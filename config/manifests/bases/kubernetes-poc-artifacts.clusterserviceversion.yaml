@@ -1,0 +1,49 @@
+apiVersion: operators.coreos.com/v1alpha1
+kind: ClusterServiceVersion
+metadata:
+  annotations:
+    alm-examples: '[]'
+    capabilities: Basic Install
+  name: kubernetes-poc-artifacts.v0.0.0
+  namespace: placeholder
+spec:
+  apiservicedefinitions: {}
+  customresourcedefinitions:
+    owned:
+    - description: MarklogicGroup is the Schema for the marklogicgroups API
+      displayName: Marklogic Server
+      kind: MarklogicGroup
+      name: marklogicgroups.operator.marklogic.com
+      version: v1alpha1
+  description: MarkLogic Operator
+  displayName: MarkLogic
+  icon:
+  - base64data: ""
+    mediatype: ""
+  install:
+    spec:
+      deployments: null
+    strategy: ""
+  installModes:
+  - supported: false
+    type: OwnNamespace
+  - supported: false
+    type: SingleNamespace
+  - supported: false
+    type: MultiNamespace
+  - supported: true
+    type: AllNamespaces
+  keywords:
+  - marklogic
+  - database
+  links:
+  - name: Kubernetes Poc Artifacts
+    url: https://kubernetes-poc-artifacts.domain
+  maintainers:
+  - email: peng.zhou@marklogic.com
+    name: Peng Zhou
+  maturity: alpha
+  provider:
+    name: MarkLogic
+    url: marklogic.com
+  version: 0.0.0
