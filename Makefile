@@ -1,3 +1,4 @@
+dockerImage?= ml-docker-db-dev-tierpoint.bed-artifactory.bedford.progress.com/marklogic/marklogic-server-centos:11.1.20230522-centos-1.0.2
 # VERSION defines the project version for the bundle.
 # Update this value when you upgrade the version of your project.
 # To re-generate a bundle for another specific version without changing the standard setup, you can:
@@ -104,6 +105,12 @@ vet: ## Run go vet against code.
 .PHONY: test
 test: manifests generate fmt vet envtest ## Run tests.
 	KUBEBUILDER_ASSETS="$(shell $(ENVTEST) use $(ENVTEST_K8S_VERSION) --bin-dir $(LOCALBIN) -p path)" go test ./... -coverprofile cover.out
+
+.PHONY: e2e-tests
+e2e-tests: ## Run e2e tests.
+	@echo "====set image name and tag in environment variable IMAGE_NAME===="
+	export IMAGE_NAME=$(dockerImage)
+	go run ./test/main.go
 
 ##@ Build
 

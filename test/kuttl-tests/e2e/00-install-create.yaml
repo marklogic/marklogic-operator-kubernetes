@@ -1,0 +1,9 @@
+apiVersion: operator.marklogic.com/v1alpha1
+kind: MarklogicGroup
+metadata:
+  name: marklogic-group
+  namespace: default
+spec:
+  name: dnode
+  image: "{{IMAGE_NAME}}"
+  replicas: 1

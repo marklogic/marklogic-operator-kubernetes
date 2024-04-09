@@ -1,0 +1,25 @@
+kind: StatefulSet
+apiVersion: apps/v1
+metadata:
+  namespace: default
+  name: dnode
+  ownerReferences:
+  - apiVersion: operator.marklogic.com/v1alpha1
+    controller: true
+    kind: MarklogicGroup
+    name: marklogic-group
+spec:
+  serviceName: dnode
+  selector: 
+    matchLabels: 
+      app.kubernetes.io/name: marklogic
+  template:
+    spec:
+      containers:
+        - name: dnode
+          image: "{{IMAGE_NAME}}"
+  replicas: 1
+status: 
+  availableReplicas: 1
+  readyReplicas: 1
+  replicas: 1
