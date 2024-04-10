@@ -120,10 +120,8 @@ func (oc *OperatorContext) setCondition(condition *metav1.Condition) bool {
 
 func (oc *OperatorContext) GetStatefulSet(namespace string, stateful string) (*appsv1.StatefulSet, error) {
 	logger := oc.ReqLogger
-	getOpts := metav1.GetOptions{
-		TypeMeta: generateTypeMeta("StatefulSet", "apps/v1"),
-	}
-	statefulInfo, err := generateK8sClient().AppsV1().StatefulSets(namespace).Get(context.TODO(), stateful, getOpts)
+	statefulInfo := &appsv1.StatefulSet{}
+	err := oc.Client.Get(context.TODO(), client.ObjectKey{Namespace: namespace, Name: stateful}, statefulInfo)
 	if err != nil {
 		logger.Info("MarkLogic statefulSet get action failed")
 		return nil, err
@@ -134,7 +132,8 @@ func (oc *OperatorContext) GetStatefulSet(namespace string, stateful string) (*a
 
 func (oc *OperatorContext) createStatefulSet(namespace string, stateful *appsv1.StatefulSet, cr *operatorv1alpha1.MarklogicGroup) error {
 	logger := oc.ReqLogger
-	_, err := generateK8sClient().AppsV1().StatefulSets(namespace).Create(context.TODO(), stateful, metav1.CreateOptions{})
+	err := oc.Client.Create(context.TODO(), stateful)
+	// _, err := GenerateK8sClient().AppsV1().StatefulSets(namespace).Create(context.TODO(), stateful, metav1.CreateOptions{})
 	if err != nil {
 		logger.Error(err, "MarkLogic stateful creation failed")
 		return err
@@ -181,7 +180,7 @@ func GetPodsForStatefulSet(namespace, name string) ([]corev1.Pod, error) {
 	selector := fmt.Sprintf("app.kubernetes.io/name=marklogic,app.kubernetes.io/instance=%s", name)
 	// List Pods with the label selector
 	listOptions := metav1.ListOptions{LabelSelector: selector}
-	pods, err := generateK8sClient().CoreV1().Pods(namespace).List(context.TODO(), listOptions)
+	pods, err := GenerateK8sClient().CoreV1().Pods(namespace).List(context.TODO(), listOptions)
 	if err != nil {
 		return nil, err
 	}

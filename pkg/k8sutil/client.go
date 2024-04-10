@@ -7,8 +7,8 @@ import (
 )
 
 // generateK8sClient create client for kubernetes
-func generateK8sClient() *kubernetes.Clientset {
-	config, err := generateK8sConfig()
+func GenerateK8sClient() *kubernetes.Clientset {
+	config, err := GenerateK8sConfig()
 	if err != nil {
 		panic(err.Error())
 	}
@@ -20,7 +20,7 @@ func generateK8sClient() *kubernetes.Clientset {
 }
 
 // generateK8sConfig will load the kube config file
-func generateK8sConfig() (*rest.Config, error) {
+func GenerateK8sConfig() (*rest.Config, error) {
 	loadingRules := clientcmd.NewDefaultClientConfigLoadingRules()
 	// if you want to change the loading rules (which files in which order), you can do so here
 	configOverrides := &clientcmd.ConfigOverrides{}

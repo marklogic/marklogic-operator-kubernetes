@@ -1,8 +1,6 @@
 package k8sutil
 
 import (
-	"context"
-
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -73,10 +71,9 @@ func generateServicePorts() []corev1.ServicePort {
 
 func (oc *OperatorContext) getService(namespace string, serviceName string) (*corev1.Service, error) {
 	logger := oc.ReqLogger
-	getOpts := metav1.GetOptions{
-		TypeMeta: generateTypeMeta("Service", "v1"),
-	}
-	serviceInfo, err := generateK8sClient().CoreV1().Services(namespace).Get(context.TODO(), serviceName, getOpts)
+
+	var serviceInfo *corev1.Service
+	err := oc.Client.Get(oc.Ctx, types.NamespacedName{Name: serviceName, Namespace: namespace}, serviceInfo)
 	if err != nil {
 		logger.Info("MarkLogic service get action is failed")
 		return nil, err
@@ -140,7 +137,8 @@ func (oc *OperatorContext) ReconcileSrvices() result.ReconcileResult {
 
 func (oc *OperatorContext) createService(namespace string, service *corev1.Service) error {
 	logger := oc.ReqLogger
-	_, err := generateK8sClient().CoreV1().Services(namespace).Create(context.TODO(), service, metav1.CreateOptions{})
+	client := oc.Client
+	err := client.Create(oc.Ctx, service)
 	if err != nil {
 		logger.Error(err, "MarkLogic service creation is failed")
 		return err

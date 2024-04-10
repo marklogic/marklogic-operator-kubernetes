@@ -44,17 +44,6 @@ func ReconcileMarkLogicCluster(cr *operatorv1alpha1.MarklogicCluster, index int)
 	return MarkLogicServerDef
 }
 
-// func createMarkLogicServer(namespace string, markLogicServer *operatorv1alpha1.MarklogicGroup) error {
-// 	logger := statefulSetLogger(namespace, markLogicServer.Name)
-// 	_, err := generateK8sClient().OperatorV1alpha1().MarklogicServers(namespace).Create(context.Background(), markLogicServer, metav1.CreateOptions{})
-// 	if err != nil {
-// 		logger.Error(err, "MarkLogic stateful creation failed")
-// 		return err
-// 	}
-// 	logger.Info("MarkLogic stateful successfully created")
-// 	return nil
-// }
-
 func generateBootstrapHost(isBootstrap bool) string {
 	if isBootstrap {
 		return ""
