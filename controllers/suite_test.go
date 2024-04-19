@@ -17,6 +17,7 @@ limitations under the License.
 package controllers
 
 import (
+	"context"
 	"path/filepath"
 	"testing"
 
@@ -35,9 +36,13 @@ import (
 	//+kubebuilder:scaffold:imports
 )
 
-var cfg *rest.Config
-var k8sClient client.Client
-var testEnv *envtest.Environment
+var (
+	cfg       *rest.Config
+	k8sClient client.Client
+	testEnv   *envtest.Environment
+	ctx       context.Context
+	cancel    context.CancelFunc
+)
 
 func TestAPIs(t *testing.T) {
 	RegisterFailHandler(Fail)
@@ -47,6 +52,8 @@ func TestAPIs(t *testing.T) {
 
 var _ = BeforeSuite(func() {
 	logf.SetLogger(zap.New(zap.WriteTo(GinkgoWriter), zap.UseDevMode(true)))
+
+	ctx, cancel = context.WithCancel(context.TODO())
 
 	By("bootstrapping test environment")
 	testEnv = &envtest.Environment{
@@ -69,17 +76,16 @@ var _ = BeforeSuite(func() {
 	Expect(err).NotTo(HaveOccurred())
 	Expect(k8sClient).NotTo(BeNil())
 
-	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
-		Scheme:             scheme.Scheme,
-		MetricsBindAddress: ":8080",
-		Port:               9443,
+	mgr, err := ctrl.NewManager(cfg, ctrl.Options{
+		Scheme: scheme.Scheme,
 	})
 	Expect(err).NotTo(HaveOccurred())
 
 	err = (&MarklogicServerReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
-		Log:    ctrl.Log.WithName("controllers").WithName("MarklogicGroup"),
+		Client:   mgr.GetClient(),
+		Scheme:   mgr.GetScheme(),
+		Log:      ctrl.Log.WithName("controllers").WithName("MarklogicGroup"),
+		Recorder: mgr.GetEventRecorderFor("marklogicgroup-controller"),
 	}).SetupWithManager(mgr)
 	Expect(err).ToNot(HaveOccurred())
 
@@ -98,6 +104,7 @@ var _ = BeforeSuite(func() {
 })
 
 var _ = AfterSuite(func() {
+	cancel()
 	By("tearing down the test environment")
 	err := testEnv.Stop()
 	Expect(err).NotTo(HaveOccurred())
