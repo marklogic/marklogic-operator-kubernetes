@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	operatorv1alpha1 "github.com/marklogic/marklogic-kubernetes-operator/api/v1alpha1"
+	databasev1alpha1 "github.com/marklogic/marklogic-kubernetes-operator/api/v1alpha1"
 	"github.com/marklogic/marklogic-kubernetes-operator/pkg/result"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -130,7 +130,7 @@ func (oc *OperatorContext) GetStatefulSet(namespace string, stateful string) (*a
 	return statefulInfo, nil
 }
 
-func (oc *OperatorContext) createStatefulSet(namespace string, stateful *appsv1.StatefulSet, cr *operatorv1alpha1.MarklogicGroup) error {
+func (oc *OperatorContext) createStatefulSet(namespace string, stateful *appsv1.StatefulSet, cr *databasev1alpha1.MarklogicGroup) error {
 	logger := oc.ReqLogger
 	err := oc.Client.Create(context.TODO(), stateful)
 	// _, err := GenerateK8sClient().AppsV1().StatefulSets(namespace).Create(context.TODO(), stateful, metav1.CreateOptions{})
@@ -208,7 +208,7 @@ func generateContainerDef(name string, containerParams containerParameters) []co
 	return containerDef
 }
 
-func generateStatefulSetsParams(cr *operatorv1alpha1.MarklogicGroup) statefulSetParameters {
+func generateStatefulSetsParams(cr *databasev1alpha1.MarklogicGroup) statefulSetParameters {
 	params := statefulSetParameters{
 		Replicas:                      cr.Spec.Replicas,
 		Name:                          cr.Spec.Name,
@@ -220,7 +220,7 @@ func generateStatefulSetsParams(cr *operatorv1alpha1.MarklogicGroup) statefulSet
 	return params
 }
 
-func generateContainerParams(cr *operatorv1alpha1.MarklogicGroup) containerParameters {
+func generateContainerParams(cr *databasev1alpha1.MarklogicGroup) containerParameters {
 	trueProperty := true
 	containerParams := containerParameters{
 		Image:         cr.Spec.Image,

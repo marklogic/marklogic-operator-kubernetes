@@ -19,23 +19,39 @@ package controller
 import (
 	"context"
 
+	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
+	"github.com/go-logr/logr"
 	databasev1alpha1 "github.com/marklogic/marklogic-kubernetes-operator/api/v1alpha1"
+	"github.com/marklogic/marklogic-kubernetes-operator/pkg/k8sutil"
 )
 
 // MarklogicGroupReconciler reconciles a MarklogicGroup object
 type MarklogicGroupReconciler struct {
 	client.Client
-	Scheme *runtime.Scheme
+	Scheme   *runtime.Scheme
+	Log      logr.Logger
+	Recorder record.EventRecorder
 }
 
-//+kubebuilder:rbac:groups=database.marklogic.com,resources=marklogicgroups,verbs=get;list;watch;create;update;patch;delete
-//+kubebuilder:rbac:groups=database.marklogic.com,resources=marklogicgroups/status,verbs=get;update;patch
-//+kubebuilder:rbac:groups=database.marklogic.com,resources=marklogicgroups/finalizers,verbs=update
+const (
+	ConditionTypeReady      = "Ready"
+	ConditionTypeInProgress = "InProgress"
+	ConditionTypeError      = "Error"
+)
+
+//+kubebuilder:rbac:groups=operator.marklogic.com,resources=marklogicgroups,verbs=get;list;watch;create;update;patch;delete
+//+kubebuilder:rbac:groups=operator.marklogic.com,resources=marklogicgroups/status,verbs=get;update;patch
+//+kubebuilder:rbac:groups=operator.marklogic.com,resources=marklogicgroups/finalizers,verbs=update
+//+kubebuilder:rbac:groups=apps,resources=statefulsets;replicasets;deployments;daemonsets,verbs=get;list;watch;create;update;patch;delete
+//+kubebuilder:rbac:groups=core,resources=pods;services,verbs=get;list;watch;create;update;patch;delete
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
@@ -45,18 +61,47 @@ type MarklogicGroupReconciler struct {
 // the user.
 //
 // For more details, check Reconcile and its Result here:
-// - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.16.3/pkg/reconcile
+// - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.14.1/pkg/reconcile
 func (r *MarklogicGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	_ = log.FromContext(ctx)
 
-	// TODO(user): your logic here
+	logger := r.Log.
+		WithValues("marklogicGroups", req.NamespacedName).
+		WithValues("requestNamespace", req.Namespace)
 
-	return ctrl.Result{}, nil
+	log.IntoContext(ctx, logger)
+
+	// logger.Info("Operator Status: ", "Conditions", &operatorCR.Status.Conditions)
+	oc, err := k8sutil.CreateOperatorContext(ctx, &req, r.Client, r.Scheme, r.Recorder)
+
+	logger.Info("==== Reconciling MarklogicGroup")
+
+	if err != nil {
+		if errors.IsNotFound(err) {
+			logger.Info("MarkLogicServer resource not found. Exiting reconcile loop since there is nothing to do")
+			return ctrl.Result{}, nil
+		}
+
+		logger.Error(err, "Failed to get MarkLogicServer")
+		return ctrl.Result{}, err
+	}
+
+	result, err := oc.ReconsileHandler()
+	if err != nil {
+		logger.Error(err, "Error reconciling statefulset")
+		return ctrl.Result{}, err
+	}
+
+	return result, nil
 }
 
 // SetupWithManager sets up the controller with the Manager.
 func (r *MarklogicGroupReconciler) SetupWithManager(mgr ctrl.Manager) error {
-	return ctrl.NewControllerManagedBy(mgr).
+
+	builder := ctrl.NewControllerManagedBy(mgr).
+		Named("marklogicgroup-controller").
 		For(&databasev1alpha1.MarklogicGroup{}).
-		Complete(r)
+		Owns(&appsv1.StatefulSet{}).
+		Owns(&corev1.Service{})
+
+	return builder.Complete(r)
 }

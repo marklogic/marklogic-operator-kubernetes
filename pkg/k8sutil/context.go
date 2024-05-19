@@ -4,7 +4,7 @@ import (
 	"context"
 
 	"github.com/go-logr/logr"
-	operatorv1alpha1 "github.com/marklogic/marklogic-kubernetes-operator/api/v1alpha1"
+	databasev1alpha1 "github.com/marklogic/marklogic-kubernetes-operator/api/v1alpha1"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -20,7 +20,7 @@ type OperatorContext struct {
 	Request        *reconcile.Request
 	Client         controllerClient.Client
 	Scheme         *runtime.Scheme
-	MarklogicGroup *operatorv1alpha1.MarklogicGroup
+	MarklogicGroup *databasev1alpha1.MarklogicGroup
 	ReqLogger      logr.Logger
 	Recorder       record.EventRecorder
 
@@ -43,7 +43,7 @@ func CreateOperatorContext(
 	oc.Scheme = scheme
 	oc.ReqLogger = reqLogger
 	oc.Recorder = rec
-	mls := &operatorv1alpha1.MarklogicGroup{}
+	mls := &databasev1alpha1.MarklogicGroup{}
 	if err := retrieveMarkLogicServer(oc, request, mls); err != nil {
 		oc.ReqLogger.Error(err, "Failed to retrieve MarkLogicServer")
 		return nil, err
@@ -58,13 +58,13 @@ func CreateOperatorContext(
 	return oc, nil
 }
 
-func retrieveMarkLogicServer(oc *OperatorContext, request *reconcile.Request, mls *operatorv1alpha1.MarklogicGroup) error {
+func retrieveMarkLogicServer(oc *OperatorContext, request *reconcile.Request, mls *databasev1alpha1.MarklogicGroup) error {
 	err := oc.Client.Get(oc.Ctx, request.NamespacedName, mls)
 
 	return err
 }
 
-func (oc *OperatorContext) GetMarkLogicServer() *operatorv1alpha1.MarklogicGroup {
+func (oc *OperatorContext) GetMarkLogicServer() *databasev1alpha1.MarklogicGroup {
 	return oc.MarklogicGroup
 }
 
