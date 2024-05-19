@@ -9,4 +9,14 @@ metadata:
     app.kubernetes.io/created-by: marklogic-kubernetes-operator
   name: marklogiccluster-sample
 spec:
-  # TODO(user): Add fields here
+  markLogicGroups:
+    - spec:
+        replicas: 2
+        name: dnode
+        image: "marklogicdb/marklogic-db:11.1.0-centos-1.1.1"
+      isBootstrap: true
+    - spec:
+        replicas: 1
+        name: enode
+        image: "marklogicdb/marklogic-db:11.1.0-centos-1.1.1"
+      isBootstrap: false
