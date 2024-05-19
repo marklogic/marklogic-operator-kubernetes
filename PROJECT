@@ -20,4 +20,13 @@ resources:
   kind: MarklogicGroup
   path: github.com/marklogic/marklogic-kubernetes-operator/api/v1alpha1
   version: v1alpha1
+- api:
+    crdVersion: v1
+    namespaced: true
+  controller: true
+  domain: marklogic.com
+  group: database
+  kind: MarklogicCluster
+  path: github.com/marklogic/marklogic-kubernetes-operator/api/v1alpha1
+  version: v1alpha1
 version: "3"

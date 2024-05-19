@@ -1,0 +1,27 @@
+# permissions for end users to view marklogicclusters.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  labels:
+    app.kubernetes.io/name: clusterrole
+    app.kubernetes.io/instance: marklogiccluster-viewer-role
+    app.kubernetes.io/component: rbac
+    app.kubernetes.io/created-by: marklogic-kubernetes-operator
+    app.kubernetes.io/part-of: marklogic-kubernetes-operator
+    app.kubernetes.io/managed-by: kustomize
+  name: marklogiccluster-viewer-role
+rules:
+- apiGroups:
+  - database.marklogic.com
+  resources:
+  - marklogicclusters
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - database.marklogic.com
+  resources:
+  - marklogicclusters/status
+  verbs:
+  - get

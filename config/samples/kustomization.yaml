@@ -1,4 +1,5 @@
 ## Append samples of your project ##
 resources:
 - database_v1alpha1_marklogicgroup.yaml
+- database_v1alpha1_marklogiccluster.yaml
 #+kubebuilder:scaffold:manifestskustomizesamples
