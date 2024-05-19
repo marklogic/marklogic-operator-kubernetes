@@ -29,13 +29,19 @@ type MarklogicClusterSpec struct {
 	// Important: Run "make" to regenerate code after modifying this file
 
 	// Foo is an example field of MarklogicCluster. Edit marklogiccluster_types.go to remove/update
-	Foo string `json:"foo,omitempty"`
+	MarkLogicGroups []*MarklogicGroups `json:"markLogicGroups,omitempty"`
+}
+
+type MarklogicGroups struct {
+	*MarklogicGroupSpec `json:"spec,omitempty"`
+	IsBootstrap         bool `json:"isBootstrap,omitempty"`
 }
 
 // MarklogicClusterStatus defines the observed state of MarklogicCluster
 type MarklogicClusterStatus struct {
 	// INSERT ADDITIONAL STATUS FIELD - define observed state of cluster
 	// Important: Run "make" to regenerate code after modifying this file
+	Conditions []metav1.Condition `json:"conditions,omitempty"`
 }
 
 //+kubebuilder:object:root=true
@@ -62,3 +68,13 @@ type MarklogicClusterList struct {
 func init() {
 	SchemeBuilder.Register(&MarklogicCluster{}, &MarklogicClusterList{})
 }
+
+// Observed State for MarkLogic Cluster
+const (
+	ClusterReady        MarkLogicConditionType = "Ready"
+	ClusterInitialized  MarkLogicConditionType = "Initialized"
+	ClusterScalingUp    MarkLogicConditionType = "Stopped"
+	ClusterScalingDown  MarkLogicConditionType = "Resuming"
+	ClusterDecommission MarkLogicConditionType = "Decommission"
+	ClusterUpdating     MarkLogicConditionType = "Updating"
+)
