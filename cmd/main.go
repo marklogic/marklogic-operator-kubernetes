@@ -123,9 +123,9 @@ func main() {
 	}
 
 	if err = (&controller.MarklogicGroupReconciler{
-		Client: mgr.GetClient(),
-		Log:	ctrl.Log.WithName("controllers").WithName("MarklogicGroup"),	
-		Scheme: mgr.GetScheme(),
+		Client:   mgr.GetClient(),
+		Log:      ctrl.Log.WithName("controllers").WithName("MarklogicGroup"),
+		Scheme:   mgr.GetScheme(),
 		Recorder: mgr.GetEventRecorderFor("marklogicgroup-controller"),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "MarklogicGroup")

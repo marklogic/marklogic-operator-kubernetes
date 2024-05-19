@@ -5,6 +5,34 @@ metadata:
   name: manager-role
 rules:
 - apiGroups:
+  - apps
+  resources:
+  - daemonsets
+  - deployments
+  - replicasets
+  - statefulsets
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - ""
+  resources:
+  - pods
+  - services
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
   - database.marklogic.com
   resources:
   - marklogicclusters
@@ -31,7 +59,7 @@ rules:
   - patch
   - update
 - apiGroups:
-  - database.marklogic.com
+  - operator.marklogic.com
   resources:
   - marklogicgroups
   verbs:
@@ -43,13 +71,13 @@ rules:
   - update
   - watch
 - apiGroups:
-  - database.marklogic.com
+  - operator.marklogic.com
   resources:
   - marklogicgroups/finalizers
   verbs:
   - update
 - apiGroups:
-  - database.marklogic.com
+  - operator.marklogic.com
   resources:
   - marklogicgroups/status
   verbs:
