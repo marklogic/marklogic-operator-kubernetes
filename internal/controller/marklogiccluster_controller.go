@@ -18,6 +18,9 @@ package controller
 
 import (
 	"context"
+	"fmt"
+
+	"k8s.io/apimachinery/pkg/api/errors"
 
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -25,6 +28,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	databasev1alpha1 "github.com/marklogic/marklogic-kubernetes-operator/api/v1alpha1"
+	"github.com/marklogic/marklogic-kubernetes-operator/pkg/k8sutil"
 )
 
 // MarklogicClusterReconciler reconciles a MarklogicCluster object
@@ -45,11 +49,36 @@ type MarklogicClusterReconciler struct {
 // the user.
 //
 // For more details, check Reconcile and its Result here:
-// - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.16.3/pkg/reconcile
+// - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.14.1/pkg/reconcile
 func (r *MarklogicClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	_ = log.FromContext(ctx)
+	logger := log.FromContext(ctx)
+	logger.Info(fmt.Sprintf("Reconciling MarklogicGroup %s", req.NamespacedName))
 
-	// TODO(user): your logic here
+	operatorCR := &databasev1alpha1.MarklogicCluster{}
+	err := r.Get(ctx, req.NamespacedName, operatorCR)
+	if err != nil {
+		if errors.IsNotFound(err) {
+			logger.Info("Operator MarkLogicCluster resource object not found. Skipping reconcile.")
+			return ctrl.Result{}, nil
+		}
+		logger.Error(err, "Error getting operator resource object")
+		return ctrl.Result{}, err
+	}
+	total := len(operatorCR.Spec.MarkLogicGroups)
+	logger.Info("===== Total Count ==== ", "Count:", total)
+
+	for i := 0; i < total; i++ {
+		logger.Info("ReconcileCluster", "Count", i)
+		markLogicCluster := k8sutil.ReconcileMarkLogicCluster(operatorCR, i)
+		err = r.Create(ctx, markLogicCluster)
+		if err != nil {
+			logger.Error(err, "Failed to create markLogicCluster")
+			return ctrl.Result{}, err
+		}
+
+		logger.Info("Created new MarkLogic Server resource")
+
+	}
 
 	return ctrl.Result{}, nil
 }
@@ -58,5 +87,6 @@ func (r *MarklogicClusterReconciler) Reconcile(ctx context.Context, req ctrl.Req
 func (r *MarklogicClusterReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&databasev1alpha1.MarklogicCluster{}).
+		Owns(&databasev1alpha1.MarklogicGroup{}).
 		Complete(r)
 }
