@@ -58,7 +58,7 @@ var _ = Describe("MarkLogicGroup controller", func() {
 			mlGroup := &databasev1alpha1.MarklogicGroup{
 				TypeMeta: v1.TypeMeta{
 					Kind:       "MarklogicGroup",
-					APIVersion: "operator.marklogic.com/v1alpha1",
+					APIVersion: "database.marklogic.com/v1alpha1",
 				},
 				ObjectMeta: v1.ObjectMeta{
 					Name:      Name,
@@ -69,7 +69,6 @@ var _ = Describe("MarkLogicGroup controller", func() {
 					Name:     Name,
 					Image:    "marklogicdb/marklogic-db:11.1.0-centos-1.1.1",
 				},
-				Status: databasev1alpha1.MarklogicGroupStatus{},
 			}
 			Expect(k8sClient.Create(ctx, mlGroup)).Should(Succeed())
 
