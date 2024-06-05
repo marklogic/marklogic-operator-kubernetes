@@ -70,7 +70,6 @@ func (r *MarklogicGroupReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 
 	log.IntoContext(ctx, logger)
 
-	// logger.Info("Operator Status: ", "Conditions", &operatorCR.Status.Conditions)
 	oc, err := k8sutil.CreateOperatorContext(ctx, &req, r.Client, r.Scheme, r.Recorder)
 
 	logger.Info("==== Reconciling MarklogicGroup")

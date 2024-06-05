@@ -148,9 +148,10 @@ func generateStatefulSetsDef(stsMeta metav1.ObjectMeta, params statefulSetParame
 		TypeMeta:   generateTypeMeta("StatefulSet", "apps/v1"),
 		ObjectMeta: stsMeta,
 		Spec: appsv1.StatefulSetSpec{
-			Selector:    LabelSelectors(stsMeta.GetLabels()),
-			ServiceName: stsMeta.Name,
-			Replicas:    params.Replicas,
+			Selector:            LabelSelectors(stsMeta.GetLabels()),
+			ServiceName:         stsMeta.Name,
+			Replicas:            params.Replicas,
+			PodManagementPolicy: appsv1.ParallelPodManagement,
 			Template: corev1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{
 					Labels: stsMeta.GetLabels(),
@@ -158,6 +159,7 @@ func generateStatefulSetsDef(stsMeta metav1.ObjectMeta, params statefulSetParame
 				Spec: corev1.PodSpec{
 					Containers:                    generateContainerDef(stsMeta.GetName(), containerParams),
 					TerminationGracePeriodSeconds: params.TerminationGracePeriodSeconds,
+					Volumes:                       generateVolumes(stsMeta.Name),
 				},
 			},
 		},
@@ -195,6 +197,7 @@ func generateContainerDef(name string, containerParams containerParameters) []co
 			Image:           containerParams.Image,
 			ImagePullPolicy: containerParams.ImagePullPolicy,
 			Env:             getEnvironmentVariables(containerParams),
+			Lifecycle:       getLifeCycle(),
 			ReadinessProbe:  getReadinessProbe(),
 			LivenessProbe:   getLivenessProbe(),
 			StartupProbe:    getStartupProbe(),
@@ -246,6 +249,37 @@ func generateContainerParams(cr *databasev1alpha1.MarklogicGroup) containerParam
 	return containerParams
 }
 
+func getLifeCycle() *corev1.Lifecycle {
+	return &corev1.Lifecycle{
+		PostStart: &corev1.LifecycleHandler{
+			Exec: &corev1.ExecAction{
+				Command: []string{"/bin/bash", "/tmp/helm-scripts/poststart-hook.sh"},
+			},
+		},
+		PreStop: &corev1.LifecycleHandler{
+			Exec: &corev1.ExecAction{
+				Command: []string{"/bin/bash", "/tmp/helm-scripts/prestop-hook.sh"},
+			},
+		},
+	}
+}
+
+func generateVolumes(stsName string) []corev1.Volume {
+	volumes := []corev1.Volume{}
+	volumes = append(volumes, corev1.Volume{
+		Name: "helm-scripts",
+		VolumeSource: corev1.VolumeSource{
+			ConfigMap: &corev1.ConfigMapVolumeSource{
+				LocalObjectReference: corev1.LocalObjectReference{
+					Name: fmt.Sprintf("%s-scripts", stsName),
+				},
+				DefaultMode: func(i int32) *int32 { return &i }(0755),
+			},
+		},
+	})
+	return volumes
+}
+
 func generatePVCTemplate(storageSize string) corev1.PersistentVolumeClaim {
 	pvcTemplate := corev1.PersistentVolumeClaim{}
 	pvcTemplate.CreationTimestamp = metav1.Time{}
@@ -271,13 +305,16 @@ func getEnvironmentVariables(containerParams containerParameters) []corev1.EnvVa
 		Value: fmt.Sprintf("%s.%s.svc.%s", containerParams.Name, containerParams.Namespace, containerParams.ClusterDomain),
 	}, corev1.EnvVar{
 		Name:  "MARKLOGIC_INIT",
-		Value: "true",
+		Value: "false",
 	}, corev1.EnvVar{
 		Name:  "MARKLOGIC_JOIN_CLUSTER",
-		Value: "true",
+		Value: "false",
 	}, corev1.EnvVar{
 		Name:  "MARKLOGIC_GROUP",
 		Value: "Default",
+	}, corev1.EnvVar{
+		Name:  "MARKLOGIC_CLUSTER_TYPE",
+		Value: "bootstrap",
 	},
 	)
 	if containerParams.LicenseKey != "" {
@@ -309,11 +346,15 @@ func getVolumeMount() []corev1.VolumeMount {
 	var VolumeMounts []corev1.VolumeMount
 
 	// if persistenceEnabled != nil && *persistenceEnabled {
-	VolumeMounts = append(VolumeMounts, corev1.VolumeMount{
-		Name:      "data",
-		MountPath: "/var/opt/MarkLogic",
-	})
-
+	VolumeMounts = append(VolumeMounts,
+		corev1.VolumeMount{
+			Name:      "data",
+			MountPath: "/var/opt/MarkLogic",
+		},
+		corev1.VolumeMount{
+			Name:      "helm-scripts",
+			MountPath: "/tmp/helm-scripts",
+		})
 	return VolumeMounts
 }
 
