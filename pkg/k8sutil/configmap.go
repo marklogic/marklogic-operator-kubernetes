@@ -18,7 +18,6 @@ func (oc *OperatorContext) ReconcileConfigMap() result.ReconcileResult {
 	annotations := map[string]string{}
 	configMapName := cr.Spec.Name + "-scripts"
 	objectMeta := generateObjectMeta(configMapName, cr.Namespace, labels, annotations)
-	namespace := objectMeta.Namespace
 	nsName := types.NamespacedName{Name: objectMeta.Name, Namespace: objectMeta.Namespace}
 	configmap := &corev1.ConfigMap{}
 	err := client.Get(oc.Ctx, nsName, configmap)
@@ -26,7 +25,7 @@ func (oc *OperatorContext) ReconcileConfigMap() result.ReconcileResult {
 		if errors.IsNotFound(err) {
 			logger.Info("MarkLogic sripts ConfigMap is not found, creating a new one")
 			configmapDef := generateConfigMapDef(objectMeta, marklogicServerAsOwner(cr))
-			err = oc.createConfigMap(namespace, configmapDef)
+			err = oc.createConfigMap(configmapDef)
 			if err != nil {
 				logger.Info("MarkLogic scripts configmap creation is failed")
 				return result.Error(err)
@@ -42,13 +41,13 @@ func (oc *OperatorContext) ReconcileConfigMap() result.ReconcileResult {
 	return result.Continue()
 }
 
-func generateConfigMapDef(serviceMeta metav1.ObjectMeta, ownerRef metav1.OwnerReference) *corev1.ConfigMap {
+func generateConfigMapDef(configMapMeta metav1.ObjectMeta, ownerRef metav1.OwnerReference) *corev1.ConfigMap {
 	configmap := &corev1.ConfigMap{
 		TypeMeta: metav1.TypeMeta{
 			Kind:       "ConfigMap",
 			APIVersion: "v1",
 		},
-		ObjectMeta: serviceMeta,
+		ObjectMeta: configMapMeta,
 		Data: map[string]string{
 			"liveness-probe.sh": getLivenessProbeScript(),
 			"copy-certs.sh":     getCopyCertScript(),
@@ -60,7 +59,7 @@ func generateConfigMapDef(serviceMeta metav1.ObjectMeta, ownerRef metav1.OwnerRe
 	return configmap
 }
 
-func (oc *OperatorContext) createConfigMap(namespace string, configMap *corev1.ConfigMap) error {
+func (oc *OperatorContext) createConfigMap(configMap *corev1.ConfigMap) error {
 	logger := oc.ReqLogger
 	client := oc.Client
 	err := client.Create(oc.Ctx, configMap)
