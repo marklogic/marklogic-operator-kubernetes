@@ -33,3 +33,9 @@ type VolumeMountWrapper struct {
 	Volume    []corev1.Volume      `json:"volume,omitempty"`
 	MountPath []corev1.VolumeMount `json:"mountPath,omitempty"`
 }
+
+type AdminAuth struct {
+	AdminUsername  *string `json:"adminUsername,omitempty"`
+	AdminPassword  *string `json:"adminPassword,omitempty"`
+	WalletPassword *string `json:"walletPassword,omitempty"`
+}

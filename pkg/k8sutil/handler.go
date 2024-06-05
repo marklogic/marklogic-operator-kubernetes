@@ -12,6 +12,10 @@ func (oc *OperatorContext) ReconsileHandler() (reconcile.Result, error) {
 	}
 	setOperatorInternalStatus(oc, "Created")
 
+	if result := oc.ReconcileSecret(); result.Completed() {
+		return result.Output()
+	}
+
 	if result := oc.ReconcileConfigMap(); result.Completed() {
 		return result.Output()
 	}

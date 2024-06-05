@@ -108,7 +108,7 @@ fi
 func getCopyCertScript() string {
 	return `#!/bin/bash
 MARKLOGIC_ADMIN_USERNAME="$(< /run/secrets/ml-secrets/username)"            
-MARKLOGIC_ADMIN_PASSWORD="$(< /run/secrets/ml-secrets/username)"
+MARKLOGIC_ADMIN_PASSWORD="$(< /run/secrets/ml-secrets/password)"
 log () {
     local TIMESTAMP=$(date +"%Y-%m-%d %T.%3N")
     echo "${TIMESTAMP}  $@"
@@ -258,10 +258,8 @@ else
     echo "IS_BOOTSTRAP_HOST false"
 fi
 
-# MARKLOGIC_ADMIN_USERNAME="$(< /run/secrets/ml-secrets/username)"
-# MARKLOGIC_ADMIN_PASSWORD="$(< /run/secrets/ml-secrets/password)"
-MARKLOGIC_ADMIN_USERNAME="admin"
-MARKLOGIC_ADMIN_PASSWORD="admin"
+MARKLOGIC_ADMIN_USERNAME="$(< /run/secrets/ml-secrets/username)"
+MARKLOGIC_ADMIN_PASSWORD="$(< /run/secrets/ml-secrets/password)"
 
 pid=$(pgrep -fn start.marklogic)
 

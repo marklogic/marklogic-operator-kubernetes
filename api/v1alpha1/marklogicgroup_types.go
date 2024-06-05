@@ -38,6 +38,7 @@ type MarklogicGroupSpec struct {
 	ImagePullPolicy  string                        `json:"imagePullPolicy,omitempty"`
 	ImagePullSecrets []corev1.LocalObjectReference `json:"imagePullSecrets,omitempty"`
 
+	Auth                          *AdminAuth                   `json:"auth,omitempty"`
 	Storage                       *Storage                     `json:"storage,omitempty"`
 	Resources                     *corev1.ResourceRequirements `json:"resources,omitempty"`
 	TerminationGracePeriodSeconds *int64                       `json:"terminationGracePeriodSeconds,omitempty"`

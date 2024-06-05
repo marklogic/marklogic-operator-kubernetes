@@ -862,6 +862,15 @@ spec:
                         type: array
                     type: object
                 type: object
+              auth:
+                properties:
+                  adminPassword:
+                    type: string
+                  adminUsername:
+                    type: string
+                  walletPassword:
+                    type: string
+                type: object
               bootstrapHost:
                 type: string
               clusterDomain:

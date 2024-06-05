@@ -276,6 +276,13 @@ func generateVolumes(stsName string) []corev1.Volume {
 				DefaultMode: func(i int32) *int32 { return &i }(0755),
 			},
 		},
+	}, corev1.Volume{
+		Name: "mladmin-secrets",
+		VolumeSource: corev1.VolumeSource{
+			Secret: &corev1.SecretVolumeSource{
+				SecretName: fmt.Sprintf("%s-admin", stsName),
+			},
+		},
 	})
 	return volumes
 }
@@ -295,11 +302,11 @@ func generatePVCTemplate(storageSize string) corev1.PersistentVolumeClaim {
 func getEnvironmentVariables(containerParams containerParameters) []corev1.EnvVar {
 	envVars := []corev1.EnvVar{}
 	envVars = append(envVars, corev1.EnvVar{
-		Name:  "MARKLOGIC_ADMIN_USERNAME",
-		Value: "admin",
+		Name:  "MARKLOGIC_ADMIN_USERNAME_FILE",
+		Value: "ml-secrets/username",
 	}, corev1.EnvVar{
-		Name:  "MARKLOGIC_ADMIN_PASSWORD",
-		Value: "admin",
+		Name:  "MARKLOGIC_ADMIN_PASSWORD_FILE",
+		Value: "ml-secrets/password",
 	}, corev1.EnvVar{
 		Name:  "MARKLOGIC_FQDN_SUFFIX",
 		Value: fmt.Sprintf("%s.%s.svc.%s", containerParams.Name, containerParams.Namespace, containerParams.ClusterDomain),
@@ -354,7 +361,13 @@ func getVolumeMount() []corev1.VolumeMount {
 		corev1.VolumeMount{
 			Name:      "helm-scripts",
 			MountPath: "/tmp/helm-scripts",
-		})
+		},
+		corev1.VolumeMount{
+			Name:      "mladmin-secrets",
+			MountPath: "/run/secrets/ml-secrets",
+			ReadOnly:  true,
+		},
+	)
 	return VolumeMounts
 }
 

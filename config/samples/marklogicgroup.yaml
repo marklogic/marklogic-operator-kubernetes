@@ -12,6 +12,9 @@ spec:
   replicas: 1
   name: marklogic
   image: "marklogicdb/marklogic-db:11.1.0-centos-1.1.2"
+  auth:
+    adminUsername: user
+    adminPassword: pass
   # storage:
   #   size: 10Gi
   terminationGracePeriodSeconds: 9
