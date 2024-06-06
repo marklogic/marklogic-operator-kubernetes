@@ -34,17 +34,19 @@ type MarklogicGroupSpec struct {
 	// +kubebuilder:default:="cluster.local"
 	ClusterDomain string `json:"clusterDomain,omitempty"`
 
-	Image            string                        `json:"image"`
+	// +kubebuilder:default:="marklogicdb/marklogic-db:11.2.0-ubi"
+	Image string `json:"image"`
+	// +kubebuilder:default:="IfNotPresent"
 	ImagePullPolicy  string                        `json:"imagePullPolicy,omitempty"`
 	ImagePullSecrets []corev1.LocalObjectReference `json:"imagePullSecrets,omitempty"`
 
+	Auth                          *AdminAuth                   `json:"auth,omitempty"`
 	Storage                       *Storage                     `json:"storage,omitempty"`
 	Resources                     *corev1.ResourceRequirements `json:"resources,omitempty"`
 	TerminationGracePeriodSeconds *int64                       `json:"terminationGracePeriodSeconds,omitempty"`
 	// +kubebuilder:validation:Enum=OnDelete;RollingUpdate
 	// +kubebuilder:default:="OnDelete"
 	UpdateStrategy           string                      `json:"updateStrategy,omitempty"`
-	PodManagementPolicy      *string                     `json:"podManagementPolicy,omitempty"`
 	NetworkPolicy            *networkingv1.NetworkPolicy `json:"networkPolicy,omitempty"`
 	PodSecurityContext       *corev1.PodSecurityContext  `json:"securityContext,omitempty"`
 	ContainerSecurityContext *corev1.SecurityContext     `json:"containerSecurityContext,omitempty"`
@@ -54,11 +56,13 @@ type MarklogicGroupSpec struct {
 	TopologySpreadConstraints []corev1.TopologySpreadConstraint `json:"topologySpreadConstraints,omitempty"`
 	PriorityClassName         string                            `json:"priorityClassName,omitempty"`
 
-	LivenessProbe  *corev1.Probe `json:"livenessProbe,omitempty"`
-	ReadinessProbe *corev1.Probe `json:"readinessProbe,omitempty"`
-	StartupProbe   *corev1.Probe `json:"startupProbe,omitempty"`
+	// +kubebuilder:default:={enabled: true, initialDelaySeconds: 30, timeoutSeconds: 5, periodSeconds: 30, successThreshold: 1, failureThreshold: 3}
+	LivenessProbe ContainerProbe `json:"livenessProbe,omitempty"`
+	// +kubebuilder:default:={enabled: false, initialDelaySeconds: 10, timeoutSeconds: 5, periodSeconds: 30, successThreshold: 1, failureThreshold: 3}
+	ReadinessProbe ContainerProbe `json:"readinessProbe,omitempty"`
 
-	GroupConfig      GroupConfig `json:"groupConfigs,omitempty"`
+	// +kubebuilder:default:={name: "Default", enableXdqpSsl: true}
+	GroupConfig      GroupConfig `json:"groupConfig,omitempty"`
 	License          *License    `json:"license,omitempty"`
 	EnableConverters bool        `json:"enableConverters,omitempty"`
 

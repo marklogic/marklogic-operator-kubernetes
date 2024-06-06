@@ -3,7 +3,9 @@ package k8sutil
 import (
 	databasev1alpha1 "github.com/marklogic/marklogic-kubernetes-operator/api/v1alpha1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"math/rand"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"time"
 )
 
 // generateTypeMeta generates the TyeMeta
@@ -79,4 +81,16 @@ func setOperatorInternalStatus(oc *OperatorContext, newState databasev1alpha1.In
 	}
 
 	return nil
+}
+
+func generateRandomAlphaNumeric(length int) string {
+	const charset = "abcdefghijklmnopqrstuvwxyz" +
+		"ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+
+	seededRand := rand.New(rand.NewSource(time.Now().UnixNano()))
+	result := make([]byte, length)
+	for i := range result {
+		result[i] = charset[seededRand.Intn(len(charset))]
+	}
+	return string(result)
 }
