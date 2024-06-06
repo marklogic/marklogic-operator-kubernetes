@@ -35,7 +35,7 @@ type MarklogicGroupSpec struct {
 	ClusterDomain string `json:"clusterDomain,omitempty"`
 
 	// +kubebuilder:default:="marklogicdb/marklogic-db:11.2.0-ubi"
-	Image            string                        `json:"image"`
+	Image string `json:"image"`
 	// +kubebuilder:default:="IfNotPresent"
 	ImagePullPolicy  string                        `json:"imagePullPolicy,omitempty"`
 	ImagePullSecrets []corev1.LocalObjectReference `json:"imagePullSecrets,omitempty"`
@@ -47,7 +47,6 @@ type MarklogicGroupSpec struct {
 	// +kubebuilder:validation:Enum=OnDelete;RollingUpdate
 	// +kubebuilder:default:="OnDelete"
 	UpdateStrategy           string                      `json:"updateStrategy,omitempty"`
-	// PodManagementPolicy      *string                     `json:"podManagementPolicy,omitempty"`
 	NetworkPolicy            *networkingv1.NetworkPolicy `json:"networkPolicy,omitempty"`
 	PodSecurityContext       *corev1.PodSecurityContext  `json:"securityContext,omitempty"`
 	ContainerSecurityContext *corev1.SecurityContext     `json:"containerSecurityContext,omitempty"`

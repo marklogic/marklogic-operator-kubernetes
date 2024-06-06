@@ -286,11 +286,6 @@ func (in *MarklogicGroupSpec) DeepCopyInto(out *MarklogicGroupSpec) {
 		*out = new(int64)
 		**out = **in
 	}
-	if in.PodManagementPolicy != nil {
-		in, out := &in.PodManagementPolicy, &out.PodManagementPolicy
-		*out = new(string)
-		**out = **in
-	}
 	if in.NetworkPolicy != nil {
 		in, out := &in.NetworkPolicy, &out.NetworkPolicy
 		*out = new(networkingv1.NetworkPolicy)
