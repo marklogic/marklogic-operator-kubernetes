@@ -39,15 +39,20 @@ const (
 	interval = time.Millisecond * 250
 )
 
-var rep = int32(1)
+var replicas = int32(2)
 var typeNamespaceName = types.NamespacedName{Name: Name, Namespace: Namespace}
-var imageName = "marklogicdb/marklogic-db:11.1.0-centos-1.1.1"
+
+const imageName = "marklogicdb/marklogic-db:11.1.0-centos-1.1.1"
+
+var groupConfig = databasev1alpha1.GroupConfig{
+	Name:          "dnode",
+	EnableXdqpSsl: true,
+}
 
 var _ = Describe("MarkLogicGroup controller", func() {
 	Context("When creating an MarklogicGroup", func() {
 		ctx := context.Background()
 		It("Should create a MarklogicGroup CR, StatefulSet and Service", func() {
-
 			// Create the namespace
 			ns := corev1.Namespace{
 				ObjectMeta: v1.ObjectMeta{Name: Namespace},
@@ -65,9 +70,10 @@ var _ = Describe("MarkLogicGroup controller", func() {
 					Namespace: Namespace,
 				},
 				Spec: databasev1alpha1.MarklogicGroupSpec{
-					Replicas: &rep,
-					Name:     Name,
-					Image:    "marklogicdb/marklogic-db:11.1.0-centos-1.1.1",
+					Replicas:    &replicas,
+					Name:        Name,
+					Image:       imageName,
+					GroupConfig: groupConfig,
 				},
 			}
 			Expect(k8sClient.Create(ctx, mlGroup)).Should(Succeed())
@@ -79,17 +85,20 @@ var _ = Describe("MarkLogicGroup controller", func() {
 				return err == nil
 			}, timeout, interval).Should(BeTrue())
 			Expect(createdCR.Spec.Image).Should(Equal(imageName))
-			Expect(createdCR.Spec.Replicas).Should(Equal(&rep))
+			Expect(createdCR.Spec.Replicas).Should(Equal(&replicas))
 			Expect(createdCR.Name).Should(Equal(Name))
+			Expect(createdCR.Spec.GroupConfig).Should(Equal(groupConfig))
 
 			// Validating if StatefulSet is created successfully
-			createdSts := &appsv1.StatefulSet{}
+			sts := &appsv1.StatefulSet{}
 			Eventually(func() bool {
-				err := k8sClient.Get(ctx, typeNamespaceName, createdSts)
+				err := k8sClient.Get(ctx, typeNamespaceName, sts)
 				return err == nil
 			}, timeout, interval).Should(BeTrue())
-			Expect(createdSts.Spec.Template.Spec.Containers[0].Image).Should(Equal(imageName))
-			Expect(createdSts.Spec.Replicas).Should(Equal(&rep))
+			Expect(sts.Spec.Template.Spec.Containers[0].Image).Should(Equal(imageName))
+			Expect(sts.Spec.Replicas).Should(Equal(&replicas))
+			Expect(sts.Name).Should(Equal(Name))
+			Expect(sts.Spec.PodManagementPolicy).Should(Equal(appsv1.ParallelPodManagement))
 
 			// Validating if Service is created successfully
 			createdSrv := &corev1.Service{}
@@ -98,6 +107,26 @@ var _ = Describe("MarkLogicGroup controller", func() {
 				return err == nil
 			}, timeout, interval).Should(BeTrue())
 			Expect(createdSrv.Spec.Ports[0].TargetPort).Should(Equal(intstr.FromInt(int(7997))))
+		})
+
+		It("Should create configmap for MarkLogic scripts", func() {
+			// Validating if ConfigMap is created successfully
+			configMap := &corev1.ConfigMap{}
+			configMapName := Name + "-scripts"
+			Eventually(func() bool {
+				err := k8sClient.Get(ctx, types.NamespacedName{Name: configMapName, Namespace: Namespace}, configMap)
+				return err == nil
+			}, timeout, interval).Should(BeTrue())
+		})
+
+		It("Should create a secret for MarkLogic Admin User", func() {
+			// Validating if Secret is created successfully
+			secret := &corev1.Secret{}
+			secretName := Name + "-admin"
+			Eventually(func() bool {
+				err := k8sClient.Get(ctx, types.NamespacedName{Name: secretName, Namespace: Namespace}, secret)
+				return err == nil
+			}, timeout, interval).Should(BeTrue())
 		})
 	})
 })
