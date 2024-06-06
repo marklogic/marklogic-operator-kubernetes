@@ -61,7 +61,8 @@ type MarklogicGroupSpec struct {
 	// +kubebuilder:default:={enabled: false, initialDelaySeconds: 10, timeoutSeconds: 5, periodSeconds: 30, successThreshold: 1, failureThreshold: 3}
 	ReadinessProbe ContainerProbe `json:"readinessProbe,omitempty"`
 
-	GroupConfig      GroupConfig `json:"groupConfigs,omitempty"`
+	// +kubebuilder:default:={name: "Default", enableXdqpSsl: true}
+	GroupConfig      GroupConfig `json:"groupConfig,omitempty"`
 	License          *License    `json:"license,omitempty"`
 	EnableConverters bool        `json:"enableConverters,omitempty"`
 

@@ -1040,7 +1040,10 @@ spec:
                 type: boolean
               enableConverters:
                 type: boolean
-              groupConfigs:
+              groupConfig:
+                default:
+                  enableXdqpSsl: true
+                  name: Default
                 properties:
                   enableXdqpSsl:
                     type: boolean

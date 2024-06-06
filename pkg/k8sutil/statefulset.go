@@ -14,6 +14,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+	"strconv"
 )
 
 type statefulSetParameters struct {
@@ -39,6 +40,7 @@ type containerParameters struct {
 	BootstrapHost      string
 	LivenessProbe      databasev1alpha1.ContainerProbe
 	ReadinessProbe     databasev1alpha1.ContainerProbe
+	GroupConfig        databasev1alpha1.GroupConfig
 }
 
 func (oc *OperatorContext) ReconcileStatefulset() (reconcile.Result, error) {
@@ -241,6 +243,7 @@ func generateContainerParams(cr *databasev1alpha1.MarklogicGroup) containerParam
 		BootstrapHost:  cr.Spec.BootstrapHost,
 		LivenessProbe:  cr.Spec.LivenessProbe,
 		ReadinessProbe: cr.Spec.ReadinessProbe,
+		GroupConfig:    cr.Spec.GroupConfig,
 	}
 
 	if cr.Spec.Storage != nil {
@@ -328,7 +331,10 @@ func getEnvironmentVariables(containerParams containerParameters) []corev1.EnvVa
 		Value: "false",
 	}, corev1.EnvVar{
 		Name:  "MARKLOGIC_GROUP",
-		Value: "Default",
+		Value: containerParams.GroupConfig.Name,
+	}, corev1.EnvVar{
+		Name:  "XDQP_SSL_ENABLED",
+		Value: strconv.FormatBool(containerParams.GroupConfig.EnableXdqpSsl),
 	}, corev1.EnvVar{
 		Name:  "MARKLOGIC_CLUSTER_TYPE",
 		Value: "bootstrap",
