@@ -14,6 +14,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+	"strconv"
 )
 
 type statefulSetParameters struct {
@@ -37,6 +38,9 @@ type containerParameters struct {
 	LicenseKey         string
 	Licensee           string
 	BootstrapHost      string
+	LivenessProbe      databasev1alpha1.ContainerProbe
+	ReadinessProbe     databasev1alpha1.ContainerProbe
+	GroupConfig        databasev1alpha1.GroupConfig
 }
 
 func (oc *OperatorContext) ReconcileStatefulset() (reconcile.Result, error) {
@@ -46,10 +50,11 @@ func (oc *OperatorContext) ReconcileStatefulset() (reconcile.Result, error) {
 	annotations := map[string]string{}
 	objectMeta := generateObjectMeta(cr.Spec.Name, cr.Namespace, labels, annotations)
 	sts, err := oc.GetStatefulSet(cr.Namespace, objectMeta.Name)
-
+	containerParams := generateContainerParams(cr)
+	statefulSetParams := generateStatefulSetsParams(cr)
 	if err != nil {
 		if apierrors.IsNotFound(err) {
-			statefulSetDef := generateStatefulSetsDef(objectMeta, generateStatefulSetsParams(cr), marklogicServerAsOwner(cr), generateContainerParams(cr))
+			statefulSetDef := generateStatefulSetsDef(objectMeta, statefulSetParams, marklogicServerAsOwner(cr), containerParams)
 			oc.createStatefulSet(cr.Namespace, statefulSetDef, cr)
 			oc.Recorder.Event(oc.MarklogicGroup, "Normal", "StatefulSetCreated", "MarkLogic statefulSet created successfully")
 			return result.RequeueSoon(10).Output()
@@ -148,9 +153,10 @@ func generateStatefulSetsDef(stsMeta metav1.ObjectMeta, params statefulSetParame
 		TypeMeta:   generateTypeMeta("StatefulSet", "apps/v1"),
 		ObjectMeta: stsMeta,
 		Spec: appsv1.StatefulSetSpec{
-			Selector:    LabelSelectors(stsMeta.GetLabels()),
-			ServiceName: stsMeta.Name,
-			Replicas:    params.Replicas,
+			Selector:            LabelSelectors(stsMeta.GetLabels()),
+			ServiceName:         stsMeta.Name,
+			Replicas:            params.Replicas,
+			PodManagementPolicy: appsv1.ParallelPodManagement,
 			Template: corev1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{
 					Labels: stsMeta.GetLabels(),
@@ -158,6 +164,7 @@ func generateStatefulSetsDef(stsMeta metav1.ObjectMeta, params statefulSetParame
 				Spec: corev1.PodSpec{
 					Containers:                    generateContainerDef(stsMeta.GetName(), containerParams),
 					TerminationGracePeriodSeconds: params.TerminationGracePeriodSeconds,
+					Volumes:                       generateVolumes(stsMeta.Name),
 				},
 			},
 		},
@@ -195,14 +202,19 @@ func generateContainerDef(name string, containerParams containerParameters) []co
 			Image:           containerParams.Image,
 			ImagePullPolicy: containerParams.ImagePullPolicy,
 			Env:             getEnvironmentVariables(containerParams),
-			ReadinessProbe:  getReadinessProbe(),
-			LivenessProbe:   getLivenessProbe(),
-			StartupProbe:    getStartupProbe(),
+			Lifecycle:       getLifeCycle(),
 			VolumeMounts:    getVolumeMount(),
 		},
 	}
 	if containerParams.Resources != nil {
 		containerDef[0].Resources = *containerParams.Resources
+	}
+	if containerParams.LivenessProbe.Enabled == true {
+		containerDef[0].LivenessProbe = getLivenessProbe(containerParams.LivenessProbe)
+	}
+
+	if containerParams.ReadinessProbe.Enabled == true {
+		containerDef[0].ReadinessProbe = getReadinessProbe(containerParams.ReadinessProbe)
 	}
 
 	return containerDef
@@ -223,12 +235,15 @@ func generateStatefulSetsParams(cr *databasev1alpha1.MarklogicGroup) statefulSet
 func generateContainerParams(cr *databasev1alpha1.MarklogicGroup) containerParameters {
 	trueProperty := true
 	containerParams := containerParameters{
-		Image:         cr.Spec.Image,
-		Resources:     cr.Spec.Resources,
-		Name:          cr.Spec.Name,
-		Namespace:     cr.Namespace,
-		ClusterDomain: cr.Spec.ClusterDomain,
-		BootstrapHost: cr.Spec.BootstrapHost,
+		Image:          cr.Spec.Image,
+		Resources:      cr.Spec.Resources,
+		Name:           cr.Spec.Name,
+		Namespace:      cr.Namespace,
+		ClusterDomain:  cr.Spec.ClusterDomain,
+		BootstrapHost:  cr.Spec.BootstrapHost,
+		LivenessProbe:  cr.Spec.LivenessProbe,
+		ReadinessProbe: cr.Spec.ReadinessProbe,
+		GroupConfig:    cr.Spec.GroupConfig,
 	}
 
 	if cr.Spec.Storage != nil {
@@ -243,7 +258,46 @@ func generateContainerParams(cr *databasev1alpha1.MarklogicGroup) containerParam
 		containerParams.LicenseKey = cr.Spec.License.Key
 		containerParams.Licensee = cr.Spec.License.Licensee
 	}
+
 	return containerParams
+}
+
+func getLifeCycle() *corev1.Lifecycle {
+	return &corev1.Lifecycle{
+		PostStart: &corev1.LifecycleHandler{
+			Exec: &corev1.ExecAction{
+				Command: []string{"/bin/bash", "/tmp/helm-scripts/poststart-hook.sh"},
+			},
+		},
+		PreStop: &corev1.LifecycleHandler{
+			Exec: &corev1.ExecAction{
+				Command: []string{"/bin/bash", "/tmp/helm-scripts/prestop-hook.sh"},
+			},
+		},
+	}
+}
+
+func generateVolumes(stsName string) []corev1.Volume {
+	volumes := []corev1.Volume{}
+	volumes = append(volumes, corev1.Volume{
+		Name: "helm-scripts",
+		VolumeSource: corev1.VolumeSource{
+			ConfigMap: &corev1.ConfigMapVolumeSource{
+				LocalObjectReference: corev1.LocalObjectReference{
+					Name: fmt.Sprintf("%s-scripts", stsName),
+				},
+				DefaultMode: func(i int32) *int32 { return &i }(0755),
+			},
+		},
+	}, corev1.Volume{
+		Name: "mladmin-secrets",
+		VolumeSource: corev1.VolumeSource{
+			Secret: &corev1.SecretVolumeSource{
+				SecretName: fmt.Sprintf("%s-admin", stsName),
+			},
+		},
+	})
+	return volumes
 }
 
 func generatePVCTemplate(storageSize string) corev1.PersistentVolumeClaim {
@@ -251,7 +305,7 @@ func generatePVCTemplate(storageSize string) corev1.PersistentVolumeClaim {
 	pvcTemplate.CreationTimestamp = metav1.Time{}
 	pvcTemplate.Name = "data"
 	pvcTemplate.Spec.AccessModes = []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce}
-	// pvcTemplate.Spec.Resources.Requests.Storage().Add(resource.MustParse(storageSize))
+	pvcTemplate.Spec.Resources.Requests.Storage().Add(resource.MustParse(storageSize))
 	pvcTemplate.Spec.Resources.Requests = corev1.ResourceList{
 		corev1.ResourceStorage: resource.MustParse(storageSize),
 	}
@@ -261,23 +315,29 @@ func generatePVCTemplate(storageSize string) corev1.PersistentVolumeClaim {
 func getEnvironmentVariables(containerParams containerParameters) []corev1.EnvVar {
 	envVars := []corev1.EnvVar{}
 	envVars = append(envVars, corev1.EnvVar{
-		Name:  "MARKLOGIC_ADMIN_USERNAME",
-		Value: "admin",
+		Name:  "MARKLOGIC_ADMIN_USERNAME_FILE",
+		Value: "ml-secrets/username",
 	}, corev1.EnvVar{
-		Name:  "MARKLOGIC_ADMIN_PASSWORD",
-		Value: "admin",
+		Name:  "MARKLOGIC_ADMIN_PASSWORD_FILE",
+		Value: "ml-secrets/password",
 	}, corev1.EnvVar{
 		Name:  "MARKLOGIC_FQDN_SUFFIX",
 		Value: fmt.Sprintf("%s.%s.svc.%s", containerParams.Name, containerParams.Namespace, containerParams.ClusterDomain),
 	}, corev1.EnvVar{
 		Name:  "MARKLOGIC_INIT",
-		Value: "true",
+		Value: "false",
 	}, corev1.EnvVar{
 		Name:  "MARKLOGIC_JOIN_CLUSTER",
-		Value: "true",
+		Value: "false",
 	}, corev1.EnvVar{
 		Name:  "MARKLOGIC_GROUP",
-		Value: "Default",
+		Value: containerParams.GroupConfig.Name,
+	}, corev1.EnvVar{
+		Name:  "XDQP_SSL_ENABLED",
+		Value: strconv.FormatBool(containerParams.GroupConfig.EnableXdqpSsl),
+	}, corev1.EnvVar{
+		Name:  "MARKLOGIC_CLUSTER_TYPE",
+		Value: "bootstrap",
 	},
 	)
 	if containerParams.LicenseKey != "" {
@@ -309,62 +369,53 @@ func getVolumeMount() []corev1.VolumeMount {
 	var VolumeMounts []corev1.VolumeMount
 
 	// if persistenceEnabled != nil && *persistenceEnabled {
-	VolumeMounts = append(VolumeMounts, corev1.VolumeMount{
-		Name:      "data",
-		MountPath: "/var/opt/MarkLogic",
-	})
-
+	VolumeMounts = append(VolumeMounts,
+		corev1.VolumeMount{
+			Name:      "data",
+			MountPath: "/var/opt/MarkLogic",
+		},
+		corev1.VolumeMount{
+			Name:      "helm-scripts",
+			MountPath: "/tmp/helm-scripts",
+		},
+		corev1.VolumeMount{
+			Name:      "mladmin-secrets",
+			MountPath: "/run/secrets/ml-secrets",
+			ReadOnly:  true,
+		},
+	)
 	return VolumeMounts
 }
 
-func getLivenessProbe() *corev1.Probe {
+func getLivenessProbe(probe databasev1alpha1.ContainerProbe) *corev1.Probe {
 	return &corev1.Probe{
-		InitialDelaySeconds: 30,
-		PeriodSeconds:       60,
-		FailureThreshold:    3,
-		TimeoutSeconds:      5,
-		SuccessThreshold:    1,
-		ProbeHandler: corev1.ProbeHandler{
-			HTTPGet: &corev1.HTTPGetAction{
-				Path: "/",
-				Port: intstr.IntOrString{
-					Type:   intstr.Int,
-					IntVal: 7997,
-				},
-			},
-		},
-	}
-}
-
-func getReadinessProbe() *corev1.Probe {
-	return &corev1.Probe{
-		InitialDelaySeconds: 10,
-		PeriodSeconds:       60,
-		FailureThreshold:    3,
-		TimeoutSeconds:      5,
-		SuccessThreshold:    1,
-		ProbeHandler: corev1.ProbeHandler{
-			HTTPGet: &corev1.HTTPGetAction{
-				Path: "/",
-				Port: intstr.IntOrString{
-					Type:   intstr.Int,
-					IntVal: 7997,
-				},
-			},
-		},
-	}
-}
-
-func getStartupProbe() *corev1.Probe {
-	return &corev1.Probe{
-		InitialDelaySeconds: 10,
-		PeriodSeconds:       20,
-		TimeoutSeconds:      3,
-		SuccessThreshold:    1,
-		FailureThreshold:    30,
+		InitialDelaySeconds: probe.InitialDelaySeconds,
+		PeriodSeconds:       probe.PeriodSeconds,
+		FailureThreshold:    probe.FailureThreshold,
+		TimeoutSeconds:      probe.TimeoutSeconds,
+		SuccessThreshold:    probe.SuccessThreshold,
 		ProbeHandler: corev1.ProbeHandler{
 			Exec: &corev1.ExecAction{
-				Command: []string{"ls", "/var/opt/MarkLogic/ready"},
+				Command: []string{"/bin/bash", "/tmp/helm-scripts/liveness-probe.sh"},
+			},
+		},
+	}
+}
+
+func getReadinessProbe(probe databasev1alpha1.ContainerProbe) *corev1.Probe {
+	return &corev1.Probe{
+		InitialDelaySeconds: probe.InitialDelaySeconds,
+		PeriodSeconds:       probe.PeriodSeconds,
+		FailureThreshold:    probe.FailureThreshold,
+		TimeoutSeconds:      probe.TimeoutSeconds,
+		SuccessThreshold:    probe.SuccessThreshold,
+		ProbeHandler: corev1.ProbeHandler{
+			HTTPGet: &corev1.HTTPGetAction{
+				Path: "/",
+				Port: intstr.IntOrString{
+					Type:   intstr.Int,
+					IntVal: 7997,
+				},
 			},
 		},
 	}
