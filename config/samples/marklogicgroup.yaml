@@ -29,3 +29,17 @@ spec:
   #   limits:
   #     memory: "6Gi"
   #     cpu: "2"
+  # livenessProbe:
+  #   enabled: true
+  #   initialDelaySeconds: 31
+  #   periodSeconds: 11
+  #   timeoutSeconds: 6
+  #   successThreshold: 1
+  #   failureThreshold: 4
+  # readinessProbe:
+  #   enabled: true
+  #   initialDelaySeconds: 29
+  #   periodSeconds: 9
+  #   timeoutSeconds: 4
+  #   successThreshold: 1
+  #   failureThreshold: 2

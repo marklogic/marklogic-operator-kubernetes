@@ -4,21 +4,17 @@ import (
 	corev1 "k8s.io/api/core/v1"
 )
 
-type Probe struct {
-	// +kubebuilder:validation:Minimum=1
-	// +kubebuilder:default=1
+type ContainerProbe struct {
+	Enabled bool `json:"enabled,omitempty"`
+	// +kubebuilder:validation:Minimum=0
 	InitialDelaySeconds int32 `json:"initialDelaySeconds,omitempty"`
-	// +kubebuilder:validation:Minimum=1
-	// +kubebuilder:default=1
+	// +kubebuilder:validation:Minimum=0
 	TimeoutSeconds int32 `json:"timeoutSeconds,omitempty"`
-	// +kubebuilder:validation:Minimum=1
-	// +kubebuilder:default=10
+	// +kubebuilder:validation:Minimum=0
 	PeriodSeconds int32 `json:"periodSeconds,omitempty"`
-	// +kubebuilder:validation:Minimum=1
-	// +kubebuilder:default=1
+	// +kubebuilder:validation:Minimum=0
 	SuccessThreshold int32 `json:"successThreshold,omitempty"`
-	// +kubebuilder:validation:Minimum=1
-	// +kubebuilder:default=3
+	// +kubebuilder:validation:Minimum=0
 	FailureThreshold int32 `json:"failureThreshold,omitempty"`
 }
 

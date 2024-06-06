@@ -37,6 +37,8 @@ type containerParameters struct {
 	LicenseKey         string
 	Licensee           string
 	BootstrapHost      string
+	LivenessProbe      databasev1alpha1.ContainerProbe
+	ReadinessProbe     databasev1alpha1.ContainerProbe
 }
 
 func (oc *OperatorContext) ReconcileStatefulset() (reconcile.Result, error) {
@@ -46,10 +48,11 @@ func (oc *OperatorContext) ReconcileStatefulset() (reconcile.Result, error) {
 	annotations := map[string]string{}
 	objectMeta := generateObjectMeta(cr.Spec.Name, cr.Namespace, labels, annotations)
 	sts, err := oc.GetStatefulSet(cr.Namespace, objectMeta.Name)
-
+	containerParams := generateContainerParams(cr)
+	statefulSetParams := generateStatefulSetsParams(cr)
 	if err != nil {
 		if apierrors.IsNotFound(err) {
-			statefulSetDef := generateStatefulSetsDef(objectMeta, generateStatefulSetsParams(cr), marklogicServerAsOwner(cr), generateContainerParams(cr))
+			statefulSetDef := generateStatefulSetsDef(objectMeta, statefulSetParams, marklogicServerAsOwner(cr), containerParams)
 			oc.createStatefulSet(cr.Namespace, statefulSetDef, cr)
 			oc.Recorder.Event(oc.MarklogicGroup, "Normal", "StatefulSetCreated", "MarkLogic statefulSet created successfully")
 			return result.RequeueSoon(10).Output()
@@ -198,14 +201,18 @@ func generateContainerDef(name string, containerParams containerParameters) []co
 			ImagePullPolicy: containerParams.ImagePullPolicy,
 			Env:             getEnvironmentVariables(containerParams),
 			Lifecycle:       getLifeCycle(),
-			ReadinessProbe:  getReadinessProbe(),
-			LivenessProbe:   getLivenessProbe(),
-			StartupProbe:    getStartupProbe(),
 			VolumeMounts:    getVolumeMount(),
 		},
 	}
 	if containerParams.Resources != nil {
 		containerDef[0].Resources = *containerParams.Resources
+	}
+	if containerParams.LivenessProbe.Enabled == true {
+		containerDef[0].LivenessProbe = getLivenessProbe(containerParams.LivenessProbe)
+	}
+
+	if containerParams.ReadinessProbe.Enabled == true {
+		containerDef[0].ReadinessProbe = getReadinessProbe(containerParams.ReadinessProbe)
 	}
 
 	return containerDef
@@ -226,12 +233,14 @@ func generateStatefulSetsParams(cr *databasev1alpha1.MarklogicGroup) statefulSet
 func generateContainerParams(cr *databasev1alpha1.MarklogicGroup) containerParameters {
 	trueProperty := true
 	containerParams := containerParameters{
-		Image:         cr.Spec.Image,
-		Resources:     cr.Spec.Resources,
-		Name:          cr.Spec.Name,
-		Namespace:     cr.Namespace,
-		ClusterDomain: cr.Spec.ClusterDomain,
-		BootstrapHost: cr.Spec.BootstrapHost,
+		Image:          cr.Spec.Image,
+		Resources:      cr.Spec.Resources,
+		Name:           cr.Spec.Name,
+		Namespace:      cr.Namespace,
+		ClusterDomain:  cr.Spec.ClusterDomain,
+		BootstrapHost:  cr.Spec.BootstrapHost,
+		LivenessProbe:  cr.Spec.LivenessProbe,
+		ReadinessProbe: cr.Spec.ReadinessProbe,
 	}
 
 	if cr.Spec.Storage != nil {
@@ -246,6 +255,7 @@ func generateContainerParams(cr *databasev1alpha1.MarklogicGroup) containerParam
 		containerParams.LicenseKey = cr.Spec.License.Key
 		containerParams.Licensee = cr.Spec.License.Licensee
 	}
+
 	return containerParams
 }
 
@@ -292,7 +302,7 @@ func generatePVCTemplate(storageSize string) corev1.PersistentVolumeClaim {
 	pvcTemplate.CreationTimestamp = metav1.Time{}
 	pvcTemplate.Name = "data"
 	pvcTemplate.Spec.AccessModes = []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce}
-	// pvcTemplate.Spec.Resources.Requests.Storage().Add(resource.MustParse(storageSize))
+	pvcTemplate.Spec.Resources.Requests.Storage().Add(resource.MustParse(storageSize))
 	pvcTemplate.Spec.Resources.Requests = corev1.ResourceList{
 		corev1.ResourceStorage: resource.MustParse(storageSize),
 	}
@@ -371,54 +381,35 @@ func getVolumeMount() []corev1.VolumeMount {
 	return VolumeMounts
 }
 
-func getLivenessProbe() *corev1.Probe {
+func getLivenessProbe(probe databasev1alpha1.ContainerProbe) *corev1.Probe {
 	return &corev1.Probe{
-		InitialDelaySeconds: 30,
-		PeriodSeconds:       60,
-		FailureThreshold:    3,
-		TimeoutSeconds:      5,
-		SuccessThreshold:    1,
-		ProbeHandler: corev1.ProbeHandler{
-			HTTPGet: &corev1.HTTPGetAction{
-				Path: "/",
-				Port: intstr.IntOrString{
-					Type:   intstr.Int,
-					IntVal: 7997,
-				},
-			},
-		},
-	}
-}
-
-func getReadinessProbe() *corev1.Probe {
-	return &corev1.Probe{
-		InitialDelaySeconds: 10,
-		PeriodSeconds:       60,
-		FailureThreshold:    3,
-		TimeoutSeconds:      5,
-		SuccessThreshold:    1,
-		ProbeHandler: corev1.ProbeHandler{
-			HTTPGet: &corev1.HTTPGetAction{
-				Path: "/",
-				Port: intstr.IntOrString{
-					Type:   intstr.Int,
-					IntVal: 7997,
-				},
-			},
-		},
-	}
-}
-
-func getStartupProbe() *corev1.Probe {
-	return &corev1.Probe{
-		InitialDelaySeconds: 10,
-		PeriodSeconds:       20,
-		TimeoutSeconds:      3,
-		SuccessThreshold:    1,
-		FailureThreshold:    30,
+		InitialDelaySeconds: probe.InitialDelaySeconds,
+		PeriodSeconds:       probe.PeriodSeconds,
+		FailureThreshold:    probe.FailureThreshold,
+		TimeoutSeconds:      probe.TimeoutSeconds,
+		SuccessThreshold:    probe.SuccessThreshold,
 		ProbeHandler: corev1.ProbeHandler{
 			Exec: &corev1.ExecAction{
-				Command: []string{"ls", "/var/opt/MarkLogic/ready"},
+				Command: []string{"/bin/bash", "/tmp/helm-scripts/liveness-probe.sh"},
+			},
+		},
+	}
+}
+
+func getReadinessProbe(probe databasev1alpha1.ContainerProbe) *corev1.Probe {
+	return &corev1.Probe{
+		InitialDelaySeconds: probe.InitialDelaySeconds,
+		PeriodSeconds:       probe.PeriodSeconds,
+		FailureThreshold:    probe.FailureThreshold,
+		TimeoutSeconds:      probe.TimeoutSeconds,
+		SuccessThreshold:    probe.SuccessThreshold,
+		ProbeHandler: corev1.ProbeHandler{
+			HTTPGet: &corev1.HTTPGetAction{
+				Path: "/",
+				Port: intstr.IntOrString{
+					Type:   intstr.Int,
+					IntVal: 7997,
+				},
 			},
 		},
 	}

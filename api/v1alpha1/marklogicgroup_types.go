@@ -56,9 +56,10 @@ type MarklogicGroupSpec struct {
 	TopologySpreadConstraints []corev1.TopologySpreadConstraint `json:"topologySpreadConstraints,omitempty"`
 	PriorityClassName         string                            `json:"priorityClassName,omitempty"`
 
-	LivenessProbe  *corev1.Probe `json:"livenessProbe,omitempty"`
-	ReadinessProbe *corev1.Probe `json:"readinessProbe,omitempty"`
-	StartupProbe   *corev1.Probe `json:"startupProbe,omitempty"`
+	// +kubebuilder:default:={enabled: true, initialDelaySeconds: 30, timeoutSeconds: 5, periodSeconds: 30, successThreshold: 1, failureThreshold: 3}
+	LivenessProbe ContainerProbe `json:"livenessProbe,omitempty"`
+	// +kubebuilder:default:={enabled: false, initialDelaySeconds: 10, timeoutSeconds: 5, periodSeconds: 30, successThreshold: 1, failureThreshold: 3}
+	ReadinessProbe ContainerProbe `json:"readinessProbe,omitempty"`
 
 	GroupConfig      GroupConfig `json:"groupConfigs,omitempty"`
 	License          *License    `json:"license,omitempty"`

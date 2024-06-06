@@ -86,9 +86,7 @@ func (oc *OperatorContext) getScriptsForConfigMap() map[string]string {
 		if err != nil {
 			logger.Error(err, "Error reading file")
 		}
-		logger.Info(string(fileData))
 		configMapData[fileName] = string(fileData)
 	}
 	return configMapData
 }
-
