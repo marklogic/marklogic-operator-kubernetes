@@ -1173,8 +1173,10 @@ spec:
                               type: string
                           type: object
                         image:
+                          default: marklogicdb/marklogic-db:11.2.0-ubi
                           type: string
                         imagePullPolicy:
+                          default: IfNotPresent
                           type: string
                         imagePullSecrets:
                           items:
@@ -1967,8 +1969,6 @@ spec:
                           additionalProperties:
                             type: string
                           type: object
-                        podManagementPolicy:
-                          type: string
                         priorityClassName:
                           type: string
                         readinessProbe:
