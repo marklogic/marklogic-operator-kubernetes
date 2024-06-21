@@ -395,7 +395,8 @@ function configure_group {
         LOCAL_HTTP_PROTOCOL="https"
         LOCAL_HTTPS_OPTION="-k"
     fi  
-    log "configuring group"
+    log "configuring group wiht protocol: $LOCAL_HTTP_PROTOCOL"
+    sleep 5s
     if [[ "$IS_BOOTSTRAP_HOST" == "true" ]]; then
         group_cfg_template='{"group-name":"%s", "xdqp-ssl-enabled":"%s"}'
         group_cfg=$(printf "$group_cfg_template" "$MARKLOGIC_GROUP" "$XDQP_SSL_ENABLED") 
