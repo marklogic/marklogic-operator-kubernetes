@@ -1,0 +1,51 @@
+apiVersion: operators.coreos.com/v1alpha1
+kind: ClusterServiceVersion
+metadata:
+  annotations:
+    alm-examples: '[]'
+    capabilities: Basic Install
+  name: marklogic-kubernetes-operator.v0.0.0
+  namespace: placeholder
+spec:
+  apiservicedefinitions: {}
+  customresourcedefinitions:
+    owned:
+    - description: MarklogicCluster is the Schema for the marklogicclusters API
+      displayName: Marklogic Cluster
+      kind: MarklogicCluster
+      name: marklogicclusters.database.marklogic.com
+      version: v1alpha1
+    - description: MarklogicGroup is the Schema for the marklogicgroup API
+      displayName: Marklogic Group
+      kind: MarklogicGroup
+      name: marklogicgroups.database.marklogic.com
+      version: v1alpha1
+  description: Operator for managing marklogic server
+  displayName: marklogic-kubernetes-operator
+  icon:
+  - base64data: ""
+    mediatype: ""
+  install:
+    spec:
+      deployments: null
+    strategy: ""
+  installModes:
+  - supported: false
+    type: OwnNamespace
+  - supported: false
+    type: SingleNamespace
+  - supported: false
+    type: MultiNamespace
+  - supported: true
+    type: AllNamespaces
+  keywords:
+  - marklogic
+  - datbase
+  links:
+  - name: Marklogic Kubernetes Operator
+    url: https://marklogic-kubernetes-operator.domain
+  maturity: alpha
+  provider:
+    name: Progress Software Corp
+    url: https://www.progress.com/
+  version: 0.0.0
