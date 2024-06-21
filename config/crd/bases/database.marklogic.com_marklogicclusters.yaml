@@ -4313,6 +4313,9 @@ spec:
                           type: array
                         updateStrategy:
                           default: OnDelete
+                          description: StatefulSetUpdateStrategyType is a string enumeration
+                            type that enumerates all possible update strategies for
+                            the StatefulSet controller.
                           enum:
                           - OnDelete
                           - RollingUpdate

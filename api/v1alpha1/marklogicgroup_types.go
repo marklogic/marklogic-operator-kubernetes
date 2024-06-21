@@ -17,6 +17,7 @@ limitations under the License.
 package v1alpha1
 
 import (
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -46,10 +47,10 @@ type MarklogicGroupSpec struct {
 	TerminationGracePeriodSeconds *int64                       `json:"terminationGracePeriodSeconds,omitempty"`
 	// +kubebuilder:validation:Enum=OnDelete;RollingUpdate
 	// +kubebuilder:default:="OnDelete"
-	UpdateStrategy           string                      `json:"updateStrategy,omitempty"`
-	NetworkPolicy            *networkingv1.NetworkPolicy `json:"networkPolicy,omitempty"`
-	PodSecurityContext       *corev1.PodSecurityContext  `json:"securityContext,omitempty"`
-	ContainerSecurityContext *corev1.SecurityContext     `json:"containerSecurityContext,omitempty"`
+	UpdateStrategy           appsv1.StatefulSetUpdateStrategyType `json:"updateStrategy,omitempty"`
+	NetworkPolicy            *networkingv1.NetworkPolicy          `json:"networkPolicy,omitempty"`
+	PodSecurityContext       *corev1.PodSecurityContext           `json:"securityContext,omitempty"`
+	ContainerSecurityContext *corev1.SecurityContext              `json:"containerSecurityContext,omitempty"`
 
 	Affinity                  *corev1.Affinity                  `json:"affinity,omitempty"`
 	NodeSelector              map[string]string                 `json:"nodeSelector,omitempty"`
