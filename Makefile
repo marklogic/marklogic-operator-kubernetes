@@ -140,6 +140,7 @@ lint-fix: golangci-lint ## Run golangci-lint linter and perform fixes
 
 .PHONY: build
 build: manifests generate fmt vet ## Build manager binary.
+	go version
 	go build -o bin/manager cmd/main.go
 
 .PHONY: run
