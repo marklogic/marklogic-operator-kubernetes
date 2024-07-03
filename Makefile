@@ -51,7 +51,7 @@ endif
 OPERATOR_SDK_VERSION ?= v1.34.2
 
 # Image URL to use all building/pushing image targets
-IMG ?= ml-docker-db-dev-tierpoint.bed-artifactory.bedford.progress.com/ml-marklogic-operator-dev/marklogic-kubernetes-operator:0.0.1
+IMG ?= ml-marklogic-operator-dev.bed-artifactory.bedford.progress.com/marklogic-kubernetes-operator:0.0.1
 # ENVTEST_K8S_VERSION refers to the version of kubebuilder assets to be downloaded by envtest binary.
 ENVTEST_K8S_VERSION = 1.28.3
 
