@@ -42,6 +42,8 @@ const (
 )
 
 var replicas = int32(2)
+var cpu = int64(1)
+var memory = int64(268435456)
 var typeNamespaceName = types.NamespacedName{Name: Name, Namespace: Namespace}
 
 const imageName = "marklogicdb/marklogic-db:11.1.0-centos-1.1.1"
@@ -82,7 +84,7 @@ var _ = Describe("MarkLogicGroup controller", func() {
 					PriorityClassName:         "high-priority",
 					ClusterDomain:             "cluster.local",
 					TopologySpreadConstraints: []corev1.TopologySpreadConstraint{{MaxSkew: 2, TopologyKey: "kubernetes.io/hostname", WhenUnsatisfiable: corev1.ScheduleAnyway}},
-					Affinity:                  &corev1.Affinity{PodAffinity: &corev1.PodAffinity{PreferredDuringSchedulingIgnoredDuringExecution: []corev1.WeightedPodAffinityTerm{{PodAffinityTerm: corev1.PodAffinityTerm{TopologyKey: "kubernetes.io/hostname"}}}}},
+					Affinity:                  &corev1.Affinity{PodAffinity: &corev1.PodAffinity{PreferredDuringSchedulingIgnoredDuringExecution: []corev1.WeightedPodAffinityTerm{{PodAffinityTerm: corev1.PodAffinityTerm{TopologyKey: "kubernetes.io/hostname"}, Weight: 100}}}},
 				},
 			}
 			Expect(k8sClient.Create(ctx, mlGroup)).Should(Succeed())
@@ -98,17 +100,17 @@ var _ = Describe("MarkLogicGroup controller", func() {
 			Expect(createdCR.Name).Should(Equal(Name))
 			Expect(createdCR.Spec.GroupConfig).Should(Equal(groupConfig))
 			Expect(createdCR.Spec.EnableConverters).Should(Equal(true))
-			Expect(createdCR.Spec.Resources.Limits.Cpu().AsInt64()).Should(Equal(100))
-			Expect(createdCR.Spec.Resources.Limits.Memory().AsInt64()).Should(Equal(256))
-			Expect(createdCR.Spec.Resources.Requests.Cpu().AsInt64()).Should(Equal(100))
-			Expect(createdCR.Spec.Resources.Requests.Memory().AsInt64()).Should(Equal(256))
-			Expect(createdCR.Spec.UpdateStrategy).Should(Equal("OnDelete"))
+			Expect(createdCR.Spec.Resources.Limits.Cpu().Value()).Should(Equal(cpu))
+			Expect(createdCR.Spec.Resources.Limits.Memory().Value()).Should(Equal(memory))
+			Expect(createdCR.Spec.Resources.Requests.Cpu().Value()).Should(Equal(cpu))
+			Expect(createdCR.Spec.Resources.Requests.Memory().Value()).Should(Equal(memory))
+			Expect(createdCR.Spec.UpdateStrategy).Should(Equal(appsv1.OnDeleteStatefulSetStrategyType))
 			Expect(createdCR.Spec.PriorityClassName).Should(Equal("high-priority"))
 			Expect(createdCR.Spec.ClusterDomain).Should(Equal("cluster.local"))
-			Expect(createdCR.Spec.TopologySpreadConstraints[0].MaxSkew).Should(Equal(2))
+			Expect(createdCR.Spec.TopologySpreadConstraints[0].MaxSkew).Should(Equal(int32(2)))
 			Expect(createdCR.Spec.TopologySpreadConstraints[0].TopologyKey).Should(Equal("kubernetes.io/hostname"))
 			Expect(createdCR.Spec.TopologySpreadConstraints[0].WhenUnsatisfiable).Should(Equal(corev1.ScheduleAnyway))
-			Expect(createdCR.Spec.Affinity.PodAntiAffinity.PreferredDuringSchedulingIgnoredDuringExecution[0].PodAffinityTerm.TopologyKey).Should(Equal("kubernetes.io/hostname"))
+			Expect(createdCR.Spec.Affinity.PodAffinity.PreferredDuringSchedulingIgnoredDuringExecution[0].Weight).Should(Equal(int32(100)))
 
 			// Validating if StatefulSet is created successfully
 			sts := &appsv1.StatefulSet{}
