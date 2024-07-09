@@ -3,6 +3,8 @@ package k8sutil
 import (
 	"github.com/go-logr/logr"
 	databasev1alpha1 "github.com/marklogic/marklogic-kubernetes-operator/api/v1alpha1"
+	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 )
 
@@ -12,6 +14,14 @@ type markLogicServerParameters struct {
 	Image    string
 	// PersistentVolumeClaim         corev1.PersistentVolumeClaim
 	TerminationGracePeriodSeconds *int64
+	Resources                     *corev1.ResourceRequirements
+	EnableConverters              bool
+	PriorityClassName             string
+	ClusterDomain                 string
+	UpdateStrategy                appsv1.StatefulSetUpdateStrategyType
+	Affinity                      *corev1.Affinity
+	NodeSelector                  map[string]string
+	TopologySpreadConstraints     []corev1.TopologySpreadConstraint
 }
 
 func MarkLogicServerLogger(namespace string, name string) logr.Logger {
@@ -58,6 +68,14 @@ func generateMarkLogicServerParams(cr *databasev1alpha1.MarklogicCluster, index 
 		Name:                          cr.Spec.MarkLogicGroups[index].Name,
 		Image:                         cr.Spec.MarkLogicGroups[index].Image,
 		TerminationGracePeriodSeconds: cr.Spec.MarkLogicGroups[index].TerminationGracePeriodSeconds,
+		Resources:                     cr.Spec.MarkLogicGroups[index].Resources,
+		EnableConverters:              cr.Spec.MarkLogicGroups[index].EnableConverters,
+		PriorityClassName:             cr.Spec.MarkLogicGroups[index].PriorityClassName,
+		ClusterDomain:                 cr.Spec.MarkLogicGroups[index].ClusterDomain,
+		UpdateStrategy:                cr.Spec.MarkLogicGroups[index].UpdateStrategy,
+		Affinity:                      cr.Spec.MarkLogicGroups[index].Affinity,
+		NodeSelector:                  cr.Spec.MarkLogicGroups[index].NodeSelector,
+		TopologySpreadConstraints:     cr.Spec.MarkLogicGroups[index].TopologySpreadConstraints,
 	}
 	// if cr.Spec.Storage != nil {
 	// 	params.PersistentVolumeClaim = generatePVCTemplate(cr.Spec.Storage.Size)
