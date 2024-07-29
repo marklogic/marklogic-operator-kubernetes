@@ -1,10 +1,11 @@
 #! /bin/bash    
 # Refer to https://docs.marklogic.com/guide/admin-api/cluster#id_10889 for cluster joining process
 
-mkdir -p /tmp/marklogic
 N_RETRY=10
 RETRY_INTERVAL=5
-HOST_FQDN="$(hostname).${MARKLOGIC_FQDN_SUFFIX}"
+HOSTNAME=$(cat /etc/hostname)
+HOST_FQDN="${HOSTNAME}.${MARKLOGIC_FQDN_SUFFIX}"
+ML_KUBERNETES_FILE_PATH="/var/opt/MarkLogic/Kubernetes"
 
 # HTTP_PROTOCOL could be http or https 
 HTTP_PROTOCOL="http"
@@ -15,7 +16,7 @@ if [[ "$MARKLOGIC_JOIN_TLS_ENABLED" == "true" ]]; then
 fi
 
 IS_BOOTSTRAP_HOST=false
-if [[ "$(hostname)" == *-0 ]]; then
+if [[ "${HOSTNAME}" == *-0 ]]; then
     echo "IS_BOOTSTRAP_HOST true"
     IS_BOOTSTRAP_HOST=true
 else 
@@ -62,7 +63,7 @@ get_current_host_protocol() {
     hostname="${1:-localhost}"
     port="${2:-8001}"
     protocol="http"
-    resp_code=$(curl -s -o /dev/null -w '%{http_code}' http://$hostname:$port)
+    resp_code=$(curl -s --retry 5 -o /dev/null -w '%{http_code}' http://$hostname:$port)
     if [[ $resp_code -eq 403 ]]; then
         protocol="https"
     fi
@@ -176,16 +177,16 @@ function curl_retry_validate {
 # return values: 0 - successfully initialized
 #                1 - host not reachable
 ################################################################
-function wait_until_marklogic_ready {
+function init_marklogic {
     local host=$1
     info "wait until $host is ready"
-    timestamp=$( curl -s --anyauth \
+    timestamp=$( curl -s --anyauth -m 4 \
                 --user "${MARKLOGIC_ADMIN_USERNAME}":"${MARKLOGIC_ADMIN_PASSWORD}" \
-                http://${host}:8001/admin/v1/timestamp )
+                http://localhost:8001/admin/v1/timestamp )
     if [ -z "${timestamp}" ]; then
         info "${host} - not responding yet"
-        sleep 5s
-        wait_until_marklogic_ready $host
+        sleep 10s
+        init_marklogic $host
         return 0
     else 
         info "${host} - responding with $timestamp"
@@ -197,7 +198,7 @@ function wait_until_marklogic_ready {
             -i -X POST -H "Content-type:application/json" \
             -d "${LICENSE_PAYLOAD}" \
             --user "${MARKLOGIC_ADMIN_USERNAME}":"${MARKLOGIC_ADMIN_PASSWORD}" \
-            http://${host}:8001/admin/v1/init \
+            http://localhost:8001/admin/v1/init \
         )
         if [ "${response_code}" = "202" ]; then
             info "${host} - init called, restart triggered"
@@ -269,7 +270,7 @@ function init_security_db {
         info "${MARKLOGIC_BOOTSTRAP_HOST} - bootstrap security already initialized"
         return 0
     else
-        info "${MARKLOGIC_BOOTSTRAP_HOST} - initializing bootstrap security"
+        info "initializing bootstrap security"
 
         # Get last restart timestamp directly before instance-admin call to verify restart after
         timestamp=$( \
@@ -286,7 +287,7 @@ function init_security_db {
 
         restart_check "${MARKLOGIC_BOOTSTRAP_HOST}" "${timestamp}"
 
-        info "${MARKLOGIC_BOOTSTRAP_HOST} - bootstrap security initialized"
+        info "bootstrap security initialized"
         return 0
     fi
 }
@@ -334,7 +335,7 @@ function join_cluster {
 
     # process to join the host
     # Wait until the group is ready
-    retry_count=5
+    retry_count=10
     while [ $retry_count -gt 0 ]; do
         GROUP_RESP_CODE=$( curl --anyauth -m 20 -s -o /dev/null -w "%{http_code}" $HTTPS_OPTION -X GET $HTTP_PROTOCOL://${MARKLOGIC_BOOTSTRAP_HOST}:8002/manage/v2/groups/${MARKLOGIC_GROUP} --anyauth --user ${MARKLOGIC_ADMIN_USERNAME}:${MARKLOGIC_ADMIN_PASSWORD} )
         info "GROUP_RESP_CODE: $GROUP_RESP_CODE"
@@ -353,12 +354,12 @@ function join_cluster {
         fi
     done
 
-    info "${hostname} - joining cluster of group ${MARKLOGIC_GROUP}"
+    info "joining cluster of group ${MARKLOGIC_GROUP}"
     MARKLOGIC_GROUP_PAYLOAD="group=${MARKLOGIC_GROUP}"
-    curl_retry_validate false "http://${hostname}:8001/admin/v1/server-config" 200 \
+    curl_retry_validate false "http://localhost:8001/admin/v1/server-config" 200 \
         "-o" "/tmp/host.xml" "-X" "GET" "-H" "Accept: application/xml"
     
-    info "${hostname} - getting cluster-config from bootstrap host"
+    info "getting cluster-config from bootstrap host"
     curl_retry_validate false "$HTTP_PROTOCOL://${MARKLOGIC_BOOTSTRAP_HOST}:8001/admin/v1/cluster-config" 200 \
         "--anyauth" "--user" "${MARKLOGIC_ADMIN_USERNAME}:${MARKLOGIC_ADMIN_PASSWORD}" \
         "-X" "POST" "-d" "${MARKLOGIC_GROUP_PAYLOAD}" \
@@ -366,19 +367,19 @@ function join_cluster {
         "-H" "Content-type: application/x-www-form-urlencoded" \
         "-o" "/tmp/cluster.zip" $HTTPS_OPTION
 
-    timestamp=$(curl -s "http://${hostname}:8001/admin/v1/timestamp" )
+    timestamp=$(curl -s "http://localhost:8001/admin/v1/timestamp" )
 
-    info "${hostname} - joining cluster of group ${MARKLOGIC_GROUP}"
-    curl_retry_validate false "http://${hostname}:8001/admin/v1/cluster-config" 202 \
+    info "joining cluster of group ${MARKLOGIC_GROUP}"
+    curl_retry_validate false "http://localhost:8001/admin/v1/cluster-config" 202 \
             "-o" "/dev/null" \
             "-X" "POST" "-H" "Content-type: application/zip" \
             "--data-binary" "@/tmp/cluster.zip"
     
     # 202 causes restart
-    info "${hostname} - restart triggered"
-    restart_check "${hostname}" "${timestamp}"
+    info "restart triggered"
+    restart_check "localhost" "${timestamp}"
 
-    info "${hostname} - joined group ${MARKLOGIC_GROUP}"
+    info "joined group ${MARKLOGIC_GROUP}"
 }
 
 ################################################################
@@ -390,13 +391,12 @@ function configure_group {
     local LOCAL_HTTP_PROTOCOL LOCAL_HTTPS_OPTION
     LOCAL_HTTP_PROTOCOL="http"
     LOCAL_HTTPS_OPTION=""
-    protocol=$(get_current_host_protocol $MARKLOGIC_BOOTSTRAP_HOST)
-    if [[ $protocol == "https" ]]; then
+    bootstrap_protocol=$(get_current_host_protocol $MARKLOGIC_BOOTSTRAP_HOST)
+    if [[ $bootstrap_protocol == "https" ]]; then
         LOCAL_HTTP_PROTOCOL="https"
         LOCAL_HTTPS_OPTION="-k"
     fi  
-    log "configuring group wiht protocol: $LOCAL_HTTP_PROTOCOL"
-    sleep 5s
+    log "configuring group"
     if [[ "$IS_BOOTSTRAP_HOST" == "true" ]]; then
         group_cfg_template='{"group-name":"%s", "xdqp-ssl-enabled":"%s"}'
         group_cfg=$(printf "$group_cfg_template" "$MARKLOGIC_GROUP" "$XDQP_SSL_ENABLED") 
@@ -404,12 +404,12 @@ function configure_group {
         # check if host is already in and get the current cluster
         curl_retry_validate false "$LOCAL_HTTP_PROTOCOL://${MARKLOGIC_BOOTSTRAP_HOST}:8002/manage/v2/hosts/${HOST_FQDN}/properties?format=xml" 200 \
             "--anyauth" "--user" "${MARKLOGIC_ADMIN_USERNAME}:${MARKLOGIC_ADMIN_PASSWORD}" \
-            "-o" "/tmp/marklogic/groups.out" $LOCAL_HTTPS_OPTION
+            "-o" "/tmp/groups.out" $LOCAL_HTTPS_OPTION
 
         response_code=$?
         if [ "${response_code}" = "200" ]; then
             current_group=$( \
-                cat "/tmp/marklogic/groups.out" | 
+                cat "/tmp/groups.out" | 
                 grep "group" |
                 sed 's%^.*<group.*>\(.*\)</group>.*$%\1%' \
             )
@@ -420,7 +420,7 @@ function configure_group {
             response_code=$( \
                 curl -s --anyauth \
                 --user ${MARKLOGIC_ADMIN_USERNAME}:${MARKLOGIC_ADMIN_PASSWORD} \
-                -w '%{http_code}' \
+                -w '%{http_code}' --retry 5 \
                 -X PUT \
                 -H "Content-type: application/json" \
                 $LOCAL_HTTPS_OPTION -d "${group_cfg}" \
@@ -445,11 +445,11 @@ function configure_group {
             info "creating group for other Helm Chart"
 
             # Create a group if group is not already exits
-            GROUP_RESP_CODE=$( curl --anyauth -m 20 -s -o /dev/null -w "%{http_code}" $HTTPS_OPTION -X GET $HTTP_PROTOCOL://${MARKLOGIC_BOOTSTRAP_HOST}:8002/manage/v2/groups/${MARKLOGIC_GROUP} --anyauth --user ${MARKLOGIC_ADMIN_USERNAME}:${MARKLOGIC_ADMIN_PASSWORD} )
+            GROUP_RESP_CODE=$( curl --anyauth --retry 5 -m 20 -s -o /dev/null -w "%{http_code}" $HTTPS_OPTION -X GET $HTTP_PROTOCOL://${MARKLOGIC_BOOTSTRAP_HOST}:8002/manage/v2/groups/${MARKLOGIC_GROUP} --anyauth --user ${MARKLOGIC_ADMIN_USERNAME}:${MARKLOGIC_ADMIN_PASSWORD} )
             if [[ ${GROUP_RESP_CODE} -eq 200 ]]; then
                 info "Skipping creation of group $MARKLOGIC_GROUP as it already exists on the MarkLogic cluster." 
             else 
-                res_code=$(curl --anyauth --user ${MARKLOGIC_ADMIN_USERNAME}:${MARKLOGIC_ADMIN_PASSWORD} $HTTPS_OPTION -m 20 -s -w '%{http_code}' -X POST -d "${group_cfg}" -H "Content-type: application/json" $HTTP_PROTOCOL://${MARKLOGIC_BOOTSTRAP_HOST}:8002/manage/v2/groups)
+                res_code=$(curl --anyauth --retry 5 --user ${MARKLOGIC_ADMIN_USERNAME}:${MARKLOGIC_ADMIN_PASSWORD} $HTTPS_OPTION -m 20 -s -w '%{http_code}' -X POST -d "${group_cfg}" -H "Content-type: application/json" $HTTP_PROTOCOL://${MARKLOGIC_BOOTSTRAP_HOST}:8002/manage/v2/groups)
                 if [[ ${res_code} -eq 201 ]]; then
                     log "Info: [initContainer] Successfully configured group $MARKLOGIC_GROUP on the MarkLogic cluster."
                 else
@@ -619,45 +619,96 @@ EOF
     
     log "Info: removing cert keys"
     rm -f /run/secrets/marklogic-certs/*.key
-}   
+}
 
+
+function configure_path_based_routing {
+    # Authentication configuration when path based is used
+    if [[ $PATH_BASED_ROUTING == "true" ]]; then                    
+        log "Info:  path based routing is set. Adapting authentication method"
+        resp=$(curl --anyauth -w "%{http_code}" --user $MARKLOGIC_ADMIN_USERNAME:$MARKLOGIC_ADMIN_PASSWORD -m 20 -s -X PUT -H "Content-type: application/json" -d '{"authentication":"basic"}' http://localhost:8002/manage/v2/servers/Admin/properties?group-id=${MARKLOGIC_GROUP})
+        log "Info:  Admin-Servers response code: $resp"
+        resp=$(curl --anyauth -w "%{http_code}" --user $MARKLOGIC_ADMIN_USERNAME:$MARKLOGIC_ADMIN_PASSWORD -m 20 -s -X PUT -H "Content-type: application/json" -d '{"authentication":"basic"}' http://localhost:8002/manage/v2/servers/App-Services/properties?group-id=${MARKLOGIC_GROUP})
+        log "Info:  App Service response code: $resp"
+        resp=$(curl --anyauth -w "%{http_code}" --user $MARKLOGIC_ADMIN_USERNAME:$MARKLOGIC_ADMIN_PASSWORD -m 20 -s -X PUT -H "Content-type: application/json" -d '{"authentication":"basic"}' http://localhost:8002/manage/v2/servers/Manage/properties?group-id=${MARKLOGIC_GROUP})
+        log "Info:  Manage response code: $resp"
+        log "Info:  Default App-Servers authentication set to basic auth"
+    else
+        log "Info:  This is not the boostrap host or path based routing is not set. Skipping authentication configuration"
+    fi
+    #End of authentication configuration
+}
+
+function set_status_file {
+    mkdir -p $ML_KUBERNETES_FILE_PATH
+    fqdn=$(hostname -f)
+    status_file="$ML_KUBERNETES_FILE_PATH/status.txt"
+    group_name="${MARKLOGIC_GROUP}"
+    group_xdqp_ssl_enabled="${XDQP_SSL_ENABLED}"
+    https_enabled="${MARKLOGIC_JOIN_TLS_ENABLED}"
+    echo "fqdn=${fqdn}" > $status_file
+    echo "group_name=${group_name}" >> $status_file
+    echo "group_xdqp_ssl_enabled=${group_xdqp_ssl_enabled}" >> $status_file
+    echo "https_enabled=${https_enabled}" >> $status_file
+}
+
+function check_status_file_for_nonbootstrap {
+    if [[ -f "$ML_KUBERNETES_FILE_PATH/status.txt" ]]; then
+        log "Info: status file exists. Skip configuration"
+        exit 0
+    else
+        log "Info:  status file does not exist. Continue"
+    fi
+}
+
+function check_status_file_for_boostrap {
+    if [[ -f "$ML_KUBERNETES_FILE_PATH/status.txt" ]]; then
+        new_group_name="${MARKLOGIC_GROUP}"
+        new_group_xdqp_ssl_enabled="${XDQP_SSL_ENABLED}"
+        new_https_enabled="${MARKLOGIC_JOIN_TLS_ENABLED}"
+        source "$ML_KUBERNETES_FILE_PATH/status.txt"
+        if [[ "$new_group_name" == "$group_name" ]] && [[ "$new_group_xdqp_ssl_enabled" == "$group_xdqp_ssl_enabled" ]] && [[ "$new_https_enabled" == "$https_enabled" ]]; then
+            log "No change in values file. Skip configuration"
+            exit 0
+        else
+            log "Info: changes made in values file. Continue Configuration"
+        fi
+    else
+        return 0
+    fi
+}
+
+# Wait for current pod ready
 
 info "Start configuring MarkLogic for $HOST_FQDN"
 info "Bootstrap host: $MARKLOGIC_BOOTSTRAP_HOST"
 
-# Wait for current pod ready
-wait_until_marklogic_ready $HOST_FQDN
-
 # Only do this if the bootstrap host is in the statefulset we are configuring
-if [[ "${MARKLOGIC_CLUSTER_TYPE}" = "bootstrap" && "${HOST_FQDN}" = "${MARKLOGIC_BOOTSTRAP_HOST}" ]]; then
-    sleep 2s
-    init_security_db
-    configure_group
-else
+if [[ "$IS_BOOTSTRAP_HOST" == "true" ]]; then
+    check_status_file_for_boostrap
+    init_marklogic $HOST_FQDN
+    if [[ "${MARKLOGIC_CLUSTER_TYPE}" == "bootstrap" ]]; then
+        log "Info:  bootstrap host is ready"
+        init_security_db
+        configure_group
+    else 
+        log "Info:  bootstrap host is ready"
+        configure_group
+        join_cluster $HOST_FQDN
+    fi
+    configure_path_based_routing
+else 
+    check_status_file_for_nonbootstrap
+    init_marklogic $HOST_FQDN
     wait_bootstrap_ready
-    configure_group
     join_cluster $HOST_FQDN
 fi
 
-sleep 5s 
-
-# Authentication configuration when path based is used
-if [[ "$IS_BOOTSTRAP_HOST" == "true" ]] && [[ $PATH_BASED_ROUTING == "true" ]]; then                    
-    log "Info:  path based routing is set. Adapting authentication method"
-    resp=$(curl --anyauth -w "%{http_code}" --user $MARKLOGIC_ADMIN_USERNAME:$MARKLOGIC_ADMIN_PASSWORD -m 20 -s -X PUT -H "Content-type: application/json" -d '{"authentication":"basic"}' http://localhost:8002/manage/v2/servers/Admin/properties?group-id=${MARKLOGIC_GROUP})
-    log "Info:  Admin-Servers response code: $resp"
-    resp=$(curl --anyauth -w "%{http_code}" --user $MARKLOGIC_ADMIN_USERNAME:$MARKLOGIC_ADMIN_PASSWORD -m 20 -s -X PUT -H "Content-type: application/json" -d '{"authentication":"basic"}' http://localhost:8002/manage/v2/servers/App-Services/properties?group-id=${MARKLOGIC_GROUP})
-    log "Info:  App Service response code: $resp"
-    resp=$(curl --anyauth -w "%{http_code}" --user $MARKLOGIC_ADMIN_USERNAME:$MARKLOGIC_ADMIN_PASSWORD -m 20 -s -X PUT -H "Content-type: application/json" -d '{"authentication":"basic"}' http://localhost:8002/manage/v2/servers/Manage/properties?group-id=${MARKLOGIC_GROUP})
-    log "Info:  Manage response code: $resp"
-    log "Info:  Default App-Servers authentication set to basic auth"
-else
-    log "Info:  This is not the boostrap host or path based routing is not set. Skipping authentication configuration"
-fi
-#End of authentication configuration
-
 if [[ $MARKLOGIC_JOIN_TLS_ENABLED == "true" ]]; then
+    log "configuring tls"
     configure_tls
 fi
 
-info "helm script completed"
+set_status_file
+
+info "post-start hook script completed"
