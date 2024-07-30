@@ -128,5 +128,22 @@ var _ = Describe("MarkLogicGroup controller", func() {
 				return err == nil
 			}, timeout, interval).Should(BeTrue())
 		})
+
+		It("Should update the MarklogicGroup CR", func() {
+			// Update the MarklogicGroup CR
+			createdCR := &databasev1alpha1.MarklogicGroup{}
+
+			Expect(k8sClient.Get(ctx, typeNamespaceName, createdCR)).Should(Succeed())
+			createdCR.Spec.Replicas = new(int32)
+			*createdCR.Spec.Replicas = 3
+			Expect(k8sClient.Update(ctx, createdCR)).Should(Succeed())
+
+			// Validating if CR is updated successfully
+			updatedCR := &databasev1alpha1.MarklogicGroup{}
+			Eventually(func() bool {
+				err := k8sClient.Get(ctx, typeNamespaceName, updatedCR)
+				return err == nil && *updatedCR.Spec.Replicas == 3
+			}, timeout, interval).Should(BeTrue())
+		})
 	})
 })
