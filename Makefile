@@ -29,7 +29,7 @@ BUNDLE_METADATA_OPTS ?= $(BUNDLE_CHANNELS) $(BUNDLE_DEFAULT_CHANNEL)
 #
 # For example, running 'make bundle-build bundle-push catalog-build catalog-push' will build and push both
 # marklogic.com/marklogic-kubernetes-operator-bundle:$VERSION and marklogic.com/marklogic-kubernetes-operator-catalog:$VERSION.
-IMAGE_TAG_BASE ?= marklogic.com/marklogic-kubernetes-operator
+IMAGE_TAG_BASE ?= ml-docker-db-dev-tierpoint.bed-artifactory.bedford.progress.com/ml-marklogic-operator-dev/marklogic-kubernetes-operator
 
 # BUNDLE_IMG defines the image:tag used for the bundle.
 # You can use it as an arg. (E.g make bundle-build BUNDLE_IMG=<some-registry>/<project-name-bundle>:<tag>)
@@ -51,7 +51,7 @@ endif
 OPERATOR_SDK_VERSION ?= v1.34.2
 
 # Image URL to use all building/pushing image targets
-IMG ?= controller:latest
+IMG ?= ml-marklogic-operator-dev.bed-artifactory.bedford.progress.com/marklogic-kubernetes-operator:0.0.1
 # ENVTEST_K8S_VERSION refers to the version of kubebuilder assets to be downloaded by envtest binary.
 ENVTEST_K8S_VERSION = 1.28.3
 
@@ -140,6 +140,7 @@ lint-fix: golangci-lint ## Run golangci-lint linter and perform fixes
 
 .PHONY: build
 build: manifests generate fmt vet ## Build manager binary.
+	go version
 	go build -o bin/manager cmd/main.go
 
 .PHONY: run
@@ -212,7 +213,7 @@ ENVTEST ?= $(LOCALBIN)/setup-envtest
 
 ## Tool Versions
 KUSTOMIZE_VERSION ?= v5.2.1
-CONTROLLER_TOOLS_VERSION ?= v0.13.0
+CONTROLLER_TOOLS_VERSION ?= v0.14.0
 
 .PHONY: kustomize
 kustomize: $(KUSTOMIZE) ## Download kustomize locally if necessary. If wrong version is installed, it will be removed before downloading.

@@ -3,7 +3,9 @@ package k8sutil
 import (
 	"context"
 	"fmt"
+	"strconv"
 
+	"github.com/cisco-open/k8s-objectmatcher/patch"
 	databasev1alpha1 "github.com/marklogic/marklogic-kubernetes-operator/api/v1alpha1"
 	"github.com/marklogic/marklogic-kubernetes-operator/pkg/result"
 	appsv1 "k8s.io/api/apps/v1"
@@ -14,7 +16,6 @@ import (
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
-	"strconv"
 )
 
 type statefulSetParameters struct {
@@ -23,6 +24,7 @@ type statefulSetParameters struct {
 	Metadata                      metav1.ObjectMeta
 	PersistentVolumeClaim         corev1.PersistentVolumeClaim
 	TerminationGracePeriodSeconds *int64
+	UpdateStrategy                appsv1.StatefulSetUpdateStrategyType
 }
 
 type containerParameters struct {
@@ -49,15 +51,15 @@ func (oc *OperatorContext) ReconcileStatefulset() (reconcile.Result, error) {
 	labels := getMarkLogicLabels(cr.Spec.Name)
 	annotations := map[string]string{}
 	objectMeta := generateObjectMeta(cr.Spec.Name, cr.Namespace, labels, annotations)
-	sts, err := oc.GetStatefulSet(cr.Namespace, objectMeta.Name)
+	currentSts, err := oc.GetStatefulSet(cr.Namespace, objectMeta.Name)
 	containerParams := generateContainerParams(cr)
 	statefulSetParams := generateStatefulSetsParams(cr)
+	statefulSetDef := generateStatefulSetsDef(objectMeta, statefulSetParams, marklogicServerAsOwner(cr), containerParams)
 	if err != nil {
 		if apierrors.IsNotFound(err) {
-			statefulSetDef := generateStatefulSetsDef(objectMeta, statefulSetParams, marklogicServerAsOwner(cr), containerParams)
-			oc.createStatefulSet(cr.Namespace, statefulSetDef, cr)
+			oc.createStatefulSet(statefulSetDef, cr)
 			oc.Recorder.Event(oc.MarklogicGroup, "Normal", "StatefulSetCreated", "MarkLogic statefulSet created successfully")
-			return result.RequeueSoon(10).Output()
+			return result.Done().Output()
 		}
 		result.Error(err).Output()
 	}
@@ -65,9 +67,9 @@ func (oc *OperatorContext) ReconcileStatefulset() (reconcile.Result, error) {
 		logger.Error(err, "Cannot create standalone statefulSet for MarkLogic")
 		return result.Error(err).Output()
 	}
-	patch := client.MergeFrom(oc.MarklogicGroup.DeepCopy())
+	patchClient := client.MergeFrom(oc.MarklogicGroup.DeepCopy())
 	updated := false
-	if sts.Status.ReadyReplicas == 0 || sts.Status.ReadyReplicas != sts.Status.Replicas {
+	if currentSts.Status.ReadyReplicas == 0 || currentSts.Status.ReadyReplicas != currentSts.Status.Replicas {
 		logger.Info("MarkLogic statefulSet is not ready, setting condition and requeue")
 		condition := metav1.Condition{
 			Type:    "Ready",
@@ -77,12 +79,12 @@ func (oc *OperatorContext) ReconcileStatefulset() (reconcile.Result, error) {
 		}
 		updated = oc.setCondition(&condition)
 		if updated {
-			err := oc.Client.Status().Patch(oc.Ctx, oc.MarklogicGroup, patch)
+			err := oc.Client.Status().Patch(oc.Ctx, oc.MarklogicGroup, patchClient)
 			if err != nil {
 				oc.ReqLogger.Error(err, "error updating the MarkLogic Operator Internal status")
 			}
 		}
-		return result.RequeueSoon(10).Output()
+		return result.Done().Output()
 	} else {
 		logger.Info("MarkLogic statefulSet is ready, setting condition")
 		condition := metav1.Condition{
@@ -94,11 +96,32 @@ func (oc *OperatorContext) ReconcileStatefulset() (reconcile.Result, error) {
 		updated = oc.setCondition(&condition)
 	}
 	if updated {
-		err := oc.Client.Status().Patch(oc.Ctx, oc.MarklogicGroup, patch)
+		err := oc.Client.Status().Patch(oc.Ctx, oc.MarklogicGroup, patchClient)
 		if err != nil {
 			oc.ReqLogger.Error(err, "error updating the MarkLogic Operator Internal status")
 		}
 	}
+	patchDiff, err := patch.DefaultPatchMaker.Calculate(currentSts, statefulSetDef,
+		patch.IgnoreStatusFields(),
+		patch.IgnoreVolumeClaimTemplateTypeMetaAndStatus(),
+		patch.IgnoreField("kind"))
+	if err != nil {
+		logger.Error(err, "Error calculating patch")
+		return result.Error(err).Output()
+	}
+	if !patchDiff.IsEmpty() {
+		logger.Info("MarkLogic statefulSet spec is different from the MarkLogicGroup spec, updating the statefulSet")
+		logger.Info(patchDiff.String())
+		err := oc.Client.Update(oc.Ctx, statefulSetDef)
+		if err != nil {
+			logger.Error(err, "Error updating statefulSet")
+			return result.Error(err).Output()
+		}
+	} else {
+		logger.Info("MarkLogic statefulSet spec is the same as the MarkLogicGroup spec")
+
+	}
+	logger.Info("MarkLogic statefulSet is updated to " + strconv.Itoa(int(*cr.Spec.Replicas)))
 	logger.Info("Operator Status:", "Stage", cr.Status.Stage)
 	if cr.Status.Stage == "STS_CREATED" {
 		logger.Info("MarkLogic statefulSet created successfully, waiting for pods to be ready")
@@ -135,9 +158,9 @@ func (oc *OperatorContext) GetStatefulSet(namespace string, stateful string) (*a
 	return statefulInfo, nil
 }
 
-func (oc *OperatorContext) createStatefulSet(namespace string, stateful *appsv1.StatefulSet, cr *databasev1alpha1.MarklogicGroup) error {
+func (oc *OperatorContext) createStatefulSet(statefulset *appsv1.StatefulSet, cr *databasev1alpha1.MarklogicGroup) error {
 	logger := oc.ReqLogger
-	err := oc.Client.Create(context.TODO(), stateful)
+	err := oc.Client.Create(context.TODO(), statefulset)
 	// _, err := GenerateK8sClient().AppsV1().StatefulSets(namespace).Create(context.TODO(), stateful, metav1.CreateOptions{})
 	if err != nil {
 		logger.Error(err, "MarkLogic stateful creation failed")
@@ -157,6 +180,7 @@ func generateStatefulSetsDef(stsMeta metav1.ObjectMeta, params statefulSetParame
 			ServiceName:         stsMeta.Name,
 			Replicas:            params.Replicas,
 			PodManagementPolicy: appsv1.ParallelPodManagement,
+			UpdateStrategy:      appsv1.StatefulSetUpdateStrategy{Type: params.UpdateStrategy},
 			Template: corev1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{
 					Labels: stsMeta.GetLabels(),
@@ -225,6 +249,7 @@ func generateStatefulSetsParams(cr *databasev1alpha1.MarklogicGroup) statefulSet
 		Replicas:                      cr.Spec.Replicas,
 		Name:                          cr.Spec.Name,
 		TerminationGracePeriodSeconds: cr.Spec.TerminationGracePeriodSeconds,
+		UpdateStrategy:                cr.Spec.UpdateStrategy,
 	}
 	if cr.Spec.Storage != nil {
 		params.PersistentVolumeClaim = generatePVCTemplate(cr.Spec.Storage.Size)
