@@ -22,7 +22,9 @@ rules:
 - apiGroups:
   - ""
   resources:
+  - configmaps
   - pods
+  - secrets
   - services
   verbs:
   - create
