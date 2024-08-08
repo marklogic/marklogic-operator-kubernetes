@@ -1,4 +1,4 @@
-package e2eframework
+package e2e
 
 import (
 	"context"
