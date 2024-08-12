@@ -49,7 +49,7 @@ type MarklogicGroupSpec struct {
 	// +kubebuilder:default:="OnDelete"
 	UpdateStrategy           appsv1.StatefulSetUpdateStrategyType `json:"updateStrategy,omitempty"`
 	NetworkPolicy            *networkingv1.NetworkPolicy          `json:"networkPolicy,omitempty"`
-	PodSecurityContext       *corev1.PodSecurityContext           `json:"securityContext,omitempty"`
+	PodSecurityContext       *corev1.PodSecurityContext           `json:"podSecurityContext,omitempty"`
 	ContainerSecurityContext *corev1.SecurityContext              `json:"containerSecurityContext,omitempty"`
 
 	Affinity                  *corev1.Affinity                  `json:"affinity,omitempty"`

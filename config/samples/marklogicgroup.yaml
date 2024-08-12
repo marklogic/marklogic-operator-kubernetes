@@ -21,6 +21,15 @@ spec:
   updateStrategy: OnDelete
   groupConfig:
     name: "node"
+## Uncomment the following lines to specify the podSecurityContext and containerSecurityContext
+  # podSecurityContext:
+  #   fsGroup: 2
+  #   fsGroupChangePolicy: OnRootMismatch
+  # containerSecurityContext:
+  #   runAsUser: 1000
+  #   runAsNonRoot: false
+  #   allowPrivilegeEscalation: false
+
 
   # resources:
   #   requests:
