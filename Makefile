@@ -317,3 +317,7 @@ $(HELMIFY): $(LOCALBIN)
     
 helm: manifests kustomize helmify
 	$(KUSTOMIZE) build config/default | $(HELMIFY) charts/marklogic-operator
+
+.PHONY: image-scan
+image-scan: docker-build
+	docker run --rm -v /var/run/docker.sock:/var/run/docker.sock anchore/grype:latest $(IMG)
