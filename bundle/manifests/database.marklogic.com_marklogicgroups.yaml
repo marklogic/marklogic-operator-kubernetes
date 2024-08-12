@@ -1051,7 +1051,7 @@ spec:
                     type: string
                 type: object
               image:
-                default: marklogicdb/marklogic-db:11.2.0-ubi
+                default: progressofficial/marklogic-db:11.3.0-ubi-rootless
                 type: string
               imagePullPolicy:
                 default: IfNotPresent

@@ -35,7 +35,7 @@ type MarklogicGroupSpec struct {
 	// +kubebuilder:default:="cluster.local"
 	ClusterDomain string `json:"clusterDomain,omitempty"`
 
-	// +kubebuilder:default:="marklogicdb/marklogic-db:11.2.0-ubi"
+	// +kubebuilder:default:="progressofficial/marklogic-db:11.3.0-ubi-rootless"
 	Image string `json:"image"`
 	// +kubebuilder:default:="IfNotPresent"
 	ImagePullPolicy  string                        `json:"imagePullPolicy,omitempty"`
@@ -47,10 +47,12 @@ type MarklogicGroupSpec struct {
 	TerminationGracePeriodSeconds *int64                       `json:"terminationGracePeriodSeconds,omitempty"`
 	// +kubebuilder:validation:Enum=OnDelete;RollingUpdate
 	// +kubebuilder:default:="OnDelete"
-	UpdateStrategy           appsv1.StatefulSetUpdateStrategyType `json:"updateStrategy,omitempty"`
-	NetworkPolicy            *networkingv1.NetworkPolicy          `json:"networkPolicy,omitempty"`
-	PodSecurityContext       *corev1.PodSecurityContext           `json:"podSecurityContext,omitempty"`
-	ContainerSecurityContext *corev1.SecurityContext              `json:"containerSecurityContext,omitempty"`
+	UpdateStrategy appsv1.StatefulSetUpdateStrategyType `json:"updateStrategy,omitempty"`
+	NetworkPolicy  *networkingv1.NetworkPolicy          `json:"networkPolicy,omitempty"`
+	// +kubebuilder:default:={fsGroup: 2, fsGroupChangePolicy: "OnRootMismatch"}
+	PodSecurityContext *corev1.PodSecurityContext `json:"podSecurityContext,omitempty"`
+	// +kubebuilder:default:={runAsUser: 1000, runAsNonRoot: true, allowPrivilegeEscalation: false}
+	ContainerSecurityContext *corev1.SecurityContext `json:"containerSecurityContext,omitempty"`
 
 	Affinity                  *corev1.Affinity                  `json:"affinity,omitempty"`
 	NodeSelector              map[string]string                 `json:"nodeSelector,omitempty"`

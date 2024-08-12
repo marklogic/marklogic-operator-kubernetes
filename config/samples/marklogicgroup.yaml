@@ -11,7 +11,7 @@ metadata:
 spec:
   replicas: 2
   name: marklogic
-  image: "marklogicdb/marklogic-db:11.1.0-centos-1.1.2"
+  image: "progressofficial/marklogic-db:11.3.0-ubi-rootless"
   auth:
     adminUsername: user
     adminPassword: pass
@@ -22,6 +22,7 @@ spec:
   groupConfig:
     name: "node"
 ## Uncomment the following lines to specify the podSecurityContext and containerSecurityContext
+## Note: Below values are set to default, please update them as per your requirements
   # podSecurityContext:
   #   fsGroup: 2
   #   fsGroupChangePolicy: OnRootMismatch

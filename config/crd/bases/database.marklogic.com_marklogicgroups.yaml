@@ -816,6 +816,10 @@ spec:
                 default: cluster.local
                 type: string
               containerSecurityContext:
+                default:
+                  allowPrivilegeEscalation: false
+                  runAsNonRoot: true
+                  runAsUser: 1000
                 description: |-
                   SecurityContext holds security configuration that will be applied to a container.
                   Some fields are present in both SecurityContext and PodSecurityContext.  When both
@@ -998,7 +1002,7 @@ spec:
                     type: string
                 type: object
               image:
-                default: marklogicdb/marklogic-db:11.2.0-ubi
+                default: progressofficial/marklogic-db:11.3.0-ubi-rootless
                 type: string
               imagePullPolicy:
                 default: IfNotPresent
@@ -1549,6 +1553,9 @@ spec:
                   type: string
                 type: object
               podSecurityContext:
+                default:
+                  fsGroup: 2
+                  fsGroupChangePolicy: OnRootMismatch
                 description: |-
                   PodSecurityContext holds pod-level security attributes and common container settings.
                   Some fields are also present in container.securityContext.  Field values of
