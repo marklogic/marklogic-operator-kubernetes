@@ -52,7 +52,7 @@ type MarklogicGroupSpec struct {
 	// +kubebuilder:default:={fsGroup: 2, fsGroupChangePolicy: "OnRootMismatch"}
 	PodSecurityContext *corev1.PodSecurityContext `json:"podSecurityContext,omitempty"`
 	// +kubebuilder:default:={runAsUser: 1000, runAsNonRoot: true, allowPrivilegeEscalation: false}
-	ContainerSecurityContext *corev1.SecurityContext `json:"containerSecurityContext,omitempty"`
+	ContainerSecurityContext *corev1.SecurityContext `json:"securityContext,omitempty"`
 
 	Affinity                  *corev1.Affinity                  `json:"affinity,omitempty"`
 	NodeSelector              map[string]string                 `json:"nodeSelector,omitempty"`

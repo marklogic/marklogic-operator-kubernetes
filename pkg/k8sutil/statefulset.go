@@ -43,6 +43,8 @@ type containerParameters struct {
 	LivenessProbe      databasev1alpha1.ContainerProbe
 	ReadinessProbe     databasev1alpha1.ContainerProbe
 	GroupConfig        databasev1alpha1.GroupConfig
+	PodSecurityContext *corev1.PodSecurityContext
+	SecurityContext    *corev1.SecurityContext
 }
 
 func (oc *OperatorContext) ReconcileStatefulset() (reconcile.Result, error) {
@@ -189,6 +191,7 @@ func generateStatefulSetsDef(stsMeta metav1.ObjectMeta, params statefulSetParame
 					Containers:                    generateContainerDef(stsMeta.GetName(), containerParams),
 					TerminationGracePeriodSeconds: params.TerminationGracePeriodSeconds,
 					Volumes:                       generateVolumes(stsMeta.Name),
+					SecurityContext:               containerParams.PodSecurityContext,
 				},
 			},
 		},
@@ -228,6 +231,7 @@ func generateContainerDef(name string, containerParams containerParameters) []co
 			Env:             getEnvironmentVariables(containerParams),
 			Lifecycle:       getLifeCycle(),
 			VolumeMounts:    getVolumeMount(),
+			SecurityContext: containerParams.SecurityContext,
 		},
 	}
 	if containerParams.Resources != nil {
@@ -260,15 +264,17 @@ func generateStatefulSetsParams(cr *databasev1alpha1.MarklogicGroup) statefulSet
 func generateContainerParams(cr *databasev1alpha1.MarklogicGroup) containerParameters {
 	trueProperty := true
 	containerParams := containerParameters{
-		Image:          cr.Spec.Image,
-		Resources:      cr.Spec.Resources,
-		Name:           cr.Spec.Name,
-		Namespace:      cr.Namespace,
-		ClusterDomain:  cr.Spec.ClusterDomain,
-		BootstrapHost:  cr.Spec.BootstrapHost,
-		LivenessProbe:  cr.Spec.LivenessProbe,
-		ReadinessProbe: cr.Spec.ReadinessProbe,
-		GroupConfig:    cr.Spec.GroupConfig,
+		Image:              cr.Spec.Image,
+		Resources:          cr.Spec.Resources,
+		Name:               cr.Spec.Name,
+		Namespace:          cr.Namespace,
+		ClusterDomain:      cr.Spec.ClusterDomain,
+		BootstrapHost:      cr.Spec.BootstrapHost,
+		LivenessProbe:      cr.Spec.LivenessProbe,
+		ReadinessProbe:     cr.Spec.ReadinessProbe,
+		GroupConfig:        cr.Spec.GroupConfig,
+		PodSecurityContext: cr.Spec.PodSecurityContext,
+		SecurityContext:    cr.Spec.ContainerSecurityContext,
 	}
 
 	if cr.Spec.Storage != nil {

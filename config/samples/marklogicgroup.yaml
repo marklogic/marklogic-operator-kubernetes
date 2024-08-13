@@ -26,9 +26,9 @@ spec:
   # podSecurityContext:
   #   fsGroup: 2
   #   fsGroupChangePolicy: OnRootMismatch
-  # containerSecurityContext:
+  # securityContext:
   #   runAsUser: 1000
-  #   runAsNonRoot: false
+  #   runAsNonRoot: true
   #   allowPrivilegeEscalation: false
 
 
