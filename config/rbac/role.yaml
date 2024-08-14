@@ -1,0 +1,88 @@
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: manager-role
+rules:
+- apiGroups:
+  - apps
+  resources:
+  - daemonsets
+  - deployments
+  - replicasets
+  - statefulsets
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - ""
+  resources:
+  - configmaps
+  - pods
+  - secrets
+  - services
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - database.marklogic.com
+  resources:
+  - marklogicclusters
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - database.marklogic.com
+  resources:
+  - marklogicclusters/finalizers
+  verbs:
+  - update
+- apiGroups:
+  - database.marklogic.com
+  resources:
+  - marklogicclusters/status
+  verbs:
+  - get
+  - patch
+  - update
+- apiGroups:
+  - database.marklogic.com
+  resources:
+  - marklogicgroups
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - database.marklogic.com
+  resources:
+  - marklogicgroups/finalizers
+  verbs:
+  - update
+- apiGroups:
+  - database.marklogic.com
+  resources:
+  - marklogicgroups/status
+  verbs:
+  - get
+  - patch
+  - update
