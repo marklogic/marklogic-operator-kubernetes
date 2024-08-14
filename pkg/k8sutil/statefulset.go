@@ -60,7 +60,6 @@ func (oc *OperatorContext) ReconcileStatefulset() (reconcile.Result, error) {
 	containerParams := generateContainerParams(cr)
 	statefulSetParams := generateStatefulSetsParams(cr)
 	statefulSetDef := generateStatefulSetsDef(objectMeta, statefulSetParams, marklogicServerAsOwner(cr), containerParams)
-	logger.Info("statefulSetDef SPEC: ", "statefulSetDef", statefulSetDef.Spec)
 	if err != nil {
 		if apierrors.IsNotFound(err) {
 			oc.createStatefulSet(statefulSetDef, cr)
