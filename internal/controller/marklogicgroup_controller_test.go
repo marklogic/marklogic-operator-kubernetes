@@ -42,15 +42,16 @@ const (
 )
 
 var replicas = int32(2)
-var cpu = int64(1)
-var memory = int64(268435456)
+
+const resourceCpuValue = int64(1)
+const resourceMemoryValue = int64(268435456)
 
 // 100Mi
-const hugepagesValue = int64(104857600)
+const resourceHugepageValue = int64(104857600)
 
 var typeNamespaceName = types.NamespacedName{Name: Name, Namespace: Namespace}
 
-const imageName = "marklogicdb/marklogic-db:11.1.0-centos-1.1.1"
+const imageName = "progressofficial/marklogic-db:11.3.0-ubi-rootless"
 
 var groupConfig = databasev1alpha1.GroupConfig{
 	Name:          "dnode",
@@ -104,14 +105,14 @@ var _ = Describe("MarkLogicGroup controller", func() {
 			Expect(createdCR.Name).Should(Equal(Name))
 			Expect(createdCR.Spec.GroupConfig).Should(Equal(groupConfig))
 			Expect(createdCR.Spec.EnableConverters).Should(Equal(true))
-			Expect(createdCR.Spec.Resources.Limits.Cpu().Value()).Should(Equal(cpu))
-			Expect(createdCR.Spec.Resources.Limits.Memory().Value()).Should(Equal(memory))
+			Expect(createdCR.Spec.Resources.Limits.Cpu().Value()).Should(Equal(resourceCpuValue))
+			Expect(createdCR.Spec.Resources.Limits.Memory().Value()).Should(Equal(resourceMemoryValue))
 			hugepagesLimit := createdCR.Spec.Resources.Limits["hugepages-2Mi"]
-			Expect(hugepagesLimit.Value()).Should(Equal(hugepagesValue))
-			Expect(createdCR.Spec.Resources.Requests.Cpu().Value()).Should(Equal(cpu))
-			Expect(createdCR.Spec.Resources.Requests.Memory().Value()).Should(Equal(memory))
+			Expect(hugepagesLimit.Value()).Should(Equal(resourceHugepageValue))
+			Expect(createdCR.Spec.Resources.Requests.Cpu().Value()).Should(Equal(resourceCpuValue))
+			Expect(createdCR.Spec.Resources.Requests.Memory().Value()).Should(Equal(resourceMemoryValue))
 			hugepagesRequest := createdCR.Spec.Resources.Requests["hugepages-2Mi"]
-			Expect(hugepagesRequest.Value()).Should(Equal(hugepagesValue))
+			Expect(hugepagesRequest.Value()).Should(Equal(resourceHugepageValue))
 			Expect(createdCR.Spec.UpdateStrategy).Should(Equal(appsv1.OnDeleteStatefulSetStrategyType))
 			Expect(createdCR.Spec.PriorityClassName).Should(Equal("high-priority"))
 			Expect(createdCR.Spec.ClusterDomain).Should(Equal("cluster.local"))
