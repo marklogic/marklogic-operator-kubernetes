@@ -47,6 +47,7 @@ const (
 var replicas = int32(2)
 var cpu = int64(1)
 var memory = int64(268435456)
+
 var fsGroup = int64(2)
 var fsGroupChangePolicy = corev1.FSGroupChangeOnRootMismatch
 var podSecurityContext = corev1.PodSecurityContext{
@@ -136,11 +137,11 @@ var _ = Describe("MarkLogicGroup controller", func() {
 			Expect(createdCR.Spec.TopologySpreadConstraints[0].TopologyKey).Should(Equal("kubernetes.io/hostname"))
 			Expect(createdCR.Spec.TopologySpreadConstraints[0].WhenUnsatisfiable).Should(Equal(corev1.ScheduleAnyway))
 			Expect(createdCR.Spec.Affinity.PodAffinity.PreferredDuringSchedulingIgnoredDuringExecution[0].Weight).Should(Equal(int32(100)))
-			Expect(createdCR.Spec.PodSecurityContext.FSGroup).Should(Equal(int64(2)))
+			Expect(createdCR.Spec.PodSecurityContext.FSGroup).Should(Equal(&fsGroup))
 			Expect(*createdCR.Spec.PodSecurityContext.FSGroupChangePolicy).Should(Equal(corev1.FSGroupChangeOnRootMismatch))
 			Expect(*createdCR.Spec.ContainerSecurityContext.RunAsUser).Should(Equal(int64(1000)))
-			Expect(createdCR.Spec.ContainerSecurityContext.RunAsNonRoot).Should(Equal(true))
-			Expect(createdCR.Spec.ContainerSecurityContext.AllowPrivilegeEscalation).Should(Equal(false))
+			Expect(createdCR.Spec.ContainerSecurityContext.RunAsNonRoot).Should(Equal(&runAsNonRoot))
+			Expect(createdCR.Spec.ContainerSecurityContext.AllowPrivilegeEscalation).Should(Equal(&allowPrivilegeEscalation))
 			Expect(createdCR.Spec.NetworkPolicy.Spec.Ingress[0].Ports[0].Port.IntVal).Should(Equal(int32(8000)))
 
 			// Validating if StatefulSet is created successfully
