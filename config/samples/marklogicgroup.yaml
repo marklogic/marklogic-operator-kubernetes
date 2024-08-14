@@ -1,0 +1,45 @@
+apiVersion: database.marklogic.com/v1alpha1
+kind: MarklogicGroup
+metadata:
+  labels:
+    app.kubernetes.io/name: marklogicgroup
+    app.kubernetes.io/instance: marklogicgroup-sample
+    app.kubernetes.io/part-of: marklogic-kubernetes-operator
+    app.kubernetes.io/managed-by: kustomize
+    app.kubernetes.io/created-by: marklogic-kubernetes-operator
+  name: marklogicgroup-sample
+spec:
+  replicas: 2
+  name: marklogic
+  image: "progressofficial/marklogic-db:11.3.0-ubi-rootless"
+  auth:
+    adminUsername: user
+    adminPassword: pass
+  # storage:
+  #   size: 10Gi
+  terminationGracePeriodSeconds: 9
+  updateStrategy: OnDelete
+  groupConfig:
+    name: "node"
+
+  # resources:
+  #   requests:
+  #     memory: "6Gi"
+  #     cpu: "2"
+  #   limits:
+  #     memory: "6Gi"
+  #     cpu: "2"
+  # livenessProbe:
+  #   enabled: true
+  #   initialDelaySeconds: 31
+  #   periodSeconds: 11
+  #   timeoutSeconds: 6
+  #   successThreshold: 1
+  #   failureThreshold: 4
+  # readinessProbe:
+  #   enabled: true
+  #   initialDelaySeconds: 29
+  #   periodSeconds: 9
+  #   timeoutSeconds: 4
+  #   successThreshold: 1
+  #   failureThreshold: 2

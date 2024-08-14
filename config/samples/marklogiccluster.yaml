@@ -1,0 +1,22 @@
+apiVersion: database.marklogic.com/v1alpha1
+kind: MarklogicCluster
+metadata:
+  labels:
+    app.kubernetes.io/name: marklogiccluster
+    app.kubernetes.io/instance: marklogiccluster-sample
+    app.kubernetes.io/part-of: marklogic-kubernetes-operator
+    app.kubernetes.io/managed-by: kustomize
+    app.kubernetes.io/created-by: marklogic-kubernetes-operator
+  name: marklogiccluster-sample
+spec:
+  markLogicGroups:
+    - spec:
+        replicas: 2
+        name: dnode
+        image: "marklogicdb/marklogic-db:11.1.0-centos-1.1.1"
+      isBootstrap: true
+    - spec:
+        replicas: 1
+        name: enode
+        image: "marklogicdb/marklogic-db:11.1.0-centos-1.1.1"
+      isBootstrap: false
