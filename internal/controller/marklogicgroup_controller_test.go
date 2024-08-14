@@ -58,6 +58,11 @@ var groupConfig = databasev1alpha1.GroupConfig{
 	EnableXdqpSsl: true,
 }
 
+var hugePages = databasev1alpha1.HugePages{
+	Enabled:   true,
+	MountPath: "/dev/hugepages",
+}
+
 var _ = Describe("MarkLogicGroup controller", func() {
 	Context("When creating an MarklogicGroup", func() {
 		ctx := context.Background()
@@ -84,6 +89,7 @@ var _ = Describe("MarkLogicGroup controller", func() {
 					Image:                     imageName,
 					GroupConfig:               groupConfig,
 					EnableConverters:          true,
+					HugePages:                 &hugePages,
 					UpdateStrategy:            "OnDelete",
 					Resources:                 &corev1.ResourceRequirements{Requests: corev1.ResourceList{"cpu": resource.MustParse("100m"), "memory": resource.MustParse("256Mi"), "hugepages-2Mi": resource.MustParse("100Mi")}, Limits: corev1.ResourceList{"cpu": resource.MustParse("100m"), "memory": resource.MustParse("256Mi"), "hugepages-2Mi": resource.MustParse("100Mi")}},
 					PriorityClassName:         "high-priority",
@@ -105,6 +111,8 @@ var _ = Describe("MarkLogicGroup controller", func() {
 			Expect(createdCR.Name).Should(Equal(Name))
 			Expect(createdCR.Spec.GroupConfig).Should(Equal(groupConfig))
 			Expect(createdCR.Spec.EnableConverters).Should(Equal(true))
+			Expect(createdCR.Spec.HugePages.Enabled).Should(Equal(true))
+			Expect(createdCR.Spec.HugePages.MountPath).Should(Equal("/dev/hugepages"))
 			Expect(createdCR.Spec.Resources.Limits.Cpu().Value()).Should(Equal(resourceCpuValue))
 			Expect(createdCR.Spec.Resources.Limits.Memory().Value()).Should(Equal(resourceMemoryValue))
 			hugepagesLimit := createdCR.Spec.Resources.Limits["hugepages-2Mi"]
