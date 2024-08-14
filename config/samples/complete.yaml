@@ -24,6 +24,9 @@ spec:
   # groupConfig:
   #   name: "node"
   enableConverters: true
+  hugePages:
+    enabled: true
+    mountPath: /dev/hugepages
   nodeSelector:
     node-role.kubernetes.io/master: "true"
   affinity: 
@@ -55,9 +58,13 @@ spec:
     requests:
       memory: "4Gi"
       cpu: "1"
+      # When using huge pages requests should equal limits
+      # refer to https://kubernetes.io/docs/tasks/manage-hugepages/scheduling-hugepages/ for more information on huge pages
+      # hugepages-2Mi: 100Mi
     limits:
       memory: "4Gi"
       cpu: "1"
+      # hugepages-2Mi: 100Mi
   livenessProbe:
     enabled: true
     initialDelaySeconds: 31

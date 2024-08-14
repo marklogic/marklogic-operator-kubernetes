@@ -47,6 +47,7 @@ type containerParameters struct {
 	ReadinessProbe     databasev1alpha1.ContainerProbe
 	GroupConfig        databasev1alpha1.GroupConfig
 	EnableConverters   bool
+	HugePages          *databasev1alpha1.HugePages
 }
 
 func (oc *OperatorContext) ReconcileStatefulset() (reconcile.Result, error) {
@@ -59,6 +60,7 @@ func (oc *OperatorContext) ReconcileStatefulset() (reconcile.Result, error) {
 	containerParams := generateContainerParams(cr)
 	statefulSetParams := generateStatefulSetsParams(cr)
 	statefulSetDef := generateStatefulSetsDef(objectMeta, statefulSetParams, marklogicServerAsOwner(cr), containerParams)
+	logger.Info("statefulSetDef SPEC: ", "statefulSetDef", statefulSetDef.Spec)
 	if err != nil {
 		if apierrors.IsNotFound(err) {
 			oc.createStatefulSet(statefulSetDef, cr)
@@ -192,7 +194,7 @@ func generateStatefulSetsDef(stsMeta metav1.ObjectMeta, params statefulSetParame
 				Spec: corev1.PodSpec{
 					Containers:                    generateContainerDef(stsMeta.GetName(), containerParams),
 					TerminationGracePeriodSeconds: params.TerminationGracePeriodSeconds,
-					Volumes:                       generateVolumes(stsMeta.Name),
+					Volumes:                       generateVolumes(stsMeta.Name, containerParams),
 					NodeSelector:                  params.NodeSelector,
 					Affinity:                      params.Affinity,
 					TopologySpreadConstraints:     params.TopologySpreadConstraints,
@@ -235,7 +237,7 @@ func generateContainerDef(name string, containerParams containerParameters) []co
 			ImagePullPolicy: containerParams.ImagePullPolicy,
 			Env:             getEnvironmentVariables(containerParams),
 			Lifecycle:       getLifeCycle(),
-			VolumeMounts:    getVolumeMount(),
+			VolumeMounts:    getVolumeMount(containerParams),
 		},
 	}
 	if containerParams.Resources != nil {
@@ -297,6 +299,9 @@ func generateContainerParams(cr *databasev1alpha1.MarklogicGroup) containerParam
 		containerParams.LicenseKey = cr.Spec.License.Key
 		containerParams.Licensee = cr.Spec.License.Licensee
 	}
+	if cr.Spec.HugePages.Enabled {
+		containerParams.HugePages = cr.Spec.HugePages
+	}
 
 	return containerParams
 }
@@ -316,7 +321,7 @@ func getLifeCycle() *corev1.Lifecycle {
 	}
 }
 
-func generateVolumes(stsName string) []corev1.Volume {
+func generateVolumes(stsName string, containerParams containerParameters) []corev1.Volume {
 	volumes := []corev1.Volume{}
 	volumes = append(volumes, corev1.Volume{
 		Name: "helm-scripts",
@@ -336,6 +341,17 @@ func generateVolumes(stsName string) []corev1.Volume {
 			},
 		},
 	})
+	if containerParams.HugePages.Enabled {
+		volumes = append(volumes, corev1.Volume{
+			Name: "huge-pages",
+			VolumeSource: corev1.VolumeSource{
+				EmptyDir: &corev1.EmptyDirVolumeSource{
+					Medium: corev1.StorageMediumHugePages,
+				},
+			},
+		})
+	}
+
 	return volumes
 }
 
@@ -408,7 +424,7 @@ func getEnvironmentVariables(containerParams containerParameters) []corev1.EnvVa
 	return envVars
 }
 
-func getVolumeMount() []corev1.VolumeMount {
+func getVolumeMount(containerParams containerParameters) []corev1.VolumeMount {
 	var VolumeMounts []corev1.VolumeMount
 
 	// if persistenceEnabled != nil && *persistenceEnabled {
@@ -427,6 +443,14 @@ func getVolumeMount() []corev1.VolumeMount {
 			ReadOnly:  true,
 		},
 	)
+	if containerParams.HugePages.Enabled {
+		VolumeMounts = append(VolumeMounts,
+			corev1.VolumeMount{
+				Name:      "huge-pages",
+				MountPath: containerParams.HugePages.MountPath,
+			},
+		)
+	}
 	return VolumeMounts
 }
 

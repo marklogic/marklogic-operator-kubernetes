@@ -19,10 +19,15 @@ type ContainerProbe struct {
 }
 
 // Storage is the inteface to add pvc and pv support in marklogic
-
 type Storage struct {
 	Size        string             `json:"size,omitempty"`
 	VolumeMount VolumeMountWrapper `json:"volumeMount,omitempty"`
+}
+
+type HugePages struct {
+	Enabled bool `json:"enabled,omitempty"`
+	// +kubebuilder:default:="/dev/hugepages"
+	MountPath string `json:"mountPath,omitempty"`
 }
 
 type VolumeMountWrapper struct {
