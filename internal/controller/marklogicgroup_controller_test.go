@@ -44,6 +44,10 @@ const (
 var replicas = int32(2)
 var cpu = int64(1)
 var memory = int64(268435456)
+
+// 100Mi
+const hugepagesValue = int64(104857600)
+
 var typeNamespaceName = types.NamespacedName{Name: Name, Namespace: Namespace}
 
 const imageName = "marklogicdb/marklogic-db:11.1.0-centos-1.1.1"
@@ -80,7 +84,7 @@ var _ = Describe("MarkLogicGroup controller", func() {
 					GroupConfig:               groupConfig,
 					EnableConverters:          true,
 					UpdateStrategy:            "OnDelete",
-					Resources:                 &corev1.ResourceRequirements{Requests: corev1.ResourceList{"cpu": resource.MustParse("100m"), "memory": resource.MustParse("256Mi")}, Limits: corev1.ResourceList{"cpu": resource.MustParse("100m"), "memory": resource.MustParse("256Mi")}},
+					Resources:                 &corev1.ResourceRequirements{Requests: corev1.ResourceList{"cpu": resource.MustParse("100m"), "memory": resource.MustParse("256Mi"), "hugepages-2Mi": resource.MustParse("100Mi")}, Limits: corev1.ResourceList{"cpu": resource.MustParse("100m"), "memory": resource.MustParse("256Mi"), "hugepages-2Mi": resource.MustParse("100Mi")}},
 					PriorityClassName:         "high-priority",
 					ClusterDomain:             "cluster.local",
 					TopologySpreadConstraints: []corev1.TopologySpreadConstraint{{MaxSkew: 2, TopologyKey: "kubernetes.io/hostname", WhenUnsatisfiable: corev1.ScheduleAnyway}},
@@ -102,8 +106,12 @@ var _ = Describe("MarkLogicGroup controller", func() {
 			Expect(createdCR.Spec.EnableConverters).Should(Equal(true))
 			Expect(createdCR.Spec.Resources.Limits.Cpu().Value()).Should(Equal(cpu))
 			Expect(createdCR.Spec.Resources.Limits.Memory().Value()).Should(Equal(memory))
+			hugepagesLimit := createdCR.Spec.Resources.Limits["hugepages-2Mi"]
+			Expect(hugepagesLimit.Value()).Should(Equal(hugepagesValue))
 			Expect(createdCR.Spec.Resources.Requests.Cpu().Value()).Should(Equal(cpu))
 			Expect(createdCR.Spec.Resources.Requests.Memory().Value()).Should(Equal(memory))
+			hugepagesRequest := createdCR.Spec.Resources.Requests["hugepages-2Mi"]
+			Expect(hugepagesRequest.Value()).Should(Equal(hugepagesValue))
 			Expect(createdCR.Spec.UpdateStrategy).Should(Equal(appsv1.OnDeleteStatefulSetStrategyType))
 			Expect(createdCR.Spec.PriorityClassName).Should(Equal("high-priority"))
 			Expect(createdCR.Spec.ClusterDomain).Should(Equal("cluster.local"))
