@@ -35,7 +35,7 @@ type MarklogicGroupSpec struct {
 	// +kubebuilder:default:="cluster.local"
 	ClusterDomain string `json:"clusterDomain,omitempty"`
 
-	// +kubebuilder:default:="marklogicdb/marklogic-db:11.2.0-ubi"
+	// +kubebuilder:default:="progressofficial/marklogic-db:11.3.0-ubi-rootless"
 	Image string `json:"image"`
 	// +kubebuilder:default:="IfNotPresent"
 	ImagePullPolicy  string                        `json:"imagePullPolicy,omitempty"`
@@ -56,6 +56,9 @@ type MarklogicGroupSpec struct {
 	NodeSelector              map[string]string                 `json:"nodeSelector,omitempty"`
 	TopologySpreadConstraints []corev1.TopologySpreadConstraint `json:"topologySpreadConstraints,omitempty"`
 	PriorityClassName         string                            `json:"priorityClassName,omitempty"`
+
+	// +kubebuilder:default:={enabled: false, mountPath: "/dev/hugepages"}
+	HugePages *HugePages `json:"hugePages,omitempty"`
 
 	// +kubebuilder:default:={enabled: true, initialDelaySeconds: 30, timeoutSeconds: 5, periodSeconds: 30, successThreshold: 1, failureThreshold: 3}
 	LivenessProbe ContainerProbe `json:"livenessProbe,omitempty"`

@@ -43,5 +43,5 @@ helm upgrade marklogic-operator marklogic-operator/marklogic-operator --install 
 ## Install MarkLogic Cluster with MarkLogic Operator
 Once MarkLogic Operator is installed, go to config/samples folder and pick one sample file to deploy. For example, to deploy marklogic single group, use the following script: 
 ```sh
-kubeclt apply -f marklogicgroup.yaml
+kubectl apply -f marklogicgroup.yaml
 ```
