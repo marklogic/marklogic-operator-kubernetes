@@ -44,9 +44,6 @@ const (
 )
 
 var replicas = int32(2)
-var cpu = int64(1)
-var memory = int64(268435456)
-
 var fsGroup = int64(2)
 var fsGroupChangePolicy = corev1.FSGroupChangeOnRootMismatch
 var podSecurityContext = corev1.PodSecurityContext{
@@ -64,9 +61,21 @@ var securityContext = corev1.SecurityContext{
 var protocol = corev1.ProtocolTCP
 var endPort = int32(8000)
 var typeNamespaceName = types.NamespacedName{Name: Name, Namespace: Namespace}
+
+const resourceCpuValue = int64(1)
+const resourceMemoryValue = int64(268435456)
+
+// 100Mi
+const resourceHugepageValue = int64(104857600)
+
 var groupConfig = databasev1alpha1.GroupConfig{
 	Name:          "dnode",
 	EnableXdqpSsl: true,
+}
+
+var hugePages = databasev1alpha1.HugePages{
+	Enabled:   true,
+	MountPath: "/dev/hugepages",
 }
 
 var _ = Describe("MarkLogicGroup controller", func() {
@@ -95,8 +104,9 @@ var _ = Describe("MarkLogicGroup controller", func() {
 					Image:                     imageName,
 					GroupConfig:               groupConfig,
 					EnableConverters:          true,
+					HugePages:                 &hugePages,
 					UpdateStrategy:            "OnDelete",
-					Resources:                 &corev1.ResourceRequirements{Requests: corev1.ResourceList{"cpu": resource.MustParse("100m"), "memory": resource.MustParse("256Mi")}, Limits: corev1.ResourceList{"cpu": resource.MustParse("100m"), "memory": resource.MustParse("256Mi")}},
+					Resources:                 &corev1.ResourceRequirements{Requests: corev1.ResourceList{"cpu": resource.MustParse("100m"), "memory": resource.MustParse("256Mi"), "hugepages-2Mi": resource.MustParse("100Mi")}, Limits: corev1.ResourceList{"cpu": resource.MustParse("100m"), "memory": resource.MustParse("256Mi"), "hugepages-2Mi": resource.MustParse("100Mi")}},
 					PriorityClassName:         "high-priority",
 					ClusterDomain:             "cluster.local",
 					TopologySpreadConstraints: []corev1.TopologySpreadConstraint{{MaxSkew: 2, TopologyKey: "kubernetes.io/hostname", WhenUnsatisfiable: corev1.ScheduleAnyway}},
@@ -118,10 +128,16 @@ var _ = Describe("MarkLogicGroup controller", func() {
 			Expect(createdCR.Name).Should(Equal(Name))
 			Expect(createdCR.Spec.GroupConfig).Should(Equal(groupConfig))
 			Expect(createdCR.Spec.EnableConverters).Should(Equal(true))
-			Expect(createdCR.Spec.Resources.Limits.Cpu().Value()).Should(Equal(cpu))
-			Expect(createdCR.Spec.Resources.Limits.Memory().Value()).Should(Equal(memory))
-			Expect(createdCR.Spec.Resources.Requests.Cpu().Value()).Should(Equal(cpu))
-			Expect(createdCR.Spec.Resources.Requests.Memory().Value()).Should(Equal(memory))
+			Expect(createdCR.Spec.HugePages.Enabled).Should(Equal(true))
+			Expect(createdCR.Spec.HugePages.MountPath).Should(Equal("/dev/hugepages"))
+			Expect(createdCR.Spec.Resources.Limits.Cpu().Value()).Should(Equal(resourceCpuValue))
+			Expect(createdCR.Spec.Resources.Limits.Memory().Value()).Should(Equal(resourceMemoryValue))
+			hugepagesLimit := createdCR.Spec.Resources.Limits["hugepages-2Mi"]
+			Expect(hugepagesLimit.Value()).Should(Equal(resourceHugepageValue))
+			Expect(createdCR.Spec.Resources.Requests.Cpu().Value()).Should(Equal(resourceCpuValue))
+			Expect(createdCR.Spec.Resources.Requests.Memory().Value()).Should(Equal(resourceMemoryValue))
+			hugepagesRequest := createdCR.Spec.Resources.Requests["hugepages-2Mi"]
+			Expect(hugepagesRequest.Value()).Should(Equal(resourceHugepageValue))
 			Expect(createdCR.Spec.UpdateStrategy).Should(Equal(appsv1.OnDeleteStatefulSetStrategyType))
 			Expect(createdCR.Spec.PriorityClassName).Should(Equal("high-priority"))
 			Expect(createdCR.Spec.ClusterDomain).Should(Equal("cluster.local"))

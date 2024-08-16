@@ -1,121 +1,135 @@
-/*
-Copyright 2024.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
-    http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
-
 package e2e
 
 import (
-	"fmt"
-	"os/exec"
+	"context"
+	"strings"
+	"testing"
 	"time"
 
-	. "github.com/onsi/ginkgo/v2"
-	. "github.com/onsi/gomega"
+	databasev1alpha1 "github.com/marklogic/marklogic-kubernetes-operator/api/v1alpha1"
+	coreV1 "k8s.io/api/core/v1"
+	apiextensionsV1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
+	metaV1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	"github.com/marklogic/marklogic-kubernetes-operator/test/utils"
+	"sigs.k8s.io/e2e-framework/klient/k8s"
+	"sigs.k8s.io/e2e-framework/klient/wait"
+	"sigs.k8s.io/e2e-framework/klient/wait/conditions"
+	"sigs.k8s.io/e2e-framework/pkg/envconf"
+	"sigs.k8s.io/e2e-framework/pkg/features"
 )
 
-const namespace = "marklogic-kubernetes-operator-system"
+var replicas = int32(1)
+var (
+	marklogiccluster = &databasev1alpha1.MarklogicCluster{
+		TypeMeta: metaV1.TypeMeta{
+			APIVersion: "marklogic.com/v1alpha1",
+			Kind:       "MarklogicCluster",
+		},
+		ObjectMeta: metaV1.ObjectMeta{
+			Name:      "marklogicclusters",
+			Namespace: namespace,
+		},
+		Spec: databasev1alpha1.MarklogicClusterSpec{
+			MarkLogicGroups: []*databasev1alpha1.MarklogicGroups{
+				{
+					MarklogicGroupSpec: &databasev1alpha1.MarklogicGroupSpec{
+						Replicas: &replicas,
+						Name:     "marklogicgroups",
+						Image:    "marklogicdb/marklogic-db:11.2.0-ubi",
+					},
+				},
+			},
+		},
+	}
+)
 
-var _ = Describe("controller", Ordered, func() {
-	BeforeAll(func() {
-		By("installing prometheus operator")
-		Expect(utils.InstallPrometheusOperator()).To(Succeed())
+func TestMarklogicCluster(t *testing.T) {
+	podCreationSig := make(chan *coreV1.Pod)
 
-		By("installing the cert-manager")
-		Expect(utils.InstallCertManager()).To(Succeed())
+	feature := features.New("MarklogicCluster Controller")
 
-		By("creating manager namespace")
-		cmd := exec.Command("kubectl", "create", "ns", namespace)
-		_, _ = utils.Run(cmd)
-	})
-
-	AfterAll(func() {
-		By("uninstalling the Prometheus manager bundle")
-		utils.UninstallPrometheusOperator()
-
-		By("uninstalling the cert-manager bundle")
-		utils.UninstallCertManager()
-
-		By("removing manager namespace")
-		cmd := exec.Command("kubectl", "delete", "ns", namespace)
-		_, _ = utils.Run(cmd)
-	})
-
-	Context("Operator", func() {
-		It("should run successfully", func() {
-			var controllerPodName string
-			var err error
-
-			// projectimage stores the name of the image used in the example
-			var projectimage = "example.com/marklogic-kubernetes-operator:v0.0.1"
-
-			By("building the manager(Operator) image")
-			cmd := exec.Command("make", "docker-build", fmt.Sprintf("IMG=%s", projectimage))
-			_, err = utils.Run(cmd)
-			ExpectWithOffset(1, err).NotTo(HaveOccurred())
-
-			By("loading the the manager(Operator) image on Kind")
-			err = utils.LoadImageToKindClusterWithName(projectimage)
-			ExpectWithOffset(1, err).NotTo(HaveOccurred())
-
-			By("installing CRDs")
-			cmd = exec.Command("make", "install")
-			_, err = utils.Run(cmd)
-
-			By("deploying the controller-manager")
-			cmd = exec.Command("make", "deploy", fmt.Sprintf("IMG=%s", projectimage))
-			_, err = utils.Run(cmd)
-			ExpectWithOffset(1, err).NotTo(HaveOccurred())
-
-			By("validating that the controller-manager pod is running as expected")
-			verifyControllerUp := func() error {
-				// Get pod name
-
-				cmd = exec.Command("kubectl", "get",
-					"pods", "-l", "control-plane=controller-manager",
-					"-o", "go-template={{ range .items }}"+
-						"{{ if not .metadata.deletionTimestamp }}"+
-						"{{ .metadata.name }}"+
-						"{{ \"\\n\" }}{{ end }}{{ end }}",
-					"-n", namespace,
-				)
-
-				podOutput, err := utils.Run(cmd)
-				ExpectWithOffset(2, err).NotTo(HaveOccurred())
-				podNames := utils.GetNonEmptyLines(string(podOutput))
-				if len(podNames) != 1 {
-					return fmt.Errorf("expect 1 controller pods running, but got %d", len(podNames))
-				}
-				controllerPodName = podNames[0]
-				ExpectWithOffset(2, controllerPodName).Should(ContainSubstring("controller-manager"))
-
-				// Validate pod status
-				cmd = exec.Command("kubectl", "get",
-					"pods", controllerPodName, "-o", "jsonpath={.status.phase}",
-					"-n", namespace,
-				)
-				status, err := utils.Run(cmd)
-				ExpectWithOffset(2, err).NotTo(HaveOccurred())
-				if string(status) != "Running" {
-					return fmt.Errorf("controller pod in %s status", status)
-				}
-				return nil
+	// Use feature.Setup to define pre-test configuration
+	feature.Setup(func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
+		client := cfg.Client()
+		if err := client.Resources(namespace).Watch(&coreV1.PodList{}).WithAddFunc(func(obj interface{}) {
+			pod := obj.(*coreV1.Pod)
+			if strings.HasPrefix(pod.Name, "marklogic-operator-controller") {
+				podCreationSig <- pod
 			}
-			EventuallyWithOffset(1, verifyControllerUp, time.Minute, time.Second).Should(Succeed())
-
-		})
+		}).Start(ctx); err != nil {
+			t.Fatal(err)
+		}
+		return ctx
 	})
-})
+
+	// Assessment to check for CRD in cluster
+	feature.Assess("CRD installed", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
+		client := c.Client()
+		apiextensionsV1.AddToScheme(client.Resources().GetScheme())
+		name := "marklogicclusters.database.marklogic.com"
+		var crd apiextensionsV1.CustomResourceDefinition
+		if err := client.Resources().Get(ctx, name, "", &crd); err != nil {
+			t.Fatalf("CRD not found: %s", err)
+		}
+		if condition := crd.Spec.Names.Kind; condition != "MarklogicCluster" {
+			t.Fatalf("MarklogicCluster CRD has unexpected kind: %s", condition)
+		}
+		return ctx
+	})
+
+	// Assessment for MarklogicCluster creation
+	feature.Assess("MarklogicCluster creation", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
+		client := c.Client()
+		databasev1alpha1.AddToScheme(client.Resources(namespace).GetScheme())
+
+		if err := client.Resources().Create(ctx, marklogiccluster); err != nil {
+			t.Fatalf("Failed to create MarklogicCluster: %s", err)
+		}
+		// wait for resource to be created
+		if err := wait.For(
+			conditions.New(client.Resources()).ResourceMatch(marklogiccluster, func(object k8s.Object) bool {
+				return true
+			}),
+			wait.WithTimeout(3*time.Minute),
+			wait.WithInterval(30*time.Second),
+		); err != nil {
+			t.Fatal(err)
+		}
+		return ctx
+	})
+
+	// Assessment to check for MarklogicCluster deployment
+	feature.Assess("MarklogicCluster deployed Ok", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
+		client := c.Client()
+		var marklogicclusterLive databasev1alpha1.MarklogicCluster
+		if err := client.Resources().Get(ctx, "marklogicclusters", namespace, &marklogicclusterLive); err != nil {
+			t.Log("====MarklogicCluster not found====")
+			t.Fatal(err)
+		}
+		return ctx
+	})
+
+	// Assessment to check for the creation of the pod
+	feature.Assess("Pod created", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
+		select {
+		case <-time.After(60 * time.Second):
+			t.Error("Timed out wating for pod creation by MarklogicCluster contoller")
+		case pod := <-podCreationSig:
+			t.Log("Pod created by MarklogicCluster controller")
+			refname := pod.GetOwnerReferences()[0].Name
+			if !strings.HasPrefix(refname, "marklogic-operator") {
+				t.Fatalf("Pod has unexpected owner ref: %#v", refname)
+			}
+		}
+		return ctx
+	})
+
+	// Using feature.Teardown to clean up
+	feature.Teardown(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
+		close(podCreationSig)
+		return ctx
+	})
+
+	// submit the feature to be tested
+	testEnv.Test(t, feature.Feature())
+}

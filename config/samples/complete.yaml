@@ -1,0 +1,81 @@
+apiVersion: database.marklogic.com/v1alpha1
+kind: MarklogicGroup
+metadata:
+  labels:
+    app.kubernetes.io/name: marklogicgroup
+    app.kubernetes.io/instance: marklogicgroup-sample
+    app.kubernetes.io/part-of: marklogic-kubernetes-operator
+    app.kubernetes.io/managed-by: kustomize
+    app.kubernetes.io/created-by: marklogic-kubernetes-operator
+  name: marklogicgroup-sample
+spec:
+  replicas: 1
+  name: marklogic
+  image: "progressofficial/marklogic-db:11.3.0-ubi-rootless"
+  auth:
+    adminUsername: user
+    adminPassword: pass
+  # storage:
+  #   size: 10Gi
+  terminationGracePeriodSeconds: 9
+  updateStrategy: OnDelete
+  clusterDomain: cluster.local
+  priorityClassName: "system-node-critical"
+  # groupConfig:
+  #   name: "node"
+  enableConverters: true
+  hugePages:
+    enabled: true
+    mountPath: /dev/hugepages
+  nodeSelector:
+    node-role.kubernetes.io/master: "true"
+  affinity: 
+    podAntiAffinity:
+      preferredDuringSchedulingIgnoredDuringExecution:
+      - weight: 100
+        podAffinityTerm:
+          labelSelector:
+            matchExpressions:
+            - key: app.kubernetes.io/name
+              operator: In
+              values:
+              - marklogic
+          topologyKey: kubernetes.io/hostname
+  topologySpreadConstraints:
+    - maxSkew: 1
+      topologyKey: kubernetes.io/hostname
+      whenUnsatisfiable: DoNotSchedule
+      labelSelector:
+        matchLabels:
+          app.kubernetes.io/name: marklogic
+    - maxSkew: 1
+      topologyKey: topology.kubernetes.io/zone
+      whenUnsatisfiable: ScheduleAnyway
+      labelSelector:
+        matchLabels:
+          app.kubernetes.io/name: marklogic
+  resources:
+    requests:
+      memory: "4Gi"
+      cpu: "1"
+      # When using huge pages requests should equal limits
+      # refer to https://kubernetes.io/docs/tasks/manage-hugepages/scheduling-hugepages/ for more information on huge pages
+      # hugepages-2Mi: 100Mi
+    limits:
+      memory: "4Gi"
+      cpu: "1"
+      # hugepages-2Mi: 100Mi
+  livenessProbe:
+    enabled: true
+    initialDelaySeconds: 31
+    periodSeconds: 11
+    timeoutSeconds: 6
+    successThreshold: 1
+    failureThreshold: 4
+  readinessProbe:
+    enabled: true
+    initialDelaySeconds: 29
+    periodSeconds: 9
+    timeoutSeconds: 4
+    successThreshold: 1
+    failureThreshold: 2
