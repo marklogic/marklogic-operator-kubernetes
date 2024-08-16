@@ -25,7 +25,6 @@ import (
 	. "github.com/onsi/gomega"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
-	networkingv1 "k8s.io/api/networking/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -64,12 +63,6 @@ var securityContext = corev1.SecurityContext{
 }
 var protocol = corev1.ProtocolTCP
 var endPort = int32(8000)
-var networkPolicy = networkingv1.NetworkPolicy{
-	Spec: networkingv1.NetworkPolicySpec{
-		PodSelector: metav1.LabelSelector{MatchLabels: map[string]string{"app": "marklogic"}},
-		Ingress:     []networkingv1.NetworkPolicyIngressRule{{Ports: []networkingv1.NetworkPolicyPort{{Port: &intstr.IntOrString{IntVal: 8000}, Protocol: &protocol, EndPort: &endPort}}}},
-	},
-}
 var typeNamespaceName = types.NamespacedName{Name: Name, Namespace: Namespace}
 var groupConfig = databasev1alpha1.GroupConfig{
 	Name:          "dnode",
@@ -110,7 +103,6 @@ var _ = Describe("MarkLogicGroup controller", func() {
 					Affinity:                  &corev1.Affinity{PodAffinity: &corev1.PodAffinity{PreferredDuringSchedulingIgnoredDuringExecution: []corev1.WeightedPodAffinityTerm{{PodAffinityTerm: corev1.PodAffinityTerm{TopologyKey: "kubernetes.io/hostname"}, Weight: 100}}}},
 					PodSecurityContext:        &podSecurityContext,
 					ContainerSecurityContext:  &securityContext,
-					NetworkPolicy:             &networkPolicy,
 				},
 			}
 			Expect(k8sClient.Create(ctx, mlGroup)).Should(Succeed())
@@ -142,7 +134,6 @@ var _ = Describe("MarkLogicGroup controller", func() {
 			Expect(*createdCR.Spec.ContainerSecurityContext.RunAsUser).Should(Equal(int64(1000)))
 			Expect(createdCR.Spec.ContainerSecurityContext.RunAsNonRoot).Should(Equal(&runAsNonRoot))
 			Expect(createdCR.Spec.ContainerSecurityContext.AllowPrivilegeEscalation).Should(Equal(&allowPrivilegeEscalation))
-			Expect(createdCR.Spec.NetworkPolicy.Spec.Ingress[0].Ports[0].Port.IntVal).Should(Equal(int32(8000)))
 
 			// Validating if StatefulSet is created successfully
 			sts := &appsv1.StatefulSet{}

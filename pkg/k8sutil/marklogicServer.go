@@ -5,7 +5,6 @@ import (
 	databasev1alpha1 "github.com/marklogic/marklogic-kubernetes-operator/api/v1alpha1"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
-	networkingv1 "k8s.io/api/networking/v1"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 )
 
@@ -26,7 +25,6 @@ type markLogicServerParameters struct {
 	TopologySpreadConstraints     []corev1.TopologySpreadConstraint
 	PodSecurityContext            *corev1.PodSecurityContext
 	ContainerSecurityContext      *corev1.SecurityContext
-	NetworkPolicy                 *networkingv1.NetworkPolicy
 }
 
 func MarkLogicServerLogger(namespace string, name string) logr.Logger {
@@ -64,7 +62,6 @@ func ReconcileMarkLogicCluster(cr *databasev1alpha1.MarklogicCluster, index int)
 			TopologySpreadConstraints:     params.TopologySpreadConstraints,
 			PodSecurityContext:            params.PodSecurityContext,
 			ContainerSecurityContext:      params.ContainerSecurityContext,
-			NetworkPolicy:                 params.NetworkPolicy,
 		},
 	}
 	AddOwnerRefToObject(MarkLogicServerDef, ownerDef)
@@ -96,7 +93,6 @@ func generateMarkLogicServerParams(cr *databasev1alpha1.MarklogicCluster, index 
 		TopologySpreadConstraints:     cr.Spec.MarkLogicGroups[index].TopologySpreadConstraints,
 		PodSecurityContext:            cr.Spec.MarkLogicGroups[index].PodSecurityContext,
 		ContainerSecurityContext:      cr.Spec.MarkLogicGroups[index].ContainerSecurityContext,
-		NetworkPolicy:                 cr.Spec.MarkLogicGroups[index].NetworkPolicy,
 	}
 	// if cr.Spec.Storage != nil {
 	// 	params.PersistentVolumeClaim = generatePVCTemplate(cr.Spec.Storage.Size)
