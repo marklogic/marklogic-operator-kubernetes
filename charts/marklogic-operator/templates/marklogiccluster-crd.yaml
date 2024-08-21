@@ -1206,6 +1206,17 @@ spec:
                             name:
                               type: string
                           type: object
+                        hugePages:
+                          default:
+                            enabled: false
+                            mountPath: /dev/hugepages
+                          properties:
+                            enabled:
+                              type: boolean
+                            mountPath:
+                              default: /dev/hugepages
+                              type: string
+                          type: object
                         image:
                           default: progressofficial/marklogic-db:11.3.0-ubi-rootless
                           type: string
@@ -2084,6 +2095,8 @@ spec:
                               type: object
                           type: object
                         storage:
+                          description: Storage is the inteface to add pvc and pv support
+                            in marklogic
                           properties:
                             size:
                               type: string
