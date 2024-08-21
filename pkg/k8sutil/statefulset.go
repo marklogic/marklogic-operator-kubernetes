@@ -340,7 +340,7 @@ func generateVolumes(stsName string, containerParams containerParameters) []core
 			},
 		},
 	})
-	if containerParams.HugePages.Enabled {
+	if containerParams.HugePages != nil && containerParams.HugePages.Enabled {
 		volumes = append(volumes, corev1.Volume{
 			Name: "huge-pages",
 			VolumeSource: corev1.VolumeSource{
@@ -442,7 +442,7 @@ func getVolumeMount(containerParams containerParameters) []corev1.VolumeMount {
 			ReadOnly:  true,
 		},
 	)
-	if containerParams.HugePages.Enabled {
+	if containerParams.HugePages != nil && containerParams.HugePages.Enabled {
 		VolumeMounts = append(VolumeMounts,
 			corev1.VolumeMount{
 				Name:      "huge-pages",
