@@ -3,12 +3,12 @@ entries:
   marklogic-operator:
   - apiVersion: v2
     appVersion: 1.0.0-ea1
-    created: "2024-08-14T22:34:46.224453489Z"
+    created: "2024-08-21T05:22:29.338230049Z"
     description: A Helm chart for MarkLogic Operator
-    digest: 620df705ae4cb133861bfcae7a29d576416660cf981757aee1fc4ab987033ea8
+    digest: f7fe0f6154c53e50736371b144ec5b1401ffeedb450b7b78413c44778e4f68e1
     name: marklogic-operator
     type: application
     urls:
-    - https://github.com/marklogic/marklogic-kubernetes-operator/releases/download/marklogic-operator-1.0.0-ea1/marklogic-operator-1.0.0-ea1.tgz
+    - https://raw.githubusercontent.com/pengzhouml/marklogic-kubernetes-operator/gh-pages/marklogic-operator-1.0.0-ea1.tgz
     version: 1.0.0-ea1
-generated: "2024-08-14T22:34:46.22446431Z"
+generated: "2024-08-21T05:22:29.336269727Z"
