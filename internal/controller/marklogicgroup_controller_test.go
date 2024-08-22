@@ -52,6 +52,7 @@ const resourceHugepageValue = int64(104857600)
 var typeNamespaceName = types.NamespacedName{Name: Name, Namespace: Namespace}
 
 const imageName = "progressofficial/marklogic-db:11.3.0-ubi-rootless"
+const fluentBitImage = "fluent/fluent-bit:3.1.1"
 
 var groupConfig = databasev1alpha1.GroupConfig{
 	Name:          "dnode",
@@ -96,6 +97,7 @@ var _ = Describe("MarkLogicGroup controller", func() {
 					ClusterDomain:             "cluster.local",
 					TopologySpreadConstraints: []corev1.TopologySpreadConstraint{{MaxSkew: 2, TopologyKey: "kubernetes.io/hostname", WhenUnsatisfiable: corev1.ScheduleAnyway}},
 					Affinity:                  &corev1.Affinity{PodAffinity: &corev1.PodAffinity{PreferredDuringSchedulingIgnoredDuringExecution: []corev1.WeightedPodAffinityTerm{{PodAffinityTerm: corev1.PodAffinityTerm{TopologyKey: "kubernetes.io/hostname"}, Weight: 100}}}},
+					LogCollection:             &databasev1alpha1.LogCollection{Enabled: true, Image: "fluent/fluent-bit:3.1.1", Files: databasev1alpha1.LogFilesConfig{ErrorLogs: true, AccessLogs: true, RequestLogs: true, CrashLogs: true, AuditLogs: true}, Outputs: "stdout"},
 				},
 			}
 			Expect(k8sClient.Create(ctx, mlGroup)).Should(Succeed())
@@ -128,6 +130,8 @@ var _ = Describe("MarkLogicGroup controller", func() {
 			Expect(createdCR.Spec.TopologySpreadConstraints[0].TopologyKey).Should(Equal("kubernetes.io/hostname"))
 			Expect(createdCR.Spec.TopologySpreadConstraints[0].WhenUnsatisfiable).Should(Equal(corev1.ScheduleAnyway))
 			Expect(createdCR.Spec.Affinity.PodAffinity.PreferredDuringSchedulingIgnoredDuringExecution[0].Weight).Should(Equal(int32(100)))
+			Expect(createdCR.Spec.LogCollection.Enabled).Should(Equal(true))
+			Expect(createdCR.Spec.LogCollection.Image).Should(Equal(fluentBitImage))
 
 			// Validating if StatefulSet is created successfully
 			sts := &appsv1.StatefulSet{}
@@ -136,6 +140,7 @@ var _ = Describe("MarkLogicGroup controller", func() {
 				return err == nil
 			}, timeout, interval).Should(BeTrue())
 			Expect(sts.Spec.Template.Spec.Containers[0].Image).Should(Equal(imageName))
+			Expect(sts.Spec.Template.Spec.Containers[1].Image).Should(Equal(fluentBitImage))
 			Expect(sts.Spec.Replicas).Should(Equal(&replicas))
 			Expect(sts.Name).Should(Equal(Name))
 			Expect(sts.Spec.PodManagementPolicy).Should(Equal(appsv1.ParallelPodManagement))

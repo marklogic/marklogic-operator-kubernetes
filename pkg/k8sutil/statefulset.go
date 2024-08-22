@@ -45,6 +45,7 @@ type containerParameters struct {
 	BootstrapHost      string
 	LivenessProbe      databasev1alpha1.ContainerProbe
 	ReadinessProbe     databasev1alpha1.ContainerProbe
+	LogCollection      *databasev1alpha1.LogCollection
 	GroupConfig        databasev1alpha1.GroupConfig
 	EnableConverters   bool
 	HugePages          *databasev1alpha1.HugePages
@@ -251,6 +252,20 @@ func generateContainerDef(name string, containerParams containerParameters) []co
 		containerDef[0].ReadinessProbe = getReadinessProbe(containerParams.ReadinessProbe)
 	}
 
+	if containerParams.LogCollection != nil && containerParams.LogCollection.Enabled {
+		fulentBitContainerDef := corev1.Container{
+			Name:            "fluent-bit",
+			Image:           containerParams.LogCollection.Image,
+			ImagePullPolicy: "IfNotPresent",
+			Env:             getFluentBitEnvironmentVariables(),
+			VolumeMounts:    getFluentBitVolumeMount(),
+		}
+		if containerParams.LogCollection.Resources != nil {
+			fulentBitContainerDef.Resources = *containerParams.LogCollection.Resources
+		}
+		containerDef = append(containerDef, fulentBitContainerDef)
+	}
+
 	return containerDef
 }
 
@@ -282,6 +297,7 @@ func generateContainerParams(cr *databasev1alpha1.MarklogicGroup) containerParam
 		BootstrapHost:    cr.Spec.BootstrapHost,
 		LivenessProbe:    cr.Spec.LivenessProbe,
 		ReadinessProbe:   cr.Spec.ReadinessProbe,
+		LogCollection:    cr.Spec.LogCollection,
 		GroupConfig:      cr.Spec.GroupConfig,
 		EnableConverters: cr.Spec.EnableConverters,
 	}
@@ -300,6 +316,9 @@ func generateContainerParams(cr *databasev1alpha1.MarklogicGroup) containerParam
 	}
 	if cr.Spec.HugePages.Enabled {
 		containerParams.HugePages = cr.Spec.HugePages
+	}
+	if cr.Spec.LogCollection.Enabled {
+		containerParams.LogCollection = cr.Spec.LogCollection
 	}
 
 	return containerParams
@@ -346,6 +365,18 @@ func generateVolumes(stsName string, containerParams containerParameters) []core
 			VolumeSource: corev1.VolumeSource{
 				EmptyDir: &corev1.EmptyDirVolumeSource{
 					Medium: corev1.StorageMediumHugePages,
+				},
+			},
+		})
+	}
+	if containerParams.LogCollection != nil && containerParams.LogCollection.Enabled {
+		volumes = append(volumes, corev1.Volume{
+			Name: "fluent-bit",
+			VolumeSource: corev1.VolumeSource{
+				ConfigMap: &corev1.ConfigMapVolumeSource{
+					LocalObjectReference: corev1.LocalObjectReference{
+						Name: "fluent-bit",
+					},
 				},
 			},
 		})
@@ -423,6 +454,22 @@ func getEnvironmentVariables(containerParams containerParameters) []corev1.EnvVa
 	return envVars
 }
 
+func getFluentBitEnvironmentVariables() []corev1.EnvVar {
+
+	envVars := []corev1.EnvVar{}
+	envVars = append(envVars,
+		corev1.EnvVar{
+			Name:      "POD_NAME",
+			ValueFrom: &corev1.EnvVarSource{FieldRef: &corev1.ObjectFieldSelector{FieldPath: "metadata.name"}},
+		},
+		corev1.EnvVar{
+			Name:      "NAMESPACE",
+			ValueFrom: &corev1.EnvVarSource{FieldRef: &corev1.ObjectFieldSelector{FieldPath: "metadata.namespace"}},
+		},
+	)
+	return envVars
+}
+
 func getVolumeMount(containerParams containerParameters) []corev1.VolumeMount {
 	var VolumeMounts []corev1.VolumeMount
 
@@ -451,6 +498,22 @@ func getVolumeMount(containerParams containerParameters) []corev1.VolumeMount {
 		)
 	}
 	return VolumeMounts
+}
+
+func getFluentBitVolumeMount() []corev1.VolumeMount {
+	var VolumeMountsFluentBit []corev1.VolumeMount
+
+	VolumeMountsFluentBit = append(VolumeMountsFluentBit,
+		corev1.VolumeMount{
+			Name:      "data",
+			MountPath: "/var/opt/MarkLogic",
+		},
+		corev1.VolumeMount{
+			Name:      "fluent-bit",
+			MountPath: "/fluent-bit/etc/",
+		},
+	)
+	return VolumeMountsFluentBit
 }
 
 func getLivenessProbe(probe databasev1alpha1.ContainerProbe) *corev1.Probe {
