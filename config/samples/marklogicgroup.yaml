@@ -9,9 +9,9 @@ metadata:
     app.kubernetes.io/created-by: marklogic-kubernetes-operator
   name: marklogicgroup-sample
 spec:
-  replicas: 2
+  replicas: 1
   name: marklogic
-  image: "progressofficial/marklogic-db:11.3.0-ubi-rootless"
+  image: "progressofficial/marklogic-db:11.3.0-ubi"
   auth:
     adminUsername: user
     adminPassword: pass
@@ -21,6 +21,24 @@ spec:
   updateStrategy: OnDelete
   groupConfig:
     name: "node"
+  logCollection:
+    enabled: true
+    image: fluent/fluent-bit:3.1.1
+    files:
+      errorLogs: true
+      accessLogs: true
+      requestLogs: true
+      crashLogs: true
+      auditLogs: true
+    outputs: |-
+        [OUTPUT]
+          name loki
+          match *
+          host loki.loki.svc.cluster.local
+          port 3100
+          labels job=fluent-bit
+          http_user admin
+          http_passwd admin
 
   # resources:
   #   requests:

@@ -1,11 +1,12 @@
 package k8sutil
 
 import (
+	"math/rand"
+	"time"
+
 	databasev1alpha1 "github.com/marklogic/marklogic-kubernetes-operator/api/v1alpha1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"math/rand"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"time"
 )
 
 // generateTypeMeta generates the TyeMeta
@@ -48,6 +49,13 @@ func LabelSelectors(labels map[string]string) *metav1.LabelSelector {
 func getMarkLogicLabels(name string) map[string]string {
 	return map[string]string{
 		"app.kubernetes.io/name":     "marklogic",
+		"app.kubernetes.io/instance": name,
+	}
+}
+
+func getFluentBitLabels(name string) map[string]string {
+	return map[string]string{
+		"app.kubernetes.io/name":     "fluent-bit",
 		"app.kubernetes.io/instance": name,
 	}
 }
