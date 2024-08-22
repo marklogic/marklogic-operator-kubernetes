@@ -9,9 +9,9 @@ metadata:
     app.kubernetes.io/created-by: marklogic-kubernetes-operator
   name: marklogicgroup-sample
 spec:
-  replicas: 1
+  replicas: 2
   name: marklogic
-  image: "progressofficial/marklogic-db:11.3.0-ubi"
+  image: "progressofficial/marklogic-db:11.3.0-ubi-rootless"
   auth:
     adminUsername: user
     adminPassword: pass
