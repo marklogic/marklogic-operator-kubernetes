@@ -46,20 +46,9 @@ const (
 var replicas = int32(2)
 var fsGroup = int64(2)
 var fsGroupChangePolicy = corev1.FSGroupChangeOnRootMismatch
-var podSecurityContext = corev1.PodSecurityContext{
-	FSGroup:             &fsGroup,
-	FSGroupChangePolicy: &fsGroupChangePolicy,
-}
 var runAsUser = int64(1000)
 var runAsNonRoot bool = true
 var allowPrivilegeEscalation bool = false
-var securityContext = corev1.SecurityContext{
-	RunAsUser:                &runAsUser,
-	RunAsNonRoot:             &runAsNonRoot,
-	AllowPrivilegeEscalation: &allowPrivilegeEscalation,
-}
-var protocol = corev1.ProtocolTCP
-var endPort = int32(8000)
 var typeNamespaceName = types.NamespacedName{Name: Name, Namespace: Namespace}
 
 const resourceCpuValue = int64(1)
@@ -111,8 +100,15 @@ var _ = Describe("MarkLogicGroup controller", func() {
 					ClusterDomain:             "cluster.local",
 					TopologySpreadConstraints: []corev1.TopologySpreadConstraint{{MaxSkew: 2, TopologyKey: "kubernetes.io/hostname", WhenUnsatisfiable: corev1.ScheduleAnyway}},
 					Affinity:                  &corev1.Affinity{PodAffinity: &corev1.PodAffinity{PreferredDuringSchedulingIgnoredDuringExecution: []corev1.WeightedPodAffinityTerm{{PodAffinityTerm: corev1.PodAffinityTerm{TopologyKey: "kubernetes.io/hostname"}, Weight: 100}}}},
-					PodSecurityContext:        &podSecurityContext,
-					ContainerSecurityContext:  &securityContext,
+					PodSecurityContext: &corev1.PodSecurityContext{
+						FSGroup:             &fsGroup,
+						FSGroupChangePolicy: &fsGroupChangePolicy,
+					},
+					ContainerSecurityContext: &corev1.SecurityContext{
+						RunAsUser:                &runAsUser,
+						RunAsNonRoot:             &runAsNonRoot,
+						AllowPrivilegeEscalation: &allowPrivilegeEscalation,
+					},
 				},
 			}
 			Expect(k8sClient.Create(ctx, mlGroup)).Should(Succeed())
