@@ -45,7 +45,7 @@ type containerParameters struct {
 	BootstrapHost      string
 	LivenessProbe      databasev1alpha1.ContainerProbe
 	ReadinessProbe     databasev1alpha1.ContainerProbe
-	LogCollection      databasev1alpha1.LogCollection
+	LogCollection      *databasev1alpha1.LogCollection
 	GroupConfig        databasev1alpha1.GroupConfig
 	EnableConverters   bool
 	HugePages          *databasev1alpha1.HugePages
@@ -252,7 +252,7 @@ func generateContainerDef(name string, containerParams containerParameters) []co
 		containerDef[0].ReadinessProbe = getReadinessProbe(containerParams.ReadinessProbe)
 	}
 
-	if containerParams.LogCollection.Enabled {
+	if containerParams.LogCollection != nil && containerParams.LogCollection.Enabled {
 		fulentBitContainerDef := corev1.Container{
 			Name:            "fluent-bit",
 			Image:           containerParams.LogCollection.Image,
@@ -369,7 +369,7 @@ func generateVolumes(stsName string, containerParams containerParameters) []core
 			},
 		})
 	}
-	if containerParams.LogCollection.Enabled {
+	if containerParams.LogCollection != nil && containerParams.LogCollection.Enabled {
 		volumes = append(volumes, corev1.Volume{
 			Name: "fluent-bit",
 			VolumeSource: corev1.VolumeSource{

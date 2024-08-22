@@ -97,7 +97,7 @@ var _ = Describe("MarkLogicGroup controller", func() {
 					ClusterDomain:             "cluster.local",
 					TopologySpreadConstraints: []corev1.TopologySpreadConstraint{{MaxSkew: 2, TopologyKey: "kubernetes.io/hostname", WhenUnsatisfiable: corev1.ScheduleAnyway}},
 					Affinity:                  &corev1.Affinity{PodAffinity: &corev1.PodAffinity{PreferredDuringSchedulingIgnoredDuringExecution: []corev1.WeightedPodAffinityTerm{{PodAffinityTerm: corev1.PodAffinityTerm{TopologyKey: "kubernetes.io/hostname"}, Weight: 100}}}},
-					LogCollection:             databasev1alpha1.LogCollection{Enabled: true, Image: "fluent/fluent-bit:3.1.1", Files: databasev1alpha1.LogFiles{ErrorLogs: true, AccessLogs: true, RequestLogs: true, CrashLogs: true, AuditLogs: true}, Outputs: "stdout"},
+					LogCollection:             &databasev1alpha1.LogCollection{Enabled: true, Image: "fluent/fluent-bit:3.1.1", Files: databasev1alpha1.LogFilesConfig{ErrorLogs: true, AccessLogs: true, RequestLogs: true, CrashLogs: true, AuditLogs: true}, Outputs: "stdout"},
 				},
 			}
 			Expect(k8sClient.Create(ctx, mlGroup)).Should(Succeed())
@@ -140,7 +140,7 @@ var _ = Describe("MarkLogicGroup controller", func() {
 				return err == nil
 			}, timeout, interval).Should(BeTrue())
 			Expect(sts.Spec.Template.Spec.Containers[0].Image).Should(Equal(imageName))
-			Expect(sts.Spec.Template.Spec.Containers[1].Image).Should(Equal("fluentBitImage"))
+			Expect(sts.Spec.Template.Spec.Containers[1].Image).Should(Equal(fluentBitImage))
 			Expect(sts.Spec.Replicas).Should(Equal(&replicas))
 			Expect(sts.Name).Should(Equal(Name))
 			Expect(sts.Spec.PodManagementPolicy).Should(Equal(appsv1.ParallelPodManagement))

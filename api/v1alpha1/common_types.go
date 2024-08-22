@@ -45,11 +45,11 @@ type LogCollection struct {
 	Enabled   bool                         `json:"enabled,omitempty"`
 	Image     string                       `json:"image,omitempty"`
 	Resources *corev1.ResourceRequirements `json:"resources,omitempty"`
-	Files     LogFiles                     `json:"files,omitempty"`
+	Files     LogFilesConfig               `json:"files,omitempty"`
 	Outputs   string                       `json:"outputs,omitempty"`
 }
 
-type LogFiles struct {
+type LogFilesConfig struct {
 	ErrorLogs   bool `json:"errorLogs,omitempty"`
 	AccessLogs  bool `json:"accessLogs,omitempty"`
 	RequestLogs bool `json:"requestLogs,omitempty"`

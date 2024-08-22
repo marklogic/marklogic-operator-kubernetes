@@ -156,7 +156,10 @@ func (oc *OperatorContext) getFluentBitData() map[string]string {
 @INCLUDE outputs.conf
 `
 
-	fluentBitData["inputs.conf"] = `
+	fluentBitData["inputs.conf"] = ""
+
+	if oc.MarklogicGroup.Spec.LogCollection.Files.ErrorLogs {
+		errorLog := `
 [INPUT]
 	Name tail
 	Path /var/opt/MarkLogic/Logs/*ErrorLog.txt
@@ -165,7 +168,12 @@ func (oc *OperatorContext) getFluentBitData() map[string]string {
 	Path_Key path
 	Parser error_parser
 	Mem_Buf_Limit 4MB
+`
+		fluentBitData["inputs.conf"] += errorLog
+	}
 
+	if oc.MarklogicGroup.Spec.LogCollection.Files.AccessLogs {
+		accessLog := `
 [INPUT]
 	Name tail
 	Path /var/opt/MarkLogic/Logs/*AccessLog.txt
@@ -174,7 +182,12 @@ func (oc *OperatorContext) getFluentBitData() map[string]string {
 	Path_Key path
 	Parser access_parser
 	Mem_Buf_Limit 4MB
+`
+		fluentBitData["inputs.conf"] += accessLog
+	}
 
+	if oc.MarklogicGroup.Spec.LogCollection.Files.RequestLogs {
+		requestLog := `
 [INPUT]
 	Name tail
 	Path /var/opt/MarkLogic/Logs/*RequestLog.txt
@@ -183,7 +196,12 @@ func (oc *OperatorContext) getFluentBitData() map[string]string {
 	Path_Key path
 	Parser json_parser
 	Mem_Buf_Limit 4MB
+`
+		fluentBitData["inputs.conf"] += requestLog
+	}
 
+	if oc.MarklogicGroup.Spec.LogCollection.Files.CrashLogs {
+		crashLog := `
 [INPUT]
 	Name tail
 	Path /var/opt/MarkLogic/Logs/CrashLog.txt
@@ -191,7 +209,12 @@ func (oc *OperatorContext) getFluentBitData() map[string]string {
 	tag kube.marklogic.logs.crash
 	Path_Key path
 	Mem_Buf_Limit 4MB
+`
+		fluentBitData["inputs.conf"] += crashLog
+	}
 
+	if oc.MarklogicGroup.Spec.LogCollection.Files.AuditLogs {
+		auditLog := `
 [INPUT]
 	Name tail
 	Path /var/opt/MarkLogic/Logs/AuditLog.txt
@@ -200,6 +223,8 @@ func (oc *OperatorContext) getFluentBitData() map[string]string {
 	Path_Key path
 	Mem_Buf_Limit 4MB
 `
+		fluentBitData["inputs.conf"] += auditLog
+	}
 
 	fluentBitData["outputs.conf"] = oc.MarklogicGroup.Spec.LogCollection.Outputs
 
