@@ -57,6 +57,8 @@ const resourceMemoryValue = int64(268435456)
 // 100Mi
 const resourceHugepageValue = int64(104857600)
 
+const fluentBitImage = "fluent/fluent-bit:3.1.1"
+
 var groupConfig = databasev1alpha1.GroupConfig{
 	Name:          "dnode",
 	EnableXdqpSsl: true,
@@ -109,6 +111,7 @@ var _ = Describe("MarkLogicGroup controller", func() {
 						RunAsNonRoot:             &runAsNonRoot,
 						AllowPrivilegeEscalation: &allowPrivilegeEscalation,
 					},
+					LogCollection: &databasev1alpha1.LogCollection{Enabled: true, Image: "fluent/fluent-bit:3.1.1", Files: databasev1alpha1.LogFilesConfig{ErrorLogs: true, AccessLogs: true, RequestLogs: true, CrashLogs: true, AuditLogs: true}, Outputs: "stdout"},
 				},
 			}
 			Expect(k8sClient.Create(ctx, mlGroup)).Should(Succeed())
@@ -146,6 +149,8 @@ var _ = Describe("MarkLogicGroup controller", func() {
 			Expect(*createdCR.Spec.ContainerSecurityContext.RunAsUser).Should(Equal(int64(1000)))
 			Expect(createdCR.Spec.ContainerSecurityContext.RunAsNonRoot).Should(Equal(&runAsNonRoot))
 			Expect(createdCR.Spec.ContainerSecurityContext.AllowPrivilegeEscalation).Should(Equal(&allowPrivilegeEscalation))
+			Expect(createdCR.Spec.LogCollection.Enabled).Should(Equal(true))
+			Expect(createdCR.Spec.LogCollection.Image).Should(Equal(fluentBitImage))
 
 			// Validating if StatefulSet is created successfully
 			sts := &appsv1.StatefulSet{}
@@ -154,6 +159,7 @@ var _ = Describe("MarkLogicGroup controller", func() {
 				return err == nil
 			}, timeout, interval).Should(BeTrue())
 			Expect(sts.Spec.Template.Spec.Containers[0].Image).Should(Equal(imageName))
+			Expect(sts.Spec.Template.Spec.Containers[1].Image).Should(Equal(fluentBitImage))
 			Expect(sts.Spec.Replicas).Should(Equal(&replicas))
 			Expect(sts.Name).Should(Equal(Name))
 			Expect(sts.Spec.PodManagementPolicy).Should(Equal(appsv1.ParallelPodManagement))
