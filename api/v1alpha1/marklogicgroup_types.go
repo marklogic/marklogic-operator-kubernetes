@@ -47,10 +47,12 @@ type MarklogicGroupSpec struct {
 	TerminationGracePeriodSeconds *int64                       `json:"terminationGracePeriodSeconds,omitempty"`
 	// +kubebuilder:validation:Enum=OnDelete;RollingUpdate
 	// +kubebuilder:default:="OnDelete"
-	UpdateStrategy           appsv1.StatefulSetUpdateStrategyType `json:"updateStrategy,omitempty"`
-	NetworkPolicy            *networkingv1.NetworkPolicy          `json:"networkPolicy,omitempty"`
-	PodSecurityContext       *corev1.PodSecurityContext           `json:"securityContext,omitempty"`
-	ContainerSecurityContext *corev1.SecurityContext              `json:"containerSecurityContext,omitempty"`
+	UpdateStrategy appsv1.StatefulSetUpdateStrategyType `json:"updateStrategy,omitempty"`
+	NetworkPolicy  *networkingv1.NetworkPolicy          `json:"networkPolicy,omitempty"`
+	// +kubebuilder:default:={fsGroup: 2, fsGroupChangePolicy: "OnRootMismatch"}
+	PodSecurityContext *corev1.PodSecurityContext `json:"podSecurityContext,omitempty"`
+	// +kubebuilder:default:={runAsUser: 1000, runAsNonRoot: true, allowPrivilegeEscalation: false}
+	ContainerSecurityContext *corev1.SecurityContext `json:"securityContext,omitempty"`
 
 	Affinity                  *corev1.Affinity                  `json:"affinity,omitempty"`
 	NodeSelector              map[string]string                 `json:"nodeSelector,omitempty"`

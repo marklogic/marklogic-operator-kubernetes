@@ -47,6 +47,8 @@ type containerParameters struct {
 	ReadinessProbe     databasev1alpha1.ContainerProbe
 	LogCollection      *databasev1alpha1.LogCollection
 	GroupConfig        databasev1alpha1.GroupConfig
+	PodSecurityContext *corev1.PodSecurityContext
+	SecurityContext    *corev1.SecurityContext
 	EnableConverters   bool
 	HugePages          *databasev1alpha1.HugePages
 }
@@ -194,6 +196,7 @@ func generateStatefulSetsDef(stsMeta metav1.ObjectMeta, params statefulSetParame
 				Spec: corev1.PodSpec{
 					Containers:                    generateContainerDef(stsMeta.GetName(), containerParams),
 					TerminationGracePeriodSeconds: params.TerminationGracePeriodSeconds,
+					SecurityContext:               containerParams.PodSecurityContext,
 					Volumes:                       generateVolumes(stsMeta.Name, containerParams),
 					NodeSelector:                  params.NodeSelector,
 					Affinity:                      params.Affinity,
@@ -237,6 +240,7 @@ func generateContainerDef(name string, containerParams containerParameters) []co
 			ImagePullPolicy: containerParams.ImagePullPolicy,
 			Env:             getEnvironmentVariables(containerParams),
 			Lifecycle:       getLifeCycle(),
+			SecurityContext: containerParams.SecurityContext,
 			VolumeMounts:    getVolumeMount(containerParams),
 		},
 	}
@@ -289,17 +293,19 @@ func generateStatefulSetsParams(cr *databasev1alpha1.MarklogicGroup) statefulSet
 func generateContainerParams(cr *databasev1alpha1.MarklogicGroup) containerParameters {
 	trueProperty := true
 	containerParams := containerParameters{
-		Image:            cr.Spec.Image,
-		Resources:        cr.Spec.Resources,
-		Name:             cr.Spec.Name,
-		Namespace:        cr.Namespace,
-		ClusterDomain:    cr.Spec.ClusterDomain,
-		BootstrapHost:    cr.Spec.BootstrapHost,
-		LivenessProbe:    cr.Spec.LivenessProbe,
-		ReadinessProbe:   cr.Spec.ReadinessProbe,
-		LogCollection:    cr.Spec.LogCollection,
-		GroupConfig:      cr.Spec.GroupConfig,
-		EnableConverters: cr.Spec.EnableConverters,
+		Image:              cr.Spec.Image,
+		Resources:          cr.Spec.Resources,
+		Name:               cr.Spec.Name,
+		Namespace:          cr.Namespace,
+		ClusterDomain:      cr.Spec.ClusterDomain,
+		BootstrapHost:      cr.Spec.BootstrapHost,
+		LivenessProbe:      cr.Spec.LivenessProbe,
+		ReadinessProbe:     cr.Spec.ReadinessProbe,
+		GroupConfig:        cr.Spec.GroupConfig,
+		EnableConverters:   cr.Spec.EnableConverters,
+		PodSecurityContext: cr.Spec.PodSecurityContext,
+		SecurityContext:    cr.Spec.ContainerSecurityContext,
+		LogCollection:      cr.Spec.LogCollection,
 	}
 
 	if cr.Spec.Storage != nil {

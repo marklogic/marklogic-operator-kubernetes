@@ -26,7 +26,7 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
-	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
 )
@@ -39,9 +39,17 @@ const (
 	timeout  = time.Second * 60
 	duration = time.Second * 30
 	interval = time.Millisecond * 250
+
+	imageName = "progressofficial/marklogic-db:11.3.0-ubi-rootless"
 )
 
 var replicas = int32(2)
+var fsGroup = int64(2)
+var fsGroupChangePolicy = corev1.FSGroupChangeOnRootMismatch
+var runAsUser = int64(1000)
+var runAsNonRoot bool = true
+var allowPrivilegeEscalation bool = false
+var typeNamespaceName = types.NamespacedName{Name: Name, Namespace: Namespace}
 
 const resourceCpuValue = int64(1)
 const resourceMemoryValue = int64(268435456)
@@ -49,9 +57,6 @@ const resourceMemoryValue = int64(268435456)
 // 100Mi
 const resourceHugepageValue = int64(104857600)
 
-var typeNamespaceName = types.NamespacedName{Name: Name, Namespace: Namespace}
-
-const imageName = "progressofficial/marklogic-db:11.3.0-ubi-rootless"
 const fluentBitImage = "fluent/fluent-bit:3.1.1"
 
 var groupConfig = databasev1alpha1.GroupConfig{
@@ -70,17 +75,17 @@ var _ = Describe("MarkLogicGroup controller", func() {
 		It("Should create a MarklogicGroup CR, StatefulSet and Service", func() {
 			// Create the namespace
 			ns := corev1.Namespace{
-				ObjectMeta: v1.ObjectMeta{Name: Namespace},
+				ObjectMeta: metav1.ObjectMeta{Name: Namespace},
 			}
 			Expect(k8sClient.Create(ctx, &ns)).Should(Succeed())
 
 			// Declaring the Marklogic Group object and create CR
 			mlGroup := &databasev1alpha1.MarklogicGroup{
-				TypeMeta: v1.TypeMeta{
+				TypeMeta: metav1.TypeMeta{
 					Kind:       "MarklogicGroup",
 					APIVersion: "database.marklogic.com/v1alpha1",
 				},
-				ObjectMeta: v1.ObjectMeta{
+				ObjectMeta: metav1.ObjectMeta{
 					Name:      Name,
 					Namespace: Namespace,
 				},
@@ -97,7 +102,16 @@ var _ = Describe("MarkLogicGroup controller", func() {
 					ClusterDomain:             "cluster.local",
 					TopologySpreadConstraints: []corev1.TopologySpreadConstraint{{MaxSkew: 2, TopologyKey: "kubernetes.io/hostname", WhenUnsatisfiable: corev1.ScheduleAnyway}},
 					Affinity:                  &corev1.Affinity{PodAffinity: &corev1.PodAffinity{PreferredDuringSchedulingIgnoredDuringExecution: []corev1.WeightedPodAffinityTerm{{PodAffinityTerm: corev1.PodAffinityTerm{TopologyKey: "kubernetes.io/hostname"}, Weight: 100}}}},
-					LogCollection:             &databasev1alpha1.LogCollection{Enabled: true, Image: "fluent/fluent-bit:3.1.1", Files: databasev1alpha1.LogFilesConfig{ErrorLogs: true, AccessLogs: true, RequestLogs: true, CrashLogs: true, AuditLogs: true}, Outputs: "stdout"},
+					PodSecurityContext: &corev1.PodSecurityContext{
+						FSGroup:             &fsGroup,
+						FSGroupChangePolicy: &fsGroupChangePolicy,
+					},
+					ContainerSecurityContext: &corev1.SecurityContext{
+						RunAsUser:                &runAsUser,
+						RunAsNonRoot:             &runAsNonRoot,
+						AllowPrivilegeEscalation: &allowPrivilegeEscalation,
+					},
+					LogCollection: &databasev1alpha1.LogCollection{Enabled: true, Image: "fluent/fluent-bit:3.1.1", Files: databasev1alpha1.LogFilesConfig{ErrorLogs: true, AccessLogs: true, RequestLogs: true, CrashLogs: true, AuditLogs: true}, Outputs: "stdout"},
 				},
 			}
 			Expect(k8sClient.Create(ctx, mlGroup)).Should(Succeed())
@@ -130,6 +144,11 @@ var _ = Describe("MarkLogicGroup controller", func() {
 			Expect(createdCR.Spec.TopologySpreadConstraints[0].TopologyKey).Should(Equal("kubernetes.io/hostname"))
 			Expect(createdCR.Spec.TopologySpreadConstraints[0].WhenUnsatisfiable).Should(Equal(corev1.ScheduleAnyway))
 			Expect(createdCR.Spec.Affinity.PodAffinity.PreferredDuringSchedulingIgnoredDuringExecution[0].Weight).Should(Equal(int32(100)))
+			Expect(createdCR.Spec.PodSecurityContext.FSGroup).Should(Equal(&fsGroup))
+			Expect(*createdCR.Spec.PodSecurityContext.FSGroupChangePolicy).Should(Equal(corev1.FSGroupChangeOnRootMismatch))
+			Expect(*createdCR.Spec.ContainerSecurityContext.RunAsUser).Should(Equal(int64(1000)))
+			Expect(createdCR.Spec.ContainerSecurityContext.RunAsNonRoot).Should(Equal(&runAsNonRoot))
+			Expect(createdCR.Spec.ContainerSecurityContext.AllowPrivilegeEscalation).Should(Equal(&allowPrivilegeEscalation))
 			Expect(createdCR.Spec.LogCollection.Enabled).Should(Equal(true))
 			Expect(createdCR.Spec.LogCollection.Image).Should(Equal(fluentBitImage))
 

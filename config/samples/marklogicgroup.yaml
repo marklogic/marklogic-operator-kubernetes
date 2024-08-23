@@ -21,6 +21,16 @@ spec:
   updateStrategy: OnDelete
   groupConfig:
     name: "node"
+## Uncomment the following lines to specify the podSecurityContext and containerSecurityContext
+## Note: Below values are set to default, please update them as per your requirements
+  # podSecurityContext:
+  #   fsGroup: 2
+  #   fsGroupChangePolicy: OnRootMismatch
+  # securityContext:
+  #   runAsUser: 1000
+  #   runAsNonRoot: true
+  #   allowPrivilegeEscalation: false
+
   logCollection:
     enabled: true
     image: fluent/fluent-bit:3.1.1
