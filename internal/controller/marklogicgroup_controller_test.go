@@ -49,7 +49,9 @@ const resourceMemoryValue = int64(268435456)
 // 100Mi
 const resourceHugepageValue = int64(104857600)
 
+var svcName = Name + "-cluster"
 var typeNamespaceName = types.NamespacedName{Name: Name, Namespace: Namespace}
+var typeNamespaceNameSvc = types.NamespacedName{Name: svcName, Namespace: Namespace}
 
 const imageName = "progressofficial/marklogic-db:11.3.0-ubi-rootless"
 
@@ -140,13 +142,23 @@ var _ = Describe("MarkLogicGroup controller", func() {
 			Expect(sts.Name).Should(Equal(Name))
 			Expect(sts.Spec.PodManagementPolicy).Should(Equal(appsv1.ParallelPodManagement))
 
-			// Validating if Service is created successfully
+			// Validating if headless Service is created successfully
 			createdSrv := &corev1.Service{}
 			Eventually(func() bool {
 				err := k8sClient.Get(ctx, typeNamespaceName, createdSrv)
 				return err == nil
 			}, timeout, interval).Should(BeTrue())
 			Expect(createdSrv.Spec.Ports[0].TargetPort).Should(Equal(intstr.FromInt(int(7997))))
+
+			// Validating if Service is created successfully
+			createdClusterSrv := &corev1.Service{}
+			svcName := sts.Name + "-cluster"
+			Eventually(func() bool {
+				err := k8sClient.Get(ctx, typeNamespaceNameSvc, createdClusterSrv)
+				return err == nil
+			}, timeout, interval).Should(BeTrue())
+			Expect(createdClusterSrv.Name).Should(Equal(svcName))
+			Expect(createdClusterSrv.Spec.Type).Should(Equal(corev1.ServiceTypeClusterIP))
 		})
 
 		It("Should create configmap for MarkLogic scripts", func() {

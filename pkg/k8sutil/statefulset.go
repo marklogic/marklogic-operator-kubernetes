@@ -178,13 +178,12 @@ func (oc *OperatorContext) createStatefulSet(statefulset *appsv1.StatefulSet, cr
 }
 
 func generateStatefulSetsDef(stsMeta metav1.ObjectMeta, params statefulSetParameters, ownerDef metav1.OwnerReference, containerParams containerParameters) *appsv1.StatefulSet {
-	// headlessSvcName := stsMeta.Name + "-headless"
 	statefulSet := &appsv1.StatefulSet{
 		TypeMeta:   generateTypeMeta("StatefulSet", "apps/v1"),
 		ObjectMeta: stsMeta,
 		Spec: appsv1.StatefulSetSpec{
 			Selector:            LabelSelectors(stsMeta.GetLabels()),
-			ServiceName:         "marklogic",
+			ServiceName:         stsMeta.Name,
 			Replicas:            params.Replicas,
 			PodManagementPolicy: appsv1.ParallelPodManagement,
 			UpdateStrategy:      appsv1.StatefulSetUpdateStrategy{Type: params.UpdateStrategy},

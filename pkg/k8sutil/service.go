@@ -77,7 +77,6 @@ func generateServicePorts() []corev1.ServicePort {
 }
 
 func generateServiceParams(cr *databasev1alpha1.MarklogicGroup) serviceParameters {
-	print("====service::generateServiceParams", "ServiceObjectMeta", cr.Spec.Service.AdditionalPorts)
 	return serviceParameters{
 		Type:        cr.Spec.Service.Type,
 		Ports:       cr.Spec.Service.AdditionalPorts,
@@ -145,10 +144,10 @@ func (oc *OperatorContext) ReconcileServices() result.ReconcileResult {
 	svcName := cr.Spec.Name + "-cluster"
 	svcObjectMeta := generateObjectMeta(svcName, cr.Namespace, labels, svcParams.Annotations)
 	headlessSvcAnnotations := map[string]string{}
-	headlessSvcObjectMeta := generateObjectMeta("marklogic", cr.Namespace, labels, headlessSvcAnnotations)
-	namespace := svcObjectMeta.Namespace
+	headlessSvcObjectMeta := generateObjectMeta(cr.Name, cr.Namespace, labels, headlessSvcAnnotations)
+	namespace := cr.Namespace
 	svcNsName := types.NamespacedName{Name: svcObjectMeta.Name, Namespace: svcObjectMeta.Namespace}
-	headlessSvcNsName := types.NamespacedName{Name: svcObjectMeta.Name, Namespace: svcObjectMeta.Namespace}
+	headlessSvcNsName := types.NamespacedName{Name: headlessSvcObjectMeta.Name, Namespace: headlessSvcObjectMeta.Namespace}
 	service := &corev1.Service{}
 	err := client.Get(oc.Ctx, headlessSvcNsName, service)
 	if err != nil {
