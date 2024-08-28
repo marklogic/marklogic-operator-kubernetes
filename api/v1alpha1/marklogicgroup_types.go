@@ -47,10 +47,12 @@ type MarklogicGroupSpec struct {
 	TerminationGracePeriodSeconds *int64                       `json:"terminationGracePeriodSeconds,omitempty"`
 	// +kubebuilder:validation:Enum=OnDelete;RollingUpdate
 	// +kubebuilder:default:="OnDelete"
-	UpdateStrategy           appsv1.StatefulSetUpdateStrategyType `json:"updateStrategy,omitempty"`
-	NetworkPolicy            *networkingv1.NetworkPolicy          `json:"networkPolicy,omitempty"`
-	PodSecurityContext       *corev1.PodSecurityContext           `json:"securityContext,omitempty"`
-	ContainerSecurityContext *corev1.SecurityContext              `json:"containerSecurityContext,omitempty"`
+	UpdateStrategy appsv1.StatefulSetUpdateStrategyType `json:"updateStrategy,omitempty"`
+	NetworkPolicy  *networkingv1.NetworkPolicy          `json:"networkPolicy,omitempty"`
+	// +kubebuilder:default:={fsGroup: 2, fsGroupChangePolicy: "OnRootMismatch"}
+	PodSecurityContext *corev1.PodSecurityContext `json:"podSecurityContext,omitempty"`
+	// +kubebuilder:default:={runAsUser: 1000, runAsNonRoot: true, allowPrivilegeEscalation: false}
+	ContainerSecurityContext *corev1.SecurityContext `json:"securityContext,omitempty"`
 
 	Affinity                  *corev1.Affinity                  `json:"affinity,omitempty"`
 	NodeSelector              map[string]string                 `json:"nodeSelector,omitempty"`
@@ -64,6 +66,9 @@ type MarklogicGroupSpec struct {
 	LivenessProbe ContainerProbe `json:"livenessProbe,omitempty"`
 	// +kubebuilder:default:={enabled: false, initialDelaySeconds: 10, timeoutSeconds: 5, periodSeconds: 30, successThreshold: 1, failureThreshold: 3}
 	ReadinessProbe ContainerProbe `json:"readinessProbe,omitempty"`
+
+	// +kubebuilder:default:={enabled: false, image: "fluent/fluent-bit:3.1.1", resources: {requests: {cpu: "100m", memory: "200Mi"}, limits: {cpu: "200m", memory: "500Mi"}}, files: {errorLogs: true, accessLogs: true, requestLogs: true}, outputs: "stdout"}
+	LogCollection *LogCollection `json:"logCollection,omitempty"`
 
 	// +kubebuilder:default:={name: "Default", enableXdqpSsl: true}
 	GroupConfig      GroupConfig `json:"groupConfig,omitempty"`

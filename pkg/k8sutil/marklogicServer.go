@@ -12,6 +12,7 @@ type markLogicServerParameters struct {
 	Replicas *int32
 	Name     string
 	Image    string
+	License  *databasev1alpha1.License
 	// PersistentVolumeClaim         corev1.PersistentVolumeClaim
 	TerminationGracePeriodSeconds *int64
 	Resources                     *corev1.ResourceRequirements
@@ -22,6 +23,8 @@ type markLogicServerParameters struct {
 	Affinity                      *corev1.Affinity
 	NodeSelector                  map[string]string
 	TopologySpreadConstraints     []corev1.TopologySpreadConstraint
+	PodSecurityContext            *corev1.PodSecurityContext
+	ContainerSecurityContext      *corev1.SecurityContext
 }
 
 func MarkLogicServerLogger(namespace string, name string) logr.Logger {
@@ -46,8 +49,19 @@ func ReconcileMarkLogicCluster(cr *databasev1alpha1.MarklogicCluster, index int)
 			Replicas:                      params.Replicas,
 			Name:                          params.Name,
 			Image:                         params.Image,
+			License:                       params.License,
 			TerminationGracePeriodSeconds: params.TerminationGracePeriodSeconds,
 			BootstrapHost:                 generateBootstrapHost(cr.Spec.MarkLogicGroups[index].IsBootstrap),
+			Resources:                     params.Resources,
+			EnableConverters:              params.EnableConverters,
+			PriorityClassName:             params.PriorityClassName,
+			ClusterDomain:                 params.ClusterDomain,
+			UpdateStrategy:                params.UpdateStrategy,
+			Affinity:                      params.Affinity,
+			NodeSelector:                  params.NodeSelector,
+			TopologySpreadConstraints:     params.TopologySpreadConstraints,
+			PodSecurityContext:            params.PodSecurityContext,
+			ContainerSecurityContext:      params.ContainerSecurityContext,
 		},
 	}
 	AddOwnerRefToObject(MarkLogicServerDef, ownerDef)
@@ -67,6 +81,7 @@ func generateMarkLogicServerParams(cr *databasev1alpha1.MarklogicCluster, index 
 		Replicas:                      cr.Spec.MarkLogicGroups[index].Replicas,
 		Name:                          cr.Spec.MarkLogicGroups[index].Name,
 		Image:                         cr.Spec.MarkLogicGroups[index].Image,
+		License:                       cr.Spec.MarkLogicGroups[index].License,
 		TerminationGracePeriodSeconds: cr.Spec.MarkLogicGroups[index].TerminationGracePeriodSeconds,
 		Resources:                     cr.Spec.MarkLogicGroups[index].Resources,
 		EnableConverters:              cr.Spec.MarkLogicGroups[index].EnableConverters,
@@ -76,6 +91,8 @@ func generateMarkLogicServerParams(cr *databasev1alpha1.MarklogicCluster, index 
 		Affinity:                      cr.Spec.MarkLogicGroups[index].Affinity,
 		NodeSelector:                  cr.Spec.MarkLogicGroups[index].NodeSelector,
 		TopologySpreadConstraints:     cr.Spec.MarkLogicGroups[index].TopologySpreadConstraints,
+		PodSecurityContext:            cr.Spec.MarkLogicGroups[index].PodSecurityContext,
+		ContainerSecurityContext:      cr.Spec.MarkLogicGroups[index].ContainerSecurityContext,
 	}
 	// if cr.Spec.Storage != nil {
 	// 	params.PersistentVolumeClaim = generatePVCTemplate(cr.Spec.Storage.Size)

@@ -47,3 +47,19 @@ type AdminAuth struct {
 	AdminPassword  *string `json:"adminPassword,omitempty"`
 	WalletPassword *string `json:"walletPassword,omitempty"`
 }
+
+type LogCollection struct {
+	Enabled   bool                         `json:"enabled,omitempty"`
+	Image     string                       `json:"image,omitempty"`
+	Resources *corev1.ResourceRequirements `json:"resources,omitempty"`
+	Files     LogFilesConfig               `json:"files,omitempty"`
+	Outputs   string                       `json:"outputs,omitempty"`
+}
+
+type LogFilesConfig struct {
+	ErrorLogs   bool `json:"errorLogs,omitempty"`
+	AccessLogs  bool `json:"accessLogs,omitempty"`
+	RequestLogs bool `json:"requestLogs,omitempty"`
+	CrashLogs   bool `json:"crashLogs,omitempty"`
+	AuditLogs   bool `json:"auditLogs,omitempty"`
+}

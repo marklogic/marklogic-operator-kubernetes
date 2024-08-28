@@ -33,6 +33,34 @@ spec:
       ## Uncomment the following lines to add annotations to the service
       # annotations:
 
+## Uncomment the following lines to specify the podSecurityContext and containerSecurityContext
+## Note: Below values are set to default, please update them as per your requirements
+  # podSecurityContext:
+  #   fsGroup: 2
+  #   fsGroupChangePolicy: OnRootMismatch
+  # securityContext:
+  #   runAsUser: 1000
+  #   runAsNonRoot: true
+  #   allowPrivilegeEscalation: false
+
+  logCollection:
+    enabled: true
+    image: fluent/fluent-bit:3.1.1
+    files:
+      errorLogs: true
+      accessLogs: true
+      requestLogs: true
+      crashLogs: true
+      auditLogs: true
+    outputs: |-
+        [OUTPUT]
+          name loki
+          match *
+          host loki.loki.svc.cluster.local
+          port 3100
+          labels job=fluent-bit
+          http_user admin
+          http_passwd admin
 
   # resources:
   #   requests:
