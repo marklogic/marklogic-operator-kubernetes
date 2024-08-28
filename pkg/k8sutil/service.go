@@ -7,8 +7,15 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
 
+	databasev1alpha1 "github.com/marklogic/marklogic-kubernetes-operator/api/v1alpha1"
 	"github.com/marklogic/marklogic-kubernetes-operator/pkg/result"
 )
+
+type serviceParameters struct {
+	Ports       []corev1.ServicePort
+	Type        corev1.ServiceType
+	Annotations map[string]string
+}
 
 func generateHeadlessServiceDef(serviceMeta metav1.ObjectMeta, ownerRef metav1.OwnerReference) *corev1.Service {
 	service := &corev1.Service{
@@ -45,28 +52,54 @@ func generateServicePorts() []corev1.ServicePort {
 		{
 			Name:       "xdqp-port2",
 			Port:       7999,
-			TargetPort: intstr.FromInt(int(7997)),
+			TargetPort: intstr.FromInt(int(7999)),
 			Protocol:   corev1.ProtocolTCP,
 		},
 		{
 			Name:       "app-services",
 			Port:       8000,
-			TargetPort: intstr.FromInt(int(7997)),
+			TargetPort: intstr.FromInt(int(8000)),
 			Protocol:   corev1.ProtocolTCP,
 		},
 		{
 			Name:       "admin",
 			Port:       8001,
-			TargetPort: intstr.FromInt(int(7997)),
+			TargetPort: intstr.FromInt(int(8001)),
 			Protocol:   corev1.ProtocolTCP,
 		},
 		{
 			Name:       "manage",
 			Port:       8002,
-			TargetPort: intstr.FromInt(int(7997)),
+			TargetPort: intstr.FromInt(int(8002)),
 			Protocol:   corev1.ProtocolTCP,
 		},
 	}
+}
+
+func generateServiceParams(cr *databasev1alpha1.MarklogicGroup) serviceParameters {
+	print("====service::generateServiceParams", "ServiceObjectMeta", cr.Spec.Service.AdditionalPorts)
+	return serviceParameters{
+		Type:        cr.Spec.Service.Type,
+		Ports:       cr.Spec.Service.AdditionalPorts,
+		Annotations: cr.Spec.Service.Annotations,
+	}
+}
+
+func generateServiceDef(serviceMeta metav1.ObjectMeta, ownerRef metav1.OwnerReference, params serviceParameters) *corev1.Service {
+	service := &corev1.Service{
+		TypeMeta: metav1.TypeMeta{
+			Kind:       "Service",
+			APIVersion: "v1",
+		},
+		ObjectMeta: serviceMeta,
+		Spec: corev1.ServiceSpec{
+			Selector: serviceMeta.GetLabels(),
+			Ports:    append(params.Ports, generateServicePorts()...),
+			Type:     params.Type,
+		},
+	}
+	service.SetOwnerReferences(append(service.GetOwnerReferences(), ownerRef))
+	return service
 }
 
 func (oc *OperatorContext) getService(namespace string, serviceName string) (*corev1.Service, error) {
@@ -102,23 +135,44 @@ func (oc *OperatorContext) CreateOrUpdateService(namespace string, serviceMeta m
 	return nil
 }
 
-func (oc *OperatorContext) ReconcileSrvices() result.ReconcileResult {
+func (oc *OperatorContext) ReconcileServices() result.ReconcileResult {
 	logger := oc.ReqLogger
+	logger.Info("service::Reconciling MarkLogic Service")
 	client := oc.Client
 	cr := oc.MarklogicGroup
-
-	logger.Info("service::CheckHeadlessServer")
 	labels := getMarkLogicLabels(cr.Spec.Name)
-	annotations := map[string]string{}
-	objectMeta := generateObjectMeta(cr.Spec.Name, cr.Namespace, labels, annotations)
-	namespace := objectMeta.Namespace
-	nsName := types.NamespacedName{Name: objectMeta.Name, Namespace: objectMeta.Namespace}
+	svcParams := generateServiceParams(cr)
+	svcName := cr.Spec.Name + "-cluster"
+	svcObjectMeta := generateObjectMeta(svcName, cr.Namespace, labels, svcParams.Annotations)
+	headlessSvcAnnotations := map[string]string{}
+	headlessSvcObjectMeta := generateObjectMeta("marklogic", cr.Namespace, labels, headlessSvcAnnotations)
+	namespace := svcObjectMeta.Namespace
+	svcNsName := types.NamespacedName{Name: svcObjectMeta.Name, Namespace: svcObjectMeta.Namespace}
+	headlessSvcNsName := types.NamespacedName{Name: svcObjectMeta.Name, Namespace: svcObjectMeta.Namespace}
 	service := &corev1.Service{}
-	err := client.Get(oc.Ctx, nsName, service)
+	err := client.Get(oc.Ctx, headlessSvcNsName, service)
 	if err != nil {
+		logger.Info("MarkLogic headless service not found")
 		if errors.IsNotFound(err) {
-			logger.Info("MarkLogic service is not found, creating a new one")
-			serviceDef := generateHeadlessServiceDef(objectMeta, marklogicServerAsOwner(cr))
+			logger.Info("MarkLogic headless service not found, creating a new one")
+			headlessServiceDef := generateHeadlessServiceDef(headlessSvcObjectMeta, marklogicServerAsOwner(cr))
+			err = oc.createService(namespace, headlessServiceDef)
+			if err != nil {
+				logger.Info("MarkLogic headless service creation is failed")
+				return result.Error(err)
+			}
+			logger.Info("MarkLogic headless service creation is successful")
+		} else {
+			logger.Error(err, "MarkLogic headless service creation is failed")
+			return result.Error(err)
+		}
+	}
+	err = client.Get(oc.Ctx, svcNsName, service)
+	if err != nil {
+		logger.Info("MarkLogic service is not found")
+		if errors.IsNotFound(err) {
+			logger.Info("MarkLogic service not found, creating a new one")
+			serviceDef := generateServiceDef(svcObjectMeta, marklogicServerAsOwner(cr), svcParams)
 			err = oc.createService(namespace, serviceDef)
 			if err != nil {
 				logger.Info("MarkLogic service creation is failed")
@@ -127,11 +181,10 @@ func (oc *OperatorContext) ReconcileSrvices() result.ReconcileResult {
 			logger.Info("MarkLogic service creation is successful")
 			// result.Continue()
 		} else {
-			logger.Error(err, "MarkLogic headless service creation is failed")
+			logger.Error(err, "MarkLogic service creation is failed")
 			return result.Error(err)
 		}
 	}
-
 	return result.Continue()
 }
 

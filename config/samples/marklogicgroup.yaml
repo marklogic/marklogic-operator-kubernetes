@@ -21,6 +21,18 @@ spec:
   updateStrategy: OnDelete
   groupConfig:
     name: "node"
+  service: 
+      ## service type could be ClusterIP, NodePort or LoadBalancer, default is ClusterIP
+      type: LoadBalancer
+      ## Uncomment the following lines to add additional ports to the service
+      # additionalPorts: 
+      # - name: app1
+      #   port: 8010 
+      #   targetPort: 8010
+      #   protocol: TCP
+      ## Uncomment the following lines to add annotations to the service
+      # annotations:
+
 
   # resources:
   #   requests:
