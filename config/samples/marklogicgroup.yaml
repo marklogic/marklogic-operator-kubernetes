@@ -23,7 +23,7 @@ spec:
     name: "node"
   service: 
       ## service type could be ClusterIP, NodePort or LoadBalancer, default is ClusterIP
-      type: LoadBalancer
+      type: ClusterIP
       ## Uncomment the following lines to add additional ports to the service
       # additionalPorts: 
       # - name: app1
