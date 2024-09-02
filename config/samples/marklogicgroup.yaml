@@ -31,7 +31,7 @@ spec:
       #   targetPort: 8010
       #   protocol: TCP
       ## Uncomment the following lines to add annotations to the service
-      # annotations:
+      # annotations: {}
 
 ## Uncomment the following lines to specify the podSecurityContext and containerSecurityContext
 ## Note: Below values are set to default, please update them as per your requirements
