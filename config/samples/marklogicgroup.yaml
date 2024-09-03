@@ -21,6 +21,18 @@ spec:
   updateStrategy: OnDelete
   groupConfig:
     name: "node"
+  service: 
+      ## service type could be ClusterIP, NodePort or LoadBalancer, default is ClusterIP
+      type: ClusterIP
+      ## Uncomment the following lines to add additional ports to the service
+      # additionalPorts: 
+      # - name: app1
+      #   port: 8010 
+      #   targetPort: 8010
+      #   protocol: TCP
+      ## Uncomment the following lines to add annotations to the service
+      # annotations: {}
+
 ## Uncomment the following lines to specify the podSecurityContext and containerSecurityContext
 ## Note: Below values are set to default, please update them as per your requirements
   # podSecurityContext:

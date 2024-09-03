@@ -30,6 +30,13 @@ type HugePages struct {
 	MountPath string `json:"mountPath,omitempty"`
 }
 
+type Service struct {
+	// +kubebuilder:default:= ClusterIP
+	Type            corev1.ServiceType   `json:"type,omitempty"`
+	AdditionalPorts []corev1.ServicePort `json:"additionalPorts,omitempty"`
+	Annotations     map[string]string    `json:"annotations,omitempty"`
+}
+
 type VolumeMountWrapper struct {
 	Volume    []corev1.Volume      `json:"volume,omitempty"`
 	MountPath []corev1.VolumeMount `json:"mountPath,omitempty"`

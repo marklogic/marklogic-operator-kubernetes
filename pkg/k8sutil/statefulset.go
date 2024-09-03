@@ -22,6 +22,7 @@ type statefulSetParameters struct {
 	Replicas                      *int32
 	Name                          string
 	PersistentVolumeClaim         corev1.PersistentVolumeClaim
+	ServiceName                   string
 	TerminationGracePeriodSeconds *int64
 	UpdateStrategy                appsv1.StatefulSetUpdateStrategyType
 	NodeSelector                  map[string]string

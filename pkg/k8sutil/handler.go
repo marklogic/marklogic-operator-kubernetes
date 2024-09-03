@@ -7,7 +7,7 @@ import (
 func (oc *OperatorContext) ReconsileHandler() (reconcile.Result, error) {
 	oc.ReqLogger.Info("handler::ReconsileHandler")
 
-	if result := oc.ReconcileSrvices(); result.Completed() {
+	if result := oc.ReconcileServices(); result.Completed() {
 		return result.Output()
 	}
 	setOperatorInternalStatus(oc, "Created")

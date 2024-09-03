@@ -78,6 +78,8 @@ type MarklogicGroupSpec struct {
 	BootstrapHost string `json:"bootstrapHost,omitempty"`
 
 	DoNotDelete *bool `json:"doNotDelete,omitempty"`
+
+	Service Service `json:"service,omitempty"`
 }
 
 // InternalState defines the observed state of MarklogicGroup
