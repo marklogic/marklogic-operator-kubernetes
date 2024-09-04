@@ -21,6 +21,7 @@ spec:
   updateStrategy: OnDelete
   groupConfig:
     name: "node"
+  haProxy: true
   service: 
       ## service type could be ClusterIP, NodePort or LoadBalancer, default is ClusterIP
       type: ClusterIP
