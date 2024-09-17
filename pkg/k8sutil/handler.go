@@ -26,6 +26,12 @@ func (oc *OperatorContext) ReconsileHandler() (reconcile.Result, error) {
 		}
 	}
 
+	if oc.MarklogicGroup.Spec.NetworkPolicy.Enabled {
+		if result := oc.ReconcileNetworkPolicy(); result.Completed() {
+			return result.Output()
+		}
+	}
+
 	result, err := oc.ReconcileStatefulset()
 
 	return result, err

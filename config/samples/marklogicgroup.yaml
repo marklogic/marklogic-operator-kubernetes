@@ -61,6 +61,35 @@ spec:
           labels job=fluent-bit
           http_user admin
           http_passwd admin
+  
+  ## To configure networkPolicy, set enabled: true and uncomment the following lines 
+  ## Below is an example of networkPolicy, update it as per your requirements
+  ## ref: https://kubernetes.io/docs/concepts/services-networking/network-policies
+  networkPolicy:
+    enabled: false
+  #   policyTypes:
+  #     - Ingress
+  #     - Egress
+  #   podSelector: {}
+  #   ingress:
+  #     - from:
+  #         - podSelector:
+  #             matchLabels:
+  #               app.kubernetes.io/name: marklogic
+  #               app.kubernetes.io/instance: marklogic
+  #       ports:
+  #         - protocol: TCP
+  #           port: 8000
+  #   egress:
+  #     - to:
+  #         - podSelector:
+  #             matchLabels:
+  #               app.kubernetes.io/name: marklogic
+  #               app.kubernetes.io/instance: marklogicgroup
+  #       ports:
+  #         - protocol: TCP
+  #           port: 8000
+
 
   # resources:
   #   requests:

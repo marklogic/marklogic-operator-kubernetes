@@ -2,6 +2,8 @@ package v1alpha1
 
 import (
 	corev1 "k8s.io/api/core/v1"
+	networkingv1 "k8s.io/api/networking/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 type ContainerProbe struct {
@@ -62,4 +64,12 @@ type LogFilesConfig struct {
 	RequestLogs bool `json:"requestLogs,omitempty"`
 	CrashLogs   bool `json:"crashLogs,omitempty"`
 	AuditLogs   bool `json:"auditLogs,omitempty"`
+}
+
+type NetworkPolicy struct {
+	Enabled     bool                                    `json:"enabled,omitempty"`
+	PolicyTypes []networkingv1.PolicyType               `json:"policyTypes,omitempty"`
+	PodSelector metav1.LabelSelector                    `json:"podSelector,omitempty"`
+	Ingress     []networkingv1.NetworkPolicyIngressRule `json:"ingress,omitempty"`
+	Egress      []networkingv1.NetworkPolicyEgressRule  `json:"egress,omitempty"`
 }
