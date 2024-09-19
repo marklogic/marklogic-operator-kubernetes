@@ -28,6 +28,9 @@ func (oc *OperatorContext) ReconsileHandler() (reconcile.Result, error) {
 
 	if oc.MarklogicGroup.Spec.NetworkPolicy.Enabled {
 		if result := oc.ReconcileNetworkPolicy(); result.Completed() {
+
+	if oc.MarklogicGroup.Spec.HAProxyConfig.Enabled {
+		if result := oc.ReconcileHAProxy(); result.Completed() {
 			return result.Output()
 		}
 	}

@@ -136,6 +136,16 @@ var _ = Describe("MarkLogicGroup controller", func() {
 							},
 						},
 					},
+					HAProxyConfig: databasev1alpha1.HAProxyConfig{
+						Enabled:          true,
+						ReplicaCount:     1,
+						FrontendPort:     80,
+						PathBasedRouting: true,
+						DefaultAppServers: []databasev1alpha1.AppServers{
+							{Name: "AppServices", Type: "http", Port: 8000, TargetPort: 8000, Path: "/console"},
+							{Name: "Admin", Type: "http", Port: 8001, TargetPort: 8001, Path: "/adminUI"},
+							{Name: "Manage", Type: "http", Port: 8002, TargetPort: 8002, Path: "/manage"},
+						}},
 				},
 			}
 			Expect(k8sClient.Create(ctx, mlGroup)).Should(Succeed())
@@ -175,6 +185,13 @@ var _ = Describe("MarkLogicGroup controller", func() {
 			Expect(createdCR.Spec.ContainerSecurityContext.AllowPrivilegeEscalation).Should(Equal(&allowPrivilegeEscalation))
 			Expect(createdCR.Spec.LogCollection.Enabled).Should(Equal(true))
 			Expect(createdCR.Spec.LogCollection.Image).Should(Equal(fluentBitImage))
+			Expect(createdCR.Spec.HAProxyConfig.Enabled).Should(Equal(true))
+			Expect(createdCR.Spec.HAProxyConfig.ReplicaCount).Should(Equal(int32(1)))
+			Expect(createdCR.Spec.HAProxyConfig.FrontendPort).Should(Equal(int32(80)))
+			Expect(createdCR.Spec.HAProxyConfig.PathBasedRouting).Should(Equal(true))
+			Expect(createdCR.Spec.HAProxyConfig.DefaultAppServers[0].Name).Should(Equal("AppServices"))
+			Expect(createdCR.Spec.HAProxyConfig.DefaultAppServers[0].Type).Should(Equal("http"))
+			Expect(createdCR.Spec.HAProxyConfig.DefaultAppServers[0].Port).Should(Equal(int32(8000)))
 
 			// Validating if StatefulSet is created successfully
 			sts := &appsv1.StatefulSet{}

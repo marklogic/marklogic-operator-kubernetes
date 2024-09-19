@@ -79,6 +79,8 @@ type MarklogicGroupSpec struct {
 	DoNotDelete *bool `json:"doNotDelete,omitempty"`
 
 	Service Service `json:"service,omitempty"`
+
+	HAProxyConfig HAProxyConfig `json:"haProxyConfig,omitempty"`
 }
 
 // InternalState defines the observed state of MarklogicGroup

@@ -52,6 +52,7 @@ type containerParameters struct {
 	SecurityContext    *corev1.SecurityContext
 	EnableConverters   bool
 	HugePages          *databasev1alpha1.HugePages
+	PathBasedRouting   bool
 }
 
 func (oc *OperatorContext) ReconcileStatefulset() (reconcile.Result, error) {
@@ -307,6 +308,7 @@ func generateContainerParams(cr *databasev1alpha1.MarklogicGroup) containerParam
 		PodSecurityContext: cr.Spec.PodSecurityContext,
 		SecurityContext:    cr.Spec.ContainerSecurityContext,
 		LogCollection:      cr.Spec.LogCollection,
+		PathBasedRouting:   cr.Spec.HAProxyConfig.PathBasedRouting,
 	}
 
 	if cr.Spec.Storage != nil {
@@ -430,11 +432,13 @@ func getEnvironmentVariables(containerParams containerParameters) []corev1.EnvVa
 	}, corev1.EnvVar{
 		Name:  "MARKLOGIC_CLUSTER_TYPE",
 		Value: "bootstrap",
+	}, corev1.EnvVar{
+		Name:  "INSTALL_CONVERTERS",
+		Value: strconv.FormatBool(containerParams.EnableConverters),
+	}, corev1.EnvVar{
+		Name:  "PATH_BASED_ROUTING",
+		Value: strconv.FormatBool(containerParams.PathBasedRouting),
 	},
-		corev1.EnvVar{
-			Name:  "INSTALL_CONVERTERS",
-			Value: strconv.FormatBool(containerParams.EnableConverters),
-		},
 	)
 	if containerParams.LicenseKey != "" {
 		envVars = append(envVars, corev1.EnvVar{
