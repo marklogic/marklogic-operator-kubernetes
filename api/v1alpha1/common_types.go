@@ -63,3 +63,75 @@ type LogFilesConfig struct {
 	CrashLogs   bool `json:"crashLogs,omitempty"`
 	AuditLogs   bool `json:"auditLogs,omitempty"`
 }
+
+type HAProxyConfig struct {
+	Enabled bool `json:"enabled,omitempty"`
+	// +kubebuilder:default:=1
+	ReplicaCount int32 `json:"replicas,omitempty"`
+	// +kubebuilder:default:=80
+	FrontendPort int32 `json:"frontendPort,omitempty"`
+	// +kubebuilder:default:={{name: "AppServices", type: "http", port: 8000, targetPort: 8000, path: "/console"}, {name: "Admin", type: "http", port: 8001, targetPort: 8001, path: "/adminUI"}, {name: "Manage", type: "http", port: 8002, targetPort: 8002, path: "/manage"}}
+	DefaultAppServers    []AppServers `json:"defaultAppServers,omitempty"`
+	AdditionalAppServers []AppServers `json:"additionalAppServers,omitempty"`
+	// +kubebuilder:default:=true
+	PathBasedRouting   bool `json:"pathBasedRouting,omitempty"`
+	RestartWhenUpgrade bool `json:"restartWhenUpgrade,omitempty"`
+	// +kubebuilder:default:={type: ClusterIP}
+	Service ServiceForHAProxy `json:"service,omitempty"`
+	// +kubebuilder:default:={enabled: false}
+	TcpPorts Tcpports `json:"tcpPorts,omitempty"`
+	// +kubebuilder:default:={client: 600, connect: 600, server: 600}
+	Timeout Timeout `json:"timeout,omitempty"`
+	// +kubebuilder:default:={enabled: false, secretName: "", certFileName: ""}
+	Tls TlsForHAProxy `json:"tls,omitempty"`
+	// +kubebuilder:default:={enabled: false, port: 1024, auth: {enabled: false, username: "", password: ""}}
+	Stats     Stats               `json:"stats,omitempty"`
+	Resources corev1.ResourceList `json:"resources,omitempty"`
+}
+
+type AppServers struct {
+	Name       string `json:"name,omitempty"`
+	Type       string `json:"type,omitempty"`
+	Port       int32  `json:"port,omitempty"`
+	TargetPort int32  `json:"targetPort,omitempty"`
+	Path       string `json:"path,omitempty"`
+}
+
+type Stats struct {
+	Enabled bool      `json:"enabled,omitempty"`
+	Port    int32     `json:"port,omitempty"`
+	Auth    StatsAuth `json:"auth,omitempty"`
+}
+
+type StatsAuth struct {
+	Enabled  bool   `json:"enabled,omitempty"`
+	Username string `json:"username,omitempty"`
+	Password string `json:"password,omitempty"`
+}
+
+type ServiceForHAProxy struct {
+	Type corev1.ServiceType `json:"type,omitempty"`
+}
+
+type Tcpports struct {
+	Enabled bool      `json:"enabled,omitempty"`
+	Ports   []TcpPort `json:"ports,omitempty"`
+}
+
+type TcpPort struct {
+	Port int32  `json:"port,omitempty"`
+	Name string `json:"name,omitempty"`
+	Type string `json:"type,omitempty"`
+}
+
+type Timeout struct {
+	Client  int32 `json:"client,omitempty"`
+	Connect int32 `json:"connect,omitempty"`
+	Server  int32 `json:"server,omitempty"`
+}
+
+type TlsForHAProxy struct {
+	Enabled      bool   `json:"enabled,omitempty"`
+	SecretName   string `json:"secretName,omitempty"`
+	CertFileName string `json:"certFileName,omitempty"`
+}

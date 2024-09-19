@@ -61,6 +61,40 @@ spec:
           labels job=fluent-bit
           http_user admin
           http_passwd admin
+  
+  ## Configuration for the HAProxy load balancer
+  ## An out of box load balancer with configured to handle cookie based session affinity that required by most MarkLogic applications.
+  ## It also support multi-statement transaction and ODBC connections.  
+  ## Uncomment the following lines to enable HAProxy configuration
+  # haProxyConfig:
+  #   enabled: true
+  #   replicas: 1
+  #   frontendPort: 80
+  #   pathBasedRouting: true
+  #   stats: 
+  #     enabled: true
+  #     port: 1024
+  #     auth:
+  #       enabled: true
+  #       username: user
+  #       password: pass
+  #   tcpPorts:
+  #     enabled: true
+  #     ports:
+  #       - name: odbc
+  #         type: TCP
+  #         port: 5432
+  #   additionalAppServers:
+  #     - name: app1
+  #       path: /test1
+  #       port: 8010
+  #       targetPort: 8010
+  #       type: HTTP
+  #     - name: app2
+  #       path: /test2
+  #       port: 8011
+  #       targetPort: 8011
+  #       type: HTTP
 
   # resources:
   #   requests:
