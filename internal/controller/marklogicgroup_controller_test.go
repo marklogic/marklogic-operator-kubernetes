@@ -25,6 +25,7 @@ import (
 	. "github.com/onsi/gomega"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	networkingv1 "k8s.io/api/networking/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -50,6 +51,7 @@ var runAsUser = int64(1000)
 var runAsNonRoot bool = true
 var allowPrivilegeEscalation bool = false
 var typeNamespaceName = types.NamespacedName{Name: Name, Namespace: Namespace}
+var policy = []networkingv1.PolicyType{networkingv1.PolicyTypeIngress, networkingv1.PolicyTypeEgress}
 
 const resourceCpuValue = int64(1)
 const resourceMemoryValue = int64(268435456)
@@ -59,6 +61,8 @@ const resourceHugepageValue = int64(104857600)
 
 var svcName = Name + "-cluster"
 var typeNamespaceNameSvc = types.NamespacedName{Name: svcName, Namespace: Namespace}
+var netPolicyName = Name + "-network-policy"
+var typeNsNameNetPolicy = types.NamespacedName{Name: netPolicyName, Namespace: Namespace}
 
 const fluentBitImage = "fluent/fluent-bit:3.1.1"
 
@@ -115,6 +119,23 @@ var _ = Describe("MarkLogicGroup controller", func() {
 						AllowPrivilegeEscalation: &allowPrivilegeEscalation,
 					},
 					LogCollection: &databasev1alpha1.LogCollection{Enabled: true, Image: "fluent/fluent-bit:3.1.1", Files: databasev1alpha1.LogFilesConfig{ErrorLogs: true, AccessLogs: true, RequestLogs: true, CrashLogs: true, AuditLogs: true}, Outputs: "stdout"},
+					NetworkPolicy: databasev1alpha1.NetworkPolicy{
+						Enabled:     true,
+						PolicyTypes: policy,
+						PodSelector: metav1.LabelSelector{MatchLabels: map[string]string{"app.kubernetes.io/name": "marklogic", "app.kubernetes.io/instance": "dnode"}},
+						Ingress: []networkingv1.NetworkPolicyIngressRule{
+							{From: []networkingv1.NetworkPolicyPeer{{
+								PodSelector: &metav1.LabelSelector{
+									MatchLabels: map[string]string{
+										"app.kubernetes.io/name":     "marklogic",
+										"app.kubernetes.io/instance": "dnode",
+									},
+								},
+							}},
+								Ports: []networkingv1.NetworkPolicyPort{{Port: &intstr.IntOrString{IntVal: 8000}}},
+							},
+						},
+					},
 					HAProxyConfig: databasev1alpha1.HAProxyConfig{
 						Enabled:          true,
 						ReplicaCount:     1,
@@ -201,6 +222,18 @@ var _ = Describe("MarkLogicGroup controller", func() {
 			}, timeout, interval).Should(BeTrue())
 			Expect(createdClusterSrv.Name).Should(Equal(svcName))
 			Expect(createdClusterSrv.Spec.Type).Should(Equal(corev1.ServiceTypeClusterIP))
+
+			// Validating if NetworkPolicy is created successfully
+			createdNetPolicy := &networkingv1.NetworkPolicy{}
+			Eventually(func() bool {
+				err := k8sClient.Get(ctx, typeNsNameNetPolicy, createdNetPolicy)
+				return err == nil
+			}, timeout, interval).Should(BeTrue())
+			Expect(createdNetPolicy.Name).Should(Equal(netPolicyName))
+			Expect(createdNetPolicy.Spec.PolicyTypes).Should(Equal(policy))
+			Expect(createdNetPolicy.Spec.PodSelector).Should(Equal(metav1.LabelSelector{MatchLabels: map[string]string{"app.kubernetes.io/name": "marklogic", "app.kubernetes.io/instance": "dnode"}}))
+			Expect(createdNetPolicy.Spec.Ingress[0].From[0].PodSelector.MatchLabels).Should(Equal(map[string]string{"app.kubernetes.io/name": "marklogic", "app.kubernetes.io/instance": "dnode"}))
+			Expect(createdNetPolicy.Spec.Ingress[0].Ports[0].Port).Should(Equal(&intstr.IntOrString{IntVal: 8000}))
 		})
 
 		It("Should create configmap for MarkLogic scripts", func() {
