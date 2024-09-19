@@ -9,7 +9,7 @@ metadata:
     app.kubernetes.io/created-by: marklogic-kubernetes-operator
   name: marklogicgroup-sample
 spec:
-  replicas: 2
+  replicas: 1
   name: marklogic
   image: "progressofficial/marklogic-db:11.3.0-ubi-rootless"
   auth:
@@ -19,11 +19,11 @@ spec:
   #   size: 10Gi
   terminationGracePeriodSeconds: 9
   updateStrategy: OnDelete
-  groupConfig:
-    name: "node"
-  service: 
-      ## service type could be ClusterIP, NodePort or LoadBalancer, default is ClusterIP
-      type: ClusterIP
+  # groupConfig:
+  #   name: "node"
+  # service: 
+  #     ## service type could be ClusterIP, NodePort or LoadBalancer, default is ClusterIP
+  #     type: ClusterIP
       ## Uncomment the following lines to add additional ports to the service
       # additionalPorts: 
       # - name: app1

@@ -17,6 +17,9 @@ limitations under the License.
 package v1alpha1
 
 import (
+	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
+	networkingv1 "k8s.io/api/networking/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -28,13 +31,57 @@ type MarklogicClusterSpec struct {
 	// INSERT ADDITIONAL SPEC FIELDS - desired state of cluster
 	// Important: Run "make" to regenerate code after modifying this file
 
-	// Foo is an example field of MarklogicCluster. Edit marklogiccluster_types.go to remove/update
+	// +kubebuilder:default:="cluster.local"
+	ClusterDomain string `json:"clusterDomain,omitempty"`
+
+	// +kubebuilder:default:="progressofficial/marklogic-db:11.3.0-ubi-rootless"
+	Image string `json:"image"`
+	// +kubebuilder:default:="IfNotPresent"
+	ImagePullPolicy  string                        `json:"imagePullPolicy,omitempty"`
+	ImagePullSecrets []corev1.LocalObjectReference `json:"imagePullSecrets,omitempty"`
+
+	Auth                          *AdminAuth                   `json:"auth,omitempty"`
+	Storage                       *Storage                     `json:"storage,omitempty"`
+	Resources                     *corev1.ResourceRequirements `json:"resources,omitempty"`
+	TerminationGracePeriodSeconds *int64                       `json:"terminationGracePeriodSeconds,omitempty"`
+	// +kubebuilder:validation:Enum=OnDelete;RollingUpdate
+	// +kubebuilder:default:="OnDelete"
+	UpdateStrategy           appsv1.StatefulSetUpdateStrategyType `json:"updateStrategy,omitempty"`
+	NetworkPolicy            *networkingv1.NetworkPolicy          `json:"networkPolicy,omitempty"`
+	PodSecurityContext       *corev1.PodSecurityContext           `json:"podSecurityContext,omitempty"`
+	ContainerSecurityContext *corev1.SecurityContext              `json:"securityContext,omitempty"`
+
+	Affinity                  *corev1.Affinity                  `json:"affinity,omitempty"`
+	NodeSelector              map[string]string                 `json:"nodeSelector,omitempty"`
+	TopologySpreadConstraints []corev1.TopologySpreadConstraint `json:"topologySpreadConstraints,omitempty"`
+	PriorityClassName         string                            `json:"priorityClassName,omitempty"`
+	License                   *License                          `json:"license,omitempty"`
+	EnableConverters          bool                              `json:"enableConverters,omitempty"`
+	// +kubebuilder:default:={enabled: false, mountPath: "/dev/hugepages"}
+	HugePages *HugePages `json:"hugePages,omitempty"`
+	// +kubebuilder:default:={enabled: false, image: "fluent/fluent-bit:3.1.1", resources: {requests: {cpu: "100m", memory: "200Mi"}, limits: {cpu: "200m", memory: "500Mi"}}, files: {errorLogs: true, accessLogs: true, requestLogs: true}, outputs: "stdout"}
+	LogCollection *LogCollection `json:"logCollection,omitempty"`
+
+	HAProxy HAProxyConfig `json:"haproxy,omitempty"`
+
 	MarkLogicGroups []*MarklogicGroups `json:"markLogicGroups,omitempty"`
 }
 
 type MarklogicGroups struct {
-	*MarklogicGroupSpec `json:"spec,omitempty"`
-	IsBootstrap         bool `json:"isBootstrap,omitempty"`
+	Replicas                  *int32                            `json:"replicas,omitempty"`
+	Name                      string                            `json:"name,omitempty"`
+	Image                     string                            `json:"image,omitempty"`
+	ImagePullPolicy           string                            `json:"imagePullPolicy,omitempty"`
+	ImagePullSecrets          []corev1.LocalObjectReference     `json:"imagePullSecrets,omitempty"`
+	Storage                   *Storage                          `json:"storage,omitempty"`
+	Resources                 *corev1.ResourceRequirements      `json:"resources,omitempty"`
+	Affinity                  *corev1.Affinity                  `json:"affinity,omitempty"`
+	TopologySpreadConstraints []corev1.TopologySpreadConstraint `json:"topologySpreadConstraints,omitempty"`
+	NodeSelector              map[string]string                 `json:"nodeSelector,omitempty"`
+	PriorityClassName         string                            `json:"priorityClassName,omitempty"`
+	HugePages                 *HugePages                        `json:"hugePages,omitempty"`
+	LogCollection             *LogCollection                    `json:"logCollection,omitempty"`
+	IsBootstrap               bool                              `json:"isBootstrap,omitempty"`
 }
 
 // MarklogicClusterStatus defines the observed state of MarklogicCluster

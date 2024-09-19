@@ -23,10 +23,12 @@ import (
 	"k8s.io/apimachinery/pkg/api/errors"
 
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
+	"github.com/go-logr/logr"
 	databasev1alpha1 "github.com/marklogic/marklogic-kubernetes-operator/api/v1alpha1"
 	"github.com/marklogic/marklogic-kubernetes-operator/pkg/k8sutil"
 )
@@ -34,7 +36,9 @@ import (
 // MarklogicClusterReconciler reconciles a MarklogicCluster object
 type MarklogicClusterReconciler struct {
 	client.Client
-	Scheme *runtime.Scheme
+	Scheme   *runtime.Scheme
+	Log      logr.Logger
+	Recorder record.EventRecorder
 }
 
 //+kubebuilder:rbac:groups=database.marklogic.com,resources=marklogicclusters,verbs=get;list;watch;create;update;patch;delete
@@ -54,33 +58,26 @@ func (r *MarklogicClusterReconciler) Reconcile(ctx context.Context, req ctrl.Req
 	logger := log.FromContext(ctx)
 	logger.Info(fmt.Sprintf("Reconciling MarklogicGroup %s", req.NamespacedName))
 
-	operatorCR := &databasev1alpha1.MarklogicCluster{}
-	err := r.Get(ctx, req.NamespacedName, operatorCR)
+	cc, err := k8sutil.CreateClusterContext(ctx, &req, r.Client, r.Scheme, r.Recorder)
+
 	if err != nil {
 		if errors.IsNotFound(err) {
-			logger.Info("Operator MarkLogicCluster resource object not found. Skipping reconcile.")
+			logger.Info("MarkLogicCluster resource not found. Exiting reconcile loop since there is nothing to do")
 			return ctrl.Result{}, nil
 		}
-		logger.Error(err, "Error getting operator resource object")
+
+		logger.Error(err, "Failed to get MarkLogicCluster resource")
 		return ctrl.Result{}, err
 	}
-	total := len(operatorCR.Spec.MarkLogicGroups)
-	logger.Info("===== Total Count ==== ", "Count:", total)
 
-	for i := 0; i < total; i++ {
-		logger.Info("ReconcileCluster", "Count", i)
-		markLogicCluster := k8sutil.ReconcileMarkLogicCluster(operatorCR, i)
-		err = r.Create(ctx, markLogicCluster)
-		if err != nil {
-			logger.Error(err, "Failed to create markLogicCluster")
-			return ctrl.Result{}, err
-		}
+	result, err := cc.ReconsileMarklogicClusterHandler()
 
-		logger.Info("Created new MarkLogic Server resource")
-
+	if err != nil {
+		logger.Error(err, "Error reconciling marklogic cluster")
+		return ctrl.Result{}, err
 	}
 
-	return ctrl.Result{}, nil
+	return result, nil
 }
 
 // SetupWithManager sets up the controller with the Manager.

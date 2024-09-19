@@ -91,8 +91,10 @@ var _ = BeforeSuite(func() {
 	Expect(err).ToNot(HaveOccurred())
 
 	err = (&MarklogicClusterReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
+		Client:   mgr.GetClient(),
+		Scheme:   mgr.GetScheme(),
+		Log:      ctrl.Log.WithName("controllers").WithName("MarklogicCluster"),
+		Recorder: mgr.GetEventRecorderFor("marklogiccluster-controller"),
 	}).SetupWithManager(mgr)
 	Expect(err).ToNot(HaveOccurred())
 
