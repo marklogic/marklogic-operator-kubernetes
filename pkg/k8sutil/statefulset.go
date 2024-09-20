@@ -129,7 +129,6 @@ func (oc *OperatorContext) ReconcileStatefulset() (reconcile.Result, error) {
 		}
 	} else {
 		logger.Info("MarkLogic statefulSet spec is the same as the MarkLogicGroup spec")
-
 	}
 	logger.Info("MarkLogic statefulSet is updated to " + strconv.Itoa(int(*cr.Spec.Replicas)))
 	logger.Info("Operator Status:", "Stage", cr.Status.Stage)
@@ -287,7 +286,7 @@ func generateStatefulSetsParams(cr *databasev1alpha1.MarklogicGroup) statefulSet
 		PriorityClassName:             cr.Spec.PriorityClassName,
 	}
 	if cr.Spec.Storage != nil {
-		params.PersistentVolumeClaim = generatePVCTemplate(cr.Spec.Storage.Size)
+		params.PersistentVolumeClaim = generatePVCTemplate(cr.Spec.Storage)
 	}
 	return params
 }
@@ -394,14 +393,15 @@ func generateVolumes(stsName string, containerParams containerParameters) []core
 	return volumes
 }
 
-func generatePVCTemplate(storageSize string) corev1.PersistentVolumeClaim {
+func generatePVCTemplate(storage *databasev1alpha1.Storage) corev1.PersistentVolumeClaim {
 	pvcTemplate := corev1.PersistentVolumeClaim{}
 	pvcTemplate.CreationTimestamp = metav1.Time{}
 	pvcTemplate.Name = "data"
+	pvcTemplate.Spec.StorageClassName = &storage.StorageClass
 	pvcTemplate.Spec.AccessModes = []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce}
-	pvcTemplate.Spec.Resources.Requests.Storage().Add(resource.MustParse(storageSize))
+	pvcTemplate.Spec.Resources.Requests.Storage().Add(resource.MustParse(storage.Size))
 	pvcTemplate.Spec.Resources.Requests = corev1.ResourceList{
-		corev1.ResourceStorage: resource.MustParse(storageSize),
+		corev1.ResourceStorage: resource.MustParse(storage.Size),
 	}
 	return pvcTemplate
 }
@@ -454,11 +454,18 @@ func getEnvironmentVariables(containerParams containerParameters) []corev1.EnvVa
 		envVars = append(envVars, corev1.EnvVar{
 			Name:  "MARKLOGIC_BOOTSTRAP_HOST",
 			Value: containerParams.BootstrapHost,
-		})
+		},
+			corev1.EnvVar{
+				Name:  "MARKLOGIC_CLUSTER_TYPE",
+				Value: "non-bootstrap",
+			})
 	} else {
 		envVars = append(envVars, corev1.EnvVar{
 			Name:  "MARKLOGIC_BOOTSTRAP_HOST",
 			Value: fmt.Sprintf("%s-0.%s.%s.svc.%s", containerParams.Name, containerParams.Name, containerParams.Namespace, containerParams.ClusterDomain),
+		}, corev1.EnvVar{
+			Name:  "MARKLOGIC_CLUSTER_TYPE",
+			Value: "bootstrap",
 		})
 	}
 

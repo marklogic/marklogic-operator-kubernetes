@@ -11,13 +11,13 @@ import (
 func (oc *OperatorContext) ReconcileSecret() result.ReconcileResult {
 	logger := oc.ReqLogger
 	client := oc.Client
-	cr := oc.MarklogicGroup
+	mlg := oc.MarklogicGroup
 
 	logger.Info("Reconciling MarkLogic Secret")
-	labels := getMarkLogicLabels(cr.Spec.Name)
+	labels := getMarkLogicLabels(mlg.Spec.Name)
 	annotations := map[string]string{}
-	secretName := cr.Spec.Name + "-admin"
-	objectMeta := generateObjectMeta(secretName, cr.Namespace, labels, annotations)
+	secretName := mlg.Spec.Name + "-admin"
+	objectMeta := generateObjectMeta(secretName, mlg.Namespace, labels, annotations)
 	nsName := types.NamespacedName{Name: objectMeta.Name, Namespace: objectMeta.Namespace}
 	secret := &corev1.Secret{}
 	err := client.Get(oc.Ctx, nsName, secret)
@@ -25,7 +25,7 @@ func (oc *OperatorContext) ReconcileSecret() result.ReconcileResult {
 		if errors.IsNotFound(err) {
 			logger.Info("MarkLogic admin Secret is not found, creating a new one")
 			secretData := oc.generateSecretData()
-			secretDef := generateSecretDef(objectMeta, marklogicServerAsOwner(cr), secretData)
+			secretDef := generateSecretDef(objectMeta, marklogicServerAsOwner(mlg), secretData)
 			err = oc.createSecret(secretDef)
 			if err != nil {
 				logger.Info("MarkLogic admin Secret creation is failed")

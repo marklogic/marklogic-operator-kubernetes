@@ -122,6 +122,18 @@ func (oc *OperatorContext) createConfigMap(configMap *corev1.ConfigMap) error {
 	return nil
 }
 
+func (cc *ClusterContext) createConfigMapForCC(configMap *corev1.ConfigMap) error {
+	logger := cc.ReqLogger
+	client := cc.Client
+	err := client.Create(cc.Ctx, configMap)
+	if err != nil {
+		logger.Error(err, "MarkLogic script configmap creation is failed")
+		return err
+	}
+	logger.Info("MarkLogic script configmap creation is successful")
+	return nil
+}
+
 func (oc *OperatorContext) getScriptsForConfigMap() map[string]string {
 	configMapData := make(map[string]string)
 	logger := oc.ReqLogger

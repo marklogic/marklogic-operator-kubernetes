@@ -4,8 +4,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
 
-func (oc *OperatorContext) ReconsileHandler() (reconcile.Result, error) {
-	oc.ReqLogger.Info("handler::ReconsileHandler")
+func (oc *OperatorContext) ReconsileMarklogicGroupHandler() (reconcile.Result, error) {
+	oc.ReqLogger.Info("handler::ReconsileMarklogicGroupHandler")
 
 	if result := oc.ReconcileServices(); result.Completed() {
 		return result.Output()
@@ -40,5 +40,10 @@ func (oc *OperatorContext) ReconsileHandler() (reconcile.Result, error) {
 
 	result, err := oc.ReconcileStatefulset()
 
+	return result, err
+}
+
+func (cc *ClusterContext) ReconsileMarklogicClusterHandler() (reconcile.Result, error) {
+	result, err := cc.ReconsileMarklogicCluster()
 	return result, err
 }

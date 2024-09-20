@@ -84,7 +84,7 @@ func (r *MarklogicGroupReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		return ctrl.Result{}, err
 	}
 
-	result, err := oc.ReconsileHandler()
+	result, err := oc.ReconsileMarklogicGroupHandler()
 	if err != nil {
 		logger.Error(err, "Error reconciling statefulset")
 		return ctrl.Result{}, err

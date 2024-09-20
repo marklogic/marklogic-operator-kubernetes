@@ -2353,6 +2353,8 @@ spec:
                 properties:
                   size:
                     type: string
+                  storageClass:
+                    type: string
                   volumeMount:
                     properties:
                       mountPath:

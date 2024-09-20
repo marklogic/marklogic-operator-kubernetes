@@ -22,8 +22,9 @@ type ContainerProbe struct {
 
 // Storage is the inteface to add pvc and pv support in marklogic
 type Storage struct {
-	Size        string             `json:"size,omitempty"`
-	VolumeMount VolumeMountWrapper `json:"volumeMount,omitempty"`
+	Size         string             `json:"size,omitempty"`
+	VolumeMount  VolumeMountWrapper `json:"volumeMount,omitempty"`
+	StorageClass string             `json:"storageClass,omitempty"`
 }
 
 type HugePages struct {
@@ -73,7 +74,6 @@ type NetworkPolicy struct {
 	Ingress     []networkingv1.NetworkPolicyIngressRule `json:"ingress,omitempty"`
 	Egress      []networkingv1.NetworkPolicyEgressRule  `json:"egress,omitempty"`
 }
-
 type HAProxyConfig struct {
 	Enabled bool `json:"enabled,omitempty"`
 	// +kubebuilder:default:=1
