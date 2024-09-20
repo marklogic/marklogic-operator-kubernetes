@@ -61,7 +61,7 @@ const resourceHugepageValue = int64(104857600)
 
 var svcName = Name + "-cluster"
 var typeNamespaceNameSvc = types.NamespacedName{Name: svcName, Namespace: Namespace}
-var netPolicyName = Name + "-network-policy"
+var netPolicyName = Name
 var typeNsNameNetPolicy = types.NamespacedName{Name: netPolicyName, Namespace: Namespace}
 
 const fluentBitImage = "fluent/fluent-bit:3.1.1"

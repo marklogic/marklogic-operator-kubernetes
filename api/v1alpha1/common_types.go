@@ -72,6 +72,7 @@ type NetworkPolicy struct {
 	PodSelector metav1.LabelSelector                    `json:"podSelector,omitempty"`
 	Ingress     []networkingv1.NetworkPolicyIngressRule `json:"ingress,omitempty"`
 	Egress      []networkingv1.NetworkPolicyEgressRule  `json:"egress,omitempty"`
+}
 
 type HAProxyConfig struct {
 	Enabled bool `json:"enabled,omitempty"`
