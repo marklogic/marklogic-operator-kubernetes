@@ -37,6 +37,7 @@ type MarkLogicGroupParameters struct {
 	ContainerSecurityContext      *corev1.SecurityContext
 	IsBootstrap                   bool
 	LogCollection                 *databasev1alpha1.LogCollection
+	IsPathBasedRouting            bool
 }
 
 type MarkLogicClusterParameters struct {
@@ -110,6 +111,7 @@ func GenerateMarkLogicGroupDef(cr *databasev1alpha1.MarklogicCluster, index int,
 			TopologySpreadConstraints:     params.TopologySpreadConstraints,
 			PodSecurityContext:            params.PodSecurityContext,
 			ContainerSecurityContext:      params.ContainerSecurityContext,
+			PathBasedRouting:              params.IsPathBasedRouting,
 		},
 	}
 	AddOwnerRefToObject(MarkLogicGroupDef, ownerDef)
@@ -226,6 +228,7 @@ func generateMarkLogicGroupParams(cr *databasev1alpha1.MarklogicCluster, index i
 		ContainerSecurityContext:      clusterParams.ContainerSecurityContext,
 		IsBootstrap:                   cr.Spec.MarkLogicGroups[index].IsBootstrap,
 		LogCollection:                 clusterParams.LogCollection,
+		IsPathBasedRouting:            cr.Spec.HAProxy.PathBasedRouting,
 	}
 	if cr.Spec.MarkLogicGroups[index].Image != "" {
 		MarkLogicGroupParameters.Image = cr.Spec.MarkLogicGroups[index].Image

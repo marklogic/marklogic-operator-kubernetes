@@ -78,7 +78,8 @@ type MarklogicGroupSpec struct {
 
 	DoNotDelete *bool `json:"doNotDelete,omitempty"`
 
-	Service Service `json:"service,omitempty"`
+	Service          Service `json:"service,omitempty"`
+	PathBasedRouting bool    `json:"pathBasedRouting,omitempty"`
 }
 
 // InternalState defines the observed state of MarklogicGroup

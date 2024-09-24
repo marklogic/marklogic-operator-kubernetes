@@ -27,44 +27,45 @@ func generateFrontendConfig(cr *databasev1alpha1.MarklogicCluster) string {
 	var frontEndDef string
 	var data *HAProxyTemplateData
 	var result string
-	// pathBasedRouting := cr.Spec.HAProxy.PathBasedRouting
+	pathBasedRouting := cr.Spec.HAProxy.PathBasedRouting
 	appServers := cr.Spec.HAProxy.AppServers
-	// 	if pathBasedRouting {
-	// 		frontEndDef = `
-	// frontend marklogic-{{ $.ClusterOrGroup}}
-	//   mode http
-	//   option httplog
-	//   bind :{{ $.FrontendPort}}
-	//   http-request set-header Host marklogic:{{ $.FrontendPort}}
-	//   http-request set-header REFERER http://marklogic:{{ $.FrontendPort}}
-	//   http-request set-header X-ML-QC-Path {{ index .DefaultAppServersPath 0}}
-	//   http-request set-header X-ML-ADM-Path {{ index .DefaultAppServersPath 1}}
-	//   http-request set-header X-ML-MNG-Path {{ index .DefaultAppServersPath 2}}
-	//   {{ range $appServer := .AllAppServers }}
-	//   use_backend marklogic-{{ $.ClusterOrGroup}}-{{ $appServer.Port }} if { path {{ $appServer.Path }} } || { path_beg {{ $appServer.Path }}/ }
-	//   {{ end }}`
-
-	// 		data = map[string]interface{}{
-	// 			"AllAppServers":         appServers,
-	// 			"DefaultAppServersPath": getPathList(cr.Spec.HAProxy.AppServers),
-	// 			"FrontendPort":          80,
-	// 			"ClusterOrGroup":        "test",
-	// 		}
-	// 		result = parseTemplateToString(frontEndDef, data) + "\n"
-
-	// 	} else {
-	frontEndDef = `
+	if pathBasedRouting {
+		frontEndDef = `
+frontend marklogic-frontend
+	mode http
+	option httplog
+	bind :{{ $.PortNumber}}
+	http-request set-header Host marklogic:{{ $.PortNumber}}
+	http-request set-header REFERER http://marklogic:{{ $.PortNumber}}
+	http-request set-header X-ML-QC-Path /console
+	http-request set-header X-ML-ADM-Path /adminUI
+	http-request set-header X-ML-MNG-Path /manage
+`
+		data = &HAProxyTemplateData{
+			PortNumber: int(cr.Spec.HAProxy.FrontendPort),
+		}
+		result = parseTemplateToString(frontEndDef, data) + "\n"
+		for _, appServer := range appServers {
+			data = &HAProxyTemplateData{
+				PortNumber: int(appServer.Port),
+				Path:       appServer.Path,
+			}
+			result += getFrontendForPathbased(data)
+		}
+	} else {
+		frontEndDef = `
 frontend marklogic-{{ $.PortNumber}}
   mode http
   bind :{{ $.PortNumber }}
   log-format "%ci:%cp [%tr] %ft %b/%s %TR/%Tw/%Tc/%Tr/%Ta %ST %B %CC %CS %tsc %ac/%fc/%bc/%sc/%rc %sq/%bq %hr %hs %{+Q}r"
   default_backend marklogic-{{ $.PortNumber}}-backend`
 
-	for _, appServer := range appServers {
-		data = &HAProxyTemplateData{
-			PortNumber: int(appServer.Port),
+		for _, appServer := range appServers {
+			data = &HAProxyTemplateData{
+				PortNumber: int(appServer.Port),
+			}
+			result += parseTemplateToString(frontEndDef, data) + "\n"
 		}
-		result += parseTemplateToString(frontEndDef, data) + "\n"
 	}
 
 	return result
@@ -73,7 +74,7 @@ frontend marklogic-{{ $.PortNumber}}
 // generates backend config for HAProxy depending on pathBasedRouting flag and appServers
 func generateBackendConfig(cr *databasev1alpha1.MarklogicCluster) string {
 
-	// pathBasedRouting := cr.Spec.HAProxy.PathBasedRouting
+	pathBasedRouting := cr.Spec.HAProxy.PathBasedRouting
 	var result string
 
 	// http-request replace-path {{.Path}}(/)?(.*) /\2
@@ -89,40 +90,22 @@ backend marklogic-{{ $.PortNumber}}-backend
   stick store-response res.cook(SessionId)
   stick match req.cook(HostId)
   stick match req.cook(SessionId)
-  default-server check
-`
+  default-server check`
 
-	// if !pathBasedRouting {
-	// 	rm := `http-request replace-path {{.Path}}(/)?(.*) /\2`
-	// 	backEndDef = strings.Replace(backEndDef, rm, "", -1)
-	// 	backEndDef = strings.TrimSpace(backEndDef)
-	// }
+	if pathBasedRouting {
+		backendTemplate += `
+  http-request replace-path {{.Path}}(/)?(.*) /\2`
+	}
 	groups := cr.Spec.MarkLogicGroups
 
 	appServers := cr.Spec.HAProxy.AppServers
-	// var data map[string]interface{}
 
 	for _, appServer := range appServers {
-		// data := &HAProxyTemplateData{
-		// 	PortNumber:  int(appServer.Port),
-		// 	PortName:    appServer.Name,
-		// 	Path:        appServer.Path,
-		// 	NSName:      cr.ObjectMeta.Namespace,
-		// 	ClusterName: cr.Spec.ClusterDomain,
-		// }
 		data := &HAProxyTemplateData{
 			PortNumber: int(appServer.Port),
+			Path:       appServer.Path,
 		}
 		result += parseTemplateToString(backendTemplate, data)
-		// data = map[string]interface{}{
-		// 	"Path":           appServer.Path,
-		// 	"Port":           appServer.Port,
-		// 	"GroupName":      grpCR.Spec.Name,
-		// 	"ClusterOrGroup": grpCR.Spec.GroupConfig.Name,
-		// 	"Replicas":       replicas,
-		// }
-		// result += parseConfigDef(backEndDef, data) + "\n"
-		// result += getHaproxyFrontend(data)
 		for _, group := range groups {
 			name := group.Name
 			groupReplicas := int(*group.Replicas)
@@ -133,6 +116,7 @@ backend marklogic-{{ $.PortNumber}}-backend
 				data := &HAProxyTemplateData{
 					PortNumber:  int(appServer.Port),
 					PodName:     name,
+					Path:        appServer.Path,
 					Index:       i,
 					ServiceName: name,
 					NSName:      cr.ObjectMeta.Namespace,
@@ -147,9 +131,15 @@ backend marklogic-{{ $.PortNumber}}-backend
 }
 
 func getBackendServerConfigs(data *HAProxyTemplateData) string {
-	backendServerConfig := `
+	backend := `
     server {{.PodName}}-{{.PortNumber}}-{{.Index}} {{.PodName}}-{{.Index}}.{{.ServiceName}}.{{.NSName}}.svc.{{.ClusterName}}:{{.PortNumber}} resolvers dns init-addr none cookie {{.PodName}}-{{.PortNumber}}-{{.Index}}`
-	return parseTemplateToString(backendServerConfig, data)
+	return parseTemplateToString(backend, data)
+}
+
+func getFrontendForPathbased(data *HAProxyTemplateData) string {
+	backend := `
+	use_backend marklogic-{{.PortNumber}}-backend if { path {{.Path}} } || { path_beg {{.Path}}/ }`
+	return parseTemplateToString(backend, data)
 }
 
 // {{- if $.StatsAuth }}

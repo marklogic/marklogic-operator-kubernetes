@@ -18,11 +18,19 @@ spec:
   #   size: 5Gi
   haproxy: 
     enabled: true
+    pathBasedRouting: true
+    frontendPort: 8080
     appServers:
-      - name: "admin"
-        port: 8001
       - name: "app-service"
         port: 8000
+        path: "/console"
+      - name: "admin"
+        port: 8001
+        path: "/adminUI"
+      - name: "manage"
+        port: 8002
+        path: "/manage"
+      
     stats:
       enabled: true
       port: 1024

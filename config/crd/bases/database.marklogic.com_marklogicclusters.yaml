@@ -975,24 +975,7 @@ spec:
                 type: boolean
               haproxy:
                 properties:
-                  additionalAppServers:
-                    items:
-                      properties:
-                        name:
-                          type: string
-                        path:
-                          type: string
-                        port:
-                          format: int32
-                          type: integer
-                        targetPort:
-                          format: int32
-                          type: integer
-                        type:
-                          type: string
-                      type: object
-                    type: array
-                  defaultAppServers:
+                  appServers:
                     default:
                     - name: AppServices
                       path: /console
@@ -2198,6 +2181,148 @@ spec:
                                 type: object
                               type: array
                               x-kubernetes-list-type: atomic
+                          type: object
+                      type: object
+                    haproxy:
+                      properties:
+                        appServers:
+                          default:
+                          - name: AppServices
+                            path: /console
+                            port: 8000
+                            targetPort: 8000
+                            type: http
+                          - name: Admin
+                            path: /adminUI
+                            port: 8001
+                            targetPort: 8001
+                            type: http
+                          - name: Manage
+                            path: /manage
+                            port: 8002
+                            targetPort: 8002
+                            type: http
+                          items:
+                            properties:
+                              name:
+                                type: string
+                              path:
+                                type: string
+                              port:
+                                format: int32
+                                type: integer
+                              targetPort:
+                                format: int32
+                                type: integer
+                              type:
+                                type: string
+                            type: object
+                          type: array
+                        enabled:
+                          type: boolean
+                        frontendPort:
+                          default: 80
+                          format: int32
+                          type: integer
+                        pathBasedRouting:
+                          default: true
+                          type: boolean
+                        replicas:
+                          default: 1
+                          format: int32
+                          type: integer
+                        resources:
+                          additionalProperties:
+                            anyOf:
+                            - type: integer
+                            - type: string
+                            pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                            x-kubernetes-int-or-string: true
+                          description: ResourceList is a set of (resource name, quantity)
+                            pairs.
+                          type: object
+                        restartWhenUpgrade:
+                          type: boolean
+                        service:
+                          default:
+                            type: ClusterIP
+                          properties:
+                            type:
+                              description: Service Type string describes ingress methods
+                                for a service
+                              type: string
+                          type: object
+                        stats:
+                          default:
+                            auth:
+                              enabled: false
+                              password: ""
+                              username: ""
+                            enabled: false
+                            port: 1024
+                          properties:
+                            auth:
+                              properties:
+                                enabled:
+                                  type: boolean
+                                password:
+                                  type: string
+                                username:
+                                  type: string
+                              type: object
+                            enabled:
+                              type: boolean
+                            port:
+                              format: int32
+                              type: integer
+                          type: object
+                        tcpPorts:
+                          default:
+                            enabled: false
+                          properties:
+                            enabled:
+                              type: boolean
+                            ports:
+                              items:
+                                properties:
+                                  name:
+                                    type: string
+                                  port:
+                                    format: int32
+                                    type: integer
+                                  type:
+                                    type: string
+                                type: object
+                              type: array
+                          type: object
+                        timeout:
+                          default:
+                            client: 600
+                            connect: 600
+                            server: 600
+                          properties:
+                            client:
+                              format: int32
+                              type: integer
+                            connect:
+                              format: int32
+                              type: integer
+                            server:
+                              format: int32
+                              type: integer
+                          type: object
+                        tls:
+                          default:
+                            certFileName: ""
+                            enabled: false
+                            secretName: ""
+                          properties:
+                            certFileName:
+                              type: string
+                            enabled:
+                              type: boolean
+                            secretName:
+                              type: string
                           type: object
                       type: object
                     hugePages:

@@ -307,6 +307,7 @@ func generateContainerParams(cr *databasev1alpha1.MarklogicGroup) containerParam
 		PodSecurityContext: cr.Spec.PodSecurityContext,
 		SecurityContext:    cr.Spec.ContainerSecurityContext,
 		LogCollection:      cr.Spec.LogCollection,
+		PathBasedRouting:   cr.Spec.PathBasedRouting,
 	}
 
 	if cr.Spec.Storage != nil {

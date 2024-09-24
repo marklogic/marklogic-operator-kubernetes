@@ -264,6 +264,48 @@ func (cc *ClusterContext) createHAProxyService() error {
 	cr := cc.MarklogicCluster
 	ownerDef := marklogicClusterAsOwner(cr)
 	client := cc.Client
+	servicePort := []corev1.ServicePort{
+		{
+			Name:       "stat",
+			Port:       1024,
+			TargetPort: intstr.FromInt(int(1024)),
+			Protocol:   corev1.ProtocolTCP,
+		},
+		{
+			Name:       "qconsole",
+			Port:       8000,
+			TargetPort: intstr.FromInt(int(8000)),
+			Protocol:   corev1.ProtocolTCP,
+		},
+		{
+			Name:       "admin",
+			Port:       8001,
+			TargetPort: intstr.FromInt(int(8001)),
+			Protocol:   corev1.ProtocolTCP,
+		},
+		{
+			Name:       "manage",
+			Port:       8002,
+			TargetPort: intstr.FromInt(int(8002)),
+			Protocol:   corev1.ProtocolTCP,
+		},
+	}
+	if cr.Spec.HAProxy.PathBasedRouting {
+		servicePort = []corev1.ServicePort{
+			{
+				Name:       "stat",
+				Port:       1024,
+				TargetPort: intstr.FromInt(int(1024)),
+				Protocol:   corev1.ProtocolTCP,
+			},
+			{
+				Name:       "frontend",
+				Port:       cr.Spec.HAProxy.FrontendPort,
+				TargetPort: intstr.FromInt(int(cr.Spec.HAProxy.FrontendPort)),
+				Protocol:   corev1.ProtocolTCP,
+			},
+		}
+	}
 	serviceDef := &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "marklogic-haproxy",
@@ -278,33 +320,8 @@ func (cc *ClusterContext) createHAProxyService() error {
 				"app.kubernetes.io/instance": "marklogic",
 				"app.kubernetes.io/name":     "haproxy",
 			},
-			Ports: []corev1.ServicePort{
-				{
-					Name:       "stat",
-					Port:       1024,
-					TargetPort: intstr.FromInt(int(1024)),
-					Protocol:   corev1.ProtocolTCP,
-				},
-				{
-					Name:       "qconsole",
-					Port:       8000,
-					TargetPort: intstr.FromInt(int(8000)),
-					Protocol:   corev1.ProtocolTCP,
-				},
-				{
-					Name:       "admin",
-					Port:       8001,
-					TargetPort: intstr.FromInt(int(8001)),
-					Protocol:   corev1.ProtocolTCP,
-				},
-				{
-					Name:       "manage",
-					Port:       8002,
-					TargetPort: intstr.FromInt(int(8002)),
-					Protocol:   corev1.ProtocolTCP,
-				},
-			},
-			Type: corev1.ServiceTypeClusterIP,
+			Ports: servicePort,
+			Type:  corev1.ServiceTypeClusterIP,
 		},
 	}
 	logger.Info("===== HAProxy Service ==== ", "service:", serviceDef)
