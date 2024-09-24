@@ -20,6 +20,12 @@ spec:
     enabled: true
     pathBasedRouting: true
     frontendPort: 8080
+    tcpPorts:
+      enabled: true
+      ports:
+        - name: odbc
+          type: TCP
+          port: 5432
     appServers:
       - name: "app-service"
         port: 8000

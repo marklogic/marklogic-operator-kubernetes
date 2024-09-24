@@ -37,9 +37,9 @@ frontend marklogic-frontend
 	bind :{{ $.PortNumber}}
 	http-request set-header Host marklogic:{{ $.PortNumber}}
 	http-request set-header REFERER http://marklogic:{{ $.PortNumber}}
-	http-request set-header X-ML-QC-Path /console
-	http-request set-header X-ML-ADM-Path /adminUI
-	http-request set-header X-ML-MNG-Path /manage
+	http-request set-header X-ML-QC1-Path /console
+	http-request set-header X-ML-ADM1-Path /adminUI
+	http-request set-header X-ML-MNG1-Path /manage
 `
 		data = &HAProxyTemplateData{
 			PortNumber: int(cr.Spec.HAProxy.FrontendPort),
@@ -142,6 +142,12 @@ func getFrontendForPathbased(data *HAProxyTemplateData) string {
 	return parseTemplateToString(backend, data)
 }
 
+func getBackendForTCP(data *HAProxyTemplateData) string {
+	backend := `
+	  server ml-{{.PodName}}-{{.PortNumber}}-{{.Index}} {{.PodName}}-{{.Index}}.{{.ServiceName}}.{{.NSName}}.svc.{{.ClusterName}}:{{.PortNumber}} check resolvers dns init-addr none`
+	return parseTemplateToString(backend, data)
+}
+
 // {{- if $.StatsAuth }}
 // stats auth {{ $.StatsUsername }}:{{ $.StatsPassword }}
 // {{- end }}
@@ -167,31 +173,43 @@ frontend stats
 	return parseTemplateToString(statsDef, data)
 }
 
-// // generates the tcp config for HAProxy
-// func generateTcpConfig(cr *databasev1alpha1.MarklogicCluster) string {
+// generates the tcp config for HAProxy
+func generateTcpConfig(cr *databasev1alpha1.MarklogicCluster) string {
+	result := ""
 
-// 	replicas := generateReplicaArray(int(*cr.Spec.re))
-// 	tcpDef := `
-//   {{- range $tcpPort := .Ports }}
-//   listen marklogic-TCP-{{$tcpPort.Port}}
-//   bind :{{ $tcpPort.Port }}
-//   mode tcp
-//   balance leastconn
-//   {{ range $replica := $.Replicas }}
-//   server {{ printf "ml-%s-%v-%v" $.GroupName $tcpPort.Port $replica }} {{ $.GroupName }}-{{ $replica }}.{{ $.HeadlessServiceName }}.{{ $.Namespace }}.svc.{{ $.ClusterDomain }}:{{ $tcpPort.Port }} check resolvers dns init-addr none
-//   {{- end }}
-//   {{- end }}
-// `
-// 	data := map[string]interface{}{
-// 		"Ports":               grpCR.Spec.HAProxy.TcpPorts.Ports,
-// 		"Replicas":            replicas,
-// 		"GroupName":           grpCR.Spec.Name,
-// 		"HeadlessServiceName": grpCR.Spec.Name,
-// 		"Namespace":           "default",
-// 		"ClusterDomain":       "cluster.local",
-// 	}
-// 	return parseConfigDef(tcpDef, data)
-// }
+	for _, tcpPort := range cr.Spec.HAProxy.TcpPorts.Ports {
+		t := `
+		listen marklogic-TCP-{{.PortNumber}}
+		bind :{{ .PortNumber }}
+		mode tcp
+		balance leastconn
+	  `
+		data := &HAProxyTemplateData{
+			PortNumber: int(tcpPort.Port),
+		}
+		result += parseTemplateToString(t, data)
+		for _, group := range cr.Spec.MarkLogicGroups {
+			name := group.Name
+			groupReplicas := int(*group.Replicas)
+			if group.HAProxy != nil && !group.HAProxy.Enabled {
+				continue
+			}
+			for i := 0; i < groupReplicas; i++ {
+				data := &HAProxyTemplateData{
+					PortNumber:  int(tcpPort.Port),
+					PodName:     name,
+					Index:       i,
+					ServiceName: name,
+					NSName:      cr.ObjectMeta.Namespace,
+					ClusterName: cr.Spec.ClusterDomain,
+				}
+				result += getBackendForTCP(data)
+			}
+		}
+	}
+
+	return result
+}
 
 // parses the given template with the given data
 func parseTemplateToString(templateStr string, data interface{}) string {
