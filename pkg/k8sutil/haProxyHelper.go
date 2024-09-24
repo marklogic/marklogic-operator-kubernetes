@@ -2,7 +2,6 @@ package k8sutil
 
 import (
 	"bytes"
-	"strings"
 	"text/template"
 
 	"github.com/marklogic/marklogic-kubernetes-operator/api/v1alpha1"
@@ -26,47 +25,46 @@ type HAProxyTemplateData struct {
 func generateFrontendConfig(cr *databasev1alpha1.MarklogicCluster) string {
 
 	var frontEndDef string
-	var data map[string]interface{}
+	var data *HAProxyTemplateData
 	var result string
-	pathBasedRouting := cr.Spec.HAProxy.PathBasedRouting
+	// pathBasedRouting := cr.Spec.HAProxy.PathBasedRouting
 	appServers := cr.Spec.HAProxy.AppServers
-	if pathBasedRouting {
-		frontEndDef = `
-frontend marklogic-{{ $.ClusterOrGroup}}
-  mode http
-  option httplog
-  bind :{{ $.FrontendPort}}
-  http-request set-header Host marklogic:{{ $.FrontendPort}}
-  http-request set-header REFERER http://marklogic:{{ $.FrontendPort}}
-  http-request set-header X-ML-QC-Path {{ index .DefaultAppServersPath 0}}
-  http-request set-header X-ML-ADM-Path {{ index .DefaultAppServersPath 1}}
-  http-request set-header X-ML-MNG-Path {{ index .DefaultAppServersPath 2}}
-  {{ range $appServer := .AllAppServers }}
-  use_backend marklogic-{{ $.ClusterOrGroup}}-{{ $appServer.Port }} if { path {{ $appServer.Path }} } || { path_beg {{ $appServer.Path }}/ }
-  {{ end }}`
+	// 	if pathBasedRouting {
+	// 		frontEndDef = `
+	// frontend marklogic-{{ $.ClusterOrGroup}}
+	//   mode http
+	//   option httplog
+	//   bind :{{ $.FrontendPort}}
+	//   http-request set-header Host marklogic:{{ $.FrontendPort}}
+	//   http-request set-header REFERER http://marklogic:{{ $.FrontendPort}}
+	//   http-request set-header X-ML-QC-Path {{ index .DefaultAppServersPath 0}}
+	//   http-request set-header X-ML-ADM-Path {{ index .DefaultAppServersPath 1}}
+	//   http-request set-header X-ML-MNG-Path {{ index .DefaultAppServersPath 2}}
+	//   {{ range $appServer := .AllAppServers }}
+	//   use_backend marklogic-{{ $.ClusterOrGroup}}-{{ $appServer.Port }} if { path {{ $appServer.Path }} } || { path_beg {{ $appServer.Path }}/ }
+	//   {{ end }}`
 
-		data = map[string]interface{}{
-			"AllAppServers":         appServers,
-			"DefaultAppServersPath": getPathList(cr.Spec.HAProxy.AppServers),
-			"FrontendPort":          80,
-			"ClusterOrGroup":        "test",
-		}
-		result = parseTemplateToString(frontEndDef, data) + "\n"
+	// 		data = map[string]interface{}{
+	// 			"AllAppServers":         appServers,
+	// 			"DefaultAppServersPath": getPathList(cr.Spec.HAProxy.AppServers),
+	// 			"FrontendPort":          80,
+	// 			"ClusterOrGroup":        "test",
+	// 		}
+	// 		result = parseTemplateToString(frontEndDef, data) + "\n"
 
-	} else {
-		frontEndDef = `
+	// 	} else {
+	frontEndDef = `
 frontend marklogic-{{ $.PortNumber}}
   mode http
   bind :{{ $.PortNumber }}
   log-format "%ci:%cp [%tr] %ft %b/%s %TR/%Tw/%Tc/%Tr/%Ta %ST %B %CC %CS %tsc %ac/%fc/%bc/%sc/%rc %sq/%bq %hr %hs %{+Q}r"
-  default_backend marklogic-{{ $.PortNumber}}-backend `
+  default_backend marklogic-{{ $.PortNumber}}-backend`
 
-		for _, appServer := range appServers {
-			data = map[string]interface{}{
-				"PortNumber": appServer.Port,
-			}
-			result += parseTemplateToString(frontEndDef, data) + "\n"
+	for _, appServer := range appServers {
+		data = &HAProxyTemplateData{
+			PortNumber: int(appServer.Port),
 		}
+		result += parseTemplateToString(frontEndDef, data) + "\n"
 	}
 
 	return result
@@ -75,14 +73,16 @@ frontend marklogic-{{ $.PortNumber}}
 // generates backend config for HAProxy depending on pathBasedRouting flag and appServers
 func generateBackendConfig(cr *databasev1alpha1.MarklogicCluster) string {
 
-	pathBasedRouting := cr.Spec.HAProxy.PathBasedRouting
+	// pathBasedRouting := cr.Spec.HAProxy.PathBasedRouting
+	var result string
 
-	backEndDef := `
-backend marklogic-{{.ClusterOrGroup}}-{{.Port}}
+	// http-request replace-path {{.Path}}(/)?(.*) /\2
+
+	backendTemplate := `
+backend marklogic-{{ $.PortNumber}}-backend
   mode http
   balance leastconn
   option forwardfor
-  http-request replace-path {{.Path}}(/)?(.*) /\2
   cookie haproxy insert indirect nocache maxidle 30m maxlife 4h
   stick-table type string len 32 size 10k expire 4h
   stick store-response res.cook(HostId)
@@ -90,31 +90,30 @@ backend marklogic-{{.ClusterOrGroup}}-{{.Port}}
   stick match req.cook(HostId)
   stick match req.cook(SessionId)
   default-server check
-  {{ range $replica := .Replicas }}
-  server ml-{{ $.GroupName}}-{{ $.Port}}-{{$replica}} {{ $.GroupName}}-{{$replica}}.{{ $.GroupName}}.default.svc.cluster.local:{{ $.Port}} resolvers dns init-addr none cookie {{ $.GroupName}}-{{ $.Port}}-{{$replica}}
-  {{ end }}
 `
 
-	if !pathBasedRouting {
-		rm := `http-request replace-path {{.Path}}(/)?(.*) /\2`
-		backEndDef = strings.Replace(backEndDef, rm, "", -1)
-		backEndDef = strings.TrimSpace(backEndDef)
-	}
+	// if !pathBasedRouting {
+	// 	rm := `http-request replace-path {{.Path}}(/)?(.*) /\2`
+	// 	backEndDef = strings.Replace(backEndDef, rm, "", -1)
+	// 	backEndDef = strings.TrimSpace(backEndDef)
+	// }
 	groups := cr.Spec.MarkLogicGroups
 
 	appServers := cr.Spec.HAProxy.AppServers
-	// replicas := generateReplicaArray(int(*spec.Replicas))
-	var result string
 	// var data map[string]interface{}
 
 	for _, appServer := range appServers {
+		// data := &HAProxyTemplateData{
+		// 	PortNumber:  int(appServer.Port),
+		// 	PortName:    appServer.Name,
+		// 	Path:        appServer.Path,
+		// 	NSName:      cr.ObjectMeta.Namespace,
+		// 	ClusterName: cr.Spec.ClusterDomain,
+		// }
 		data := &HAProxyTemplateData{
-			PortNumber:  int(appServer.Port),
-			PortName:    appServer.Name,
-			Path:        appServer.Path,
-			NSName:      cr.ObjectMeta.Namespace,
-			ClusterName: cr.Spec.ClusterDomain,
+			PortNumber: int(appServer.Port),
 		}
+		result += parseTemplateToString(backendTemplate, data)
 		// data = map[string]interface{}{
 		// 	"Path":           appServer.Path,
 		// 	"Port":           appServer.Port,
@@ -123,7 +122,7 @@ backend marklogic-{{.ClusterOrGroup}}-{{.Port}}
 		// 	"Replicas":       replicas,
 		// }
 		// result += parseConfigDef(backEndDef, data) + "\n"
-		result += getHaproxyFrontend(data)
+		// result += getHaproxyFrontend(data)
 		for _, group := range groups {
 			name := group.Name
 			groupReplicas := int(*group.Replicas)
@@ -139,7 +138,7 @@ backend marklogic-{{.ClusterOrGroup}}-{{.Port}}
 					NSName:      cr.ObjectMeta.Namespace,
 					ClusterName: cr.Spec.ClusterDomain,
 				}
-				result += getHAProxyConfigString(data)
+				result += getBackendServerConfigs(data)
 			}
 		}
 	}
@@ -147,45 +146,18 @@ backend marklogic-{{.ClusterOrGroup}}-{{.Port}}
 	return result
 }
 
-func getHAProxyConfigString(config *HAProxyTemplateData) string {
-	configTemplate := `
+func getBackendServerConfigs(data *HAProxyTemplateData) string {
+	backendServerConfig := `
     server {{.PodName}}-{{.PortNumber}}-{{.Index}} {{.PodName}}-{{.Index}}.{{.ServiceName}}.{{.NSName}}.svc.{{.ClusterName}}:{{.PortNumber}} resolvers dns init-addr none cookie {{.PodName}}-{{.PortNumber}}-{{.Index}}`
-	var buf bytes.Buffer
-	t := template.Must(template.New("template").Parse(configTemplate))
-	err := t.Execute(&buf, config)
-	if err != nil {
-		panic(err)
-	}
-	return buf.String()
+	return parseTemplateToString(backendServerConfig, data)
 }
 
-func getHaproxyFrontend(config *HAProxyTemplateData) string {
-	configTemplate := `
-frontend marklogic-{{.PortNumber}}-frontend
-    mode http
-    bind :{{.PortNumber}}
-    default_backend marklogic-{{.PortNumber}}-backend
-
-backend marklogic-{{.PortNumber}}-backend
-    mode http
-    balance leastconn
-    option forwardfor
-    cookie haproxy insert indirect nocache maxidle 30m maxlife 4h 
-    stick-table type string len 32 size 10k expire 4h
-    stick store-response res.cook(HostId)
-    stick store-response res.cook(SessionId)
-    stick match req.cook(HostId)
-    stick match req.cook(SessionId)
-    default-server check inter 10s fall 3 rise 2`
-	var buf bytes.Buffer
-	t := template.Must(template.New("template").Parse(configTemplate))
-	err := t.Execute(&buf, config)
-	if err != nil {
-		panic(err)
-	}
-	return buf.String()
-}
-
+// {{- if $.StatsAuth }}
+// stats auth {{ $.StatsUsername }}:{{ $.StatsPassword }}
+// {{- end }}
+// "StatsAuth":     cr.Spec.HAProxy.Stats.Auth.Enabled,
+// "StatsUsername": cr.Spec.HAProxy.Stats.Auth.Username,
+// "StatsPassword": cr.Spec.HAProxy.Stats.Auth.Password,
 // generates the stats config for HAProxy
 func generateStatsConfig(cr *databasev1alpha1.MarklogicCluster) string {
 	statsDef := `
@@ -195,17 +167,12 @@ frontend stats
   stats enable
   http-request use-service prometheus-exporter if { path /metrics }
   stats uri /
-  {{- if $.StatsAuth }}
-  stats auth {{ $.StatsUsername }}:{{ $.StatsPassword }}
-  {{- end }}
   stats refresh 10s
-  stats admin if LOCALHOST`
+  stats admin if LOCALHOST
+`
 
 	data := map[string]interface{}{
-		"StatsPort":     cr.Spec.HAProxy.Stats.Port,
-		"StatsAuth":     cr.Spec.HAProxy.Stats.Auth.Enabled,
-		"StatsUsername": cr.Spec.HAProxy.Stats.Auth.Username,
-		"StatsPassword": cr.Spec.HAProxy.Stats.Auth.Password,
+		"StatsPort": cr.Spec.HAProxy.Stats.Port,
 	}
 	return parseTemplateToString(statsDef, data)
 }
@@ -237,14 +204,14 @@ frontend stats
 // }
 
 // parses the given template with the given data
-func parseTemplateToString(configDef string, data map[string]interface{}) string {
-	templ := template.Must(template.New("name").Parse(configDef))
-	newBuffer := bytes.NewBufferString("")
-	err := templ.Execute(newBuffer, data)
+func parseTemplateToString(templateStr string, data interface{}) string {
+	t := template.Must(template.New("haproxyConfig").Parse(templateStr))
+	buf := bytes.NewBufferString("")
+	err := t.Execute(buf, data)
 	if err != nil {
 		panic(err)
 	}
-	return newBuffer.String()
+	return buf.String()
 }
 
 type Servers []v1alpha1.AppServers

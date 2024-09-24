@@ -105,6 +105,10 @@ func (cc *ClusterContext) ReconcileHAProxy() result.ReconcileResult {
 // generateHAProxyData generates the HAProxy Config Data
 func generateHAProxyConfigMapData(cr *databasev1alpha1.MarklogicCluster) map[string]string {
 
+	// timeout client {{ $.ClientTimeout}}s
+	// timeout connect {{ $.ConnectTimeout}}s
+	// timeout server {{ $.ServerTimeout}}s
+
 	// HAProxy Config Data
 	haProxyData := make(map[string]string)
 	haProxyData["haproxy.cfg"] = `
@@ -116,9 +120,9 @@ global
 defaults
   log global
   option forwardfor
-  timeout client {{ $.ClientTimeout}}s
-  timeout connect {{ $.ConnectTimeout}}s
-  timeout server {{ $.ServerTimeout}}s
+  timeout client 600s
+  timeout connect 600s
+  timeout server 600s
 
 resolvers dns
   # add nameserver from /etc/resolv.conf
@@ -148,17 +152,15 @@ resolvers dns
   # How long to wait for a successful resolution
   timeout resolve 5s
 `
-	data := map[string]interface{}{
-		"ClientTimeout":  cr.Spec.HAProxy.Timeout.Client,
-		"ConnectTimeout": cr.Spec.HAProxy.Timeout.Connect,
-		"ServerTimeout":  cr.Spec.HAProxy.Timeout.Server,
-	}
-	haProxyData["haproxy.cfg"] += parseTemplateToString(baseConfig, data) + "\n"
+	// data := map[string]interface{}{
+	// 	"ClientTimeout":  cr.Spec.HAProxy.Timeout.Client,
+	// 	"ConnectTimeout": cr.Spec.HAProxy.Timeout.Connect,
+	// 	"ServerTimeout":  cr.Spec.HAProxy.Timeout.Server,
+	// }
+	haProxyData["haproxy.cfg"] += baseConfig + "\n"
 
-	frontend := generateFrontendConfig(cr)
-	backend := generateBackendConfig(cr)
-	haProxyData["haproxy.cfg"] += frontend
-	haProxyData["haproxy.cfg"] += backend
+	haProxyData["haproxy.cfg"] += generateFrontendConfig(cr)
+	haProxyData["haproxy.cfg"] += generateBackendConfig(cr) + "\n"
 
 	if cr.Spec.HAProxy.Stats.Enabled {
 		haProxyData["haproxy.cfg"] += generateStatsConfig(cr)
