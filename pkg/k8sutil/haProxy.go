@@ -1,6 +1,9 @@
 package k8sutil
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"github.com/cisco-open/k8s-objectmatcher/patch"
 	databasev1alpha1 "github.com/marklogic/marklogic-kubernetes-operator/api/v1alpha1"
 	"github.com/marklogic/marklogic-kubernetes-operator/pkg/result"
 	appsv1 "k8s.io/api/apps/v1"
@@ -10,12 +13,13 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
+	"sort"
 )
 
-func (oc *OperatorContext) ReconcileHAProxy() result.ReconcileResult {
-	logger := oc.ReqLogger
-	client := oc.Client
-	cr := oc.MarklogicGroup
+func (cc *ClusterContext) ReconcileHAProxy() result.ReconcileResult {
+	logger := cc.ReqLogger
+	client := cc.Client
+	cr := cc.MarklogicCluster
 
 	logger.Info("Reconciling HAProxy Config")
 	labels := map[string]string{
@@ -27,24 +31,26 @@ func (oc *OperatorContext) ReconcileHAProxy() result.ReconcileResult {
 	objectMeta := generateObjectMeta(configMapName, cr.Namespace, labels, annotations)
 	nsName := types.NamespacedName{Name: objectMeta.Name, Namespace: objectMeta.Namespace}
 	configmap := &corev1.ConfigMap{}
-	err := client.Get(oc.Ctx, nsName, configmap)
+	err := client.Get(cc.Ctx, nsName, configmap)
+	data := generateHAProxyConfigMapData(cc.MarklogicCluster)
+	configMapDef := generateHAProxyConfigMap(objectMeta, marklogicClusterAsOwner(cr), data)
+	configmapHash := calculateHash(configMapDef.Data)
 	if err != nil {
 		if errors.IsNotFound(err) {
 			logger.Info("HAProxy ConfigMap is not found, creating a new one")
-			hAProxyDef := oc.generateHAProxyDef(objectMeta, marklogicServerAsOwner(cr), cr)
-			err = oc.createConfigMap(hAProxyDef)
+			err = cc.createConfigMapForCC(configMapDef)
 			if err != nil {
 				logger.Info("HAProxy configmap creation is failed")
 				return result.Error(err)
 			}
 			logger.Info("HAProxy configmap creation is successful")
-			err = oc.createHAProxyDeployment()
+			err = cc.createHAProxyDeployment()
 			if err != nil {
 				logger.Info("HAProxy Deployment creation is failed")
 				return result.Error(err)
 			}
 			// createHAProxyService(service corev1.Service)
-			err = oc.createHAProxyService()
+			err = cc.createHAProxyService()
 			if err != nil {
 				logger.Info("HAProxy Service creation is failed")
 				return result.Error(err)
@@ -55,32 +61,49 @@ func (oc *OperatorContext) ReconcileHAProxy() result.ReconcileResult {
 			return result.Error(err)
 		}
 	}
+	logger.Info("HAProxy ConfigMap is found", "configmap:", configmap)
+	patchDiff, err := patch.DefaultPatchMaker.Calculate(configmap, configMapDef,
+		patch.IgnoreStatusFields(),
+		patch.IgnoreVolumeClaimTemplateTypeMetaAndStatus(),
+		patch.IgnoreField("kind"))
+
+	if err != nil {
+		logger.Error(err, "Error calculating patch")
+		return result.Error(err)
+	}
+	if !patchDiff.IsEmpty() {
+		logger.Info("MarkLogic statefulSet spec is different from the MarkLogicGroup spec, updating the statefulSet")
+		logger.Info(patchDiff.String())
+		configmap.Data = configMapDef.Data
+		err := cc.Client.Update(cc.Ctx, configmap)
+		if err != nil {
+			logger.Error(err, "Error updating MakrLogicGroup")
+			return result.Error(err)
+		}
+	}
+	haproxyDeployment := &appsv1.Deployment{}
+	err = client.Get(cc.Ctx, types.NamespacedName{Name: "marklogic-haproxy", Namespace: "default"}, haproxyDeployment)
+	if err != nil {
+		logger.Error(err, "Failed to get HAProxy Deployment")
+		return result.Error(err)
+	}
+	if haproxyDeployment.Spec.Template.Annotations == nil {
+		haproxyDeployment.Spec.Template.Annotations = make(map[string]string)
+	}
+	if haproxyDeployment.Spec.Template.Annotations["configmap-hash"] != configmapHash {
+		logger.Info("HAProxy Deployment is different from the HAProxy ConfigMap, updating the Deployment")
+		haproxyDeployment.Spec.Template.Annotations["configmap-hash"] = configmapHash
+		err := client.Update(cc.Ctx, haproxyDeployment)
+		if err != nil {
+			logger.Error(err, "Error updating HAProxy Deployment")
+			return result.Error(err)
+		}
+	}
 	return result.Continue()
 }
 
-// generateHAProxyDef generates the HAProxy ConfigMap
-func (oc *OperatorContext) generateHAProxyDef(objectMeta metav1.ObjectMeta, owner metav1.OwnerReference, cr *databasev1alpha1.MarklogicGroup) *corev1.ConfigMap {
-	labels := map[string]string{
-		"app.kubernetes.io/component": "haproxy",
-	}
-	annotations := map[string]string{}
-	data := oc.generateHAProxyData(cr)
-	return &corev1.ConfigMap{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:        objectMeta.Name,
-			Namespace:   objectMeta.Namespace,
-			Labels:      labels,
-			Annotations: annotations,
-			OwnerReferences: []metav1.OwnerReference{
-				owner,
-			},
-		},
-		Data: data,
-	}
-}
-
 // generateHAProxyData generates the HAProxy Config Data
-func (oc *OperatorContext) generateHAProxyData(cr *databasev1alpha1.MarklogicGroup) map[string]string {
+func generateHAProxyConfigMapData(cr *databasev1alpha1.MarklogicCluster) map[string]string {
 
 	// HAProxy Config Data
 	haProxyData := make(map[string]string)
@@ -126,40 +149,42 @@ resolvers dns
   timeout resolve 5s
 `
 	data := map[string]interface{}{
-		"ClientTimeout":  cr.Spec.HAProxyConfig.Timeout.Client,
-		"ConnectTimeout": cr.Spec.HAProxyConfig.Timeout.Connect,
-		"ServerTimeout":  cr.Spec.HAProxyConfig.Timeout.Server,
+		"ClientTimeout":  cr.Spec.HAProxy.Timeout.Client,
+		"ConnectTimeout": cr.Spec.HAProxy.Timeout.Connect,
+		"ServerTimeout":  cr.Spec.HAProxy.Timeout.Server,
 	}
-	haProxyData["haproxy.cfg"] += parseConfigDef(baseConfig, data) + "\n"
+	haProxyData["haproxy.cfg"] += parseTemplateToString(baseConfig, data) + "\n"
 
 	frontend := generateFrontendConfig(cr)
 	backend := generateBackendConfig(cr)
 	haProxyData["haproxy.cfg"] += frontend
 	haProxyData["haproxy.cfg"] += backend
 
-	if cr.Spec.HAProxyConfig.Stats.Enabled {
+	if cr.Spec.HAProxy.Stats.Enabled {
 		haProxyData["haproxy.cfg"] += generateStatsConfig(cr)
 	}
 
-	if cr.Spec.HAProxyConfig.TcpPorts.Enabled {
-		haProxyData["haproxy.cfg"] += generateTcpConfig(cr)
-	}
+	// if cr.Spec.HAProxy.TcpPorts.Enabled {
+	// 	haProxyData["haproxy.cfg"] += generateTcpConfig(sepc)
+	// }
 
 	return haProxyData
 }
 
 // createHAproxy Deployment
-func (oc *OperatorContext) createHAProxyDeployment() error {
-	logger := oc.ReqLogger
+func (cc *ClusterContext) createHAProxyDeployment() error {
+	logger := cc.ReqLogger
 	logger.Info("Creating HAProxy Deployment")
 	labels := map[string]string{
 		"app.kubernetes.io/instance": "marklogic",
 		"app.kubernetes.io/name":     "haproxy",
 	}
-	client := oc.Client
-	replica := int32(1)
+	client := cc.Client
+	cr := cc.MarklogicCluster
+	ownerDef := marklogicClusterAsOwner(cr)
+	replica := int32(2)
 	defaultMode := int32(420)
-	deployment := appsv1.Deployment{
+	deploymentDef := &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "marklogic-haproxy",
 			Namespace: "default",
@@ -178,6 +203,9 @@ func (oc *OperatorContext) createHAProxyDeployment() error {
 					Labels: map[string]string{
 						"app.kubernetes.io/instance": "marklogic",
 						"app.kubernetes.io/name":     "haproxy",
+					},
+					Annotations: map[string]string{
+						"comfigmap-hash": calculateHash(generateHAProxyConfigMapData(cr)),
 					},
 				},
 				Spec: corev1.PodSpec{
@@ -217,22 +245,24 @@ func (oc *OperatorContext) createHAProxyDeployment() error {
 			},
 		},
 	}
-	err := client.Create(oc.Ctx, &deployment)
+	AddOwnerRefToObject(deploymentDef, ownerDef)
+	logger.Info("===== HAProxy Deployment ==== ", "deployment:", deploymentDef)
+	err := client.Create(cc.Ctx, deploymentDef)
 	if err != nil {
 		logger.Error(err, "HAProxy Deployment creation failed")
 		return err
 	}
 	logger.Info("HAProxy Deployment creation is successful")
 	return nil
-
 }
 
-// createHAProxyService creates the HAProxy Service
-func (oc *OperatorContext) createHAProxyService() error {
-	logger := oc.ReqLogger
+func (cc *ClusterContext) createHAProxyService() error {
+	logger := cc.ReqLogger
 	logger.Info("Creating HAProxy Service")
-	client := oc.Client
-	service := corev1.Service{
+	cr := cc.MarklogicCluster
+	ownerDef := marklogicClusterAsOwner(cr)
+	client := cc.Client
+	serviceDef := &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "marklogic-haproxy",
 			Namespace: "default",
@@ -247,6 +277,12 @@ func (oc *OperatorContext) createHAProxyService() error {
 				"app.kubernetes.io/name":     "haproxy",
 			},
 			Ports: []corev1.ServicePort{
+				{
+					Name:       "stat",
+					Port:       1024,
+					TargetPort: intstr.FromInt(int(1024)),
+					Protocol:   corev1.ProtocolTCP,
+				},
 				{
 					Name:       "qconsole",
 					Port:       8000,
@@ -265,21 +301,59 @@ func (oc *OperatorContext) createHAProxyService() error {
 					TargetPort: intstr.FromInt(int(8002)),
 					Protocol:   corev1.ProtocolTCP,
 				},
-				{
-					Name:       "frontendport",
-					Port:       80,
-					TargetPort: intstr.FromInt(int(80)),
-					Protocol:   corev1.ProtocolTCP,
-				},
 			},
 			Type: corev1.ServiceTypeClusterIP,
 		},
 	}
-	err := client.Create(oc.Ctx, &service)
+	logger.Info("===== HAProxy Service ==== ", "service:", serviceDef)
+	AddOwnerRefToObject(serviceDef, ownerDef)
+	err := client.Create(cc.Ctx, serviceDef)
 	if err != nil {
 		logger.Error(err, "HAProxy Service creation failed")
 		return err
 	}
 	logger.Info("HAProxy Service creation is successful")
 	return nil
+}
+
+func generateHAProxyConfigMap(objectMeta metav1.ObjectMeta, owner metav1.OwnerReference, data map[string]string) *corev1.ConfigMap {
+	labels := map[string]string{
+		"app.kubernetes.io/component": "haproxy",
+	}
+	annotations := map[string]string{}
+	return &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:        objectMeta.Name,
+			Namespace:   objectMeta.Namespace,
+			Labels:      labels,
+			Annotations: annotations,
+			OwnerReferences: []metav1.OwnerReference{
+				owner,
+			},
+		},
+		Data: data,
+	}
+}
+
+func calculateHash(data map[string]string) string {
+	// Create a slice to hold the sorted keys
+	keys := make([]string, 0, len(data))
+	for k := range data {
+		keys = append(keys, k)
+	}
+
+	// Sort the keys to ensure consistent ordering
+	sort.Strings(keys)
+
+	// Create a SHA256 hash
+	hash := sha256.New()
+
+	// Iterate over the sorted keys and write key-value pairs to the hash
+	for _, k := range keys {
+		hash.Write([]byte(k))
+		hash.Write([]byte(data[k]))
+	}
+
+	// Get the final hash and convert to hexadecimal string
+	return hex.EncodeToString(hash.Sum(nil))
 }

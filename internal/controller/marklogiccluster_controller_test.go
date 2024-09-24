@@ -74,6 +74,16 @@ var _ = Describe("MarklogicCluster Controller", func() {
 					EnableConverters: true,
 					MarkLogicGroups:  marklogicGroups,
 					LogCollection:    &databasev1alpha1.LogCollection{Enabled: true, Image: "fluent/fluent-bit:3.1.1", Files: databasev1alpha1.LogFilesConfig{ErrorLogs: true, AccessLogs: true, RequestLogs: true, CrashLogs: true, AuditLogs: true}, Outputs: "stdout"},
+					HAProxy: databasev1alpha1.HAProxy{
+						Enabled:          true,
+						ReplicaCount:     1,
+						FrontendPort:     80,
+						PathBasedRouting: true,
+						AppServers: []databasev1alpha1.AppServers{
+							{Name: "AppServices", Type: "http", Port: 8000, TargetPort: 8000, Path: "/console"},
+							{Name: "Admin", Type: "http", Port: 8001, TargetPort: 8001, Path: "/adminUI"},
+							{Name: "Manage", Type: "http", Port: 8002, TargetPort: 8002, Path: "/manage"},
+						}},
 				},
 			}
 			Expect(k8sClient.Create(ctx, mlCluster)).Should(Succeed())
@@ -97,6 +107,13 @@ var _ = Describe("MarklogicCluster Controller", func() {
 			Expect(clusterCR.Spec.MarkLogicGroups).Should(Equal(marklogicGroups))
 			Expect(clusterCR.Spec.LogCollection.Enabled).Should(Equal(true))
 			Expect(clusterCR.Spec.LogCollection.Image).Should(Equal(fluentBitImage))
+			Expect(clusterCR.Spec.HAProxy.Enabled).Should(Equal(true))
+			Expect(clusterCR.Spec.HAProxy.ReplicaCount).Should(Equal(int32(1)))
+			Expect(clusterCR.Spec.HAProxy.FrontendPort).Should(Equal(int32(80)))
+			Expect(clusterCR.Spec.HAProxy.PathBasedRouting).Should(Equal(true))
+			Expect(clusterCR.Spec.HAProxy.AppServers[0].Name).Should(Equal("AppServices"))
+			Expect(clusterCR.Spec.HAProxy.AppServers[0].Type).Should(Equal("http"))
+			Expect(clusterCR.Spec.HAProxy.AppServers[0].Port).Should(Equal(int32(8000)))
 		})
 	})
 })

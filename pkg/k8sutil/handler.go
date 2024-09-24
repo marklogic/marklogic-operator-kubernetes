@@ -32,18 +32,17 @@ func (oc *OperatorContext) ReconsileMarklogicGroupHandler() (reconcile.Result, e
 		}
 	}
 
-	if oc.MarklogicGroup.Spec.HAProxyConfig.Enabled {
-		if result := oc.ReconcileHAProxy(); result.Completed() {
-			return result.Output()
-		}
-	}
-
 	result, err := oc.ReconcileStatefulset()
 
 	return result, err
 }
 
 func (cc *ClusterContext) ReconsileMarklogicClusterHandler() (reconcile.Result, error) {
+	if cc.MarklogicCluster.Spec.HAProxy.Enabled {
+		if result := cc.ReconcileHAProxy(); result.Completed() {
+			return result.Output()
+		}
+	}
 	result, err := cc.ReconsileMarklogicCluster()
 	return result, err
 }

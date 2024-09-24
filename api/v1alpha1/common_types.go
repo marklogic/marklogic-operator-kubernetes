@@ -74,15 +74,14 @@ type NetworkPolicy struct {
 	Ingress     []networkingv1.NetworkPolicyIngressRule `json:"ingress,omitempty"`
 	Egress      []networkingv1.NetworkPolicyEgressRule  `json:"egress,omitempty"`
 }
-type HAProxyConfig struct {
+type HAProxy struct {
 	Enabled bool `json:"enabled,omitempty"`
 	// +kubebuilder:default:=1
 	ReplicaCount int32 `json:"replicas,omitempty"`
 	// +kubebuilder:default:=80
 	FrontendPort int32 `json:"frontendPort,omitempty"`
 	// +kubebuilder:default:={{name: "AppServices", type: "http", port: 8000, targetPort: 8000, path: "/console"}, {name: "Admin", type: "http", port: 8001, targetPort: 8001, path: "/adminUI"}, {name: "Manage", type: "http", port: 8002, targetPort: 8002, path: "/manage"}}
-	DefaultAppServers    []AppServers `json:"defaultAppServers,omitempty"`
-	AdditionalAppServers []AppServers `json:"additionalAppServers,omitempty"`
+	AppServers []AppServers `json:"appServers,omitempty"`
 	// +kubebuilder:default:=true
 	PathBasedRouting   bool `json:"pathBasedRouting,omitempty"`
 	RestartWhenUpgrade bool `json:"restartWhenUpgrade,omitempty"`
