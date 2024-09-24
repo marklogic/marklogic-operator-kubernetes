@@ -14,13 +14,18 @@ spec:
     adminUsername: user
     adminPassword: pass
 # This is the cluster level configuration that will apply to all the groups
-  storage:
-    size: 5Gi
+  # storage:
+  #   size: 5Gi
   haproxy: 
     enabled: true
-    defaultAppServers:
+    appServers:
       - name: "admin"
         port: 8001
+      - name: "app-service"
+        port: 8000
+    stats:
+      enabled: true
+      port: 1024
   resources:
     requests:
       memory: "4Gi"
@@ -28,41 +33,37 @@ spec:
     limits:
       memory: "4Gi"
       cpu: "1"
-  logCollection:
-    enabled: true
-    image: fluent/fluent-bit:3.1.1
-    files:
-      errorLogs: true
-      accessLogs: true
-      requestLogs: true
-      crashLogs: true
-      auditLogs: true
-    outputs: |-
-        [OUTPUT]
-          name loki
-          match *
-          host loki.loki.svc.cluster.local
-          port 3100
-          labels job=fluent-bit
-          http_user admin
-          http_passwd admin
+  # logCollection:
+  #   enabled: true
+  #   image: fluent/fluent-bit:3.1.1
+  #   files:
+  #     errorLogs: true
+  #     accessLogs: true
+  #     requestLogs: true
+  #     crashLogs: true
+  #     auditLogs: true
+  #   outputs: |-
+  #       [OUTPUT]
+  #         name loki
+  #         match *
+  #         host loki.loki.svc.cluster.local
+  #         port 3100
+  #         labels job=fluent-bit
+  #         http_user admin
+  #         http_passwd admin
   markLogicGroups:
-    - spec:
-        haproxy:
-          enabled: false
-        replicas: 1
-        name: dnode
-        storage:
-          size: 10Gi
-        resources:
-          requests:
-            memory: "5Gi"
-            cpu: "1"
-          limits:
-            memory: "5Gi"
-            cpu: "1"
-      isBootstrap: true
-    - spec:
-        replicas: 2
-        name: enode
-      isBootstrap: false
+  - replicas: 1
+    name: dnode
+    # storage:
+    #   size: 10Gi
+    resources:
+      requests:
+        memory: "5Gi"
+        cpu: "1"
+      limits:
+        memory: "5Gi"
+        cpu: "1"
+    isBootstrap: true
+  - replicas: 2
+    name: enode
+    isBootstrap: false
