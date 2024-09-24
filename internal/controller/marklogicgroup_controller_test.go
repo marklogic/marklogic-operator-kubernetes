@@ -66,7 +66,7 @@ var typeNsNameNetPolicy = types.NamespacedName{Name: netPolicyName, Namespace: N
 
 const fluentBitImage = "fluent/fluent-bit:3.1.1"
 
-var groupConfig = databasev1alpha1.GroupConfig{
+var groupConfig = &databasev1alpha1.GroupConfig{
 	Name:          "dnode",
 	EnableXdqpSsl: true,
 }

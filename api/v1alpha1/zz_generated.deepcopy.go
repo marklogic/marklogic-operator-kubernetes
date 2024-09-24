@@ -516,7 +516,11 @@ func (in *MarklogicGroupSpec) DeepCopyInto(out *MarklogicGroupSpec) {
 		*out = new(LogCollection)
 		(*in).DeepCopyInto(*out)
 	}
-	out.GroupConfig = in.GroupConfig
+	if in.GroupConfig != nil {
+		in, out := &in.GroupConfig, &out.GroupConfig
+		*out = new(GroupConfig)
+		**out = **in
+	}
 	if in.License != nil {
 		in, out := &in.License, &out.License
 		*out = new(License)

@@ -47,7 +47,7 @@ type containerParameters struct {
 	LivenessProbe      databasev1alpha1.ContainerProbe
 	ReadinessProbe     databasev1alpha1.ContainerProbe
 	LogCollection      *databasev1alpha1.LogCollection
-	GroupConfig        databasev1alpha1.GroupConfig
+	GroupConfig        *databasev1alpha1.GroupConfig
 	PodSecurityContext *corev1.PodSecurityContext
 	SecurityContext    *corev1.SecurityContext
 	EnableConverters   bool
@@ -407,6 +407,10 @@ func generatePVCTemplate(storage *databasev1alpha1.Storage) corev1.PersistentVol
 
 func getEnvironmentVariables(containerParams containerParameters) []corev1.EnvVar {
 	envVars := []corev1.EnvVar{}
+	groupName := "Default"
+	if containerParams.GroupConfig != nil && containerParams.GroupConfig.Name != "" {
+		groupName = containerParams.GroupConfig.Name
+	}
 	envVars = append(envVars, corev1.EnvVar{
 		Name:  "MARKLOGIC_ADMIN_USERNAME_FILE",
 		Value: "ml-secrets/username",
@@ -424,7 +428,7 @@ func getEnvironmentVariables(containerParams containerParameters) []corev1.EnvVa
 		Value: "false",
 	}, corev1.EnvVar{
 		Name:  "MARKLOGIC_GROUP",
-		Value: containerParams.GroupConfig.Name,
+		Value: groupName,
 	}, corev1.EnvVar{
 		Name:  "XDQP_SSL_ENABLED",
 		Value: strconv.FormatBool(containerParams.GroupConfig.EnableXdqpSsl),
@@ -439,6 +443,7 @@ func getEnvironmentVariables(containerParams containerParameters) []corev1.EnvVa
 		Value: strconv.FormatBool(containerParams.PathBasedRouting),
 	},
 	)
+
 	if containerParams.LicenseKey != "" {
 		envVars = append(envVars, corev1.EnvVar{
 			Name:  "LICENSE_KEY",
