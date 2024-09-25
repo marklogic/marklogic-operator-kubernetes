@@ -23,9 +23,11 @@ import (
 	. "github.com/onsi/gomega"
 	corev1 "k8s.io/api/core/v1"
 
+	networkingv1 "k8s.io/api/networking/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/intstr"
 
 	databasev1alpha1 "github.com/marklogic/marklogic-kubernetes-operator/api/v1alpha1"
 )
@@ -39,6 +41,8 @@ var clusterHugePages = &databasev1alpha1.HugePages{
 }
 var enodeReplicas = int32(2)
 var dnodeReplicas = int32(1)
+var policy = []networkingv1.PolicyType{networkingv1.PolicyTypeIngress, networkingv1.PolicyTypeEgress}
+
 var marklogicGroups = []*databasev1alpha1.MarklogicGroups{
 	{
 		Name:     "dnode",
@@ -84,6 +88,23 @@ var _ = Describe("MarklogicCluster Controller", func() {
 							{Name: "Admin", Type: "http", Port: 8001, TargetPort: 8001, Path: "/adminUI"},
 							{Name: "Manage", Type: "http", Port: 8002, TargetPort: 8002, Path: "/manage"},
 						}},
+					NetworkPolicy: databasev1alpha1.NetworkPolicy{
+						Enabled:     true,
+						PolicyTypes: policy,
+						PodSelector: metav1.LabelSelector{MatchLabels: map[string]string{"app.kubernetes.io/name": "marklogic", "app.kubernetes.io/instance": "dnode"}},
+						Ingress: []networkingv1.NetworkPolicyIngressRule{
+							{From: []networkingv1.NetworkPolicyPeer{{
+								PodSelector: &metav1.LabelSelector{
+									MatchLabels: map[string]string{
+										"app.kubernetes.io/name":     "marklogic",
+										"app.kubernetes.io/instance": "dnode",
+									},
+								},
+							}},
+								Ports: []networkingv1.NetworkPolicyPort{{Port: &intstr.IntOrString{IntVal: 8000}}},
+							},
+						},
+					},
 				},
 			}
 			Expect(k8sClient.Create(ctx, mlCluster)).Should(Succeed())
@@ -114,6 +135,11 @@ var _ = Describe("MarklogicCluster Controller", func() {
 			Expect(clusterCR.Spec.HAProxy.AppServers[0].Name).Should(Equal("AppServices"))
 			Expect(clusterCR.Spec.HAProxy.AppServers[0].Type).Should(Equal("http"))
 			Expect(clusterCR.Spec.HAProxy.AppServers[0].Port).Should(Equal(int32(8000)))
+			// Validating if NetworkPolicy is created successfully
+			Expect(clusterCR.Spec.NetworkPolicy.PolicyTypes).Should(Equal(policy))
+			Expect(clusterCR.Spec.NetworkPolicy.PodSelector).Should(Equal(metav1.LabelSelector{MatchLabels: map[string]string{"app.kubernetes.io/name": "marklogic", "app.kubernetes.io/instance": "dnode"}}))
+			Expect(clusterCR.Spec.NetworkPolicy.Ingress[0].From[0].PodSelector.MatchLabels).Should(Equal(map[string]string{"app.kubernetes.io/name": "marklogic", "app.kubernetes.io/instance": "dnode"}))
+			Expect(clusterCR.Spec.NetworkPolicy.Ingress[0].Ports[0].Port).Should(Equal(&intstr.IntOrString{IntVal: 8000}))
 		})
 	})
 })
