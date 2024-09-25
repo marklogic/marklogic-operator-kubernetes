@@ -31,15 +31,15 @@ func generateFrontendConfig(cr *databasev1alpha1.MarklogicCluster) string {
 	appServers := cr.Spec.HAProxy.AppServers
 	if pathBasedRouting {
 		frontEndDef = `
-frontend marklogic-frontend
+frontend marklogic-pathbased-frontend
 	mode http
 	option httplog
 	bind :{{ $.PortNumber}}
 	http-request set-header Host marklogic:{{ $.PortNumber}}
 	http-request set-header REFERER http://marklogic:{{ $.PortNumber}}
-	http-request set-header X-ML-QC1-Path /console
-	http-request set-header X-ML-ADM1-Path /adminUI
-	http-request set-header X-ML-MNG1-Path /manage
+	http-request set-header X-ML-QC-Path /console
+	http-request set-header X-ML-ADM-Path /admin
+	http-request set-header X-ML-MNG-Path /manage
 `
 		data = &HAProxyTemplateData{
 			PortNumber: int(cr.Spec.HAProxy.FrontendPort),
