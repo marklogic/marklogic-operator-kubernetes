@@ -211,7 +211,7 @@ func (cc *ClusterContext) createHAProxyDeployment() error {
 					Containers: []corev1.Container{
 						{
 							Name:  "haproxy",
-							Image: "haproxytech/haproxy-alpine:2.9.4",
+							Image: cr.Spec.HAProxy.Image,
 							Resources: corev1.ResourceRequirements{
 								Requests: corev1.ResourceList{
 									"cpu":    resource.MustParse("250m"),
@@ -243,6 +243,12 @@ func (cc *ClusterContext) createHAProxyDeployment() error {
 				},
 			},
 		},
+	}
+	if cr.Spec.HAProxy.Affinity != nil {
+		deploymentDef.Spec.Template.Spec.Affinity = cr.Spec.HAProxy.Affinity
+	}
+	if cr.Spec.HAProxy.NodeSelector != nil {
+		deploymentDef.Spec.Template.Spec.NodeSelector = cr.Spec.HAProxy.NodeSelector
 	}
 	AddOwnerRefToObject(deploymentDef, ownerDef)
 	logger.Info("===== HAProxy Deployment ==== ", "deployment:", deploymentDef)

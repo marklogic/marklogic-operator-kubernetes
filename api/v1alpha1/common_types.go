@@ -76,6 +76,8 @@ type NetworkPolicy struct {
 }
 type HAProxy struct {
 	Enabled bool `json:"enabled,omitempty"`
+	// +kubebuilder:default:="haproxytech/haproxy-alpine:3.1"
+	Image string `json:"image"`
 	// +kubebuilder:default:=1
 	ReplicaCount int32 `json:"replicas,omitempty"`
 	// +kubebuilder:default:=80
@@ -94,8 +96,10 @@ type HAProxy struct {
 	// +kubebuilder:default:={enabled: false, secretName: "", certFileName: ""}
 	Tls TlsForHAProxy `json:"tls,omitempty"`
 	// +kubebuilder:default:={enabled: false, port: 1024, auth: {enabled: false, username: "", password: ""}}
-	Stats     Stats               `json:"stats,omitempty"`
-	Resources corev1.ResourceList `json:"resources,omitempty"`
+	Stats        Stats               `json:"stats,omitempty"`
+	Resources    corev1.ResourceList `json:"resources,omitempty"`
+	Affinity     *corev1.Affinity    `json:"affinity,omitempty"`
+	NodeSelector map[string]string   `json:"nodeSelector,omitempty"`
 }
 
 type AppServers struct {

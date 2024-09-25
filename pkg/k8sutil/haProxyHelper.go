@@ -67,7 +67,6 @@ frontend marklogic-{{ $.PortNumber}}
 			result += parseTemplateToString(frontEndDef, data) + "\n"
 		}
 	}
-
 	return result
 }
 
@@ -76,8 +75,6 @@ func generateBackendConfig(cr *databasev1alpha1.MarklogicCluster) string {
 
 	pathBasedRouting := cr.Spec.HAProxy.PathBasedRouting
 	var result string
-
-	// http-request replace-path {{.Path}}(/)?(.*) /\2
 
 	backendTemplate := `
 backend marklogic-{{ $.PortNumber}}-backend
@@ -159,18 +156,12 @@ func getBackendForTCP(data *HAProxyTemplateData) string {
 	return parseTemplateToString(backend, data)
 }
 
-// {{- if $.StatsAuth }}
-// stats auth {{ $.StatsUsername }}:{{ $.StatsPassword }}
-// {{- end }}
-// "StatsAuth":     cr.Spec.HAProxy.Stats.Auth.Enabled,
-// "StatsUsername": cr.Spec.HAProxy.Stats.Auth.Username,
-// "StatsPassword": cr.Spec.HAProxy.Stats.Auth.Password,
 // generates the stats config for HAProxy
 func generateStatsConfig(cr *databasev1alpha1.MarklogicCluster) string {
 	statsDef := `
 frontend stats
   mode http
-  bind *:{{ $.StatsPort }}
+  bind *:{{ .StatsPort }}
   stats enable
   http-request use-service prometheus-exporter if { path /metrics }
   stats uri /
@@ -180,6 +171,13 @@ frontend stats
 	data := map[string]interface{}{
 		"StatsPort": cr.Spec.HAProxy.Stats.Port,
 	}
+	if cr.Spec.HAProxy.Stats.Auth.Enabled {
+		statsDef += `  stats auth {{ $.StatsUsername }}:{{ $.StatsPassword }}
+`
+		data["StatsUsername"] = cr.Spec.HAProxy.Stats.Auth.Username
+		data["StatsPassword"] = cr.Spec.HAProxy.Stats.Auth.Password
+	}
+
 	return parseTemplateToString(statsDef, data)
 }
 
