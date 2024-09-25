@@ -9,14 +9,15 @@ import (
 )
 
 type HAProxyTemplateData struct {
-	PortNumber  int
-	PortName    string
-	Path        string
-	PodName     string
-	Index       int
-	ServiceName string
-	NSName      string
-	ClusterName string
+	TargetPortNumber int
+	PortNumber       int
+	PortName         string
+	Path             string
+	PodName          string
+	Index            int
+	ServiceName      string
+	NSName           string
+	ClusterName      string
 }
 
 // generates frontend config for HAProxy depending on pathBasedRouting flag
@@ -37,9 +38,6 @@ frontend marklogic-pathbased-frontend
 	bind :{{ $.PortNumber}}
 	http-request set-header Host marklogic:{{ $.PortNumber}}
 	http-request set-header REFERER http://marklogic:{{ $.PortNumber}}
-	http-request set-header X-ML-QC-Path /console
-	http-request set-header X-ML-ADM-Path /admin
-	http-request set-header X-ML-MNG-Path /manage
 `
 		data = &HAProxyTemplateData{
 			PortNumber: int(cr.Spec.HAProxy.FrontendPort),
@@ -47,11 +45,13 @@ frontend marklogic-pathbased-frontend
 		result = parseTemplateToString(frontEndDef, data) + "\n"
 		for _, appServer := range appServers {
 			data = &HAProxyTemplateData{
-				PortNumber: int(appServer.Port),
-				Path:       appServer.Path,
+				PortNumber:       int(appServer.Port),
+				TargetPortNumber: int(appServer.TargetPort),
+				Path:             appServer.Path,
 			}
 			result += getFrontendForPathbased(data)
 		}
+		result += "/n"
 	} else {
 		frontEndDef = `
 frontend marklogic-{{ $.PortNumber}}
@@ -124,6 +124,7 @@ backend marklogic-{{ $.PortNumber}}-backend
 				}
 				result += getBackendServerConfigs(data)
 			}
+			result += "/n"
 		}
 	}
 
@@ -137,14 +138,24 @@ func getBackendServerConfigs(data *HAProxyTemplateData) string {
 }
 
 func getFrontendForPathbased(data *HAProxyTemplateData) string {
-	backend := `
+	frontend := `
 	use_backend marklogic-{{.PortNumber}}-backend if { path {{.Path}} } || { path_beg {{.Path}}/ }`
-	return parseTemplateToString(backend, data)
+	if data.PortNumber == 8000 || data.TargetPortNumber == 8000 {
+		frontend += `
+	http-request set-header X-ML-QC-Path {{.Path}}`
+	} else if data.PortNumber == 8001 || data.TargetPortNumber == 8001 {
+		frontend += `
+	http-request set-header X-ML-ADM-Path {{.Path}}`
+	} else if data.PortNumber == 8002 || data.TargetPortNumber == 8002 {
+		frontend += `
+	http-request set-header X-ML-MNG-Path {{.Path}}`
+	}
+	return parseTemplateToString(frontend, data)
 }
 
 func getBackendForTCP(data *HAProxyTemplateData) string {
 	backend := `
-	  server ml-{{.PodName}}-{{.PortNumber}}-{{.Index}} {{.PodName}}-{{.Index}}.{{.ServiceName}}.{{.NSName}}.svc.{{.ClusterName}}:{{.PortNumber}} check resolvers dns init-addr none`
+  server ml-{{.PodName}}-{{.PortNumber}}-{{.Index}} {{.PodName}}-{{.Index}}.{{.ServiceName}}.{{.NSName}}.svc.{{.ClusterName}}:{{.PortNumber}} check resolvers dns init-addr none`
 	return parseTemplateToString(backend, data)
 }
 
@@ -166,7 +177,6 @@ frontend stats
   stats refresh 10s
   stats admin if LOCALHOST
 `
-
 	data := map[string]interface{}{
 		"StatsPort": cr.Spec.HAProxy.Stats.Port,
 	}
@@ -179,11 +189,10 @@ func generateTcpConfig(cr *databasev1alpha1.MarklogicCluster) string {
 
 	for _, tcpPort := range cr.Spec.HAProxy.TcpPorts.Ports {
 		t := `
-		listen marklogic-TCP-{{.PortNumber}}
-		bind :{{ .PortNumber }}
-		mode tcp
-		balance leastconn
-	  `
+listen marklogic-TCP-{{.PortNumber}}
+  bind :{{ .PortNumber }}
+  mode tcp
+  balance leastconn`
 		data := &HAProxyTemplateData{
 			PortNumber: int(tcpPort.Port),
 		}
