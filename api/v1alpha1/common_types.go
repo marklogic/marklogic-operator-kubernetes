@@ -74,15 +74,16 @@ type NetworkPolicy struct {
 	Ingress     []networkingv1.NetworkPolicyIngressRule `json:"ingress,omitempty"`
 	Egress      []networkingv1.NetworkPolicyEgressRule  `json:"egress,omitempty"`
 }
-type HAProxyConfig struct {
+type HAProxy struct {
 	Enabled bool `json:"enabled,omitempty"`
+	// +kubebuilder:default:="haproxytech/haproxy-alpine:3.1"
+	Image string `json:"image"`
 	// +kubebuilder:default:=1
 	ReplicaCount int32 `json:"replicas,omitempty"`
 	// +kubebuilder:default:=80
 	FrontendPort int32 `json:"frontendPort,omitempty"`
 	// +kubebuilder:default:={{name: "AppServices", type: "http", port: 8000, targetPort: 8000, path: "/console"}, {name: "Admin", type: "http", port: 8001, targetPort: 8001, path: "/adminUI"}, {name: "Manage", type: "http", port: 8002, targetPort: 8002, path: "/manage"}}
-	DefaultAppServers    []AppServers `json:"defaultAppServers,omitempty"`
-	AdditionalAppServers []AppServers `json:"additionalAppServers,omitempty"`
+	AppServers []AppServers `json:"appServers,omitempty"`
 	// +kubebuilder:default:=true
 	PathBasedRouting   bool `json:"pathBasedRouting,omitempty"`
 	RestartWhenUpgrade bool `json:"restartWhenUpgrade,omitempty"`
@@ -93,10 +94,12 @@ type HAProxyConfig struct {
 	// +kubebuilder:default:={client: 600, connect: 600, server: 600}
 	Timeout Timeout `json:"timeout,omitempty"`
 	// +kubebuilder:default:={enabled: false, secretName: "", certFileName: ""}
-	Tls TlsForHAProxy `json:"tls,omitempty"`
+	Tls *TlsForHAProxy `json:"tls,omitempty"`
 	// +kubebuilder:default:={enabled: false, port: 1024, auth: {enabled: false, username: "", password: ""}}
-	Stats     Stats               `json:"stats,omitempty"`
-	Resources corev1.ResourceList `json:"resources,omitempty"`
+	Stats        Stats               `json:"stats,omitempty"`
+	Resources    corev1.ResourceList `json:"resources,omitempty"`
+	Affinity     *corev1.Affinity    `json:"affinity,omitempty"`
+	NodeSelector map[string]string   `json:"nodeSelector,omitempty"`
 }
 
 type AppServers struct {

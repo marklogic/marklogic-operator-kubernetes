@@ -70,17 +70,16 @@ type MarklogicGroupSpec struct {
 	LogCollection *LogCollection `json:"logCollection,omitempty"`
 
 	// +kubebuilder:default:={name: "Default", enableXdqpSsl: true}
-	GroupConfig      GroupConfig `json:"groupConfig,omitempty"`
-	License          *License    `json:"license,omitempty"`
-	EnableConverters bool        `json:"enableConverters,omitempty"`
+	GroupConfig      *GroupConfig `json:"groupConfig,omitempty"`
+	License          *License     `json:"license,omitempty"`
+	EnableConverters bool         `json:"enableConverters,omitempty"`
 
 	BootstrapHost string `json:"bootstrapHost,omitempty"`
 
 	DoNotDelete *bool `json:"doNotDelete,omitempty"`
 
-	Service Service `json:"service,omitempty"`
-
-	HAProxyConfig HAProxyConfig `json:"haProxyConfig,omitempty"`
+	Service          Service `json:"service,omitempty"`
+	PathBasedRouting bool    `json:"pathBasedRouting,omitempty"`
 }
 
 // InternalState defines the observed state of MarklogicGroup

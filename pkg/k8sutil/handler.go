@@ -26,18 +26,6 @@ func (oc *OperatorContext) ReconsileMarklogicGroupHandler() (reconcile.Result, e
 		}
 	}
 
-	if oc.MarklogicGroup.Spec.NetworkPolicy.Enabled {
-		if result := oc.ReconcileNetworkPolicy(); result.Completed() {
-			return result.Output()
-		}
-	}
-
-	if oc.MarklogicGroup.Spec.HAProxyConfig.Enabled {
-		if result := oc.ReconcileHAProxy(); result.Completed() {
-			return result.Output()
-		}
-	}
-
 	result, err := oc.ReconcileStatefulset()
 
 	return result, err
@@ -45,5 +33,15 @@ func (oc *OperatorContext) ReconsileMarklogicGroupHandler() (reconcile.Result, e
 
 func (cc *ClusterContext) ReconsileMarklogicClusterHandler() (reconcile.Result, error) {
 	result, err := cc.ReconsileMarklogicCluster()
+	if cc.MarklogicCluster.Spec.NetworkPolicy.Enabled {
+		if result := cc.ReconcileNetworkPolicy(); result.Completed() {
+			return result.Output()
+		}
+	}
+	if cc.MarklogicCluster.Spec.HAProxy.Enabled {
+		if result := cc.ReconcileHAProxy(); result.Completed() {
+			return result.Output()
+		}
+	}
 	return result, err
 }
