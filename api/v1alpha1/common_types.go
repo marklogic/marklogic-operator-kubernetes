@@ -94,7 +94,7 @@ type HAProxy struct {
 	// +kubebuilder:default:={client: 600, connect: 600, server: 600}
 	Timeout Timeout `json:"timeout,omitempty"`
 	// +kubebuilder:default:={enabled: false, secretName: "", certFileName: ""}
-	Tls TlsForHAProxy `json:"tls,omitempty"`
+	Tls *TlsForHAProxy `json:"tls,omitempty"`
 	// +kubebuilder:default:={enabled: false, port: 1024, auth: {enabled: false, username: "", password: ""}}
 	Stats        Stats               `json:"stats,omitempty"`
 	Resources    corev1.ResourceList `json:"resources,omitempty"`

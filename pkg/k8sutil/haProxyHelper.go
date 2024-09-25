@@ -18,7 +18,10 @@ type HAProxyTemplateData struct {
 	ServiceName      string
 	NSName           string
 	ClusterName      string
+	SslCert          string
 }
+
+ 
 
 // generates frontend config for HAProxy depending on pathBasedRouting flag
 // if pathBasedRouting is disabled, it will generate a frontend for each appServer
@@ -35,12 +38,13 @@ func generateFrontendConfig(cr *databasev1alpha1.MarklogicCluster) string {
 frontend marklogic-pathbased-frontend
 	mode http
 	option httplog
-	bind :{{ $.PortNumber}}
-	http-request set-header Host marklogic:{{ $.PortNumber}}
-	http-request set-header REFERER http://marklogic:{{ $.PortNumber}}
+	bind :{{ .PortNumber}} {{ .SslCert }}
+	http-request set-header Host marklogic:{{ .PortNumber}}
+	http-request set-header REFERER http://marklogic:{{ .PortNumber}}
 `
 		data = &HAProxyTemplateData{
 			PortNumber: int(cr.Spec.HAProxy.FrontendPort),
+			SslCert: getSSLConfig(cr.Spec.HAProxy.Tls),
 		}
 		result = parseTemplateToString(frontEndDef, data) + "\n"
 		for _, appServer := range appServers {
@@ -54,15 +58,16 @@ frontend marklogic-pathbased-frontend
 		result += "/n"
 	} else {
 		frontEndDef = `
-frontend marklogic-{{ $.PortNumber}}
+frontend marklogic-{{ .PortNumber}}
   mode http
-  bind :{{ $.PortNumber }}
+  bind :{{ .PortNumber }} {{ .SslCert }}
   log-format "%ci:%cp [%tr] %ft %b/%s %TR/%Tw/%Tc/%Tr/%Ta %ST %B %CC %CS %tsc %ac/%fc/%bc/%sc/%rc %sq/%bq %hr %hs %{+Q}r"
-  default_backend marklogic-{{ $.PortNumber}}-backend`
+  default_backend marklogic-{{ .PortNumber}}-backend`
 
 		for _, appServer := range appServers {
 			data = &HAProxyTemplateData{
 				PortNumber: int(appServer.Port),
+				SslCert: getSSLConfig(cr.Spec.HAProxy.Tls),
 			}
 			result += parseTemplateToString(frontEndDef, data) + "\n"
 		}
@@ -77,7 +82,7 @@ func generateBackendConfig(cr *databasev1alpha1.MarklogicCluster) string {
 	var result string
 
 	backendTemplate := `
-backend marklogic-{{ $.PortNumber}}-backend
+backend marklogic-{{ .PortNumber}}-backend
   mode http
   balance leastconn
   option forwardfor
@@ -161,7 +166,7 @@ func generateStatsConfig(cr *databasev1alpha1.MarklogicCluster) string {
 	statsDef := `
 frontend stats
   mode http
-  bind *:{{ .StatsPort }}
+  bind *:{{ .StatsPort }} {{ .SslCert }}
   stats enable
   http-request use-service prometheus-exporter if { path /metrics }
   stats uri /
@@ -170,9 +175,10 @@ frontend stats
 `
 	data := map[string]interface{}{
 		"StatsPort": cr.Spec.HAProxy.Stats.Port,
+		"SslCert": getSSLConfig(cr.Spec.HAProxy.Tls),
 	}
 	if cr.Spec.HAProxy.Stats.Auth.Enabled {
-		statsDef += `  stats auth {{ $.StatsUsername }}:{{ $.StatsPassword }}
+		statsDef += `  stats auth {{ .StatsUsername }}:{{ .StatsPassword }}
 `
 		data["StatsUsername"] = cr.Spec.HAProxy.Stats.Auth.Username
 		data["StatsPassword"] = cr.Spec.HAProxy.Stats.Auth.Password
@@ -188,11 +194,12 @@ func generateTcpConfig(cr *databasev1alpha1.MarklogicCluster) string {
 	for _, tcpPort := range cr.Spec.HAProxy.TcpPorts.Ports {
 		t := `
 listen marklogic-TCP-{{.PortNumber}}
-  bind :{{ .PortNumber }}
+  bind :{{ .PortNumber }} {{ .SslCert }}
   mode tcp
   balance leastconn`
 		data := &HAProxyTemplateData{
 			PortNumber: int(tcpPort.Port),
+			SslCert: getSSLConfig(cr.Spec.HAProxy.Tls),
 		}
 		result += parseTemplateToString(t, data)
 		for _, group := range cr.Spec.MarkLogicGroups {
@@ -216,6 +223,14 @@ listen marklogic-TCP-{{.PortNumber}}
 	}
 
 	return result
+}
+
+func getSSLConfig(tls *databasev1alpha1.TlsForHAProxy) string {
+	if tls == nil || !tls.Enabled {
+		return ""
+	} else {
+		return "ssl crt /usr/local/etc/ssl/" + tls.CertFileName
+	}
 }
 
 // parses the given template with the given data

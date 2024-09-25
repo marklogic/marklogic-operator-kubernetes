@@ -250,6 +250,16 @@ func (cc *ClusterContext) createHAProxyDeployment() error {
 	if cr.Spec.HAProxy.NodeSelector != nil {
 		deploymentDef.Spec.Template.Spec.NodeSelector = cr.Spec.HAProxy.NodeSelector
 	}
+	if cr.Spec.HAProxy.Tls != nil && cr.Spec.HAProxy.Tls.Enabled && cr.Spec.HAProxy.Tls.SecretName != "" {
+		deploymentDef.Spec.Template.Spec.Volumes = append(deploymentDef.Spec.Template.Spec.Volumes, corev1.Volume{
+			Name: "ssl-certificate",
+			VolumeSource: corev1.VolumeSource{
+				Secret: &corev1.SecretVolumeSource{
+					SecretName: cr.Spec.HAProxy.Tls.SecretName,
+				},
+			},
+		})
+	}
 	AddOwnerRefToObject(deploymentDef, ownerDef)
 	logger.Info("===== HAProxy Deployment ==== ", "deployment:", deploymentDef)
 	err := client.Create(cc.Ctx, deploymentDef)
