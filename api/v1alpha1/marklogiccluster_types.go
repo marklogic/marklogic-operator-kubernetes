@@ -19,7 +19,6 @@ package v1alpha1
 import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
-	networkingv1 "k8s.io/api/networking/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -47,7 +46,7 @@ type MarklogicClusterSpec struct {
 	// +kubebuilder:validation:Enum=OnDelete;RollingUpdate
 	// +kubebuilder:default:="OnDelete"
 	UpdateStrategy           appsv1.StatefulSetUpdateStrategyType `json:"updateStrategy,omitempty"`
-	NetworkPolicy            *networkingv1.NetworkPolicy          `json:"networkPolicy,omitempty"`
+	NetworkPolicy            NetworkPolicy                        `json:"networkPolicy,omitempty"`
 	PodSecurityContext       *corev1.PodSecurityContext           `json:"podSecurityContext,omitempty"`
 	ContainerSecurityContext *corev1.SecurityContext              `json:"securityContext,omitempty"`
 

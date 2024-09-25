@@ -11,7 +11,7 @@ import (
 	"github.com/marklogic/marklogic-kubernetes-operator/pkg/result"
 )
 
-func generateNetworkPolicyDef(networkPolicyMeta metav1.ObjectMeta, ownerRef metav1.OwnerReference, cr *databasev1alpha1.MarklogicGroup) *networkingv1.NetworkPolicy {
+func generateNetworkPolicyDef(networkPolicyMeta metav1.ObjectMeta, ownerRef metav1.OwnerReference, cr *databasev1alpha1.MarklogicCluster) *networkingv1.NetworkPolicy {
 	networkPolicySpec := networkingv1.NetworkPolicySpec{
 		PolicyTypes: cr.Spec.NetworkPolicy.PolicyTypes,
 		PodSelector: cr.Spec.NetworkPolicy.PodSelector,
@@ -30,12 +30,12 @@ func generateNetworkPolicyDef(networkPolicyMeta metav1.ObjectMeta, ownerRef meta
 	return networkPolicyDef
 }
 
-func (oc *OperatorContext) getNetworkPolicy(namespace string, networkPolicyName string) (*networkingv1.NetworkPolicy, error) {
-	logger := oc.ReqLogger
+func (cc *ClusterContext) getNetworkPolicy(namespace string, networkPolicyName string) (*networkingv1.NetworkPolicy, error) {
+	logger := cc.ReqLogger
 
 	var networkPolicy *networkingv1.NetworkPolicy
 	networkPolicy = &networkingv1.NetworkPolicy{}
-	err := oc.Client.Get(oc.Ctx, types.NamespacedName{Name: networkPolicyName, Namespace: namespace}, networkPolicy)
+	err := cc.Client.Get(cc.Ctx, types.NamespacedName{Name: networkPolicyName, Namespace: namespace}, networkPolicy)
 	if err != nil {
 		logger.Info("MarkLogic NetworkPolicy get action failed")
 		return nil, err
@@ -44,31 +44,30 @@ func (oc *OperatorContext) getNetworkPolicy(namespace string, networkPolicyName 
 	return networkPolicy, nil
 }
 
-func generateNetworkPolicy(networkPolicyName string, cr *databasev1alpha1.MarklogicGroup) *networkingv1.NetworkPolicy {
-	labels := getMarkLogicLabels(cr.Spec.Name)
+func generateNetworkPolicy(networkPolicyName string, cr *databasev1alpha1.MarklogicCluster) *networkingv1.NetworkPolicy {
+	labels := getMarkLogicLabels(cr.GetObjectMeta().GetName())
 	netObjectMeta := generateObjectMeta(networkPolicyName, cr.Namespace, labels, map[string]string{})
-	networkPolicy := generateNetworkPolicyDef(netObjectMeta, marklogicServerAsOwner(cr), cr)
+	networkPolicy := generateNetworkPolicyDef(netObjectMeta, marklogicClusterAsOwner(cr), cr)
 	return networkPolicy
 }
 
-func (oc *OperatorContext) ReconcileNetworkPolicy() result.ReconcileResult {
-	logger := oc.ReqLogger
+func (cc *ClusterContext) ReconcileNetworkPolicy() result.ReconcileResult {
+	logger := cc.ReqLogger
 	logger.Info("NetworkPolicy::Reconciling MarkLogic NetworkPolicy")
-	client := oc.Client
-	cr := oc.MarklogicGroup
-	networkPolicyName := cr.Spec.Name
-	currentNetworkPolicy, err := oc.getNetworkPolicy(cr.Namespace, networkPolicyName)
+	client := cc.Client
+	cr := cc.MarklogicCluster
+	networkPolicyName := cr.ObjectMeta.Name
+	currentNetworkPolicy, err := cc.getNetworkPolicy(cr.Namespace, networkPolicyName)
 	networkPolicyDef := generateNetworkPolicy(networkPolicyName, cr)
 	if err != nil {
 		if errors.IsNotFound(err) {
 			logger.Info("MarkLogic NetworkPolicy not found, creating a new one")
-			err = client.Create(oc.Ctx, networkPolicyDef)
+			err = client.Create(cc.Ctx, networkPolicyDef)
 			if err != nil {
 				logger.Info("MarkLogic NetworkPolicy creation has failed")
 				return result.Error(err)
 			}
 			logger.Info("MarkLogic NetworkPolicy creation is successful")
-			oc.Recorder.Event(oc.MarklogicGroup, "Normal", "NetworkPolicyCreated", "MarkLogic NetworkPolicy creation is successful")
 		} else {
 			logger.Error(err, "MarkLogic NetworkPolicy creation has failed")
 			return result.Error(err)
@@ -86,7 +85,7 @@ func (oc *OperatorContext) ReconcileNetworkPolicy() result.ReconcileResult {
 		if !patchDiff.IsEmpty() {
 			logger.Info("MarkLogic NetworkPolicy spec is different from the input NetworkPolicy spec, updating the NetworkPolicy")
 			logger.Info(patchDiff.String())
-			err := oc.Client.Update(oc.Ctx, networkPolicyDef)
+			err := cc.Client.Update(cc.Ctx, networkPolicyDef)
 			if err != nil {
 				logger.Error(err, "Error updating NetworkPolicy")
 				return result.Error(err)

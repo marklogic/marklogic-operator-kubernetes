@@ -287,11 +287,7 @@ func (in *MarklogicClusterSpec) DeepCopyInto(out *MarklogicClusterSpec) {
 		*out = new(int64)
 		**out = **in
 	}
-	if in.NetworkPolicy != nil {
-		in, out := &in.NetworkPolicy, &out.NetworkPolicy
-		*out = new(networkingv1.NetworkPolicy)
-		(*in).DeepCopyInto(*out)
-	}
+	in.NetworkPolicy.DeepCopyInto(&out.NetworkPolicy)
 	if in.PodSecurityContext != nil {
 		in, out := &in.PodSecurityContext, &out.PodSecurityContext
 		*out = new(v1.PodSecurityContext)
