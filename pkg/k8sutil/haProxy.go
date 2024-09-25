@@ -181,7 +181,6 @@ func (cc *ClusterContext) createHAProxyDeployment() error {
 	client := cc.Client
 	cr := cc.MarklogicCluster
 	ownerDef := marklogicClusterAsOwner(cr)
-	replica := int32(2)
 	defaultMode := int32(420)
 	deploymentDef := &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{
@@ -190,7 +189,7 @@ func (cc *ClusterContext) createHAProxyDeployment() error {
 			Labels:    labels,
 		},
 		Spec: appsv1.DeploymentSpec{
-			Replicas: &replica,
+			Replicas: &cr.Spec.HAProxy.ReplicaCount,
 			Selector: &metav1.LabelSelector{
 				MatchLabels: map[string]string{
 					"app.kubernetes.io/instance": "marklogic",

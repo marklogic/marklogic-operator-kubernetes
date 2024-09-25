@@ -21,8 +21,6 @@ type HAProxyTemplateData struct {
 	SslCert          string
 }
 
- 
-
 // generates frontend config for HAProxy depending on pathBasedRouting flag
 // if pathBasedRouting is disabled, it will generate a frontend for each appServer
 // otherwise, it will generate a single frontend with path based routing
@@ -44,7 +42,7 @@ frontend marklogic-pathbased-frontend
 `
 		data = &HAProxyTemplateData{
 			PortNumber: int(cr.Spec.HAProxy.FrontendPort),
-			SslCert: getSSLConfig(cr.Spec.HAProxy.Tls),
+			SslCert:    getSSLConfig(cr.Spec.HAProxy.Tls),
 		}
 		result = parseTemplateToString(frontEndDef, data) + "\n"
 		for _, appServer := range appServers {
@@ -67,7 +65,7 @@ frontend marklogic-{{ .PortNumber}}
 		for _, appServer := range appServers {
 			data = &HAProxyTemplateData{
 				PortNumber: int(appServer.Port),
-				SslCert: getSSLConfig(cr.Spec.HAProxy.Tls),
+				SslCert:    getSSLConfig(cr.Spec.HAProxy.Tls),
 			}
 			result += parseTemplateToString(frontEndDef, data) + "\n"
 		}
@@ -175,7 +173,7 @@ frontend stats
 `
 	data := map[string]interface{}{
 		"StatsPort": cr.Spec.HAProxy.Stats.Port,
-		"SslCert": getSSLConfig(cr.Spec.HAProxy.Tls),
+		"SslCert":   getSSLConfig(cr.Spec.HAProxy.Tls),
 	}
 	if cr.Spec.HAProxy.Stats.Auth.Enabled {
 		statsDef += `  stats auth {{ .StatsUsername }}:{{ .StatsPassword }}
@@ -199,7 +197,7 @@ listen marklogic-TCP-{{.PortNumber}}
   balance leastconn`
 		data := &HAProxyTemplateData{
 			PortNumber: int(tcpPort.Port),
-			SslCert: getSSLConfig(cr.Spec.HAProxy.Tls),
+			SslCert:    getSSLConfig(cr.Spec.HAProxy.Tls),
 		}
 		result += parseTemplateToString(t, data)
 		for _, group := range cr.Spec.MarkLogicGroups {
