@@ -28,7 +28,7 @@ helm repo update
 ```
 3. Install the Helm Chart for MarkLogic Operator: 
 ```sh
-helm upgrade marklogic-operator marklogic-private/marklogic-operator --version=1.0.0-ea1 --install --namespace marklogic-operator-system --create-namespace
+helm upgrade marklogic-operator marklogic-private/marklogic-operator --version=1.0.0-ea2 --install --namespace marklogic-operator-system --create-namespace
 ```
 4. Check the Operator Pod and make sure it is in Running state:
 ```sh
@@ -70,3 +70,51 @@ Once MarkLogic Operator is installed, go to config/samples folder and pick one s
 ```sh
 kubectl apply -f marklogicgroup.yaml
 ```
+
+### Configure HAProxy Load Balancer
+HAProxy is provided as a load balancer configured to support cookie-based session affinity and multi-statement transactions. These configurations are needed by some MarkLogic client applications, like mlcp. HAProxy is recommended for production workloads. 
+
+#### Enable the HAProxy Load Balancer
+The HAProxy Load Balancer is disabled by default. To enable it, provide the following configuration in the crd yaml file to be used for cluster creation:
+```
+haproxy:
+    enabled: true
+```
+#### Configuration
+HAProxy can be configured for cluster. To setup the access for default App Servers for 8000, 8001 and 8002, uncomment the appServer seciton in marklogicgroup.yaml.
+```
+    appServers:
+      - name: "app-service"
+        port: 8000
+        path: "/console"
+      - name: "admin"
+        port: 8001
+        path: "/adminUI"
+      - name: "manage"
+        port: 8002
+        path: "/manage"
+```
+Ports can be configured for additional app servers. For example, to add port 8010 for HTTP load balancing, add this configuration to the marklogicgroup.yaml file appServer section:
+```
+- name: my-app-1     
+      port: 8010
+      targetPort: 8010
+```
+#### Access HA Proxy
+The HAProxy can be accessed from a service with the name of marklogic-haproxy. 
+
+#### External access
+By default, HAProxy is configured to provide access within the Kubernetes cluster. However, HAProxy can provide external access by setting the service type in the marklogicgroup.yaml file:
+```
+haproxy:  
+  service:    
+    type: LoadBalancer
+```
+
+> [!WARNING]
+> Please note, by setting the haproxy service type to LoadBalancer, the MarkLogic endpoint is exposed to the public internet. Because of this, networkPolicy should be set to limit the sources that can visit MarkLogic.
+
+## Known Issues and Limitations
+
+1. The latest released version of fluent/fluent-bit:3.1.1 has known high and critical security vulnerabilities. If you decide to enable the log collection feature, choose and deploy the fluent-bit or an alternate image with no vulnerabilities as per your requirements. 
+2. Known Issues and Limitations for the MarkLogic Server Docker image can be viewed using the link: https://github.com/marklogic/marklogic-docker?tab=readme-ov-file#Known-Issues-and-Limitations.

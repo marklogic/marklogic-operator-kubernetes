@@ -132,8 +132,10 @@ func main() {
 		os.Exit(1)
 	}
 	if err = (&controller.MarklogicClusterReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
+		Client:   mgr.GetClient(),
+		Scheme:   mgr.GetScheme(),
+		Log:      ctrl.Log.WithName("controllers").WithName("MarklogicCluster"),
+		Recorder: mgr.GetEventRecorderFor("marklogiccluster-controller"),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "MarklogicCluster")
 		os.Exit(1)

@@ -9,7 +9,7 @@ metadata:
     app.kubernetes.io/created-by: marklogic-kubernetes-operator
   name: marklogicgroup-sample
 spec:
-  replicas: 2
+  replicas: 1
   name: marklogic
   image: "progressofficial/marklogic-db:11.3.0-ubi-rootless"
   auth:
@@ -19,8 +19,48 @@ spec:
   #   size: 10Gi
   terminationGracePeriodSeconds: 9
   updateStrategy: OnDelete
-  groupConfig:
-    name: "node"
+  # groupConfig:
+  #   name: "node"
+  # service: 
+  #     ## service type could be ClusterIP, NodePort or LoadBalancer, default is ClusterIP
+  #     type: ClusterIP
+      ## Uncomment the following lines to add additional ports to the service
+      # additionalPorts: 
+      # - name: app1
+      #   port: 8010 
+      #   targetPort: 8010
+      #   protocol: TCP
+      ## Uncomment the following lines to add annotations to the service
+      # annotations: {}
+
+## Uncomment the following lines to specify the podSecurityContext and containerSecurityContext
+## Note: Below values are set to default, please update them as per your requirements
+  # podSecurityContext:
+  #   fsGroup: 2
+  #   fsGroupChangePolicy: OnRootMismatch
+  # securityContext:
+  #   runAsUser: 1000
+  #   runAsNonRoot: true
+  #   allowPrivilegeEscalation: false
+
+  logCollection:
+    enabled: true
+    image: fluent/fluent-bit:3.1.1
+    files:
+      errorLogs: true
+      accessLogs: true
+      requestLogs: true
+      crashLogs: true
+      auditLogs: true
+    outputs: |-
+        [OUTPUT]
+          name loki
+          match *
+          host loki.loki.svc.cluster.local
+          port 3100
+          labels job=fluent-bit
+          http_user admin
+          http_passwd admin
 
   # resources:
   #   requests:

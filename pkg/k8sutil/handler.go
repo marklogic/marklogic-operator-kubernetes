@@ -4,10 +4,10 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
 
-func (oc *OperatorContext) ReconsileHandler() (reconcile.Result, error) {
-	oc.ReqLogger.Info("handler::ReconsileHandler")
+func (oc *OperatorContext) ReconsileMarklogicGroupHandler() (reconcile.Result, error) {
+	oc.ReqLogger.Info("handler::ReconsileMarklogicGroupHandler")
 
-	if result := oc.ReconcileSrvices(); result.Completed() {
+	if result := oc.ReconcileServices(); result.Completed() {
 		return result.Output()
 	}
 	setOperatorInternalStatus(oc, "Created")
@@ -20,7 +20,28 @@ func (oc *OperatorContext) ReconsileHandler() (reconcile.Result, error) {
 		return result.Output()
 	}
 
+	if oc.MarklogicGroup.Spec.LogCollection.Enabled {
+		if result := oc.ReconcileFluentBitConfigMap(); result.Completed() {
+			return result.Output()
+		}
+	}
+
 	result, err := oc.ReconcileStatefulset()
 
+	return result, err
+}
+
+func (cc *ClusterContext) ReconsileMarklogicClusterHandler() (reconcile.Result, error) {
+	result, err := cc.ReconsileMarklogicCluster()
+	if cc.MarklogicCluster.Spec.NetworkPolicy.Enabled {
+		if result := cc.ReconcileNetworkPolicy(); result.Completed() {
+			return result.Output()
+		}
+	}
+	if cc.MarklogicCluster.Spec.HAProxy.Enabled {
+		if result := cc.ReconcileHAProxy(); result.Completed() {
+			return result.Output()
+		}
+	}
 	return result, err
 }

@@ -22,6 +22,7 @@ type statefulSetParameters struct {
 	Replicas                      *int32
 	Name                          string
 	PersistentVolumeClaim         corev1.PersistentVolumeClaim
+	ServiceName                   string
 	TerminationGracePeriodSeconds *int64
 	UpdateStrategy                appsv1.StatefulSetUpdateStrategyType
 	NodeSelector                  map[string]string
@@ -45,9 +46,13 @@ type containerParameters struct {
 	BootstrapHost      string
 	LivenessProbe      databasev1alpha1.ContainerProbe
 	ReadinessProbe     databasev1alpha1.ContainerProbe
-	GroupConfig        databasev1alpha1.GroupConfig
+	LogCollection      *databasev1alpha1.LogCollection
+	GroupConfig        *databasev1alpha1.GroupConfig
+	PodSecurityContext *corev1.PodSecurityContext
+	SecurityContext    *corev1.SecurityContext
 	EnableConverters   bool
 	HugePages          *databasev1alpha1.HugePages
+	PathBasedRouting   bool
 }
 
 func (oc *OperatorContext) ReconcileStatefulset() (reconcile.Result, error) {
@@ -124,7 +129,6 @@ func (oc *OperatorContext) ReconcileStatefulset() (reconcile.Result, error) {
 		}
 	} else {
 		logger.Info("MarkLogic statefulSet spec is the same as the MarkLogicGroup spec")
-
 	}
 	logger.Info("MarkLogic statefulSet is updated to " + strconv.Itoa(int(*cr.Spec.Replicas)))
 	logger.Info("Operator Status:", "Stage", cr.Status.Stage)
@@ -193,6 +197,7 @@ func generateStatefulSetsDef(stsMeta metav1.ObjectMeta, params statefulSetParame
 				Spec: corev1.PodSpec{
 					Containers:                    generateContainerDef(stsMeta.GetName(), containerParams),
 					TerminationGracePeriodSeconds: params.TerminationGracePeriodSeconds,
+					SecurityContext:               containerParams.PodSecurityContext,
 					Volumes:                       generateVolumes(stsMeta.Name, containerParams),
 					NodeSelector:                  params.NodeSelector,
 					Affinity:                      params.Affinity,
@@ -236,6 +241,7 @@ func generateContainerDef(name string, containerParams containerParameters) []co
 			ImagePullPolicy: containerParams.ImagePullPolicy,
 			Env:             getEnvironmentVariables(containerParams),
 			Lifecycle:       getLifeCycle(),
+			SecurityContext: containerParams.SecurityContext,
 			VolumeMounts:    getVolumeMount(containerParams),
 		},
 	}
@@ -249,6 +255,20 @@ func generateContainerDef(name string, containerParams containerParameters) []co
 
 	if containerParams.ReadinessProbe.Enabled {
 		containerDef[0].ReadinessProbe = getReadinessProbe(containerParams.ReadinessProbe)
+	}
+
+	if containerParams.LogCollection != nil && containerParams.LogCollection.Enabled {
+		fulentBitContainerDef := corev1.Container{
+			Name:            "fluent-bit",
+			Image:           containerParams.LogCollection.Image,
+			ImagePullPolicy: "IfNotPresent",
+			Env:             getFluentBitEnvironmentVariables(),
+			VolumeMounts:    getFluentBitVolumeMount(),
+		}
+		if containerParams.LogCollection.Resources != nil {
+			fulentBitContainerDef.Resources = *containerParams.LogCollection.Resources
+		}
+		containerDef = append(containerDef, fulentBitContainerDef)
 	}
 
 	return containerDef
@@ -266,7 +286,7 @@ func generateStatefulSetsParams(cr *databasev1alpha1.MarklogicGroup) statefulSet
 		PriorityClassName:             cr.Spec.PriorityClassName,
 	}
 	if cr.Spec.Storage != nil {
-		params.PersistentVolumeClaim = generatePVCTemplate(cr.Spec.Storage.Size)
+		params.PersistentVolumeClaim = generatePVCTemplate(cr.Spec.Storage)
 	}
 	return params
 }
@@ -274,16 +294,20 @@ func generateStatefulSetsParams(cr *databasev1alpha1.MarklogicGroup) statefulSet
 func generateContainerParams(cr *databasev1alpha1.MarklogicGroup) containerParameters {
 	trueProperty := true
 	containerParams := containerParameters{
-		Image:            cr.Spec.Image,
-		Resources:        cr.Spec.Resources,
-		Name:             cr.Spec.Name,
-		Namespace:        cr.Namespace,
-		ClusterDomain:    cr.Spec.ClusterDomain,
-		BootstrapHost:    cr.Spec.BootstrapHost,
-		LivenessProbe:    cr.Spec.LivenessProbe,
-		ReadinessProbe:   cr.Spec.ReadinessProbe,
-		GroupConfig:      cr.Spec.GroupConfig,
-		EnableConverters: cr.Spec.EnableConverters,
+		Image:              cr.Spec.Image,
+		Resources:          cr.Spec.Resources,
+		Name:               cr.Spec.Name,
+		Namespace:          cr.Namespace,
+		ClusterDomain:      cr.Spec.ClusterDomain,
+		BootstrapHost:      cr.Spec.BootstrapHost,
+		LivenessProbe:      cr.Spec.LivenessProbe,
+		ReadinessProbe:     cr.Spec.ReadinessProbe,
+		GroupConfig:        cr.Spec.GroupConfig,
+		EnableConverters:   cr.Spec.EnableConverters,
+		PodSecurityContext: cr.Spec.PodSecurityContext,
+		SecurityContext:    cr.Spec.ContainerSecurityContext,
+		LogCollection:      cr.Spec.LogCollection,
+		PathBasedRouting:   cr.Spec.PathBasedRouting,
 	}
 
 	if cr.Spec.Storage != nil {
@@ -300,6 +324,9 @@ func generateContainerParams(cr *databasev1alpha1.MarklogicGroup) containerParam
 	}
 	if cr.Spec.HugePages.Enabled {
 		containerParams.HugePages = cr.Spec.HugePages
+	}
+	if cr.Spec.LogCollection.Enabled {
+		containerParams.LogCollection = cr.Spec.LogCollection
 	}
 
 	return containerParams
@@ -340,7 +367,7 @@ func generateVolumes(stsName string, containerParams containerParameters) []core
 			},
 		},
 	})
-	if containerParams.HugePages.Enabled {
+	if containerParams.HugePages != nil && containerParams.HugePages.Enabled {
 		volumes = append(volumes, corev1.Volume{
 			Name: "huge-pages",
 			VolumeSource: corev1.VolumeSource{
@@ -350,24 +377,41 @@ func generateVolumes(stsName string, containerParams containerParameters) []core
 			},
 		})
 	}
+	if containerParams.LogCollection != nil && containerParams.LogCollection.Enabled {
+		volumes = append(volumes, corev1.Volume{
+			Name: "fluent-bit",
+			VolumeSource: corev1.VolumeSource{
+				ConfigMap: &corev1.ConfigMapVolumeSource{
+					LocalObjectReference: corev1.LocalObjectReference{
+						Name: "fluent-bit",
+					},
+				},
+			},
+		})
+	}
 
 	return volumes
 }
 
-func generatePVCTemplate(storageSize string) corev1.PersistentVolumeClaim {
+func generatePVCTemplate(storage *databasev1alpha1.Storage) corev1.PersistentVolumeClaim {
 	pvcTemplate := corev1.PersistentVolumeClaim{}
 	pvcTemplate.CreationTimestamp = metav1.Time{}
 	pvcTemplate.Name = "data"
+	pvcTemplate.Spec.StorageClassName = &storage.StorageClass
 	pvcTemplate.Spec.AccessModes = []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce}
-	pvcTemplate.Spec.Resources.Requests.Storage().Add(resource.MustParse(storageSize))
+	pvcTemplate.Spec.Resources.Requests.Storage().Add(resource.MustParse(storage.Size))
 	pvcTemplate.Spec.Resources.Requests = corev1.ResourceList{
-		corev1.ResourceStorage: resource.MustParse(storageSize),
+		corev1.ResourceStorage: resource.MustParse(storage.Size),
 	}
 	return pvcTemplate
 }
 
 func getEnvironmentVariables(containerParams containerParameters) []corev1.EnvVar {
 	envVars := []corev1.EnvVar{}
+	groupName := "Default"
+	if containerParams.GroupConfig != nil && containerParams.GroupConfig.Name != "" {
+		groupName = containerParams.GroupConfig.Name
+	}
 	envVars = append(envVars, corev1.EnvVar{
 		Name:  "MARKLOGIC_ADMIN_USERNAME_FILE",
 		Value: "ml-secrets/username",
@@ -385,19 +429,22 @@ func getEnvironmentVariables(containerParams containerParameters) []corev1.EnvVa
 		Value: "false",
 	}, corev1.EnvVar{
 		Name:  "MARKLOGIC_GROUP",
-		Value: containerParams.GroupConfig.Name,
+		Value: groupName,
 	}, corev1.EnvVar{
 		Name:  "XDQP_SSL_ENABLED",
 		Value: strconv.FormatBool(containerParams.GroupConfig.EnableXdqpSsl),
 	}, corev1.EnvVar{
 		Name:  "MARKLOGIC_CLUSTER_TYPE",
 		Value: "bootstrap",
+	}, corev1.EnvVar{
+		Name:  "INSTALL_CONVERTERS",
+		Value: strconv.FormatBool(containerParams.EnableConverters),
+	}, corev1.EnvVar{
+		Name:  "PATH_BASED_ROUTING",
+		Value: strconv.FormatBool(containerParams.PathBasedRouting),
 	},
-		corev1.EnvVar{
-			Name:  "INSTALL_CONVERTERS",
-			Value: strconv.FormatBool(containerParams.EnableConverters),
-		},
 	)
+
 	if containerParams.LicenseKey != "" {
 		envVars = append(envVars, corev1.EnvVar{
 			Name:  "LICENSE_KEY",
@@ -412,14 +459,37 @@ func getEnvironmentVariables(containerParams containerParameters) []corev1.EnvVa
 		envVars = append(envVars, corev1.EnvVar{
 			Name:  "MARKLOGIC_BOOTSTRAP_HOST",
 			Value: containerParams.BootstrapHost,
-		})
+		},
+			corev1.EnvVar{
+				Name:  "MARKLOGIC_CLUSTER_TYPE",
+				Value: "non-bootstrap",
+			})
 	} else {
 		envVars = append(envVars, corev1.EnvVar{
 			Name:  "MARKLOGIC_BOOTSTRAP_HOST",
 			Value: fmt.Sprintf("%s-0.%s.%s.svc.%s", containerParams.Name, containerParams.Name, containerParams.Namespace, containerParams.ClusterDomain),
+		}, corev1.EnvVar{
+			Name:  "MARKLOGIC_CLUSTER_TYPE",
+			Value: "bootstrap",
 		})
 	}
 
+	return envVars
+}
+
+func getFluentBitEnvironmentVariables() []corev1.EnvVar {
+
+	envVars := []corev1.EnvVar{}
+	envVars = append(envVars,
+		corev1.EnvVar{
+			Name:      "POD_NAME",
+			ValueFrom: &corev1.EnvVarSource{FieldRef: &corev1.ObjectFieldSelector{FieldPath: "metadata.name"}},
+		},
+		corev1.EnvVar{
+			Name:      "NAMESPACE",
+			ValueFrom: &corev1.EnvVarSource{FieldRef: &corev1.ObjectFieldSelector{FieldPath: "metadata.namespace"}},
+		},
+	)
 	return envVars
 }
 
@@ -442,7 +512,7 @@ func getVolumeMount(containerParams containerParameters) []corev1.VolumeMount {
 			ReadOnly:  true,
 		},
 	)
-	if containerParams.HugePages.Enabled {
+	if containerParams.HugePages != nil && containerParams.HugePages.Enabled {
 		VolumeMounts = append(VolumeMounts,
 			corev1.VolumeMount{
 				Name:      "huge-pages",
@@ -451,6 +521,22 @@ func getVolumeMount(containerParams containerParameters) []corev1.VolumeMount {
 		)
 	}
 	return VolumeMounts
+}
+
+func getFluentBitVolumeMount() []corev1.VolumeMount {
+	var VolumeMountsFluentBit []corev1.VolumeMount
+
+	VolumeMountsFluentBit = append(VolumeMountsFluentBit,
+		corev1.VolumeMount{
+			Name:      "data",
+			MountPath: "/var/opt/MarkLogic",
+		},
+		corev1.VolumeMount{
+			Name:      "fluent-bit",
+			MountPath: "/fluent-bit/etc/",
+		},
+	)
+	return VolumeMountsFluentBit
 }
 
 func getLivenessProbe(probe databasev1alpha1.ContainerProbe) *corev1.Probe {

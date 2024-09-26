@@ -28,6 +28,20 @@ type OperatorContext struct {
 	StatefulSets []*appsv1.StatefulSet
 }
 
+type ClusterContext struct {
+	Ctx context.Context
+
+	Request          *reconcile.Request
+	Client           controllerClient.Client
+	Scheme           *runtime.Scheme
+	MarklogicCluster *databasev1alpha1.MarklogicCluster
+	ReqLogger        logr.Logger
+	Recorder         record.EventRecorder
+
+	Services     []*corev1.Service
+	StatefulSets []*appsv1.StatefulSet
+}
+
 func CreateOperatorContext(
 	ctx context.Context,
 	request *reconcile.Request,
@@ -43,25 +57,69 @@ func CreateOperatorContext(
 	oc.Scheme = scheme
 	oc.ReqLogger = reqLogger
 	oc.Recorder = rec
-	mls := &databasev1alpha1.MarklogicGroup{}
-	if err := retrieveMarkLogicServer(oc, request, mls); err != nil {
+	mlg := &databasev1alpha1.MarklogicGroup{}
+	if err := retrieveMarkLogicGroup(oc, request, mlg); err != nil {
 		oc.ReqLogger.Error(err, "Failed to retrieve MarkLogicServer")
 		return nil, err
 	}
-	oc.MarklogicGroup = mls
+	// if err := retrieveMarklogicCluster(oc, request, mlc); err != nil {
+	// 	oc.ReqLogger.Error(err, "Failed to retrieve MarkLogicCluster")
+	// 	return nil, err
+	// }
+	oc.MarklogicGroup = mlg
+	// oc.MarklogicCluster = mlc
 
 	oc.ReqLogger.Info("==== CreateOperatorContext")
 
-	oc.ReqLogger = oc.ReqLogger.WithValues("ML server name", mls.Spec.Name)
+	oc.ReqLogger = oc.ReqLogger.WithValues("ML server name", mlg.Spec.Name)
 	log.IntoContext(ctx, oc.ReqLogger)
 
 	return oc, nil
 }
 
-func retrieveMarkLogicServer(oc *OperatorContext, request *reconcile.Request, mls *databasev1alpha1.MarklogicGroup) error {
-	err := oc.Client.Get(oc.Ctx, request.NamespacedName, mls)
+func CreateClusterContext(
+	ctx context.Context,
+	request *reconcile.Request,
+	client controllerClient.Client,
+	scheme *runtime.Scheme,
+	rec record.EventRecorder) (*ClusterContext, error) {
 
+	cc := &ClusterContext{}
+	reqLogger := log.FromContext(ctx)
+	cc.Ctx = ctx
+	cc.Request = request
+	cc.Client = client
+	cc.Scheme = scheme
+	cc.ReqLogger = reqLogger
+	cc.Recorder = rec
+	mlc := &databasev1alpha1.MarklogicCluster{}
+
+	if err := retrieveMarklogicCluster(cc, request, mlc); err != nil {
+		cc.ReqLogger.Error(err, "Failed to retrieve MarkLogicCluster")
+		return nil, err
+	}
+	cc.MarklogicCluster = mlc
+
+	cc.ReqLogger.Info("==== CreateOperatorContext")
+
+	// cc.ReqLogger = cc.ReqLogger.WithValues("ML server name")
+	log.IntoContext(ctx, cc.ReqLogger)
+
+	return cc, nil
+}
+
+func retrieveMarkLogicGroup(oc *OperatorContext, request *reconcile.Request, mlg *databasev1alpha1.MarklogicGroup) error {
+	err := oc.Client.Get(oc.Ctx, request.NamespacedName, mlg)
 	return err
+}
+
+func retrieveMarklogicCluster(cc *ClusterContext, request *reconcile.Request, mlc *databasev1alpha1.MarklogicCluster) error {
+	err := cc.Client.Get(cc.Ctx, request.NamespacedName, mlc)
+	return err
+}
+
+func (cc *ClusterContext) GetMarkLogicCluster() *databasev1alpha1.MarklogicCluster {
+	return cc.MarklogicCluster
 }
 
 func (oc *OperatorContext) GetMarkLogicServer() *databasev1alpha1.MarklogicGroup {

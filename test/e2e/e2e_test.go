@@ -30,15 +30,7 @@ var (
 			Namespace: namespace,
 		},
 		Spec: databasev1alpha1.MarklogicClusterSpec{
-			MarkLogicGroups: []*databasev1alpha1.MarklogicGroups{
-				{
-					MarklogicGroupSpec: &databasev1alpha1.MarklogicGroupSpec{
-						Replicas: &replicas,
-						Name:     "marklogicgroups",
-						Image:    "marklogicdb/marklogic-db:11.2.0-ubi",
-					},
-				},
-			},
+			Image: "marklogicdb/marklogic-db:11.2.0-ubi",
 		},
 	}
 )
