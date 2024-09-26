@@ -28,7 +28,7 @@ helm repo update
 ```
 3. Install the Helm Chart for MarkLogic Operator: 
 ```sh
-helm upgrade marklogic-operator marklogic-private/marklogic-operator --version=1.0.0-ea1 --install --namespace marklogic-operator-system --create-namespace
+helm upgrade marklogic-operator marklogic-private/marklogic-operator --version=1.0.0-ea2 --install --namespace marklogic-operator-system --create-namespace
 ```
 4. Check the Operator Pod and make sure it is in Running state:
 ```sh
@@ -81,11 +81,22 @@ haproxy:
     enabled: true
 ```
 #### Configuration
-HAProxy can be configured for cluster and group. By default, ports 8000, 8001, and 8002 are configured to handle HTTP traffic. 
-Ports can be configured for additional app servers. For example, to add port 8010 for HTTP load balancing, add this configuration to the marklogicgroup.yaml file:
+HAProxy can be configured for cluster. To setup the access for default App Servers for 8000, 8001 and 8002, uncomment the appServer seciton in marklogicgroup.yaml.
+```
+    appServers:
+      - name: "app-service"
+        port: 8000
+        path: "/console"
+      - name: "admin"
+        port: 8001
+        path: "/adminUI"
+      - name: "manage"
+        port: 8002
+        path: "/manage"
+```
+Ports can be configured for additional app servers. For example, to add port 8010 for HTTP load balancing, add this configuration to the marklogicgroup.yaml file appServer section:
 ```
 - name: my-app-1     
-      type: HTTP
       port: 8010
       targetPort: 8010
 ```
@@ -102,3 +113,8 @@ haproxy:
 
 > [!WARNING]
 > Please note, by setting the haproxy service type to LoadBalancer, the MarkLogic endpoint is exposed to the public internet. Because of this, networkPolicy should be set to limit the sources that can visit MarkLogic.
+
+## Known Issues and Limitations
+
+1. The latest released version of fluent/fluent-bit:3.1.1 has known high and critical security vulnerabilities. If you decide to enable the log collection feature, choose and deploy the fluent-bit or an alternate image with no vulnerabilities as per your requirements. 
+2. Known Issues and Limitations for the MarkLogic Server Docker image can be viewed using the link: https://github.com/marklogic/marklogic-docker?tab=readme-ov-file#Known-Issues-and-Limitations.

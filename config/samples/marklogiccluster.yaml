@@ -31,16 +31,16 @@ spec:
   #       - name: odbc
   #         type: TCP
   #         port: 5432
-  #   appServers:
-  #     - name: "app-service"
-  #       port: 8000
-  #       path: "/console"
-  #     - name: "admin"
-  #       port: 8001
-  #       path: "/adminUI"
-  #     - name: "manage"
-  #       port: 8002
-  #       path: "/manage"
+    # appServers:
+    #   - name: "app-service"
+    #     port: 8000
+    #     path: "/console"
+    #   - name: "admin"
+    #     port: 8001
+    #     path: "/adminUI"
+    #   - name: "manage"
+    #     port: 8002
+    #     path: "/manage"
   #   stats:
   #     enabled: true
   #     port: 1024
