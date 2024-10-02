@@ -37,7 +37,6 @@ spec:
           metadata:
             type: object
           spec:
-            description: MarklogicClusterSpec defines the desired state of MarklogicCluster
             properties:
               affinity:
                 description: Affinity is a group of affinity scheduling rules.
@@ -2048,8 +2047,6 @@ spec:
                       secretName:
                         type: string
                     type: object
-                required:
-                - image
                 type: object
               hugePages:
                 default:
@@ -4200,8 +4197,6 @@ spec:
                             secretName:
                               type: string
                           type: object
-                      required:
-                      - image
                       type: object
                     hugePages:
                       properties:
@@ -9391,6 +9386,12 @@ spec:
             required:
             - image
             type: object
+            x-kubernetes-validations:
+            - message: HAProxy and Pathbased Routing is enabled. PathBasedRouting
+                is only supported for MarkLogic 11.1 and above
+              rule: '!(self.haproxy.enabled == true && self.haproxy.pathBasedRouting
+                == true) || int(self.image.split('':'')[1].split(''.'')[0] + self.image.split('':'')[1].split(''.'')[1])
+                >= 111'
           status:
             description: MarklogicClusterStatus defines the observed state of MarklogicCluster
             properties:
