@@ -43,5 +43,10 @@ func (cc *ClusterContext) ReconsileMarklogicClusterHandler() (reconcile.Result, 
 			return result.Output()
 		}
 	}
+	if cc.MarklogicCluster.Spec.Ingress.Enabled {
+		if result := cc.ReconcileIngress(); result.Completed() {
+			return result.Output()
+		}
+	}
 	return result, err
 }

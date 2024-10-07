@@ -148,3 +148,13 @@ type TlsForHAProxy struct {
 	SecretName   string `json:"secretName,omitempty"`
 	CertFileName string `json:"certFileName,omitempty"`
 }
+
+type Ingress struct {
+	// +kubebuilder:default:=false
+	Enabled          bool                    `json:"enabled,omitempty"`
+	IngressClassName string                  `json:"ingressClassName,omitempty"`
+	Labels           map[string]string       `json:"labels,omitempty"`
+	Annotations      map[string]string       `json:"annotations,omitempty"`
+	Host             string                  `json:"host,omitempty"`
+	Tls              networkingv1.IngressTLS `json:"tls,omitempty"`
+}
