@@ -157,4 +157,5 @@ type Ingress struct {
 	Annotations      map[string]string       `json:"annotations,omitempty"`
 	Host             string                  `json:"host,omitempty"`
 	Tls              networkingv1.IngressTLS `json:"tls,omitempty"`
+	AdditionalHosts  []string                `json:"additionalHosts,omitempty"`
 }

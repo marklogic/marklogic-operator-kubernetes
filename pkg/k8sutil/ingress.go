@@ -15,26 +15,51 @@ func generateIngressDef(ingressMeta metav1.ObjectMeta, ownerRef metav1.OwnerRefe
 	pathType := networkingv1.PathTypePrefix
 	var ingressRules []networkingv1.IngressRule
 	for _, appServer := range cr.Spec.HAProxy.AppServers {
-		ingressRules = append(ingressRules, networkingv1.IngressRule{
-			Host: cr.Spec.Ingress.Host,
-			IngressRuleValue: networkingv1.IngressRuleValue{
-				HTTP: &networkingv1.HTTPIngressRuleValue{
-					Paths: []networkingv1.HTTPIngressPath{
-						{Path: appServer.Path,
-							PathType: &pathType,
-							Backend: networkingv1.IngressBackend{
-								Service: &networkingv1.IngressServiceBackend{
-									Name: "marklogic-haproxy",
-									Port: networkingv1.ServiceBackendPort{
-										Number: cr.Spec.HAProxy.FrontendPort,
+		if appServer.Port == 8000 || appServer.Port == 8001 || appServer.Port == 8002 {
+			ingressRules = append(ingressRules, networkingv1.IngressRule{
+				Host: cr.Spec.Ingress.Host,
+				IngressRuleValue: networkingv1.IngressRuleValue{
+					HTTP: &networkingv1.HTTPIngressRuleValue{
+						Paths: []networkingv1.HTTPIngressPath{
+							{Path: appServer.Path,
+								PathType: &pathType,
+								Backend: networkingv1.IngressBackend{
+									Service: &networkingv1.IngressServiceBackend{
+										Name: "marklogic-haproxy",
+										Port: networkingv1.ServiceBackendPort{
+											Number: cr.Spec.HAProxy.FrontendPort,
+										},
 									},
 								},
 							},
 						},
 					},
 				},
-			},
-		})
+			})
+		} else {
+			for _, additionalHost := range cr.Spec.Ingress.AdditionalHosts {
+				ingressRules = append(ingressRules, networkingv1.IngressRule{
+					Host: additionalHost,
+					IngressRuleValue: networkingv1.IngressRuleValue{
+						HTTP: &networkingv1.HTTPIngressRuleValue{
+							Paths: []networkingv1.HTTPIngressPath{
+								{Path: appServer.Path,
+									PathType: &pathType,
+									Backend: networkingv1.IngressBackend{
+										Service: &networkingv1.IngressServiceBackend{
+											Name: "marklogic-haproxy",
+											Port: networkingv1.ServiceBackendPort{
+												Number: cr.Spec.HAProxy.FrontendPort,
+											},
+										},
+									},
+								},
+							},
+						},
+					},
+				})
+			}
+		}
 	}
 	ingressSpec := networkingv1.IngressSpec{
 		IngressClassName: &cr.Spec.Ingress.IngressClassName,

@@ -1026,6 +1026,10 @@ spec:
                 type: array
               ingress:
                 properties:
+                  additionalHosts:
+                    items:
+                      type: string
+                    type: array
                   annotations:
                     additionalProperties:
                       type: string

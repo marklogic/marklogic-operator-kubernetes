@@ -129,6 +129,7 @@ spec:
     ## add default hosts and additional hosts
     ## ref: https://kubernetes.io/docs/concepts/services-networking/ingress/#ingress-rules
     # host: ""
+    # additionalHosts: []
     
     ## Ingress TLS
     ## ref: https://kubernetes.io/docs/concepts/services-networking/ingress/#tls
