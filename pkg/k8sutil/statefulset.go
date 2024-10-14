@@ -53,6 +53,7 @@ type containerParameters struct {
 	EnableConverters   bool
 	HugePages          *databasev1alpha1.HugePages
 	PathBasedRouting   bool
+	Tls                *databasev1alpha1.Tls
 }
 
 func (oc *OperatorContext) ReconcileStatefulset() (reconcile.Result, error) {
@@ -217,6 +218,59 @@ func generateStatefulSetsDef(stsMeta metav1.ObjectMeta, params statefulSetParame
 	} else {
 		statefulSet.Spec.VolumeClaimTemplates = append(statefulSet.Spec.VolumeClaimTemplates, params.PersistentVolumeClaim)
 	}
+	if containerParams.Tls != nil && containerParams.Tls.EnableOnDefaultAppServers {
+		copyCertsVM := []corev1.VolumeMount{
+			{
+				Name:      "certs",
+				MountPath: "/run/secrets/marklogic-certs/",
+			},
+			{
+				Name:      "mladmin-secrets",
+				MountPath: "/run/secrets/ml-secrets/",
+			},
+			{
+				Name:      "helm-scripts",
+				MountPath: "/tmp/helm-scripts/",
+			},
+		}
+		if containerParams.Tls.CertSecretNames != nil {
+			copyCertsVM = append(copyCertsVM, corev1.VolumeMount{
+				Name:      "ca-cert-secret",
+				MountPath: "/tmp/ca-cert-secret/",
+			}, corev1.VolumeMount{
+				Name:      "server-cert-secrets",
+				MountPath: "/tmp/server-cert-secrets/",
+			})
+		}
+		statefulSet.Spec.Template.Spec.InitContainers = []corev1.Container{
+			{
+				Name:            "copy-certs",
+				Image:           "redhat/ubi9:9.4",
+				ImagePullPolicy: "IfNotPresent",
+				Command:         []string{"/bin/sh", "/tmp/helm-scripts/copy-certs.sh"},
+				VolumeMounts:    copyCertsVM,
+				Env: []corev1.EnvVar{
+					{
+						Name:      "POD_NAME",
+						ValueFrom: &corev1.EnvVarSource{FieldRef: &corev1.ObjectFieldSelector{FieldPath: "metadata.name"}},
+					},
+					{
+						Name:  "MARKLOGIC_ADMIN_USERNAME_FILE",
+						Value: "ml-secrets/username",
+					},
+					{
+						Name:  "MARKLOGIC_ADMIN_PASSWORD_FILE",
+						Value: "ml-secrets/password",
+					},
+					{
+						Name:  "MARKLOGIC_FQDN_SUFFIX",
+						Value: fmt.Sprintf("%s.%s.svc.%s", containerParams.Name, containerParams.Namespace, containerParams.ClusterDomain),
+					},
+				},
+			},
+		}
+	}
+
 	AddOwnerRefToObject(statefulSet, ownerDef)
 	return statefulSet
 }
@@ -308,6 +362,7 @@ func generateContainerParams(cr *databasev1alpha1.MarklogicGroup) containerParam
 		SecurityContext:    cr.Spec.ContainerSecurityContext,
 		LogCollection:      cr.Spec.LogCollection,
 		PathBasedRouting:   cr.Spec.PathBasedRouting,
+		Tls:                cr.Spec.Tls,
 	}
 
 	if cr.Spec.Storage != nil {
@@ -388,6 +443,53 @@ func generateVolumes(stsName string, containerParams containerParameters) []core
 				},
 			},
 		})
+	}
+	if containerParams.Tls != nil && containerParams.Tls.EnableOnDefaultAppServers {
+		volumes = append(volumes, corev1.Volume{
+			Name:         "certs",
+			VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}},
+		})
+		if containerParams.Tls.CaSecretName != "" {
+			volumes = append(volumes, corev1.Volume{
+				Name: "ca-cert-secret",
+				VolumeSource: corev1.VolumeSource{
+					Secret: &corev1.SecretVolumeSource{
+						SecretName: containerParams.Tls.CaSecretName,
+					},
+				},
+			})
+		}
+		if containerParams.Tls.CertSecretNames != nil && len(containerParams.Tls.CertSecretNames) > 0 {
+			projectionSources := []corev1.VolumeProjection{}
+			for i, secretName := range containerParams.Tls.CertSecretNames {
+				projectionSource := corev1.VolumeProjection{
+					Secret: &corev1.SecretProjection{
+						LocalObjectReference: corev1.LocalObjectReference{
+							Name: secretName,
+						},
+						Items: []corev1.KeyToPath{
+							{
+								Key:  "tls.crt",
+								Path: fmt.Sprintf("tls_%d.crt", i),
+							},
+							{
+								Key:  "tls.key",
+								Path: fmt.Sprintf("tls_%d.key", i),
+							},
+						},
+					},
+				}
+				projectionSources = append(projectionSources, projectionSource)
+			}
+			volumes = append(volumes, corev1.Volume{
+				Name: "server-cert-secrets",
+				VolumeSource: corev1.VolumeSource{
+					Projected: &corev1.ProjectedVolumeSource{
+						Sources: projectionSources,
+					},
+				},
+			})
+		}
 	}
 
 	return volumes
@@ -471,6 +573,21 @@ func getEnvironmentVariables(containerParams containerParameters) []corev1.EnvVa
 		}, corev1.EnvVar{
 			Name:  "MARKLOGIC_CLUSTER_TYPE",
 			Value: "bootstrap",
+		})
+	}
+
+	if containerParams.Tls != nil && containerParams.Tls.EnableOnDefaultAppServers {
+		envVars = append(envVars, corev1.EnvVar{
+			Name:  "MARKLOGIC_JOIN_TLS_ENABLED",
+			Value: "true",
+		}, corev1.EnvVar{
+			Name:  "MARKLOGIC_JOIN_CACERT_FILE",
+			Value: "marklogic-certs/cacert.pem",
+		})
+	} else {
+		envVars = append(envVars, corev1.EnvVar{
+			Name:  "MARKLOGIC_JOIN_TLS_ENABLED",
+			Value: "false",
 		})
 	}
 
