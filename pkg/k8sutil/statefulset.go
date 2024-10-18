@@ -637,6 +637,13 @@ func getVolumeMount(containerParams containerParameters) []corev1.VolumeMount {
 			},
 		)
 	}
+	if containerParams.Tls != nil && containerParams.Tls.EnableOnDefaultAppServers {
+		VolumeMounts = append(VolumeMounts,
+			corev1.VolumeMount{
+				Name:      "certs",
+				MountPath: "/run/secrets/marklogic-certs/",
+			})
+	}
 	return VolumeMounts
 }
 
