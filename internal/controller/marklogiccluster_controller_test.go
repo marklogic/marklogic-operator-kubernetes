@@ -105,6 +105,14 @@ var _ = Describe("MarklogicCluster Controller", func() {
 							},
 						},
 					},
+					Tls: &databasev1alpha1.Tls{
+						EnableOnDefaultAppServers: true,
+						CertSecretNames: []string{
+							"cert-secret-1",
+							"cert-secret-2",
+						},
+						CaSecretName: "ca-secret",
+					},
 				},
 			}
 			Expect(k8sClient.Create(ctx, mlCluster)).Should(Succeed())
@@ -140,6 +148,9 @@ var _ = Describe("MarklogicCluster Controller", func() {
 			Expect(clusterCR.Spec.NetworkPolicy.PodSelector).Should(Equal(metav1.LabelSelector{MatchLabels: map[string]string{"app.kubernetes.io/name": "marklogic", "app.kubernetes.io/instance": "dnode"}}))
 			Expect(clusterCR.Spec.NetworkPolicy.Ingress[0].From[0].PodSelector.MatchLabels).Should(Equal(map[string]string{"app.kubernetes.io/name": "marklogic", "app.kubernetes.io/instance": "dnode"}))
 			Expect(clusterCR.Spec.NetworkPolicy.Ingress[0].Ports[0].Port).Should(Equal(&intstr.IntOrString{IntVal: 8000}))
+			Expect(clusterCR.Spec.Tls.EnableOnDefaultAppServers).Should(Equal(true))
+			Expect(clusterCR.Spec.Tls.CertSecretNames).Should(ContainElements("cert-secret-1", "cert-secret-2"))
+			Expect(clusterCR.Spec.Tls.CaSecretName).Should(Equal("ca-secret"))
 		})
 	})
 })

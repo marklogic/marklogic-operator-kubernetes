@@ -80,6 +80,8 @@ type MarklogicGroupSpec struct {
 
 	Service          Service `json:"service,omitempty"`
 	PathBasedRouting bool    `json:"pathBasedRouting,omitempty"`
+
+	Tls *Tls `json:"tls,omitempty"`
 }
 
 // InternalState defines the observed state of MarklogicGroup
