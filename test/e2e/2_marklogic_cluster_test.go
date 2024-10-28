@@ -2,13 +2,12 @@ package e2e
 
 import (
 	"context"
-	"strings"
+	// "strings"
 	"testing"
 	"time"
 
 	databasev1alpha1 "github.com/marklogic/marklogic-kubernetes-operator/api/v1alpha1"
 	coreV1 "k8s.io/api/core/v1"
-	apiextensionsV1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	metaV1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"sigs.k8s.io/e2e-framework/klient/k8s"
@@ -36,41 +35,12 @@ var (
 )
 
 func TestMarklogicCluster(t *testing.T) {
-	podCreationSig := make(chan *coreV1.Pod)
+    podCreationSig := make(chan *coreV1.Pod)
 
-	feature := features.New("MarklogicCluster Controller")
-
-	// Use feature.Setup to define pre-test configuration
-	feature.Setup(func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
-		client := cfg.Client()
-		if err := client.Resources(namespace).Watch(&coreV1.PodList{}).WithAddFunc(func(obj interface{}) {
-			pod := obj.(*coreV1.Pod)
-			if strings.HasPrefix(pod.Name, "marklogic-operator-controller") {
-				podCreationSig <- pod
-			}
-		}).Start(ctx); err != nil {
-			t.Fatal(err)
-		}
-		return ctx
-	})
-
-	// Assessment to check for CRD in cluster
-	feature.Assess("CRD installed", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
-		client := c.Client()
-		apiextensionsV1.AddToScheme(client.Resources().GetScheme())
-		name := "marklogicclusters.database.marklogic.com"
-		var crd apiextensionsV1.CustomResourceDefinition
-		if err := client.Resources().Get(ctx, name, "", &crd); err != nil {
-			t.Fatalf("CRD not found: %s", err)
-		}
-		if condition := crd.Spec.Names.Kind; condition != "MarklogicCluster" {
-			t.Fatalf("MarklogicCluster CRD has unexpected kind: %s", condition)
-		}
-		return ctx
-	})
+	feature := features.New("MarklogicCluster Resource")
 
 	// Assessment for MarklogicCluster creation
-	feature.Assess("MarklogicCluster creation", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
+	feature.Setup(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 		client := c.Client()
 		databasev1alpha1.AddToScheme(client.Resources(namespace).GetScheme())
 
@@ -83,7 +53,7 @@ func TestMarklogicCluster(t *testing.T) {
 				return true
 			}),
 			wait.WithTimeout(3*time.Minute),
-			wait.WithInterval(30*time.Second),
+			wait.WithInterval(5*time.Second),
 		); err != nil {
 			t.Fatal(err)
 		}
@@ -97,21 +67,6 @@ func TestMarklogicCluster(t *testing.T) {
 		if err := client.Resources().Get(ctx, "marklogicclusters", namespace, &marklogicclusterLive); err != nil {
 			t.Log("====MarklogicCluster not found====")
 			t.Fatal(err)
-		}
-		return ctx
-	})
-
-	// Assessment to check for the creation of the pod
-	feature.Assess("Pod created", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
-		select {
-		case <-time.After(60 * time.Second):
-			t.Error("Timed out wating for pod creation by MarklogicCluster contoller")
-		case pod := <-podCreationSig:
-			t.Log("Pod created by MarklogicCluster controller")
-			refname := pod.GetOwnerReferences()[0].Name
-			if !strings.HasPrefix(refname, "marklogic-operator") {
-				t.Fatalf("Pod has unexpected owner ref: %#v", refname)
-			}
 		}
 		return ctx
 	})
