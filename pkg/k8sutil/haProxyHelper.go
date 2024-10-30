@@ -19,6 +19,7 @@ type HAProxyTemplateData struct {
 	NSName           string
 	ClusterName      string
 	SslCert          string
+	sslEnabledServer bool
 }
 
 // generates frontend config for HAProxy depending on pathBasedRouting flag
@@ -114,13 +115,14 @@ backend marklogic-{{ .PortNumber}}-backend
 			}
 			for i := 0; i < groupReplicas; i++ {
 				data := &HAProxyTemplateData{
-					PortNumber:  int(appServer.Port),
-					PodName:     name,
-					Path:        appServer.Path,
-					Index:       i,
-					ServiceName: name,
-					NSName:      cr.ObjectMeta.Namespace,
-					ClusterName: cr.Spec.ClusterDomain,
+					PortNumber:       int(appServer.Port),
+					PodName:          name,
+					Path:             appServer.Path,
+					Index:            i,
+					ServiceName:      name,
+					NSName:           cr.ObjectMeta.Namespace,
+					ClusterName:      cr.Spec.ClusterDomain,
+					sslEnabledServer: cr.Spec.Tls != nil && cr.Spec.Tls.EnableOnDefaultAppServers,
 				}
 				result += getBackendServerConfigs(data)
 			}
@@ -133,6 +135,10 @@ backend marklogic-{{ .PortNumber}}-backend
 func getBackendServerConfigs(data *HAProxyTemplateData) string {
 	backend := `
     server {{.PodName}}-{{.PortNumber}}-{{.Index}} {{.PodName}}-{{.Index}}.{{.ServiceName}}.{{.NSName}}.svc.{{.ClusterName}}:{{.PortNumber}} resolvers dns init-addr none cookie {{.PodName}}-{{.PortNumber}}-{{.Index}}`
+	if data.sslEnabledServer {
+		backend += " ssl verify none"
+	}
+
 	return parseTemplateToString(backend, data)
 }
 

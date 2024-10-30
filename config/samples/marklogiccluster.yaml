@@ -137,7 +137,8 @@ spec:
   #       ports:
   #         - protocol: TCP
   #           port: 8000
-
+  tls:
+    enableOnDefaultAppServers: true
   markLogicGroups:
   - replicas: 1
     name: dnode
@@ -151,6 +152,6 @@ spec:
     #     memory: "5Gi"
     #     cpu: "1"
     isBootstrap: true
-  - replicas: 1
-    name: enode
-    isBootstrap: false
+  # - replicas: 1
+  #   name: enode
+  #   isBootstrap: false

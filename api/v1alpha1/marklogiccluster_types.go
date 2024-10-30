@@ -26,6 +26,8 @@ import (
 // NOTE: json tags are required.  Any new fields you add must have json tags for the fields to be serialized.
 
 // MarklogicClusterSpec defines the desired state of MarklogicCluster
+
+// +kubebuilder:validation:XValidation:rule="!(self.haproxy.enabled == true && self.haproxy.pathBasedRouting == true) || int(self.image.split(':')[1].split('.')[0] + self.image.split(':')[1].split('.')[1]) >= 111", message="HAProxy and Pathbased Routing is enabled. PathBasedRouting is only supported for MarkLogic 11.1 and above"
 type MarklogicClusterSpec struct {
 	// INSERT ADDITIONAL SPEC FIELDS - desired state of cluster
 	// Important: Run "make" to regenerate code after modifying this file
@@ -45,23 +47,22 @@ type MarklogicClusterSpec struct {
 	TerminationGracePeriodSeconds *int64                       `json:"terminationGracePeriodSeconds,omitempty"`
 	// +kubebuilder:validation:Enum=OnDelete;RollingUpdate
 	// +kubebuilder:default:="OnDelete"
-	UpdateStrategy           appsv1.StatefulSetUpdateStrategyType `json:"updateStrategy,omitempty"`
-	NetworkPolicy            NetworkPolicy                        `json:"networkPolicy,omitempty"`
-	PodSecurityContext       *corev1.PodSecurityContext           `json:"podSecurityContext,omitempty"`
-	ContainerSecurityContext *corev1.SecurityContext              `json:"securityContext,omitempty"`
-
-	Affinity                  *corev1.Affinity                  `json:"affinity,omitempty"`
-	NodeSelector              map[string]string                 `json:"nodeSelector,omitempty"`
-	TopologySpreadConstraints []corev1.TopologySpreadConstraint `json:"topologySpreadConstraints,omitempty"`
-	PriorityClassName         string                            `json:"priorityClassName,omitempty"`
-	License                   *License                          `json:"license,omitempty"`
-	EnableConverters          bool                              `json:"enableConverters,omitempty"`
+	UpdateStrategy            appsv1.StatefulSetUpdateStrategyType `json:"updateStrategy,omitempty"`
+	NetworkPolicy             NetworkPolicy                        `json:"networkPolicy,omitempty"`
+	PodSecurityContext        *corev1.PodSecurityContext           `json:"podSecurityContext,omitempty"`
+	ContainerSecurityContext  *corev1.SecurityContext              `json:"securityContext,omitempty"`
+	Affinity                  *corev1.Affinity                     `json:"affinity,omitempty"`
+	NodeSelector              map[string]string                    `json:"nodeSelector,omitempty"`
+	TopologySpreadConstraints []corev1.TopologySpreadConstraint    `json:"topologySpreadConstraints,omitempty"`
+	PriorityClassName         string                               `json:"priorityClassName,omitempty"`
+	License                   *License                             `json:"license,omitempty"`
+	EnableConverters          bool                                 `json:"enableConverters,omitempty"`
 	// +kubebuilder:default:={enabled: false, mountPath: "/dev/hugepages"}
 	HugePages *HugePages `json:"hugePages,omitempty"`
 	// +kubebuilder:default:={enabled: false, image: "fluent/fluent-bit:3.1.1", resources: {requests: {cpu: "100m", memory: "200Mi"}, limits: {cpu: "200m", memory: "500Mi"}}, files: {errorLogs: true, accessLogs: true, requestLogs: true}, outputs: "stdout"}
 	LogCollection *LogCollection `json:"logCollection,omitempty"`
-
-	HAProxy HAProxy `json:"haproxy,omitempty"`
+	HAProxy       HAProxy        `json:"haproxy,omitempty"`
+	Tls           *Tls           `json:"tls,omitempty"`
 
 	MarkLogicGroups []*MarklogicGroups `json:"markLogicGroups,omitempty"`
 }
@@ -82,6 +83,14 @@ type MarklogicGroups struct {
 	LogCollection             *LogCollection                    `json:"logCollection,omitempty"`
 	HAProxy                   *HAProxy                          `json:"haproxy,omitempty"`
 	IsBootstrap               bool                              `json:"isBootstrap,omitempty"`
+	Tls                       *Tls                              `json:"tls,omitempty"`
+}
+
+type Tls struct {
+	// +kubebuilder:default:=false
+	EnableOnDefaultAppServers bool     `json:"enableOnDefaultAppServers,omitempty"`
+	CertSecretNames           []string `json:"certSecretNames,omitempty"`
+	CaSecretName              string   `json:"caSecretName,omitempty"`
 }
 
 // MarklogicClusterStatus defines the observed state of MarklogicCluster

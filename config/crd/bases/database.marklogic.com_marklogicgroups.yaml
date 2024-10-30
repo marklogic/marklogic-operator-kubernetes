@@ -4044,6 +4044,18 @@ spec:
               terminationGracePeriodSeconds:
                 format: int64
                 type: integer
+              tls:
+                properties:
+                  caSecretName:
+                    type: string
+                  certSecretNames:
+                    items:
+                      type: string
+                    type: array
+                  enableOnDefaultAppServers:
+                    default: false
+                    type: boolean
+                type: object
               topologySpreadConstraints:
                 items:
                   description: TopologySpreadConstraint specifies how to spread matching

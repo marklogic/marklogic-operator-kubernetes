@@ -492,7 +492,7 @@ function configure_tls {
     cat <<'EOF' > defaultCertificateTemplate.json
 {
     "template-name": "defaultTemplate",
-    "template-description": "defaultTemplate",
+    "template-description": "Default certificate template created by MarkLogic Kubernetes Operator", 
     "key-type": "rsa",
     "key-options": {
         "key-length": "2048"

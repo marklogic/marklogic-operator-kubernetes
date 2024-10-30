@@ -38,6 +38,7 @@ type MarkLogicGroupParameters struct {
 	IsBootstrap                   bool
 	LogCollection                 *databasev1alpha1.LogCollection
 	IsPathBasedRouting            bool
+	Tls                           *databasev1alpha1.Tls
 }
 
 type MarkLogicClusterParameters struct {
@@ -60,6 +61,7 @@ type MarkLogicClusterParameters struct {
 	LogCollection                 *databasev1alpha1.LogCollection
 	PodSecurityContext            *corev1.PodSecurityContext
 	ContainerSecurityContext      *corev1.SecurityContext
+	Tls                           *databasev1alpha1.Tls
 	TerminationGracePeriodSeconds *int64
 }
 
@@ -112,6 +114,7 @@ func GenerateMarkLogicGroupDef(cr *databasev1alpha1.MarklogicCluster, index int,
 			PodSecurityContext:            params.PodSecurityContext,
 			ContainerSecurityContext:      params.ContainerSecurityContext,
 			PathBasedRouting:              params.IsPathBasedRouting,
+			Tls:                           params.Tls,
 		},
 	}
 	AddOwnerRefToObject(MarkLogicGroupDef, ownerDef)
@@ -198,6 +201,7 @@ func generateMarkLogicClusterParams(cr *databasev1alpha1.MarklogicCluster) *Mark
 		Auth:                          cr.Spec.Auth,
 		PodSecurityContext:            cr.Spec.PodSecurityContext,
 		ContainerSecurityContext:      cr.Spec.ContainerSecurityContext,
+		Tls:                           cr.Spec.Tls,
 		TerminationGracePeriodSeconds: cr.Spec.TerminationGracePeriodSeconds,
 	}
 
@@ -229,6 +233,7 @@ func generateMarkLogicGroupParams(cr *databasev1alpha1.MarklogicCluster, index i
 		IsBootstrap:                   cr.Spec.MarkLogicGroups[index].IsBootstrap,
 		LogCollection:                 clusterParams.LogCollection,
 		IsPathBasedRouting:            cr.Spec.HAProxy.PathBasedRouting,
+		Tls:                           clusterParams.Tls,
 	}
 	if cr.Spec.MarkLogicGroups[index].Image != "" {
 		MarkLogicGroupParameters.Image = cr.Spec.MarkLogicGroups[index].Image
@@ -262,6 +267,9 @@ func generateMarkLogicGroupParams(cr *databasev1alpha1.MarklogicCluster, index i
 	}
 	if cr.Spec.MarkLogicGroups[index].LogCollection != nil {
 		MarkLogicGroupParameters.LogCollection = cr.Spec.MarkLogicGroups[index].LogCollection
+	}
+	if cr.Spec.MarkLogicGroups[index].Tls != nil {
+		MarkLogicGroupParameters.Tls = cr.Spec.MarkLogicGroups[index].Tls
 	}
 	return MarkLogicGroupParameters
 }
