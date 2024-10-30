@@ -15,61 +15,37 @@ func generateIngressDef(ingressMeta metav1.ObjectMeta, ownerRef metav1.OwnerRefe
 	pathType := networkingv1.PathTypePrefix
 	var ingressRules []networkingv1.IngressRule
 	for _, appServer := range cr.Spec.HAProxy.AppServers {
-		if appServer.Port == 8000 || appServer.Port == 8001 || appServer.Port == 8002 {
-			ingressRules = append(ingressRules, networkingv1.IngressRule{
-				Host: cr.Spec.Ingress.Host,
-				IngressRuleValue: networkingv1.IngressRuleValue{
-					HTTP: &networkingv1.HTTPIngressRuleValue{
-						Paths: []networkingv1.HTTPIngressPath{
-							{Path: appServer.Path,
-								PathType: &pathType,
-								Backend: networkingv1.IngressBackend{
-									Service: &networkingv1.IngressServiceBackend{
-										Name: "marklogic-haproxy",
-										Port: networkingv1.ServiceBackendPort{
-											Number: cr.Spec.HAProxy.FrontendPort,
-										},
+		ingressRules = append(ingressRules, networkingv1.IngressRule{
+			Host: cr.Spec.HAProxy.Ingress.Host,
+			IngressRuleValue: networkingv1.IngressRuleValue{
+				HTTP: &networkingv1.HTTPIngressRuleValue{
+					Paths: []networkingv1.HTTPIngressPath{
+						{Path: appServer.Path,
+							PathType: &pathType,
+							Backend: networkingv1.IngressBackend{
+								Service: &networkingv1.IngressServiceBackend{
+									Name: "marklogic-haproxy",
+									Port: networkingv1.ServiceBackendPort{
+										Number: cr.Spec.HAProxy.FrontendPort,
 									},
 								},
 							},
 						},
 					},
 				},
-			})
-		} else {
-			for _, additionalHost := range cr.Spec.Ingress.AdditionalHosts {
-				ingressRules = append(ingressRules, networkingv1.IngressRule{
-					Host: additionalHost,
-					IngressRuleValue: networkingv1.IngressRuleValue{
-						HTTP: &networkingv1.HTTPIngressRuleValue{
-							Paths: []networkingv1.HTTPIngressPath{
-								{Path: appServer.Path,
-									PathType: &pathType,
-									Backend: networkingv1.IngressBackend{
-										Service: &networkingv1.IngressServiceBackend{
-											Name: "marklogic-haproxy",
-											Port: networkingv1.ServiceBackendPort{
-												Number: cr.Spec.HAProxy.FrontendPort,
-											},
-										},
-									},
-								},
-							},
-						},
-					},
-				})
-			}
-		}
-	}
-	ingressSpec := networkingv1.IngressSpec{
-		IngressClassName: &cr.Spec.Ingress.IngressClassName,
-		Rules:            ingressRules,
-		TLS: []networkingv1.IngressTLS{
-			{
-				Hosts:      cr.Spec.Ingress.Tls.Hosts,
-				SecretName: cr.Spec.Ingress.Tls.SecretName,
 			},
-		},
+		})
+	}
+	for _, additionalHost := range cr.Spec.HAProxy.Ingress.AdditionalHosts {
+		ingressRules = append(ingressRules, additionalHost)
+	}
+
+	ingressSpec := networkingv1.IngressSpec{
+		IngressClassName: &cr.Spec.HAProxy.Ingress.IngressClassName,
+		Rules:            ingressRules,
+	}
+	if cr.Spec.HAProxy.Ingress.TLS != nil {
+		ingressSpec.TLS = []networkingv1.IngressTLS{*cr.Spec.HAProxy.Ingress.TLS}
 	}
 	ingressDef := &networkingv1.Ingress{
 		TypeMeta: metav1.TypeMeta{
@@ -98,7 +74,7 @@ func (cc *ClusterContext) getIngress(namespace string, ingressName string) (*net
 
 func generateIngress(ingressName string, cr *databasev1alpha1.MarklogicCluster) *networkingv1.Ingress {
 	labels := getMarkLogicLabels(cr.GetObjectMeta().GetName())
-	annotations := cr.Spec.Ingress.Annotations
+	annotations := cr.Spec.HAProxy.Ingress.Annotations
 	ingressObjectMeta := generateObjectMeta(ingressName, cr.Namespace, labels, annotations)
 	ingress := generateIngressDef(ingressObjectMeta, marklogicClusterAsOwner(cr), cr)
 	return ingress
@@ -151,4 +127,19 @@ func (cc *ClusterContext) ReconcileIngress() result.ReconcileResult {
 		logger.Info("MarkLogic Ingress is updated")
 	}
 	return result.Continue()
+}
+
+func (cc *ClusterContext) createIngress(namespace string) error {
+	logger := cc.ReqLogger
+	client := cc.Client
+	cr := cc.MarklogicCluster
+	ingressName := cr.ObjectMeta.Name + "-ingress"
+	ingress := generateIngress(ingressName, cr)
+	err := client.Create(cc.Ctx, ingress)
+	if err != nil {
+		logger.Error(err, "MarkLogic ingress creation has failed")
+		return err
+	}
+	logger.Info("MarkLogic service ingress is successful")
+	return nil
 }

@@ -31,8 +31,8 @@ controllerManager:
         drop:
         - ALL
     image:
-      repository: ml-marklogic-operator-dev.bed-artifactory.bedford.progress.com/marklogic-kubernetes-operator
-      tag: 1.0.0-ea2
+      repository: 308453789681.dkr.ecr.us-west-2.amazonaws.com/marklogic-kubernetes-operator
+      tag: 1.0.4-ingress
     resources:
       limits:
         cpu: 500m
@@ -40,6 +40,8 @@ controllerManager:
       requests:
         cpu: 10m
         memory: 64Mi
+  podSecurityContext:
+    runAsNonRoot: true
   replicas: 1
   serviceAccount:
     annotations: {}

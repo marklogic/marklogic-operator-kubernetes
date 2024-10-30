@@ -100,6 +100,7 @@ type HAProxy struct {
 	Resources    corev1.ResourceList `json:"resources,omitempty"`
 	Affinity     *corev1.Affinity    `json:"affinity,omitempty"`
 	NodeSelector map[string]string   `json:"nodeSelector,omitempty"`
+	Ingress      Ingress             `json:"ingress,omitempty"`
 }
 
 type AppServers struct {
@@ -151,11 +152,11 @@ type TlsForHAProxy struct {
 
 type Ingress struct {
 	// +kubebuilder:default:=false
-	Enabled          bool                    `json:"enabled,omitempty"`
-	IngressClassName string                  `json:"ingressClassName,omitempty"`
-	Labels           map[string]string       `json:"labels,omitempty"`
-	Annotations      map[string]string       `json:"annotations,omitempty"`
-	Host             string                  `json:"host,omitempty"`
-	Tls              networkingv1.IngressTLS `json:"tls,omitempty"`
-	AdditionalHosts  []string                `json:"additionalHosts,omitempty"`
+	Enabled          bool                       `json:"enabled,omitempty"`
+	IngressClassName string                     `json:"ingressClassName,omitempty"`
+	Labels           map[string]string          `json:"labels,omitempty"`
+	Annotations      map[string]string          `json:"annotations,omitempty"`
+	Host             string                     `json:"host,omitempty"`
+	TLS              *networkingv1.IngressTLS   `json:"tls,omitempty"`
+	AdditionalHosts  []networkingv1.IngressRule `json:"additionalHosts,omitempty"`
 }

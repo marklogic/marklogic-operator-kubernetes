@@ -62,7 +62,6 @@ type MarklogicClusterSpec struct {
 	LogCollection *LogCollection `json:"logCollection,omitempty"`
 
 	HAProxy HAProxy `json:"haproxy,omitempty"`
-	Ingress Ingress `json:"ingress,omitempty"`
 
 	MarkLogicGroups []*MarklogicGroups `json:"markLogicGroups,omitempty"`
 }

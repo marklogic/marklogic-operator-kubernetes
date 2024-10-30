@@ -124,7 +124,6 @@ backend marklogic-{{ .PortNumber}}-backend
 				}
 				result += getBackendServerConfigs(data)
 			}
-			result += "/n"
 		}
 	}
 
