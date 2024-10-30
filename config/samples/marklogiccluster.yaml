@@ -22,28 +22,28 @@ spec:
   ## It also support multi-statement transaction and ODBC connections.  
   ## Uncomment the following lines to enable HAProxy configuration
   haproxy: 
-    enabled: true
-    pathBasedRouting: true
-    frontendPort: 8080
-    tcpPorts:
-      enabled: true
-      ports:
-        - name: odbc
-          type: TCP
-          port: 5432
-    appServers:
-      - name: "app-service"
-        port: 8000
-        path: "/console"
-      - name: "admin"
-        port: 8001
-        path: "/adminUI"
-      - name: "manage"
-        port: 8002
-        path: "/manage"
-    stats:
-      enabled: true
-      port: 1024
+    enabled: false
+    # pathBasedRouting: true
+    # frontendPort: 8080
+    # tcpPorts:
+    #   enabled: true
+    #   ports:
+    #     - name: odbc
+    #       type: TCP
+    #       port: 5432
+    # appServers:
+    #   - name: "app-service"
+    #     port: 8000
+    #     path: "/console"
+    #   - name: "admin"
+    #     port: 8001
+    #     path: "/adminUI"
+    #   - name: "manage"
+    #     port: 8002
+    #     path: "/manage"
+    # stats:
+    #   enabled: true
+    #   port: 1024
   # resources:
   #   requests:
   #     memory: "4Gi"
