@@ -17,10 +17,10 @@ func TestOperatorReady(t *testing.T) {
 	podCreationSig := make(chan *coreV1.Pod)
 
 	feature := features.New("Operator Ready")
-
 	// Use feature.Setup to define pre-test configuration
 	feature.Setup(func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
 		client := cfg.Client()
+
 		if err := client.Resources(namespace).Watch(&coreV1.PodList{}).WithAddFunc(func(obj interface{}) {
 			pod := obj.(*coreV1.Pod)
 			if strings.HasPrefix(pod.Name, "marklogic-operator-controller") {

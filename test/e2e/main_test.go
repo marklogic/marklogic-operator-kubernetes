@@ -22,21 +22,25 @@ import (
 
 var (
 	testEnv env.Environment
+)
 
-	dockerImage  = "marklogic-controller:v0.0.1"
-	kustomizeVer = "v5.5.0"
-	ctrlgenVer   = "v0.16.4"
-	namespace    = "marklogic-operator-system"
+const (
+	dockerImage    = "ml-marklogic-operator-dev.bed-artifactory.bedford.progress.com/marklogic-kubernetes-operator:0.0.2"
+	kustomizeVer   = "v5.5.0"
+	ctrlgenVer     = "v0.16.5"
+	namespace      = "marklogic-operator-system"
+	marklogicImage = "marklogicdb/marklogic-db:11.2.0-ubi-rootless"
+	kubernetesVer  = "v1.30.4"
 )
 
 func TestMain(m *testing.M) {
 	testEnv = env.New()
-	kindClusterName := "kind-test"
+	kindClusterName := "test-cluster"
 	kindCluster := kind.NewCluster(kindClusterName)
 
 	// Use Environment.Setup to configure pre-test setup
 	testEnv.Setup(
-		envfuncs.CreateClusterWithConfig(kindCluster, kindClusterName, "kind-config.yaml", kind.WithImage("kindest/node:v1.30.4")),
+		envfuncs.CreateClusterWithConfig(kindCluster, kindClusterName, "kind-config.yaml", kind.WithImage("kindest/node:"+kubernetesVer)),
 		envfuncs.CreateNamespace(namespace),
 
 		// install tool dependencies
@@ -70,6 +74,9 @@ func TestMain(m *testing.M) {
 		func(ctx context.Context, cfg *envconf.Config) (context.Context, error) {
 			log.Println("Building source components...")
 
+			c := utils.RunCommand("controller-gen --version")
+			log.Printf("controller-gen: %s", c.Result())
+
 			// generate manifest files
 			log.Println("Generate manifests...")
 			wd, _ := os.Getwd()
@@ -100,6 +107,13 @@ func TestMain(m *testing.M) {
 				return ctx, err
 			}
 
+			// Load MarkLogic image into kind
+			log.Println("Loading docker image into kind cluster...")
+			if err := kindCluster.LoadImage(ctx, marklogicImage); err != nil {
+				log.Printf("Failed to load image into kind: %s", err)
+				return ctx, err
+			}
+
 			// Deploy components
 			log.Println("Deploying controller-manager resources...")
 			p := utils.RunCommand(`kubectl version`)
@@ -125,6 +139,9 @@ func TestMain(m *testing.M) {
 				return ctx, err
 			}
 
+			p = utils.RunCommand(`kubectl get nodes`)
+			log.Printf("Kind Nodes: %s", p.Result())
+
 			return ctx, nil
 		},
 	)
@@ -137,6 +154,7 @@ func TestMain(m *testing.M) {
 			return ctx, nil
 		},
 		envfuncs.DeleteNamespace(namespace),
+		// envfuncs.ExportClusterLogs(kindClusterName, "../../logs"),
 		envfuncs.DestroyCluster(kindClusterName),
 	)
 
