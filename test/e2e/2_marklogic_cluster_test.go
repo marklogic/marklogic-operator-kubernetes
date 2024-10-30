@@ -2,23 +2,18 @@ package e2e
 
 import (
 	"context"
-	// "strings"
-	"fmt"
 	"testing"
 	"time"
 
 	databasev1alpha1 "github.com/marklogic/marklogic-kubernetes-operator/api/v1alpha1"
-	corev1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	"sigs.k8s.io/e2e-framework/klient"
 	"sigs.k8s.io/e2e-framework/klient/k8s"
 	"sigs.k8s.io/e2e-framework/klient/wait"
 	"sigs.k8s.io/e2e-framework/klient/wait/conditions"
 	"sigs.k8s.io/e2e-framework/pkg/envconf"
 	"sigs.k8s.io/e2e-framework/pkg/features"
-	// "sigs.k8s.io/e2e-framework/support/utils"
+	"github.com/marklogic/marklogic-kubernetes-operator/test/utils"
 )
 
 var replicas = int32(1)
@@ -90,7 +85,7 @@ func TestMarklogicCluster(t *testing.T) {
 		client := c.Client()
 
 		podName := "dnode-0"
-		err := waitForPod(ctx, t, client, mlNamespace, podName, 60*time.Second)
+		err := utils.WaitForPod(ctx, t, client, mlNamespace, podName, 60*time.Second)
 		if err != nil {
 			t.Fatalf("Failed to wait for pod creation: %v", err)
 		}
@@ -107,25 +102,3 @@ func TestMarklogicCluster(t *testing.T) {
 	testEnv.Test(t, feature.Feature())
 }
 
-func waitForPod(ctx context.Context, t *testing.T, client klient.Client, namespace, podName string, timeout time.Duration) error {
-	start := time.Now()
-	pod := &corev1.Pod{}
-	for {
-		err := client.Resources(namespace).Get(ctx, podName, namespace, pod)
-		t.Logf("Pod %s is in phase %s", pod.Name, pod.Status.Phase)
-		if err == nil {
-			if pod.Status.Phase == "Running" {
-				return nil
-			}
-		} else if !errors.IsNotFound(err) {
-			t.Logf("Failed to get pod %s: %v", podName, err)
-			continue
-		}
-
-		if time.Since(start) > timeout {
-			return fmt.Errorf("timed out waiting for pod %s to be created", podName)
-		}
-
-		time.Sleep(5 * time.Second)
-	}
-}
