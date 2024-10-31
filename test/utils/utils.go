@@ -17,12 +17,18 @@ limitations under the License.
 package utils
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
 	"strings"
+	"testing"
+	"time"
 
 	. "github.com/onsi/ginkgo/v2" //nolint:golint,revive
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/errors"
+	"sigs.k8s.io/e2e-framework/klient"
 )
 
 const (
@@ -137,4 +143,27 @@ func GetProjectDir() (string, error) {
 	}
 	wd = strings.Replace(wd, "/test/e2e", "", -1)
 	return wd, nil
+}
+
+func WaitForPod(ctx context.Context, t *testing.T, client klient.Client, namespace, podName string, timeout time.Duration) error {
+	start := time.Now()
+	pod := &corev1.Pod{}
+	for {
+		err := client.Resources(namespace).Get(ctx, podName, namespace, pod)
+		t.Logf("Pod %s is in phase %s", pod.Name, pod.Status.Phase)
+		if err == nil {
+			if pod.Status.Phase == "Running" {
+				return nil
+			}
+		} else if !errors.IsNotFound(err) {
+			t.Logf("Failed to get pod %s: %v", podName, err)
+			continue
+		}
+
+		if time.Since(start) > timeout {
+			return fmt.Errorf("timed out waiting for pod %s to be created", podName)
+		}
+
+		time.Sleep(5 * time.Second)
+	}
 }

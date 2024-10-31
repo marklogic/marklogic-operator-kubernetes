@@ -118,7 +118,7 @@ test: manifests generate fmt vet envtest ## Run tests.
 # Utilize Kind or modify the e2e tests to load the image locally, enabling compatibility with other vendors.
 .PHONY: e2e-test  # Run the e2e tests against a Kind k8s instance that is spun up.
 e2e-test:
-	go test -v ./test/e2e
+	go test -v -count=1 ./test/e2e
 	
 GOLANGCI_LINT = $(shell pwd)/bin/golangci-lint
 GOLANGCI_LINT_VERSION ?= v1.54.2
@@ -212,8 +212,15 @@ CONTROLLER_GEN ?= $(LOCALBIN)/controller-gen
 ENVTEST ?= $(LOCALBIN)/setup-envtest
 
 ## Tool Versions
-KUSTOMIZE_VERSION ?= v5.2.1
-CONTROLLER_TOOLS_VERSION ?= v0.14.0
+KUSTOMIZE_VERSION ?= v5.5.0
+CONTROLLER_TOOLS_VERSION ?= v0.16.4
+
+export E2E_DOCKER_IMAGE ?= $(IMG)
+export E2E_KUSTOMIZE_VERSION ?= $(KUSTOMIZE_VERSION)
+export E2E_CONTROLLER_TOOLS_VERSION ?= $(CONTROLLER_TOOLS_VERSION)
+export E2E_MARKLOGIC_IMAGE_VERSION ?= marklogicdb/marklogic-db:11.2.0-ubi-rootless
+export E2E_KUBERNETES_VERSION ?= v1.30.4
+
 
 .PHONY: kustomize
 kustomize: $(KUSTOMIZE) ## Download kustomize locally if necessary. If wrong version is installed, it will be removed before downloading.
