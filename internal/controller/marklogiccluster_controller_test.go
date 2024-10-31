@@ -87,6 +87,11 @@ var _ = Describe("MarklogicCluster Controller", func() {
 							{Name: "AppServices", Type: "http", Port: 8000, TargetPort: 8000, Path: "/console"},
 							{Name: "Admin", Type: "http", Port: 8001, TargetPort: 8001, Path: "/adminUI"},
 							{Name: "Manage", Type: "http", Port: 8002, TargetPort: 8002, Path: "/manage"},
+						},
+						Ingress: databasev1alpha1.Ingress{
+							Enabled:          true,
+							IngressClassName: "alb",
+							Host:             "marklogic-cluster-test.cluster.local",
 						}},
 					NetworkPolicy: databasev1alpha1.NetworkPolicy{
 						Enabled:     true,
@@ -143,6 +148,10 @@ var _ = Describe("MarklogicCluster Controller", func() {
 			Expect(clusterCR.Spec.HAProxy.AppServers[0].Name).Should(Equal("AppServices"))
 			Expect(clusterCR.Spec.HAProxy.AppServers[0].Type).Should(Equal("http"))
 			Expect(clusterCR.Spec.HAProxy.AppServers[0].Port).Should(Equal(int32(8000)))
+			// Validating if Ingress is created successfully
+			Expect(clusterCR.Spec.HAProxy.Ingress.Enabled).Should(Equal(true))
+			Expect(clusterCR.Spec.HAProxy.Ingress.IngressClassName).Should(Equal("alb"))
+			Expect(clusterCR.Spec.HAProxy.Ingress.Host).Should(Equal("marklogic-cluster-test.cluster.local"))
 			// Validating if NetworkPolicy is created successfully
 			Expect(clusterCR.Spec.NetworkPolicy.PolicyTypes).Should(Equal(policy))
 			Expect(clusterCR.Spec.NetworkPolicy.PodSelector).Should(Equal(metav1.LabelSelector{MatchLabels: map[string]string{"app.kubernetes.io/name": "marklogic", "app.kubernetes.io/instance": "dnode"}}))

@@ -3,6 +3,8 @@ package k8sutil
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"sort"
+
 	"github.com/cisco-open/k8s-objectmatcher/patch"
 	databasev1alpha1 "github.com/marklogic/marklogic-kubernetes-operator/api/v1alpha1"
 	"github.com/marklogic/marklogic-kubernetes-operator/pkg/result"
@@ -13,7 +15,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
-	"sort"
 )
 
 func (cc *ClusterContext) ReconcileHAProxy() result.ReconcileResult {
