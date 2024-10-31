@@ -8,12 +8,12 @@ import (
 	databasev1alpha1 "github.com/marklogic/marklogic-kubernetes-operator/api/v1alpha1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
+	"github.com/marklogic/marklogic-kubernetes-operator/test/utils"
 	"sigs.k8s.io/e2e-framework/klient/k8s"
 	"sigs.k8s.io/e2e-framework/klient/wait"
 	"sigs.k8s.io/e2e-framework/klient/wait/conditions"
 	"sigs.k8s.io/e2e-framework/pkg/envconf"
 	"sigs.k8s.io/e2e-framework/pkg/features"
-	"github.com/marklogic/marklogic-kubernetes-operator/test/utils"
 )
 
 var replicas = int32(1)
@@ -101,4 +101,3 @@ func TestMarklogicCluster(t *testing.T) {
 	// submit the feature to be tested
 	testEnv.Test(t, feature.Feature())
 }
-

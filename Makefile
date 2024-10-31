@@ -215,6 +215,13 @@ ENVTEST ?= $(LOCALBIN)/setup-envtest
 KUSTOMIZE_VERSION ?= v5.5.0
 CONTROLLER_TOOLS_VERSION ?= v0.16.4
 
+export E2E_DOCKER_IMAGE ?= $(IMG)
+export E2E_KUSTOMIZE_VERSION ?= $(KUSTOMIZE_VERSION)
+export E2E_CONTROLLER_TOOLS_VERSION ?= $(CONTROLLER_TOOLS_VERSION)
+export E2E_MARKLOGIC_IMAGE_VERSION ?= marklogicdb/marklogic-db:11.2.0-ubi-rootless
+export E2E_KUBERNETES_VERSION ?= v1.30.4
+
+
 .PHONY: kustomize
 kustomize: $(KUSTOMIZE) ## Download kustomize locally if necessary. If wrong version is installed, it will be removed before downloading.
 $(KUSTOMIZE): $(LOCALBIN)

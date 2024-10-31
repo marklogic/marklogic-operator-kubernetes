@@ -22,21 +22,27 @@ import (
 
 var (
 	testEnv env.Environment
+	dockerImage    = os.Getenv("E2E_DOCKER_IMAGE") //"ml-marklogic-operator-dev.bed-artifactory.bedford.progress.com/marklogic-kubernetes-operator:0.0.2"
+	kustomizeVer   = os.Getenv("E2E_KUSTOMIZE_VERSION") 
+	ctrlgenVer     = os.Getenv("E2E_CONTROLLER_TOOLS_VERSION")
+	marklogicImage = os.Getenv("E2E_MARKLOGIC_IMAGE_VERSION")
+	kubernetesVer  = os.Getenv("E2E_KUBERNETES_VERSION")
 )
 
 const (
-	dockerImage    = "ml-marklogic-operator-dev.bed-artifactory.bedford.progress.com/marklogic-kubernetes-operator:0.0.2"
-	kustomizeVer   = "v5.5.0"
-	ctrlgenVer     = "v0.16.5"
 	namespace      = "marklogic-operator-system"
-	marklogicImage = "marklogicdb/marklogic-db:11.2.0-ubi-rootless"
-	kubernetesVer  = "v1.30.4"
 )
 
 func TestMain(m *testing.M) {
 	testEnv = env.New()
 	kindClusterName := "test-cluster"
 	kindCluster := kind.NewCluster(kindClusterName)
+
+	log.Printf("Docker image: %s", dockerImage)
+	log.Printf("Kustomize version: %s", kustomizeVer)
+	log.Printf("Controller-gen version: %s", ctrlgenVer)
+	log.Printf("MarkLogic image: %s", marklogicImage)
+	log.Printf("Kubernetes version: %s", kubernetesVer)
 
 	// Use Environment.Setup to configure pre-test setup
 	testEnv.Setup(
@@ -108,7 +114,7 @@ func TestMain(m *testing.M) {
 			}
 
 			// Load MarkLogic image into kind
-			log.Println("Loading docker image into kind cluster...")
+			log.Println("Loading marklogic image into kind cluster...")
 			if err := kindCluster.LoadImage(ctx, marklogicImage); err != nil {
 				log.Printf("Failed to load image into kind: %s", err)
 				return ctx, err
