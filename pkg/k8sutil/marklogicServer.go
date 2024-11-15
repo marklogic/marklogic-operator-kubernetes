@@ -17,6 +17,7 @@ import (
 type MarkLogicGroupParameters struct {
 	Replicas                      *int32
 	Name                          string
+	GroupConfig                   *databasev1alpha1.GroupConfig
 	Image                         string
 	ImagePullPolicy               string
 	ImagePullSecrets              []corev1.LocalObjectReference
@@ -96,6 +97,7 @@ func GenerateMarkLogicGroupDef(cr *databasev1alpha1.MarklogicCluster, index int,
 		Spec: databasev1alpha1.MarklogicGroupSpec{
 			Replicas:                      params.Replicas,
 			Name:                          params.Name,
+			GroupConfig:                   params.GroupConfig,
 			Auth:                          params.Auth,
 			Image:                         params.Image,
 			License:                       params.License,
@@ -137,6 +139,7 @@ func (cc *ClusterContext) ReconsileMarklogicCluster() (reconcile.Result, error) 
 		namespacedName := types.NamespacedName{Name: name, Namespace: namespace}
 		clusterParams := generateMarkLogicClusterParams(cr)
 		params := generateMarkLogicGroupParams(cr, i, clusterParams)
+		logger.Info("!!! ReconcileCluster MarkLogicGroup", "MarkLogicGroupParams", params)
 		markLogicGroupDef := GenerateMarkLogicGroupDef(operatorCR, i, params)
 		err := cc.Client.Get(cc.Ctx, namespacedName, currentMlg)
 		if err != nil {
@@ -209,10 +212,10 @@ func generateMarkLogicClusterParams(cr *databasev1alpha1.MarklogicCluster) *Mark
 }
 
 func generateMarkLogicGroupParams(cr *databasev1alpha1.MarklogicCluster, index int, clusterParams *MarkLogicClusterParameters) *MarkLogicGroupParameters {
-
 	MarkLogicGroupParameters := &MarkLogicGroupParameters{
 		Replicas:                      cr.Spec.MarkLogicGroups[index].Replicas,
 		Name:                          cr.Spec.MarkLogicGroups[index].Name,
+		GroupConfig:                   cr.Spec.MarkLogicGroups[index].GroupConfig,
 		Image:                         clusterParams.Image,
 		ImagePullPolicy:               clusterParams.ImagePullPolicy,
 		ImagePullSecrets:              clusterParams.ImagePullSecrets,
