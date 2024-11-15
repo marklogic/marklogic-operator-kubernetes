@@ -643,6 +643,11 @@ func (in *MarklogicGroups) DeepCopyInto(out *MarklogicGroups) {
 		*out = new(int32)
 		**out = **in
 	}
+	if in.GroupConfig != nil {
+		in, out := &in.GroupConfig, &out.GroupConfig
+		*out = new(GroupConfig)
+		**out = **in
+	}
 	if in.ImagePullSecrets != nil {
 		in, out := &in.ImagePullSecrets, &out.ImagePullSecrets
 		*out = make([]v1.LocalObjectReference, len(*in))

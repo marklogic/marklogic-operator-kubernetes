@@ -1965,9 +1965,9 @@ spec:
                                 change in the future.\nIncoming requests are matched
                                 against the host before the\nIngressRuleValue. If
                                 the host is unspecified, the Ingress routes all\ntraffic
-                                based on the specified IngressRuleValue.\n\n\nhost
-                                can be \"precise\" which is a domain name without
-                                the terminating dot of\na network host (e.g. \"foo.bar.com\")
+                                based on the specified IngressRuleValue.\n\nhost can
+                                be \"precise\" which is a domain name without the
+                                terminating dot of\na network host (e.g. \"foo.bar.com\")
                                 or \"wildcard\", which is a domain name\nprefixed
                                 with a single wildcard label (e.g. \"*.foo.com\").\nThe
                                 wildcard character '*' must appear by itself as the
@@ -2055,6 +2055,7 @@ spec:
                                                     format: int32
                                                     type: integer
                                                 type: object
+                                                x-kubernetes-map-type: atomic
                                             required:
                                             - name
                                             type: object
@@ -3308,6 +3309,13 @@ spec:
                               x-kubernetes-list-type: atomic
                           type: object
                       type: object
+                    groupConfig:
+                      properties:
+                        enableXdqpSsl:
+                          type: boolean
+                        name:
+                          type: string
+                      type: object
                     haproxy:
                       properties:
                         affinity:
@@ -4308,7 +4316,7 @@ spec:
                                       these may change in the future.\nIncoming requests
                                       are matched against the host before the\nIngressRuleValue.
                                       If the host is unspecified, the Ingress routes
-                                      all\ntraffic based on the specified IngressRuleValue.\n\n\nhost
+                                      all\ntraffic based on the specified IngressRuleValue.\n\nhost
                                       can be \"precise\" which is a domain name without
                                       the terminating dot of\na network host (e.g.
                                       \"foo.bar.com\") or \"wildcard\", which is a
@@ -4400,6 +4408,7 @@ spec:
                                                           format: int32
                                                           type: integer
                                                       type: object
+                                                      x-kubernetes-map-type: atomic
                                                   required:
                                                   - name
                                                   type: object

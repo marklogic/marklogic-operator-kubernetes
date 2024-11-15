@@ -70,6 +70,7 @@ type MarklogicClusterSpec struct {
 type MarklogicGroups struct {
 	Replicas                  *int32                            `json:"replicas,omitempty"`
 	Name                      string                            `json:"name,omitempty"`
+	GroupConfig               *GroupConfig                      `json:"groupConfig,omitempty"`
 	Image                     string                            `json:"image,omitempty"`
 	ImagePullPolicy           string                            `json:"imagePullPolicy,omitempty"`
 	ImagePullSecrets          []corev1.LocalObjectReference     `json:"imagePullSecrets,omitempty"`
