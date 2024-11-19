@@ -49,7 +49,6 @@ func TestMain(m *testing.M) {
 
 	// Use Environment.Setup to configure pre-test setup
 	testEnv.Setup(
-		// envfuncs.CreateClusterWithConfig(kindCluster, kindClusterName, "kind-config.yaml", kind.WithImage("kindest/node:"+kubernetesVer)),
 		envfuncs.CreateNamespace(namespace),
 
 		// install tool dependencies
@@ -126,8 +125,6 @@ func TestMain(m *testing.M) {
 			return ctx, nil
 		},
 		envfuncs.DeleteNamespace(namespace),
-		// envfuncs.ExportClusterLogs(kindClusterName, "../../logs"),
-		// envfuncs.DestroyCluster(kindClusterName),
 	)
 
 	// Use Environment.Run to launch the test
