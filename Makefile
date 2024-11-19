@@ -8,7 +8,7 @@ VERSION ?= 0.0.1
 export E2E_DOCKER_IMAGE ?= $(IMG)
 export E2E_KUSTOMIZE_VERSION ?= $(KUSTOMIZE_VERSION)
 export E2E_CONTROLLER_TOOLS_VERSION ?= $(CONTROLLER_TOOLS_VERSION)
-export E2E_MARKLOGIC_IMAGE_VERSION ?= marklogicdb/marklogic-db:11.2.0-ubi-rootless
+export E2E_MARKLOGIC_IMAGE_VERSION ?= progressofficial/marklogic-db:11.3.1-ubi-rootless-2.1.0
 export E2E_KUBERNETES_VERSION ?= v1.30.4
 
 
