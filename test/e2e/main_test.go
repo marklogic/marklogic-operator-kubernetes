@@ -17,7 +17,6 @@ import (
 	"sigs.k8s.io/e2e-framework/pkg/env"
 	"sigs.k8s.io/e2e-framework/pkg/envconf"
 	"sigs.k8s.io/e2e-framework/pkg/envfuncs"
-	// "sigs.k8s.io/e2e-framework/support/kind"
 	"sigs.k8s.io/e2e-framework/support/utils"
 )
 
@@ -36,8 +35,6 @@ const (
 
 func TestMain(m *testing.M) {
 	testEnv = env.New()
-	// kindClusterName := "test-cluster"
-	// kindCluster := kind.NewCluster(kindClusterName)
 	path := conf.ResolveKubeConfigFile()
 	cfg := envconf.NewWithKubeConfig(path)
 	testEnv = env.NewWithConfig(cfg)
@@ -88,7 +85,6 @@ func TestMain(m *testing.M) {
 
 			c := utils.RunCommand("controller-gen --version")
 			log.Printf("controller-gen: %s", c.Result())
-
 
 			// Deploy components
 			log.Println("Deploying controller-manager resources...")
