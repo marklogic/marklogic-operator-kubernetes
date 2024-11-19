@@ -117,8 +117,16 @@ test: manifests generate fmt vet envtest ## Run tests.
 
 # Utilize Kind or modify the e2e tests to load the image locally, enabling compatibility with other vendors.
 .PHONY: e2e-test  # Run the e2e tests against a Kind k8s instance that is spun up.
-e2e-test:
+e2e-test: 
 	go test -v -count=1 ./test/e2e
+
+
+e2e-setup-minikube: kustomize controller-gen build docker-build
+	minikube delete || true
+	minikube start --driver=docker --memory=8192 --cpus=2
+	minikube addons enable ingress
+	minikube image load $(IMG)
+	
 	
 GOLANGCI_LINT = $(shell pwd)/bin/golangci-lint
 GOLANGCI_LINT_VERSION ?= v1.54.2

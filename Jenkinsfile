@@ -125,8 +125,10 @@ void runTests() {
 }
 
 void runE2eTests() {
-    //TODO: this is just a place holder as kuttl needs a proper environment
-    sh "echo make e2e-tests dockerImage=${params.dockerImage}"
+    sh '''
+        make e2e-setup-minikube
+        make e2e-test
+    '''
 }
 
 pipeline {
