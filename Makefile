@@ -128,11 +128,31 @@ e2e-test:
 	go test -v -count=1 ./test/e2e
 	minikube delete || true
 
+.PHONY: e2e-setup-minikube
 e2e-setup-minikube: kustomize controller-gen build docker-build
 	minikube delete || true
 	minikube start --driver=docker --kubernetes-version=$(E2E_KUBERNETES_VERSION) --memory=8192 --cpus=2
 	minikube addons enable ingress
 	minikube image load $(IMG)
+
+.PHONY: e2e-test-hugepages
+e2e-test-hugepages:
+	@echo "=====Setting hugepages value to 1280 for hugepages-e2e test"
+	sudo sysctl -w vm.nr_hugepages=1280
+
+	@echo "=====Restart minikube cluster"
+	minikube stop
+	minikube start
+
+	@echo "=====Running hugepages e2e test"
+	go test -v -count=1 ./test/e2e -verifyHugePages
+
+	@echo "=====Resetting hugepages value to 0"
+	sudo sysctl -w vm.nr_hugepages=0
+
+	@echo "=====Restart minikube cluster"
+	minikube stop
+	minikube start
 	
 GOLANGCI_LINT = $(shell pwd)/bin/golangci-lint
 GOLANGCI_LINT_VERSION ?= v1.54.2
