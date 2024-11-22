@@ -128,6 +128,7 @@ void runE2eTests() {
     sh '''
         make e2e-setup-minikube
         make e2e-test
+        make e2e-test-hugepages
     '''
 }
 
