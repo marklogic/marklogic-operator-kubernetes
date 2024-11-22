@@ -19,7 +19,7 @@ import (
 var replicas = int32(1)
 
 const (
-	groupName   = "dnode"
+	groupName   = "node"
 	mlNamespace = "default"
 )
 
@@ -84,8 +84,8 @@ func TestMarklogicCluster(t *testing.T) {
 	feature.Assess("MarklogicCluster Pod created", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 		client := c.Client()
 
-		podName := "dnode-0"
-		err := utils.WaitForPod(ctx, t, client, mlNamespace, podName, 60*time.Second)
+		podName := "node-0"
+		err := utils.WaitForPod(ctx, t, client, mlNamespace, podName, 90*time.Second)
 		if err != nil {
 			t.Fatalf("Failed to wait for pod creation: %v", err)
 		}

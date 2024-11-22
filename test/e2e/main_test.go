@@ -11,32 +11,35 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"sigs.k8s.io/e2e-framework/klient/conf"
 	"sigs.k8s.io/e2e-framework/klient/wait"
 	"sigs.k8s.io/e2e-framework/klient/wait/conditions"
 	"sigs.k8s.io/e2e-framework/pkg/env"
 	"sigs.k8s.io/e2e-framework/pkg/envconf"
 	"sigs.k8s.io/e2e-framework/pkg/envfuncs"
-	"sigs.k8s.io/e2e-framework/support/kind"
 	"sigs.k8s.io/e2e-framework/support/utils"
 )
 
 var (
-	testEnv env.Environment
-	dockerImage    = os.Getenv("E2E_DOCKER_IMAGE") //"ml-marklogic-operator-dev.bed-artifactory.bedford.progress.com/marklogic-kubernetes-operator:0.0.2"
-	kustomizeVer   = os.Getenv("E2E_KUSTOMIZE_VERSION") 
+	testEnv        env.Environment
+	dockerImage    = os.Getenv("E2E_DOCKER_IMAGE")
+	kustomizeVer   = os.Getenv("E2E_KUSTOMIZE_VERSION")
 	ctrlgenVer     = os.Getenv("E2E_CONTROLLER_TOOLS_VERSION")
 	marklogicImage = os.Getenv("E2E_MARKLOGIC_IMAGE_VERSION")
 	kubernetesVer  = os.Getenv("E2E_KUBERNETES_VERSION")
 )
 
 const (
-	namespace      = "marklogic-operator-system"
+	namespace = "marklogic-operator-system"
 )
 
 func TestMain(m *testing.M) {
 	testEnv = env.New()
-	kindClusterName := "test-cluster"
-	kindCluster := kind.NewCluster(kindClusterName)
+	path := conf.ResolveKubeConfigFile()
+	cfg := envconf.NewWithKubeConfig(path)
+	testEnv = env.NewWithConfig(cfg)
+
+	log.Printf("Running tests with the following configurations: path=%s", path)
 
 	log.Printf("Docker image: %s", dockerImage)
 	log.Printf("Kustomize version: %s", kustomizeVer)
@@ -46,7 +49,6 @@ func TestMain(m *testing.M) {
 
 	// Use Environment.Setup to configure pre-test setup
 	testEnv.Setup(
-		envfuncs.CreateClusterWithConfig(kindCluster, kindClusterName, "kind-config.yaml", kind.WithImage("kindest/node:"+kubernetesVer)),
 		envfuncs.CreateNamespace(namespace),
 
 		// install tool dependencies
@@ -83,43 +85,6 @@ func TestMain(m *testing.M) {
 			c := utils.RunCommand("controller-gen --version")
 			log.Printf("controller-gen: %s", c.Result())
 
-			// generate manifest files
-			log.Println("Generate manifests...")
-			wd, _ := os.Getwd()
-			log.Print(wd) // Output current working directory
-			if p := utils.RunCommand(`controller-gen rbac:roleName=manager-role crd webhook paths="./..." output:crd:artifacts:config=config/crd/bases`); p.Err() != nil {
-				log.Printf("Failed to generate manifests: %s: %s", p.Err(), p.Result())
-				return ctx, p.Err()
-			}
-
-			// generate api objects
-			log.Println("Generate API objects...")
-			if p := utils.RunCommand(`controller-gen object:headerFile="hack/boilerplate.go.txt" paths="./..."`); p.Err() != nil {
-				log.Printf("Failed to generate API objects: %s: %s", p.Err(), p.Result())
-				return ctx, p.Err()
-			}
-
-			// Build docker image
-			log.Println("Building docker image...")
-			if p := utils.RunCommand(fmt.Sprintf("docker build -t %s .", dockerImage)); p.Err() != nil {
-				log.Printf("Failed to build docker image: %s: %s", p.Err(), p.Result())
-				return ctx, p.Err()
-			}
-
-			// Load docker image into kind
-			log.Println("Loading docker image into kind cluster...")
-			if err := kindCluster.LoadImage(ctx, dockerImage); err != nil {
-				log.Printf("Failed to load image into kind: %s", err)
-				return ctx, err
-			}
-
-			// Load MarkLogic image into kind
-			log.Println("Loading marklogic image into kind cluster...")
-			if err := kindCluster.LoadImage(ctx, marklogicImage); err != nil {
-				log.Printf("Failed to load image into kind: %s", err)
-				return ctx, err
-			}
-
 			// Deploy components
 			log.Println("Deploying controller-manager resources...")
 			p := utils.RunCommand(`kubectl version`)
@@ -146,7 +111,7 @@ func TestMain(m *testing.M) {
 			}
 
 			p = utils.RunCommand(`kubectl get nodes`)
-			log.Printf("Kind Nodes: %s", p.Result())
+			log.Printf("Kubernetes Nodes: %s", p.Result())
 
 			return ctx, nil
 		},
@@ -160,8 +125,6 @@ func TestMain(m *testing.M) {
 			return ctx, nil
 		},
 		envfuncs.DeleteNamespace(namespace),
-		// envfuncs.ExportClusterLogs(kindClusterName, "../../logs"),
-		envfuncs.DestroyCluster(kindClusterName),
 	)
 
 	// Use Environment.Run to launch the test
