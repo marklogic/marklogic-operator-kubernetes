@@ -2,10 +2,14 @@ package e2e
 
 import (
 	"context"
+	"fmt"
+	"strings"
 	"testing"
 	"time"
 
 	databasev1alpha1 "github.com/marklogic/marklogic-kubernetes-operator/api/v1alpha1"
+	coreV1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/marklogic/marklogic-kubernetes-operator/test/utils"
@@ -19,11 +23,13 @@ import (
 var replicas = int32(1)
 
 const (
-	groupName   = "dnode"
+	groupName   = "node"
 	mlNamespace = "default"
 )
 
 var (
+	adminUsername    = "admin"
+	adminPassword    = "Admin@8001"
 	marklogiccluster = &databasev1alpha1.MarklogicCluster{
 		TypeMeta: metav1.TypeMeta{
 			APIVersion: "marklogic.com/v1alpha1",
@@ -35,6 +41,10 @@ var (
 		},
 		Spec: databasev1alpha1.MarklogicClusterSpec{
 			Image: marklogicImage,
+			Auth: &databasev1alpha1.AdminAuth{
+				AdminUsername: &adminUsername,
+				AdminPassword: &adminPassword,
+			},
 			MarkLogicGroups: []*databasev1alpha1.MarklogicGroups{
 				{
 					Name:        groupName,
@@ -84,13 +94,58 @@ func TestMarklogicCluster(t *testing.T) {
 	feature.Assess("MarklogicCluster Pod created", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 		client := c.Client()
 
-		podName := "dnode-0"
+		podName := "node-0"
 		err := utils.WaitForPod(ctx, t, client, mlNamespace, podName, 90*time.Second)
 		if err != nil {
 			t.Fatalf("Failed to wait for pod creation: %v", err)
 		}
 		return ctx
 
+	})
+
+	// Update the MarkLogic group resources
+	feature.Setup(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
+		t.Log("Updating MarkLogic group resources")
+		client := c.Client()
+		var mlcluster databasev1alpha1.MarklogicCluster
+		var resources = coreV1.ResourceRequirements{
+			Requests: coreV1.ResourceList{
+				"memory": resource.MustParse("8Gi"),
+			},
+			Limits: coreV1.ResourceList{
+				"memory":        resource.MustParse("8Gi"),
+				"hugepages-2Mi": resource.MustParse("1Gi"),
+			},
+		}
+		if err := client.Resources().Get(ctx, "marklogicclusters", mlNamespace, &mlcluster); err != nil {
+			t.Fatal(err)
+		}
+		// Set the resources for the MarkLogic group
+		mlcluster.Spec.MarkLogicGroups[0].Resources = &resources
+		if err := client.Resources().Update(ctx, &mlcluster); err != nil {
+			t.Log("Failed to update MarkLogic group resources")
+			t.Fatal(err)
+		}
+		return ctx
+	})
+
+	// Assessment to verify the hugepages is configured
+	feature.Assess("Verify Huge pages", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
+		podName := "node-0"
+		containerName := "marklogic-server"
+		cmd := fmt.Sprintf("cat /proc/meminfo | grep Huge")
+
+		output, err := utils.ExecCmdInPod(podName, mlNamespace, containerName, cmd)
+		if err != nil {
+			t.Fatalf("Failed to execute kubectl command in pod: %v", err)
+		}
+		actualOutput := strings.TrimSpace(output)
+		expectedOutput := strings.TrimSpace("HugePages_Total:    1280")
+
+		if !strings.Contains(string(actualOutput), expectedOutput) {
+			t.Fatal("Huge Pages not configured for the node")
+		}
+		return ctx
 	})
 
 	// Using feature.Teardown to clean up

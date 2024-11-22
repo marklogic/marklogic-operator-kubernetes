@@ -17,6 +17,7 @@ limitations under the License.
 package utils
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"os"
@@ -28,6 +29,9 @@ import (
 	. "github.com/onsi/ginkgo/v2" //nolint:golint,revive
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
 	"sigs.k8s.io/e2e-framework/klient"
 )
 
@@ -166,4 +170,43 @@ func WaitForPod(ctx context.Context, t *testing.T, client klient.Client, namespa
 
 		time.Sleep(5 * time.Second)
 	}
+}
+
+// util function to get secret data
+func GetSecretData(config *rest.Config, namespace, secretName string) (string, string, error) {
+	clientset, err := kubernetes.NewForConfig(config)
+	if err != nil {
+		return "", "", fmt.Errorf("Failed to create Kubernetes client: %s", err)
+	}
+
+	secret, err := clientset.CoreV1().Secrets(namespace).Get(context.TODO(), secretName, metav1.GetOptions{})
+	if err != nil {
+		return "", "", fmt.Errorf("Failed to get secret: %s", err)
+	}
+
+	username, ok := secret.Data["username"]
+	if !ok {
+		return "", "", fmt.Errorf("username not found in secret data")
+	}
+	password, ok := secret.Data["password"]
+	if !ok {
+		return "", "", fmt.Errorf("password not found in secret data")
+	}
+
+	return string(username), string(password), nil
+}
+
+func ExecCmdInPod(podName, namespace, containerName, curlCommand string) (string, error) {
+	cmd := exec.Command("kubectl", "exec", podName, "-n", namespace, "-c", containerName, "--", "sh", "-c", curlCommand)
+
+	var out bytes.Buffer
+	var stderr bytes.Buffer
+	cmd.Stdout = &out
+	cmd.Stderr = &stderr
+
+	err := cmd.Run()
+	if err != nil {
+		return "", fmt.Errorf("failed to execute command: %v, stderr: %v", err, stderr.String())
+	}
+	return out.String(), nil
 }
