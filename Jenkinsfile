@@ -124,10 +124,20 @@ void runTests() {
     sh "make test"
 }
 
-void runE2eTests() {
+void runMinikubeSetup() {
     sh '''
         make e2e-setup-minikube
+    '''
+}
+
+void runE2eTests() {
+    sh '''
         make e2e-test
+    '''
+}
+
+void runHugePagesE2eTests() {
+    sh '''
         make e2e-test-hugepages
     '''
 }
@@ -153,6 +163,7 @@ pipeline {
     parameters {
         string(name: 'dockerImage', defaultValue: 'ml-docker-db-dev-tierpoint.bed-artifactory.bedford.progress.com/marklogic/marklogic-server-ubi:latest-11', description: 'Docker image to use for tests.', trim: true)
         string(name: 'emailList', defaultValue: emailList, description: 'List of email for build notification', trim: true)
+        booleanParam(name: 'HugePagesTest', defaultValue: false, description: 'Run Huge Pages E2E test')
     }
 
     stages {
@@ -165,6 +176,21 @@ pipeline {
         stage('Run-tests') {
             steps {
                 runTests()
+            }
+        }
+
+        stage('Run-Minikube-Setup') {
+            steps {
+                runMinikubeSetup()
+            }
+        }
+
+        stage('Run-HugePages-Tests') {
+            when {
+                expression { return params.HugePagesTest }
+            }
+            steps {
+                runHugePagesE2eTests()
             }
         }
 

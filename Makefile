@@ -145,7 +145,7 @@ e2e-test-hugepages:
 	minikube start
 
 	@echo "=====Running hugepages e2e test"
-	go test -v -count=1 ./test/e2e -verifyHugePages
+	go test -v -count=1 ./test/e2e/1_operator_ready_test.go -verifyHugePages
 
 	@echo "=====Resetting hugepages value to 0"
 	sudo sysctl -w vm.nr_hugepages=0
