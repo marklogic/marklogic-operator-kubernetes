@@ -196,8 +196,8 @@ func GetSecretData(config *rest.Config, namespace, secretName string) (string, s
 	return string(username), string(password), nil
 }
 
-func ExecCmdInPod(podName, namespace, containerName, curlCommand string) (string, error) {
-	cmd := exec.Command("kubectl", "exec", podName, "-n", namespace, "-c", containerName, "--", "sh", "-c", curlCommand)
+func ExecCmdInPod(podName, namespace, containerName, command string) (string, error) {
+	cmd := exec.Command("kubectl", "exec", podName, "-n", namespace, "-c", containerName, "--", "sh", "-c", command)
 
 	var out bytes.Buffer
 	var stderr bytes.Buffer
