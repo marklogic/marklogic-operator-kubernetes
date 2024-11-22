@@ -111,7 +111,7 @@ func TestMain(m *testing.M) {
 			}
 
 			p = utils.RunCommand(`kubectl get nodes`)
-			log.Printf("Kind Nodes: %s", p.Result())
+			log.Printf("Kubernetes Nodes: %s", p.Result())
 
 			return ctx, nil
 		},

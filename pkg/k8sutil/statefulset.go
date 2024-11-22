@@ -196,7 +196,7 @@ func generateStatefulSetsDef(stsMeta metav1.ObjectMeta, params statefulSetParame
 					Labels: stsMeta.GetLabels(),
 				},
 				Spec: corev1.PodSpec{
-					Containers:                    generateContainerDef(stsMeta.GetName(), containerParams),
+					Containers:                    generateContainerDef("marklogic-server", containerParams),
 					TerminationGracePeriodSeconds: params.TerminationGracePeriodSeconds,
 					SecurityContext:               containerParams.PodSecurityContext,
 					Volumes:                       generateVolumes(stsMeta.Name, containerParams),
