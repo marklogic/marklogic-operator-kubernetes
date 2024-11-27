@@ -139,17 +139,16 @@ func TestMarklogicCluster(t *testing.T) {
 		feature.Assess("Verify Huge pages", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 			podName := "node-0"
 			containerName := "marklogic-server"
-			cmd := fmt.Sprintf("cat /proc/meminfo | grep Huge")
+			cmd := fmt.Sprintf("cat /var/opt/MarkLogic/Logs/ErrorLog.txt")
 
 			output, err := utils.ExecCmdInPod(podName, mlNamespace, containerName, cmd)
 			if err != nil {
 				t.Fatalf("Failed to execute kubectl command in pod: %v", err)
 			}
-			actualOutput := strings.TrimSpace(output)
-			expectedOutput := strings.TrimSpace("HugePages_Total:    1280")
+			expectedOutput := "Linux Huge Pages: detected 1280"
 
-			if !strings.Contains(string(actualOutput), expectedOutput) {
-				t.Fatal("Huge Pages not configured for the node")
+			if !strings.Contains(string(output), expectedOutput) {
+				t.Fatal("Huge Pages not configured for the MarLogic node")
 			}
 			return ctx
 		})

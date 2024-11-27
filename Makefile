@@ -122,11 +122,10 @@ vet: ## Run go vet against code.
 test: manifests generate fmt vet envtest ## Run tests.
 	KUBEBUILDER_ASSETS="$(shell $(ENVTEST) use $(ENVTEST_K8S_VERSION) --bin-dir $(LOCALBIN) -p path)" go test -v $$(go list ./... | grep -v /e2e) -coverprofile cover.out
 
-# Utilize Kind or modify the e2e tests to load the image locally, enabling compatibility with other vendors.
-.PHONY: e2e-test  # Run the e2e tests against a Kind k8s instance that is spun up.
+# Utilize minikube or modify the e2e tests to load the image locally, enabling compatibility with other vendors.
+.PHONY: e2e-test  # Run the e2e tests against a minikube k8s instance that is spun up.
 e2e-test: 
 	go test -v -count=1 ./test/e2e
-	minikube delete || true
 
 .PHONY: e2e-setup-minikube
 e2e-setup-minikube: kustomize controller-gen build docker-build
@@ -145,7 +144,7 @@ e2e-test-hugepages:
 	minikube start
 
 	@echo "=====Running hugepages e2e test"
-	go test -v -count=1 ./test/e2e/1_operator_ready_test.go -verifyHugePages
+	go test -v -count=1 ./test/e2e -verifyHugePages
 
 	@echo "=====Resetting hugepages value to 0"
 	sudo sysctl -w vm.nr_hugepages=0
@@ -153,6 +152,11 @@ e2e-test-hugepages:
 	@echo "=====Restart minikube cluster"
 	minikube stop
 	minikube start
+
+.PHONY: e2e-cleanup-minikube
+e2e-cleanup-minikube:
+	@echo "=====Delete minikube cluster"
+	minikube delete
 	
 GOLANGCI_LINT = $(shell pwd)/bin/golangci-lint
 GOLANGCI_LINT_VERSION ?= v1.54.2
