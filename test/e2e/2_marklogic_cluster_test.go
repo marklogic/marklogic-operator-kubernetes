@@ -2,6 +2,7 @@ package e2e
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
@@ -59,6 +60,7 @@ var (
 			},
 		},
 	}
+	dashboardUID     = "fluent-bit"
 	dashboardPayload = `{
 		"dashboard": {
 			"panels": [
@@ -79,6 +81,11 @@ var (
 	}`
 	dataSourcePayload = `{"name": "Loki","type": "loki","url": "http://loki-gateway.loki.svc.cluster.local", "access": "proxy","basicAuth": false}`
 )
+
+type DashboardResponse struct {
+	UID    string `json:"uid"`
+	Status string `json:"status"`
+}
 
 func TestMarklogicCluster(t *testing.T) {
 	feature := features.New("MarklogicCluster Resource")
@@ -116,7 +123,7 @@ func TestMarklogicCluster(t *testing.T) {
 		}
 
 		// Get Grafana admin password
-		grafanaAdminUser, grafanaAdminPassword, err := utils.GetSecretData(ctx, client, "grafana", "grafana", "admin-username", "admin-password")
+		grafanaAdminUser, grafanaAdminPassword, err := utils.GetSecretData(ctx, client, "grafana", "grafana", "admin-user", "admin-password")
 		if err != nil {
 			t.Fatalf("Failed to get Grafana admin user and password: %v", err)
 		}
@@ -158,7 +165,12 @@ func TestMarklogicCluster(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Failed to execute kubectl command in grafana pod: %v", err)
 		}
-		if !strings.Contains(string(output), `"status":"success"`) {
+		var dashboardResponse DashboardResponse
+		if err := json.Unmarshal([]byte(output), &dashboardResponse); err != nil {
+			t.Fatalf("Failed to unmarshal JSON response: %v", err)
+		}
+		dashboardUID = dashboardResponse.UID
+		if dashboardResponse.Status != "success" {
 			t.Fatal("Failed to create dashboard with loki and fluent-bit")
 		}
 		return ctx
@@ -206,6 +218,32 @@ func TestMarklogicCluster(t *testing.T) {
 		}
 		return ctx
 
+	})
+
+	// Assessment to check for Fluent Bit logs
+	feature.Assess("Grafana Dashboard created", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
+		client := c.Client()
+		podList := &corev1.PodList{}
+		if err := client.Resources().List(ctx, podList, func(lo *metav1.ListOptions) {
+			lo.FieldSelector = "metadata.namespace=" + "grafana"
+		}); err != nil {
+			t.Fatal(err)
+		}
+		grafanaPodName := podList.Items[0].Name
+		grafanaAdminUser, grafanaAdminPassword, err := utils.GetSecretData(ctx, client, "grafana", "grafana", "admin-user", "admin-password")
+		if err != nil {
+			t.Fatalf("Failed to get Grafana admin user and password: %v", err)
+		}
+		grafanaURL := "http://localhost:3000"
+		curlCommand := fmt.Sprintf(`curl -u %s:%s %s/api/dashboards/uid/%s`, grafanaAdminUser, grafanaAdminPassword, grafanaURL, dashboardUID)
+		output, err := utils.ExecCmdInPod(grafanaPodName, "grafana", "grafana", curlCommand)
+		if err != nil {
+			t.Fatalf("Failed to execute kubectl command in grafana pod: %v", err)
+		}
+		if !strings.Contains(string(output), "Fluent Bit Dashboard") {
+			t.Fatal("Failed to associate Fluent Bit as filter in Grafana dashboard")
+		}
+		return ctx
 	})
 
 	// Using feature.Teardown to clean up
