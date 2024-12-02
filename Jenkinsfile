@@ -136,9 +136,9 @@ void runE2eTests() {
     '''
 }
 
-void runHugePagesE2eTests() {
+void runMinikubeCleanup() {
     sh '''
-        make e2e-test-hugepages
+        make e2e-cleanup-minikube
     '''
 }
 
@@ -163,7 +163,6 @@ pipeline {
     parameters {
         string(name: 'dockerImage', defaultValue: 'ml-docker-db-dev-tierpoint.bed-artifactory.bedford.progress.com/marklogic/marklogic-server-ubi:latest-11', description: 'Docker image to use for tests.', trim: true)
         string(name: 'emailList', defaultValue: emailList, description: 'List of email for build notification', trim: true)
-        booleanParam(name: 'HugePagesTest', defaultValue: true, description: 'Run Huge Pages E2E test')
     }
 
     stages {
@@ -186,23 +185,14 @@ pipeline {
         }
 
         stage('Run-e2e-Tests') {
-            when { not { return params.HugePagesTest } }
             steps {
                 runE2eTests()
-            }
-        }
-        stage('Run-e2e-Tests-Including-HugePages') {
-            when { expression { return params.HugePagesTest } }
-            steps {
-                runHugePagesE2eTests()
             }
         }
 
         stage('Cleanup Environment') {
             steps {
-                sh '''
-                    make e2e-cleanup-minikube
-                '''
+                runMinikubeCleanup()
             }
         }
         
