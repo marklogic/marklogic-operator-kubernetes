@@ -125,14 +125,34 @@ test: manifests generate fmt vet envtest ## Run tests.
 # Utilize minikube or modify the e2e tests to load the image locally, enabling compatibility with other vendors.
 .PHONY: e2e-test  # Run the e2e tests against a minikube k8s instance that is spun up.
 e2e-test: 
-	go test -v -count=1 ./test/e2e
-	minikube delete || true
+	@echo "=====Setting hugepages value to 1280 for hugepages-e2e test"
+	sudo sysctl -w vm.nr_hugepages=1280
 
+	@echo "=====Restart minikube cluster to apply hugepages value"
+	minikube stop
+	minikube start
+
+	@echo "=====Running e2e test including hugepages test"
+	go test -v -count=1 ./test/e2e -verifyHugePages
+
+	@echo "=====Resetting hugepages value to 0"
+	sudo sysctl -w vm.nr_hugepages=0
+
+	@echo "=====Restart minikube cluster"
+	minikube stop
+	minikube start
+
+.PHONY: e2e-setup-minikube
 e2e-setup-minikube: kustomize controller-gen build docker-build
 	minikube delete || true
 	minikube start --driver=docker --kubernetes-version=$(E2E_KUBERNETES_VERSION) --memory=8192 --cpus=2
 	minikube addons enable ingress
 	minikube image load $(IMG)
+
+.PHONY: e2e-cleanup-minikube
+e2e-cleanup-minikube:
+	@echo "=====Delete minikube cluster"
+	minikube delete
 	
 GOLANGCI_LINT = $(shell pwd)/bin/golangci-lint
 GOLANGCI_LINT_VERSION ?= v1.54.2
