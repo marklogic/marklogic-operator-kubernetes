@@ -36,7 +36,7 @@ const (
 func TestMain(m *testing.M) {
 	testEnv = env.New()
 	path := conf.ResolveKubeConfigFile()
-	cfg, err  := envconf.NewFromFlags()
+	cfg, err := envconf.NewFromFlags()
 	if err != nil {
 		log.Fatalf("Failed to create config: %s", err)
 	}

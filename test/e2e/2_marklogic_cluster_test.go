@@ -24,8 +24,9 @@ import (
 var verifyHugePages = flag.Bool("verifyHugePages", false, "Test hugePages configuration")
 
 const (
-	groupName   = "node"
-	mlNamespace = "default"
+	groupName       = "node"
+	mlNamespace     = "default"
+	mlContainerName = "marklogic-server"
 )
 
 var (
