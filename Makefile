@@ -123,6 +123,7 @@ test: manifests generate fmt vet envtest ## Run tests.
 	KUBEBUILDER_ASSETS="$(shell $(ENVTEST) use $(ENVTEST_K8S_VERSION) --bin-dir $(LOCALBIN) -p path)" go test -v $$(go list ./... | grep -v /e2e) -coverprofile cover.out
 
 # Utilize minikube or modify the e2e tests to load the image locally, enabling compatibility with other vendors.
+# To run specific e2e test with label, try 	go test -v ./test/e2e -count=1 -args --labels="type=tls-multi-node"
 .PHONY: e2e-test  # Run the e2e tests against a minikube k8s instance that is spun up.
 e2e-test: 
 	@echo "=====Setting hugepages value to 1280 for hugepages-e2e test"
