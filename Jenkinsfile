@@ -124,10 +124,21 @@ void runTests() {
     sh "make test"
 }
 
-void runE2eTests() {
+void runMinikubeSetup() {
     sh '''
         make e2e-setup-minikube
+    '''
+}
+
+void runE2eTests() {
+    sh '''
         make e2e-test
+    '''
+}
+
+void runMinikubeCleanup() {
+    sh '''
+        make e2e-cleanup-minikube
     '''
 }
 
@@ -167,9 +178,21 @@ pipeline {
             }
         }
 
-        stage('Run-e2e-tests') {
+        stage('Run-Minikube-Setup') {
+            steps {
+                runMinikubeSetup()
+            }
+        }
+
+        stage('Run-e2e-Tests') {
             steps {
                 runE2eTests()
+            }
+        }
+
+        stage('Cleanup Environment') {
+            steps {
+                runMinikubeCleanup()
             }
         }
         

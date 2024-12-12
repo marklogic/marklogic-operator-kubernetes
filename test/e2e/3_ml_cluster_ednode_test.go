@@ -31,8 +31,6 @@ var (
 	home            = homedir.HomeDir()
 	initialPodCount int
 	incrReplica     = int32(2)
-	adminUsername   = "admin"
-	adminPassword   = "Admin@8001"
 	marklogicgroups = []*databasev1alpha1.MarklogicGroups{
 		{
 			Name:        dnodeGrpName,
