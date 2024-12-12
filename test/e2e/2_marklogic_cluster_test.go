@@ -27,7 +27,7 @@ const (
 
 var (
 	replicas         = int32(1)
-	logOutput        = "[OUTPUT]\nname loki\nmatch *\nhost loki.loki.svc.cluster.local\nport 3100\nlabels job=fluent-bit\nhttp_user admin\nhttp_passwd admin"
+	logOutput        = "[OUTPUT]\n\tname loki\n\tmatch *\n\thost loki.loki.svc.cluster.local\n\tport 3100\n\tlabels job=fluent-bit\n\thttp_user admin\n\thttp_passwd admin"
 	marklogiccluster = &databasev1alpha1.MarklogicCluster{
 		TypeMeta: metav1.TypeMeta{
 			APIVersion: "marklogic.com/v1alpha1",
@@ -60,7 +60,6 @@ var (
 			},
 		},
 	}
-	dashboardUID     = "fluent-bit"
 	dashboardPayload = `{
 		"dashboard": {
 			"panels": [
@@ -79,12 +78,27 @@ var (
 		},
 			"overwrite": true
 	}`
-	dataSourcePayload = `{"name": "Loki","type": "loki","url": "http://loki-gateway.loki.svc.cluster.local", "access": "proxy","basicAuth": false}`
+	dashboardUID      = ""
+	dataSourcePayload = `{
+		"name": "Loki",
+		"type": "loki",
+		"url": "http://loki-gateway.loki.svc.cluster.local",
+		"access": "proxy",
+		"basicAuth": false
+	}`
+	dataSourceUID = ""
 )
 
 type DashboardResponse struct {
 	UID    string `json:"uid"`
 	Status string `json:"status"`
+}
+type DataSourceResponse struct {
+	DataSource DataSource `json:"datasource"`
+}
+type DataSource struct {
+	UID     string `json:"uid"`
+	Message string `json:"message"`
 }
 
 func TestMarklogicCluster(t *testing.T) {
@@ -99,14 +113,14 @@ func TestMarklogicCluster(t *testing.T) {
 			t.Fatalf("Failed to add helm repo: %v", err)
 		}
 
-		err = utils.InstallHelmChart("grafana", "grafana/grafana", "grafana", "8.3.2")
-		if err != nil {
-			t.Fatalf("Failed to install grafana helm chart: %v", err)
-		}
-
 		err = utils.InstallHelmChart("loki", "grafana/loki", "loki", "6.6.5", "loki.yaml")
 		if err != nil {
 			t.Fatalf("Failed to install loki helm chart: %v", err)
+		}
+
+		err = utils.InstallHelmChart("grafana", "grafana/grafana", "grafana", "8.3.2")
+		if err != nil {
+			t.Fatalf("Failed to install grafana helm chart: %v", err)
 		}
 
 		podList := &corev1.PodList{}
@@ -158,21 +172,11 @@ func TestMarklogicCluster(t *testing.T) {
 		if !(strings.Contains(string(output), "Datasource added") && strings.Contains(string(output), "Loki")) {
 			t.Fatal("Failed to create datasource for Grafana")
 		}
-
-		url = fmt.Sprintf("%s/api/dashboards/db", grafanaURL)
-		curlCommand = fmt.Sprintf(`curl -X POST %s -u %s:%s -H "Content-Type: application/json" -d '%s'`, url, grafanaAdminUser, grafanaAdminPassword, dashboardPayload)
-		output, err = utils.ExecCmdInPod(grafanaPodName, "grafana", "grafana", curlCommand)
-		if err != nil {
-			t.Fatalf("Failed to execute kubectl command in grafana pod: %v", err)
-		}
-		var dashboardResponse DashboardResponse
-		if err := json.Unmarshal([]byte(output), &dashboardResponse); err != nil {
+		var dataSourceResponse DataSourceResponse
+		if err := json.Unmarshal([]byte(output), &dataSourceResponse); err != nil {
 			t.Fatalf("Failed to unmarshal JSON response: %v", err)
 		}
-		dashboardUID = dashboardResponse.UID
-		if dashboardResponse.Status != "success" {
-			t.Fatal("Failed to create dashboard with loki and fluent-bit")
-		}
+		dataSourceUID = dataSourceResponse.DataSource.UID
 		return ctx
 	})
 
@@ -220,7 +224,7 @@ func TestMarklogicCluster(t *testing.T) {
 
 	})
 
-	// Assessment to check for Fluent Bit logs
+	// Assessment to check for logging in MarkLogic Operator
 	feature.Assess("Grafana Dashboard created", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 		client := c.Client()
 		podList := &corev1.PodList{}
@@ -234,9 +238,63 @@ func TestMarklogicCluster(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Failed to get Grafana admin user and password: %v", err)
 		}
+		time.Sleep(60 * time.Second)
 		grafanaURL := "http://localhost:3000"
-		curlCommand := fmt.Sprintf(`curl -u %s:%s %s/api/dashboards/uid/%s`, grafanaAdminUser, grafanaAdminPassword, grafanaURL, dashboardUID)
+		url := fmt.Sprintf("%s/api/dashboards/db", grafanaURL)
+		curlCommand := fmt.Sprintf(`curl -X POST %s -u %s:%s -H "Content-Type: application/json" -d '%s'`, url, grafanaAdminUser, grafanaAdminPassword, dashboardPayload)
 		output, err := utils.ExecCmdInPod(grafanaPodName, "grafana", "grafana", curlCommand)
+		if err != nil {
+			t.Fatalf("Failed to execute kubectl command in grafana pod: %v", err)
+		}
+		var dashboardResponse DashboardResponse
+		if err := json.Unmarshal([]byte(output), &dashboardResponse); err != nil {
+			t.Fatalf("Failed to unmarshal JSON response: %v", err)
+		}
+		dashboardUID = dashboardResponse.UID
+		if dashboardResponse.Status != "success" {
+			t.Fatal("Failed to create dashboard with loki and fluent-bit")
+		}
+
+		// Create query to verify MarkLogic logs in Grafana
+		payload := map[string]interface{}{
+			"queries": []map[string]interface{}{
+				{
+					"refId":     "A",
+					"expr":      "{job=\"fluent-bit\"} |= ``",
+					"queryType": "range",
+					"datasource": map[string]string{
+						"type": "loki",
+						"uid":  dataSourceUID,
+					},
+					"editorMode":    "builder",
+					"maxLines":      1000,
+					"legendFormat":  "",
+					"datasourceId":  1,
+					"intervalMs":    20000,
+					"maxDataPoints": 1073,
+				},
+			},
+			"from": "now-5m",
+			"to":   "now",
+		}
+
+		payloadBytes, err := json.Marshal(payload)
+		if err != nil {
+			t.Fatalf("Failed to marshal payload: %v", err)
+		}
+		queryUrl := fmt.Sprintf("%s/api/ds/query?ds_type=loki", grafanaURL)
+		curlCommand = fmt.Sprintf(`curl -X POST %s -u %s:%s -H "Content-Type: application/json" -d '%s'`, queryUrl, grafanaAdminUser, grafanaAdminPassword, payloadBytes)
+		output, err = utils.ExecCmdInPod(grafanaPodName, "grafana", "grafana", curlCommand)
+		if err != nil {
+			t.Fatalf("Failed to execute kubectl command in grafana pod: %v", err)
+		}
+		// Verify MarkLogic logs in Grafana using Loki and Fluent Bit
+		if !(strings.Contains(string(output), "Starting MarkLogic Server")) {
+			t.Fatal("Failed to Query datasource")
+		}
+
+		curlCommand = fmt.Sprintf(`curl -u %s:%s %s/api/dashboards/uid/%s`, grafanaAdminUser, grafanaAdminPassword, grafanaURL, dashboardUID)
+		output, err = utils.ExecCmdInPod(grafanaPodName, "grafana", "grafana", curlCommand)
 		if err != nil {
 			t.Fatalf("Failed to execute kubectl command in grafana pod: %v", err)
 		}
