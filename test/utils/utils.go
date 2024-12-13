@@ -33,6 +33,7 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"sigs.k8s.io/e2e-framework/klient"
+	"sigs.k8s.io/e2e-framework/pkg/envconf"
 )
 
 const (
@@ -209,4 +210,11 @@ func ExecCmdInPod(podName, namespace, containerName, command string) (string, er
 		return "", fmt.Errorf("failed to execute command: %v, stderr: %v", err, stderr.String())
 	}
 	return out.String(), nil
+}
+
+func DeleteNS(ctx context.Context, cfg *envconf.Config, nsName string) error {
+	nsObj := corev1.Namespace{}
+	nsObj.Name = nsName
+	err := cfg.Client().Resources().Delete(ctx, &nsObj)
+	return err
 }

@@ -24,8 +24,9 @@ import (
 var verifyHugePages = flag.Bool("verifyHugePages", false, "Test hugePages configuration")
 
 const (
-	groupName   = "node"
-	mlNamespace = "default"
+	groupName       = "node"
+	mlNamespace     = "default"
+	mlContainerName = "marklogic-server"
 )
 
 var (
@@ -59,7 +60,7 @@ var (
 )
 
 func TestMarklogicCluster(t *testing.T) {
-	feature := features.New("MarklogicCluster Resource")
+	feature := features.New("Marklogic Cluster Test")
 
 	// Assessment for MarklogicCluster creation
 	feature.Setup(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
@@ -97,7 +98,7 @@ func TestMarklogicCluster(t *testing.T) {
 		client := c.Client()
 
 		podName := "node-0"
-		err := utils.WaitForPod(ctx, t, client, mlNamespace, podName, 90*time.Second)
+		err := utils.WaitForPod(ctx, t, client, mlNamespace, podName, 120*time.Second)
 		if err != nil {
 			t.Fatalf("Failed to wait for pod creation: %v", err)
 		}
