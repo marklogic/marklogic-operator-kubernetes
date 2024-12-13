@@ -11,8 +11,8 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	"github.com/tidwall/gjson"
 	"github.com/marklogic/marklogic-kubernetes-operator/test/utils"
+	"github.com/tidwall/gjson"
 	"sigs.k8s.io/e2e-framework/klient/k8s"
 	"sigs.k8s.io/e2e-framework/klient/wait"
 	"sigs.k8s.io/e2e-framework/klient/wait/conditions"
@@ -23,7 +23,7 @@ import (
 
 func TestTlsWithSelfSigned(t *testing.T) {
 	feature := features.New("TLS with Self Signed Certificate").WithLabel("type", "tls-self-signed")
-	namespace := "default"
+	namespace := "tls-self-signed"
 	releaseName := "ml"
 	replicas := int32(1)
 
@@ -59,9 +59,13 @@ func TestTlsWithSelfSigned(t *testing.T) {
 	feature.Setup(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 
 		client := c.Client()
-		databasev1alpha1.AddToScheme(client.Resources(mlNamespace).GetScheme())
-
-		if err := client.Resources(mlNamespace).Create(ctx, cr); err != nil {
+		databasev1alpha1.AddToScheme(client.Resources(namespace).GetScheme())
+		client.Resources(namespace).Create(ctx, &corev1.Namespace{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: namespace,
+			},
+		})
+		if err := client.Resources(namespace).Create(ctx, cr); err != nil {
 			t.Fatalf("Failed to create MarklogicCluster: %s", err)
 		}
 		// wait for resource to be created
@@ -120,6 +124,7 @@ func TestTlsWithSelfSigned(t *testing.T) {
 
 	// Using feature.Teardown to clean up
 	feature.Teardown(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
+		utils.DeleteNS(ctx, c, namespace)
 		return ctx
 	})
 
@@ -298,10 +303,10 @@ func TestTlsWithMultiNode(t *testing.T) {
 			},
 			MarkLogicGroups: []*databasev1alpha1.MarklogicGroups{
 				{
-					Name:        dnodeName,
-					Replicas:    &dnodeSize,
+					Name:     dnodeName,
+					Replicas: &dnodeSize,
 					GroupConfig: &databasev1alpha1.GroupConfig{
-						Name: dnodeName,
+						Name:          dnodeName,
 						EnableXdqpSsl: true,
 					},
 					IsBootstrap: true,
@@ -312,10 +317,10 @@ func TestTlsWithMultiNode(t *testing.T) {
 					},
 				},
 				{
-					Name:        enodeName,
-					Replicas:    &enodeSize,
+					Name:     enodeName,
+					Replicas: &enodeSize,
 					GroupConfig: &databasev1alpha1.GroupConfig{
-						Name: enodeName,
+						Name:          enodeName,
 						EnableXdqpSsl: true,
 					},
 					IsBootstrap: false,
@@ -428,7 +433,6 @@ func TestTlsWithMultiNode(t *testing.T) {
 		}
 		return ctx
 	})
-
 
 	// Using feature.Teardown to clean up
 	feature.Teardown(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
