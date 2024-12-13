@@ -57,14 +57,14 @@ func TestTlsWithSelfSigned(t *testing.T) {
 
 	// Assessment for MarklogicCluster creation
 	feature.Setup(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
-
 		client := c.Client()
-		databasev1alpha1.AddToScheme(client.Resources(namespace).GetScheme())
 		client.Resources(namespace).Create(ctx, &corev1.Namespace{
 			ObjectMeta: metav1.ObjectMeta{
 				Name: namespace,
 			},
 		})
+		databasev1alpha1.AddToScheme(client.Resources(namespace).GetScheme())
+
 		if err := client.Resources(namespace).Create(ctx, cr); err != nil {
 			t.Fatalf("Failed to create MarklogicCluster: %s", err)
 		}
@@ -85,7 +85,7 @@ func TestTlsWithSelfSigned(t *testing.T) {
 		client := c.Client()
 
 		podName := "ml-0"
-		err := utils.WaitForPod(ctx, t, client, mlNamespace, podName, 120*time.Second)
+		err := utils.WaitForPod(ctx, t, client, namespace, podName, 120*time.Second)
 		if err != nil {
 			t.Fatalf("Failed to wait for pod creation: %v", err)
 		}
@@ -97,7 +97,7 @@ func TestTlsWithSelfSigned(t *testing.T) {
 		url := "https://localhost:8002/manage/v2/groups"
 		command := fmt.Sprintf("curl -k -u %s:%s %s", adminUsername, adminPassword, url)
 
-		_, err := utils.ExecCmdInPod(podName, mlNamespace, mlContainerName, command)
+		_, err := utils.ExecCmdInPod(podName, namespace, mlContainerName, command)
 		if err != nil {
 			t.Fatalf("Failed to execute curl command in pod: %v", err)
 		}
@@ -112,7 +112,7 @@ func TestTlsWithSelfSigned(t *testing.T) {
 		url := "https://localhost:8002/manage/v2/hosts?view=status&format=json"
 		command := fmt.Sprintf("curl -k -u %s:%s %s", adminUsername, adminPassword, url)
 
-		_, err := utils.ExecCmdInPod(podName, mlNamespace, mlContainerName, command)
+		_, err := utils.ExecCmdInPod(podName, namespace, mlContainerName, command)
 		if err != nil {
 			t.Fatalf("Failed to execute curl command in pod: %v", err)
 		}
@@ -170,12 +170,12 @@ func TestTlsWithNamedCert(t *testing.T) {
 
 	feature.Setup(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 		client := c.Client()
-		databasev1alpha1.AddToScheme(client.Resources(namespace).GetScheme())
 		client.Resources(namespace).Create(ctx, &corev1.Namespace{
 			ObjectMeta: metav1.ObjectMeta{
 				Name: namespace,
 			},
 		})
+		databasev1alpha1.AddToScheme(client.Resources(namespace).GetScheme())
 
 		if err := client.Resources(namespace).Create(ctx, cr); err != nil {
 			t.Fatalf("Failed to create MarklogicCluster: %s", err)
@@ -336,12 +336,13 @@ func TestTlsWithMultiNode(t *testing.T) {
 
 	feature.Setup(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 		client := c.Client()
-		databasev1alpha1.AddToScheme(client.Resources(namespace).GetScheme())
 		client.Resources(namespace).Create(ctx, &corev1.Namespace{
 			ObjectMeta: metav1.ObjectMeta{
 				Name: namespace,
 			},
 		})
+		databasev1alpha1.AddToScheme(client.Resources(namespace).GetScheme())
+
 
 		if err := client.Resources(namespace).Create(ctx, cr); err != nil {
 			t.Fatalf("Failed to create MarklogicCluster: %s", err)
