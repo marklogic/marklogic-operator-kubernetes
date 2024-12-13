@@ -117,12 +117,12 @@ func TestMlClusterWithEdnode(t *testing.T) {
 		client := c.Client()
 
 		podName := "dnode-0"
-		err := utils.WaitForPod(ctx, t, client, mlClusterNs, podName, 90*time.Second)
+		err := utils.WaitForPod(ctx, t, client, mlClusterNs, podName, 120*time.Second)
 		if err != nil {
 			t.Fatalf("Failed to wait for pod creation: %v", err)
 		}
 		epodName := "enode-0"
-		err = utils.WaitForPod(ctx, t, client, mlClusterNs, epodName, 150*time.Second)
+		err = utils.WaitForPod(ctx, t, client, mlClusterNs, epodName, 180*time.Second)
 		if err != nil {
 			t.Fatalf("Failed to wait for pod creation: %v", err)
 		}

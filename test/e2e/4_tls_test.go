@@ -343,7 +343,6 @@ func TestTlsWithMultiNode(t *testing.T) {
 		})
 		databasev1alpha1.AddToScheme(client.Resources(namespace).GetScheme())
 
-
 		if err := client.Resources(namespace).Create(ctx, cr); err != nil {
 			t.Fatalf("Failed to create MarklogicCluster: %s", err)
 		}
