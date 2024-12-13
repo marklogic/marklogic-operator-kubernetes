@@ -13,6 +13,68 @@ import (
 //go:embed scripts/*
 var scriptsFolder embed.FS
 
+func (cc *ClusterContext) ReconcileComfigMapForCluster() result.ReconcileResult {
+	logger := cc.ReqLogger
+	client := cc.Client
+	cr := cc.MarklogicCluster
+
+	logger.Info("Reconciling MarkLogic ConfigMap")
+	labels := getMarkLogicLabels(cr.ObjectMeta.Name)
+	annotations := map[string]string{}
+	configMapName := cr.ObjectMeta.Name + "-scripts"
+	objectMeta := generateObjectMeta(configMapName, cr.Namespace, labels, annotations)
+	nsName := types.NamespacedName{Name: objectMeta.Name, Namespace: objectMeta.Namespace}
+	configmap := &corev1.ConfigMap{}
+	err := client.Get(cc.Ctx, nsName, configmap)
+	if err != nil {
+		if errors.IsNotFound(err) {
+			logger.Info("MarkLogic sripts ConfigMap is not found, creating a new one")
+			configmapDef := cc.generateConfigMapDef(objectMeta, marklogicClusterAsOwner(cr))
+			err = cc.createConfigMapForCC(configmapDef)
+			if err != nil {
+				logger.Info("MarkLogic scripts configmap creation is failed")
+				return result.Error(err)
+			}
+			logger.Info("MarkLogic scripts configmap creation is successful")
+			// result.Continue()
+		} else {
+			logger.Error(err, "MarkLogic scripts configmap creation is failed")
+			return result.Error(err)
+		}
+	}
+
+	return result.Continue()
+}
+
+func (cc *ClusterContext) generateConfigMapDef(configMapMeta metav1.ObjectMeta, ownerRef metav1.OwnerReference) *corev1.ConfigMap {
+
+	configMapData := cc.getScriptsForConfigMap()
+	configmap := &corev1.ConfigMap{
+		TypeMeta: metav1.TypeMeta{
+			Kind:       "ConfigMap",
+			APIVersion: "v1",
+		},
+		ObjectMeta: configMapMeta,
+		Data:       configMapData,
+	}
+	configmap.SetOwnerReferences(append(configmap.GetOwnerReferences(), ownerRef))
+	return configmap
+}
+
+func (cc *ClusterContext) getScriptsForConfigMap() map[string]string {
+	configMapData := make(map[string]string)
+	logger := cc.ReqLogger
+
+	fileName := "job.sh"
+	fileData, err := scriptsFolder.ReadFile("scripts/" + fileName)
+	if err != nil {
+		logger.Error(err, "Error reading file")
+	}
+	configMapData[fileName] = string(fileData)
+
+	return configMapData
+}
+
 func (oc *OperatorContext) ReconcileConfigMap() result.ReconcileResult {
 	logger := oc.ReqLogger
 	client := oc.Client

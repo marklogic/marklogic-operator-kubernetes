@@ -7,7 +7,7 @@ metadata:
     app.kubernetes.io/part-of: marklogic-kubernetes-operator
     app.kubernetes.io/managed-by: kustomize
     app.kubernetes.io/created-by: marklogic-kubernetes-operator
-  name: ml-cluster
+  name: mlcluster
 spec:
   image: "progressofficial/marklogic-db:11.3.0-ubi-rootless"
   auth:
