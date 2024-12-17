@@ -5,6 +5,9 @@
 # - use environment variables to overwrite this value (e.g export VERSION=0.0.2)
 VERSION ?= 0.0.1
 
+# VERIFY_HUGE_PAGES defines if hugepages test is enabled or not for e2e test
+VERIFY_HUGE_PAGES ?= true
+
 export E2E_DOCKER_IMAGE ?= $(IMG)
 export E2E_KUSTOMIZE_VERSION ?= $(KUSTOMIZE_VERSION)
 export E2E_CONTROLLER_TOOLS_VERSION ?= $(CONTROLLER_TOOLS_VERSION)
@@ -126,6 +129,8 @@ test: manifests generate fmt vet envtest ## Run tests.
 # To run specific e2e test with label, try 	go test -v ./test/e2e -count=1 -args --labels="type=tls-multi-node"
 .PHONY: e2e-test  # Run the e2e tests against a minikube k8s instance that is spun up.
 e2e-test: 
+	@echo "=====Check Huges pages test is enabled or not for e2e test"
+ifeq ($(VERIFY_HUGE_PAGES), true)
 	@echo "=====Setting hugepages value to 1280 for hugepages-e2e test"
 	sudo sysctl -w vm.nr_hugepages=1280
 
@@ -142,6 +147,10 @@ e2e-test:
 	@echo "=====Restart minikube cluster"
 	minikube stop
 	minikube start
+else
+	@echo "=====Running e2e test without hugepages test"
+	go test -v -count=1 ./test/e2e
+endif
 
 .PHONY: e2e-setup-minikube
 e2e-setup-minikube: kustomize controller-gen build docker-build

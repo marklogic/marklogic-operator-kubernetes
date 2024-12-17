@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -29,9 +30,6 @@ import (
 	. "github.com/onsi/ginkgo/v2" //nolint:golint,revive
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/client-go/kubernetes"
-	"k8s.io/client-go/rest"
 	"sigs.k8s.io/e2e-framework/klient"
 	"sigs.k8s.io/e2e-framework/pkg/envconf"
 )
@@ -174,27 +172,21 @@ func WaitForPod(ctx context.Context, t *testing.T, client klient.Client, namespa
 }
 
 // util function to get secret data
-func GetSecretData(config *rest.Config, namespace, secretName string) (string, string, error) {
-	clientset, err := kubernetes.NewForConfig(config)
-	if err != nil {
-		return "", "", fmt.Errorf("Failed to create Kubernetes client: %s", err)
-	}
-
-	secret, err := clientset.CoreV1().Secrets(namespace).Get(context.TODO(), secretName, metav1.GetOptions{})
+func GetSecretData(ctx context.Context, client klient.Client, namespace, secretName, username, password string) (string, string, error) {
+	secret := &corev1.Secret{}
+	err := client.Resources(namespace).Get(ctx, secretName, namespace, secret)
 	if err != nil {
 		return "", "", fmt.Errorf("Failed to get secret: %s", err)
 	}
-
-	username, ok := secret.Data["username"]
+	usernameSecret, ok := secret.Data[username]
 	if !ok {
 		return "", "", fmt.Errorf("username not found in secret data")
 	}
-	password, ok := secret.Data["password"]
+	passwordSecret, ok := secret.Data[password]
 	if !ok {
 		return "", "", fmt.Errorf("password not found in secret data")
 	}
-
-	return string(username), string(password), nil
+	return string(usernameSecret), string(passwordSecret), nil
 }
 
 func ExecCmdInPod(podName, namespace, containerName, command string) (string, error) {
@@ -210,6 +202,39 @@ func ExecCmdInPod(podName, namespace, containerName, command string) (string, er
 		return "", fmt.Errorf("failed to execute command: %v, stderr: %v", err, stderr.String())
 	}
 	return out.String(), nil
+}
+
+func AddHelmRepo(chartName, url string) error {
+	cmd := exec.Command("helm", "repo", "add", chartName, url)
+	err := cmd.Run()
+	if err != nil {
+		return fmt.Errorf("failed to add Helm repo: %w", err)
+	}
+	fmt.Printf("%s helm repo added successfully \n", chartName)
+	return nil
+}
+
+func InstallHelmChart(releaseName string, chartName string, namespace string, version string, valuesFile ...string) error {
+	cmd := exec.Command("helm", "install", releaseName, chartName, "--namespace", namespace, "--create-namespace", "--version", version)
+	if valuesFile != nil {
+		valuesFilePath := filepath.Join("test", "e2e", "data", valuesFile[0])
+
+		if _, err := os.Stat(valuesFilePath); os.IsNotExist(err) {
+			return fmt.Errorf("values file %s does not exist", valuesFilePath)
+		}
+		cmd.Args = append(cmd.Args, "-f", valuesFilePath)
+	}
+
+	fmt.Print(cmd.String())
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+
+	err := cmd.Run()
+	if err != nil {
+		return fmt.Errorf("failed to install Helm chart: %w", err)
+	}
+	fmt.Printf("%s Helm chart installed successfully", chartName)
+	return nil
 }
 
 func DeleteNS(ctx context.Context, cfg *envconf.Config, nsName string) error {
