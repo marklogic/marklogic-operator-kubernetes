@@ -36,7 +36,12 @@ const (
 func TestMain(m *testing.M) {
 	testEnv = env.New()
 	path := conf.ResolveKubeConfigFile()
-	cfg := envconf.NewWithKubeConfig(path)
+	cfg, err := envconf.NewFromFlags()
+	if err != nil {
+		log.Fatalf("Failed to create config: %s", err)
+	}
+	cfg = cfg.WithKubeconfigFile(path)
+
 	testEnv = env.NewWithConfig(cfg)
 
 	log.Printf("Running tests with the following configurations: path=%s", path)

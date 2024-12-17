@@ -31,6 +31,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"sigs.k8s.io/e2e-framework/klient"
+	"sigs.k8s.io/e2e-framework/pkg/envconf"
 )
 
 const (
@@ -234,4 +235,11 @@ func InstallHelmChart(releaseName string, chartName string, namespace string, ve
 	}
 	fmt.Printf("%s Helm chart installed successfully", chartName)
 	return nil
+}
+
+func DeleteNS(ctx context.Context, cfg *envconf.Config, nsName string) error {
+	nsObj := corev1.Namespace{}
+	nsObj.Name = nsName
+	err := cfg.Client().Resources().Delete(ctx, &nsObj)
+	return err
 }
