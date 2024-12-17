@@ -1,8 +1,8 @@
 package k8sutil
 
 import (
-	"fmt"
 	"encoding/json"
+	"fmt"
 
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -82,7 +82,7 @@ func generateJobDef(meta metav1.ObjectMeta, ownerRef metav1.OwnerReference, volu
 					Containers: []corev1.Container{
 						{
 							Name:    "marklogic",
-							Image:   "redhat/ubi9:9.4",
+							Image:   "dwdraju/alpine-curl-jq:latest",
 							Command: []string{"/bin/bash", "/tmp/job-scripts/job.sh"},
 							VolumeMounts: []corev1.VolumeMount{
 								{
@@ -103,11 +103,10 @@ func generateJobDef(meta metav1.ObjectMeta, ownerRef metav1.OwnerReference, volu
 									Name:  "MARKLOGIC_ADMIN_PASSWORD_FILE",
 									Value: "ml-secrets/password",
 								}, {
-									Name: "MARKLOGIC_CLUSTER_CONFIG",
+									Name:  "MARKLOGIC_CLUSTER_CONFIG",
 									Value: clusterConfig,
 								},
 							},
-										
 						},
 					},
 					Volumes: []corev1.Volume{
@@ -140,11 +139,12 @@ func generateJobDef(meta metav1.ObjectMeta, ownerRef metav1.OwnerReference, volu
 }
 
 type ClusterConfig struct {
-	ClusterFQDN string `json:"clusterfqdn"`
-	GroupName    string `json:"groupname"`
-	IsBootstrap bool `json:"isbootstrap"`
-	EnableXdqpSsl  bool    `json:"enablexdqpssl"`
-	Replicas 	int32   `json:"replicas"`
+	FqdnSuffix    string `json:"fqdnsuffix"`
+	StsName       string `json:"stsname"`
+	GroupName     string `json:"groupname"`
+	IsBootstrap   bool   `json:"isbootstrap"`
+	EnableXdqpSsl bool   `json:"enablexdqpssl"`
+	Replicas      int32  `json:"replicas"`
 }
 
 func (cc *ClusterContext) generateClusterConfig() string {
@@ -154,11 +154,12 @@ func (cc *ClusterContext) generateClusterConfig() string {
 	clusterConfig := ""
 	for _, group := range mlc.Spec.MarkLogicGroups {
 		cluster := ClusterConfig{
-			ClusterFQDN: fmt.Sprintf("%s.%s.svc.%s", group.Name, nsName, mlc.Spec.ClusterDomain),
-			GroupName: group.GroupConfig.Name,
-			IsBootstrap: group.IsBootstrap,
+			FqdnSuffix:    fmt.Sprintf("%s.%s.svc.%s", group.Name, nsName, mlc.Spec.ClusterDomain),
+			StsName:       group.Name,
+			GroupName:     group.GroupConfig.Name,
+			IsBootstrap:   group.IsBootstrap,
 			EnableXdqpSsl: group.GroupConfig.EnableXdqpSsl,
-			Replicas: *group.Replicas,
+			Replicas:      *group.Replicas,
 		}
 		clusters = append(clusters, cluster)
 	}

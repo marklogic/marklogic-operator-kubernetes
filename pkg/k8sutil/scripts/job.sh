@@ -179,27 +179,54 @@ function curl_retry_validate {
 #                1 - host not reachable
 ################################################################
 function init_marklogic {
+    info "!!!clusters_array: ${clusters_array[*]}" 
+    info "!!!bootstrap_host_config: $bootstrap_host_config"
+    info "!!!nonbootstrap_host_config: ${nonbootstrap_host_config[*]}"
+    IFS='|' read -r  stsname replicas fqdnsuffix groupname enablexdqpssl <<< "$bootstrap_host_config"
+    info "!!!stsname: $stsname"
+    info "!!!replicas: $replicas"
+    info "!!!fqdnsuffix: $fqdnsuffix"
+    info "!!!groupname: $groupname"
+    info "!!!enablexdqpssl: $enablexdqpssl"
+    info "wait until $MARKLOGIC_BOOTSTRAP_HOST is ready"
+    for ((i = 0; i < replicas; i++)) do 
+        fqdn="${stsname}-${i}.${fqdnsuffix}"
+        init_marklogic_helper $fqdn
+    done
+    info "wait until nonbootstrap cluster is ready"
+    for stsname in "${clusters_array[@]}"; do
+        info "!!!stsname: $stsname"
+        IFS='|' read -r  stsname replicas fqdnsuffix groupname enablexdqpssl <<< "${nonbootstrap_host_config[$stsname]}"
+        for ((i = 0; i < replicas; i++)) do
+            fqdn="${stsname}-${i}.${fqdnsuffix}"
+            init_marklogic_helper $fqdn
+        done
+    done
+}
+
+function init_marklogic_helper {
     local host=$1
-    info "wait until $host is ready"
-    timestamp=$( curl -s --anyauth -m 4 \
+    info "Initializing MarkLogic on $host"
+    info "MARKLOGIC_ADMIN_USERNAME: $MARKLOGIC_ADMIN_USERNAME"
+    info "MARKLOGIC_ADMIN_PASSWORD: $MARKLOGIC_ADMIN_PASSWORD"
+    timestamp=$(curl -s --anyauth -m 4 \
                 --user "${MARKLOGIC_ADMIN_USERNAME}":"${MARKLOGIC_ADMIN_PASSWORD}" \
-                http://localhost:8001/admin/v1/timestamp )
+                http://$MARKLOGIC_BOOTSTRAP_HOST:8001/admin/v1/timestamp )
     if [ -z "${timestamp}" ]; then
         info "${host} - not responding yet"
         sleep 10s
-        init_marklogic $host
+        init_marklogic_helper $host
         return 0
     else 
-        info "${host} - responding with $timestamp"
+        info "${host} - responding with $timestamp"init_marklogic_helper
         out="/tmp/${host}.out"
 
-        response_code=$( \
-            curl --anyauth -m 30 -s --retry 5 \
+        response_code=$( curl --anyauth -m 30 -s --retry 5 \
             -w '%{http_code}' -o "${out}" \
             -i -X POST -H "Content-type:application/json" \
             -d "${LICENSE_PAYLOAD}" \
             --user "${MARKLOGIC_ADMIN_USERNAME}":"${MARKLOGIC_ADMIN_PASSWORD}" \
-            http://localhost:8001/admin/v1/init \
+            http://$host:8001/admin/v1/init \
         )
         if [ "${response_code}" = "202" ]; then
             info "${host} - init called, restart triggered"
@@ -216,6 +243,8 @@ function init_marklogic {
             info "${host} - init called, no restart triggered"
             info "${host} - init complete"
         else
+            sleep 5s 
+            init_marklogic_helper host
             info "${host} - error calling init: ${response_code}"
         fi
     fi
@@ -293,12 +322,37 @@ function init_security_db {
     fi
 }
 
+function join_cluster {
+    info "!!!bootstrap_host_config: $bootstrap_host_config"
+    info "!!!nonbootstrap_host_config: ${nonbootstrap_host_config[*]}"
+    IFS='|' read -r  stsname replicas fqdnsuffix groupname enablexdqpssl <<< "$bootstrap_host_config"
+    info "!!!stsname: $stsname"
+    info "!!!replicas: $replicas"
+    info "!!!fqdnsuffix: $fqdnsuffix"
+    info "!!!groupname: $groupname"
+    info "!!!enablexdqpssl: $enablexdqpssl"
+    info "wait until $MARKLOGIC_BOOTSTRAP_HOST is ready"
+    for ((i = 1; i < replicas; i++)) do 
+        fqdn="${stsname}-${i}.${fqdnsuffix}"
+        init_marklogic_helper $fqdn
+    done
+    info "wait until nonbootstrap cluster is ready"
+    for stsname in "${clusters_array[@]}"; do
+        info "!!!stsname: $stsname"
+        IFS='|' read -r  stsname replicas fqdnsuffix groupname enablexdqpssl <<< "${nonbootstrap_host_config[$stsname]}"
+        for ((i = 0; i < replicas; i++)) do
+            fqdn="${stsname}-${i}.${fqdnsuffix}"
+            join_cluster_helper $fqdn
+        done
+    done
+}
+
 ################################################################
 # Function to join marklogic host to cluster
 # 
 # return values: 0 - admin user successfully initialized
 ################################################################
-function join_cluster {
+function join_cluster_helper {
     hostname=$1
     retry_count=5
 
@@ -357,7 +411,7 @@ function join_cluster {
 
     info "joining cluster of group ${MARKLOGIC_GROUP}"
     MARKLOGIC_GROUP_PAYLOAD="group=${MARKLOGIC_GROUP}"
-    curl_retry_validate false "http://localhost:8001/admin/v1/server-config" 200 \
+    curl_retry_validate false "http://$hostname:8001/admin/v1/server-config" 200 \
         "-o" "/tmp/host.xml" "-X" "GET" "-H" "Accept: application/xml"
     
     info "getting cluster-config from bootstrap host"
@@ -371,14 +425,14 @@ function join_cluster {
     timestamp=$(curl -s "http://localhost:8001/admin/v1/timestamp" )
 
     info "joining cluster of group ${MARKLOGIC_GROUP}"
-    curl_retry_validate false "http://localhost:8001/admin/v1/cluster-config" 202 \
+    curl_retry_validate false "http://$hostname:8001/admin/v1/cluster-config" 202 \
             "-o" "/dev/null" \
             "-X" "POST" "-H" "Content-type: application/zip" \
             "--data-binary" "@/tmp/cluster.zip"
     
     # 202 causes restart
     info "restart triggered"
-    restart_check "localhost" "${timestamp}"
+    restart_check "$hostname" "${timestamp}"
 
     info "joined group ${MARKLOGIC_GROUP}"
 }
@@ -681,31 +735,73 @@ function check_status_file_for_boostrap {
 
 # Wait for current pod ready
 
-info "Start configuring MarkLogic for $HOST_FQDN"
-info "Bootstrap host: $MARKLOGIC_BOOTSTRAP_HOST"
+info "Start configuring MarkLogic"
+info "cluster config: $MARKLOGIC_CLUSTER_CONFIG"
+
+declare -a clusters_array
+bootstrap_host_config=""
+declare -A nonbootstrap_host_config
+
+while read -r cluster; do
+    fqdnsuffix=$(echo $cluster | jq -r '.fqdnsuffix')
+    stsname=$(echo $cluster | jq -r '.stsname')
+    groupname=$(echo $cluster | jq -r '.groupname')
+    isbootstrap=$(echo $cluster | jq -r '.isbootstrap')
+    enablexdqpssl=$(echo $cluster | jq -r '.enablexdqpssl')
+    replicas=$(echo $cluster | jq -r '.replicas')
+    host_config="$stsname|$replicas|$fqdnsuffix|$groupname|$enablexdqpssl"
+    if $isbootstrap == "true"; then
+        fqdn="${stsname}-0.${fqdnsuffix}"
+        info "bootstrap host found: $fqdn"
+        MARKLOGIC_BOOTSTRAP_HOST=$fqdn
+        bootstrap_host_config=$host_config
+    else
+        nonbootstrap_host_config[$stsname]=$host_config
+        clusters_array+=($stsname)
+    fi
+    MARKLOGIC_GROUP=$groupname
+    XDQP_SSL_ENABLED=$enablexdqpssl
+    
+    info "fqdnsuffix: $fqdnsuffix"
+    info "stsname: $stsname"
+    info "groupname: $groupname"
+    info "isbootstrap: $isbootstrap"
+    info "enablexdqpssl: $enablexdqpssl"
+    info "replicas: $replicas"
+done < <(echo "$MARKLOGIC_CLUSTER_CONFIG" | jq -c '.[]')
+
+info "clusters_array: ${clusters_array[*]}" 
+info "bootstrap_host_config: $bootstrap_host_config"
+info "nonbootstrap_host_config: ${nonbootstrap_host_config[*]}"
+info "MARKLOGIC_BOOTSTRAP_HOST: $MARKLOGIC_BOOTSTRAP_HOST"
 
 # Only do this if the bootstrap host is in the statefulset we are configuring
-info "$MARKLOGIC_CLUSTER_CONFIG"
 
-if [[ "$IS_BOOTSTRAP_HOST" == "true" ]]; then
-    check_status_file_for_boostrap
-    init_marklogic $HOST_FQDN
-    if [[ "${MARKLOGIC_CLUSTER_TYPE}" == "bootstrap" ]]; then
-        log "Info:  bootstrap host is ready"
-        init_security_db
-        configure_group
-    else 
-        log "Info:  bootstrap host is ready"
-        configure_group
-        join_cluster $HOST_FQDN
-    fi
-    configure_path_based_routing
-else 
-    check_status_file_for_nonbootstrap
-    init_marklogic $HOST_FQDN
-    wait_bootstrap_ready
-    join_cluster $HOST_FQDN
-fi
+init_marklogic
+init_security_db
+configure_group
+join_cluster
+
+# if [[ "$IS_BOOTSTRAP_HOST" == "true" ]]; then
+#     check_status_file_for_boostrap
+#     init_marklogic
+#     info "bootstrap host: $MARKLOGIC_BOOTSTRAP_HOST"
+#     if [[ "${MARKLOGIC_CLUSTER_TYPE}" == "bootstrap" ]]; then
+#         log "Info:  bootstrap host is ready"
+#         init_security_db
+#         configure_group
+#     else 
+#         log "Info:  bootstrap host is ready"
+#         configure_group
+#         join_cluster $HOST_FQDN
+#     fi
+#     configure_path_based_routing
+# else 
+#     check_status_file_for_nonbootstrap
+#     init_marklogic $HOST_FQDN
+#     wait_bootstrap_ready
+#     join_cluster $HOST_FQDN
+# fi
 
 if [[ $MARKLOGIC_JOIN_TLS_ENABLED == "true" ]]; then
     log "configuring tls"
