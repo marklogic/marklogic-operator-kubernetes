@@ -389,11 +389,6 @@ func generateContainerParams(cr *databasev1alpha1.MarklogicGroup) containerParam
 
 func getLifeCycle() *corev1.Lifecycle {
 	return &corev1.Lifecycle{
-		PostStart: &corev1.LifecycleHandler{
-			Exec: &corev1.ExecAction{
-				Command: []string{"/bin/bash", "/tmp/helm-scripts/poststart-hook.sh"},
-			},
-		},
 		PreStop: &corev1.LifecycleHandler{
 			Exec: &corev1.ExecAction{
 				Command: []string{"/bin/bash", "/tmp/helm-scripts/prestop-hook.sh"},
