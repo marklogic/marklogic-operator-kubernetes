@@ -155,7 +155,7 @@ spec:
     #     memory: "5Gi"
     #     cpu: "1"
     isBootstrap: true
-  - replicas: 1
+  - replicas: 2
     name: enode
     groupConfig:
       name: enode

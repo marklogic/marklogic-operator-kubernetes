@@ -83,7 +83,7 @@ func generateJobDef(meta metav1.ObjectMeta, ownerRef metav1.OwnerReference, volu
 		ObjectMeta: meta,
 		Spec: batchv1.JobSpec{
 			BackoffLimit:            func(i int32) *int32 { return &i }(1),
-			TTLSecondsAfterFinished: func(i int32) *int32 { return &i }(100),
+			// TTLSecondsAfterFinished: func(i int32) *int32 { return &i }(100),
 			Template: corev1.PodTemplateSpec{
 				Spec: corev1.PodSpec{
 					RestartPolicy: corev1.RestartPolicyNever,
