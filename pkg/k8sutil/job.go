@@ -30,17 +30,24 @@ func (cc *ClusterContext) ReconcileJobs() result.ReconcileResult {
 	clusterConfig := cc.generateClusterConfig()
 	if err != nil {
 		if errors.IsNotFound(err) {
-			logger.Info("MarkLogic admin Secret is not found, creating a new one")
+			logger.Info("MarkLogic Job is not found, creating a new one")
 			jobDef := generateJobDef(objectMeta, marklogicClusterAsOwner(cc.MarklogicCluster), volumeName, secretName, clusterConfig)
 			err = cc.createJob(jobDef)
 			if err != nil {
-				logger.Info("MarkLogic admin Secret creation is failed")
+				logger.Info("MarkLogic Job creation is failed")
 				return result.Error(err)
 			}
-			logger.Info("MarkLogic admin Secret creation is successful")
+			logger.Info("MarkLogic Job creation is successful")
 			// result.Continue()
 		} else {
-			logger.Error(err, "MarkLogic admin Secret creation is failed")
+			logger.Error(err, "MarkLogic Job creation is failed")
+			return result.Error(err)
+		}
+	} else {
+		jobDef := generateJobDef(objectMeta, marklogicClusterAsOwner(cc.MarklogicCluster), volumeName, secretName, clusterConfig)
+		err := cc.Client.Update(cc.Ctx, jobDef)
+		if err != nil {
+			logger.Error(err, "MarkLogic Job update is failed")
 			return result.Error(err)
 		}
 	}
@@ -75,7 +82,8 @@ func generateJobDef(meta metav1.ObjectMeta, ownerRef metav1.OwnerReference, volu
 		},
 		ObjectMeta: meta,
 		Spec: batchv1.JobSpec{
-			BackoffLimit: func(i int32) *int32 { return &i }(1),
+			BackoffLimit:            func(i int32) *int32 { return &i }(1),
+			TTLSecondsAfterFinished: func(i int32) *int32 { return &i }(100),
 			Template: corev1.PodTemplateSpec{
 				Spec: corev1.PodSpec{
 					RestartPolicy: corev1.RestartPolicyNever,

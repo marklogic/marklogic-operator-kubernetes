@@ -153,7 +153,7 @@ function curl_retry_validate {
     local curl_options=("$@")
 
     for ((retry_count = 0; retry_count < N_RETRY; retry_count = retry_count + 1)); do
-        response=$(curl -v -m 30 -w '%{http_code}' "${curl_options[@]}" "$endpoint")
+        response=$(curl -m 30 -w '%{http_code}' "${curl_options[@]}" "$endpoint")
         response_code=$(tail -n1 <<< "$response")
         response_content=$(sed '$ d' <<< "$response")
         if [[ ${response_code} -eq ${expected_response_code} ]]; then
@@ -207,8 +207,6 @@ function init_marklogic {
 function init_marklogic_helper {
     local host=$1
     info "Initializing MarkLogic on $host"
-    info "MARKLOGIC_ADMIN_USERNAME: $MARKLOGIC_ADMIN_USERNAME"
-    info "MARKLOGIC_ADMIN_PASSWORD: $MARKLOGIC_ADMIN_PASSWORD"
     timestamp=$(curl -s --anyauth -m 4 \
                 --user "${MARKLOGIC_ADMIN_USERNAME}":"${MARKLOGIC_ADMIN_PASSWORD}" \
                 http://$MARKLOGIC_BOOTSTRAP_HOST:8001/admin/v1/timestamp )
@@ -342,7 +340,7 @@ function join_cluster {
         IFS='|' read -r  stsname replicas fqdnsuffix groupname enablexdqpssl <<< "${nonbootstrap_host_config[$stsname]}"
         for ((i = 0; i < replicas; i++)) do
             fqdn="${stsname}-${i}.${fqdnsuffix}"
-            join_cluster_helper $fqdn
+            join_cluster_helper $fqdn $groupname
         done
     done
 }
@@ -354,6 +352,7 @@ function join_cluster {
 ################################################################
 function join_cluster_helper {
     hostname=$1
+    MARKLOGIC_GROUP=$2
     retry_count=5
 
     while [ $retry_count -gt 0 ]; do
@@ -443,6 +442,37 @@ function join_cluster_helper {
 # return 
 ################################################################
 function configure_group {
+    info "!!!bootstrap_host_config: $bootstrap_host_config"
+    info "!!!nonbootstrap_host_config: ${nonbootstrap_host_config[*]}"
+    IFS='|' read -r  stsname replicas fqdnsuffix groupname enablexdqpssl <<< "$bootstrap_host_config"
+    info "!!!stsname: $stsname"
+    info "!!!replicas: $replicas"
+    info "!!!fqdnsuffix: $fqdnsuffix"
+    info "!!!groupname: $groupname"
+    info "!!!enablexdqpssl: $enablexdqpssl"
+    info "wait until $MARKLOGIC_BOOTSTRAP_HOST is ready"
+    fqdn="${stsname}-0.${fqdnsuffix}"
+    configure_group_helper $fqdn $groupname $enablexdqpssl
+    
+    for stsname in "${clusters_array[@]}"; do
+        info "config group for nonbootstrap:  $stsname"
+        IFS='|' read -r  stsname replicas fqdnsuffix groupname enablexdqpssl <<< "${nonbootstrap_host_config[$stsname]}"
+        fqdn="${stsname}-0.${fqdnsuffix}"
+        configure_group_helper $fqdn $groupname $enablexdqpssl "true"
+    done
+    
+
+}
+
+function configure_group_helper {
+    local HOST_FQDN=$1
+    local MARKLOGIC_GROUP=$2
+    local XDQP_SSL_ENABLED=$3
+    local IS_NONBOOTSTRAP_CLUSTER=$4
+    info "configure_group_helper HOST_FQDN: $HOST_FQDN"
+    info "configure_group_helper MARKLOGIC_GROUP: $MARKLOGIC_GROUP"
+    info "configure_group_helper XDQP_SSL_ENABLED: $XDQP_SSL_ENABLED"
+    info "configure_group_helper IS_NONBOOTSTRAP_CLUSTER: $IS_NONBOOTSTRAP_CLUSTER"
     local LOCAL_HTTP_PROTOCOL LOCAL_HTTPS_OPTION
     LOCAL_HTTP_PROTOCOL="http"
     LOCAL_HTTPS_OPTION=""
@@ -452,71 +482,68 @@ function configure_group {
         LOCAL_HTTPS_OPTION="-k"
     fi  
     log "configuring group"
-    if [[ "$IS_BOOTSTRAP_HOST" == "true" ]]; then
-        group_cfg_template='{"group-name":"%s", "xdqp-ssl-enabled":"%s"}'
-        group_cfg=$(printf "$group_cfg_template" "$MARKLOGIC_GROUP" "$XDQP_SSL_ENABLED") 
+    group_cfg_template='{"group-name":"%s", "xdqp-ssl-enabled":"%s"}'
+    group_cfg=$(printf "$group_cfg_template" "$MARKLOGIC_GROUP" "$XDQP_SSL_ENABLED") 
 
-        # check if host is already in and get the current cluster
-        curl_retry_validate false "$LOCAL_HTTP_PROTOCOL://${MARKLOGIC_BOOTSTRAP_HOST}:8002/manage/v2/hosts/${HOST_FQDN}/properties?format=xml" 200 \
-            "--anyauth" "--user" "${MARKLOGIC_ADMIN_USERNAME}:${MARKLOGIC_ADMIN_PASSWORD}" \
-            "-o" "/tmp/groups.out" $LOCAL_HTTPS_OPTION
+    # check if host is already in and get the current cluster
+    curl_retry_validate false "$LOCAL_HTTP_PROTOCOL://${MARKLOGIC_BOOTSTRAP_HOST}:8002/manage/v2/hosts/${HOST_FQDN}/properties?format=xml" 200 \
+        "--anyauth" "--user" "${MARKLOGIC_ADMIN_USERNAME}:${MARKLOGIC_ADMIN_PASSWORD}" \
+        "-o" "/tmp/groups.out" $LOCAL_HTTPS_OPTION
 
-        response_code=$?
-        if [ "${response_code}" = "200" ]; then
-            current_group=$( \
-                cat "/tmp/groups.out" | 
-                grep "group" |
-                sed 's%^.*<group.*>\(.*\)</group>.*$%\1%' \
-            )
+    response_code=$?
+    if [ "${response_code}" = "200" ]; then
+        current_group=$( \
+            cat "/tmp/groups.out" | 
+            grep "group" |
+            sed 's%^.*<group.*>\(.*\)</group>.*$%\1%' \
+        )
 
-            info "current_group: $current_group"
-            info "group_cfg: $group_cfg"
+        info "current_group: $current_group"
+        info "group_cfg: $group_cfg"
 
-            response_code=$( \
-                curl -s --anyauth \
-                --user ${MARKLOGIC_ADMIN_USERNAME}:${MARKLOGIC_ADMIN_PASSWORD} \
-                -w '%{http_code}' --retry 5 \
-                -X PUT \
-                -H "Content-type: application/json" \
-                $LOCAL_HTTPS_OPTION -d "${group_cfg}" \
-                $LOCAL_HTTP_PROTOCOL://${MARKLOGIC_BOOTSTRAP_HOST}:8002/manage/v2/groups/${current_group}/properties \
-            )
+        sleep 5s
 
-            info "response_code: $response_code"
+        response_code=$( \
+            curl -s --anyauth \
+            --user ${MARKLOGIC_ADMIN_USERNAME}:${MARKLOGIC_ADMIN_PASSWORD} \
+            -w '%{http_code}' \
+            -X PUT \
+            -H "Content-type: application/json" \
+            $LOCAL_HTTPS_OPTION -d "${group_cfg}" \
+            $LOCAL_HTTP_PROTOCOL://${MARKLOGIC_BOOTSTRAP_HOST}:8002/manage/v2/groups/${current_group}/properties \
+        )
 
-            if [[ "${response_code}" = "204" ]]; then
-                info "group \"${current_group}\" updated"
-            elif [[ "${response_code}" = "202" ]]; then
-                # Note: THIS SHOULD NOT HAPPEN WITH THE CURRENT GROUP CONFIG
-                info "group \"${current_group}\" updated and a restart of all hosts in the group was triggered"
-            else
-                info "unexpected response when updating group \"${current_group}\": ${response_code}"
-            fi
+        info "response_code: $response_code"
+
+        if [[ "${response_code}" = "204" ]]; then
+            info "group \"${current_group}\" updated"
+        elif [[ "${response_code}" = "202" ]]; then
+            # Note: THIS SHOULD NOT HAPPEN WITH THE CURRENT GROUP CONFIG
+            info "group \"${current_group}\" updated and a restart of all hosts in the group was triggered"
         else
-            info "failed to get current group, response code: ${response_code}"
-        fi
-
-        if [[ "$MARKLOGIC_CLUSTER_TYPE" == "non-bootstrap" ]]; then
-            info "creating group for other Helm Chart"
-
-            # Create a group if group is not already exits
-            GROUP_RESP_CODE=$( curl --anyauth --retry 5 -m 20 -s -o /dev/null -w "%{http_code}" $HTTPS_OPTION -X GET $HTTP_PROTOCOL://${MARKLOGIC_BOOTSTRAP_HOST}:8002/manage/v2/groups/${MARKLOGIC_GROUP} --anyauth --user ${MARKLOGIC_ADMIN_USERNAME}:${MARKLOGIC_ADMIN_PASSWORD} )
-            if [[ ${GROUP_RESP_CODE} -eq 200 ]]; then
-                info "Skipping creation of group $MARKLOGIC_GROUP as it already exists on the MarkLogic cluster." 
-            else 
-                res_code=$(curl --anyauth --retry 5 --user ${MARKLOGIC_ADMIN_USERNAME}:${MARKLOGIC_ADMIN_PASSWORD} $HTTPS_OPTION -m 20 -s -w '%{http_code}' -X POST -d "${group_cfg}" -H "Content-type: application/json" $HTTP_PROTOCOL://${MARKLOGIC_BOOTSTRAP_HOST}:8002/manage/v2/groups)
-                if [[ ${res_code} -eq 201 ]]; then
-                    log "Info: [initContainer] Successfully configured group $MARKLOGIC_GROUP on the MarkLogic cluster."
-                else
-                    log "Info: [initContainer] Expected response code 201, got $res_code"
-                fi
-            fi
-            
+            info "unexpected response when updating group \"${current_group}\": ${response_code}"
         fi
     else
-        info "not bootstrap host. Skip group configuration"
+        info "failed to get current group, response code: ${response_code}"
     fi
 
+    if [[ "$IS_NONBOOTSTRAP_CLUSTER" == "true" ]]; then
+        info "creating group for non-bootstrap cluster"
+
+        # Create a group if group is not already exits
+        GROUP_RESP_CODE=$( curl --anyauth --retry 5 -m 20 -s -o /dev/null -w "%{http_code}" $HTTPS_OPTION -X GET $HTTP_PROTOCOL://${MARKLOGIC_BOOTSTRAP_HOST}:8002/manage/v2/groups/${MARKLOGIC_GROUP} --anyauth --user ${MARKLOGIC_ADMIN_USERNAME}:${MARKLOGIC_ADMIN_PASSWORD} )
+        if [[ ${GROUP_RESP_CODE} -eq 200 ]]; then
+            info "Skipping creation of group $MARKLOGIC_GROUP as it already exists on the MarkLogic cluster." 
+        else 
+            res_code=$(curl --anyauth --retry 5 --user ${MARKLOGIC_ADMIN_USERNAME}:${MARKLOGIC_ADMIN_PASSWORD} $HTTPS_OPTION -m 20 -s -w '%{http_code}' -X POST -d "${group_cfg}" -H "Content-type: application/json" $HTTP_PROTOCOL://${MARKLOGIC_BOOTSTRAP_HOST}:8002/manage/v2/groups)
+            if [[ ${res_code} -eq 201 ]]; then
+                log "Info: [initContainer] Successfully configured group $MARKLOGIC_GROUP on the MarkLogic cluster."
+            else
+                log "Info: [initContainer] Expected response code 201, got $res_code"
+            fi
+        fi
+        
+    fi
 }
 
 function configure_tls {
@@ -759,8 +786,6 @@ while read -r cluster; do
         nonbootstrap_host_config[$stsname]=$host_config
         clusters_array+=($stsname)
     fi
-    MARKLOGIC_GROUP=$groupname
-    XDQP_SSL_ENABLED=$enablexdqpssl
     
     info "fqdnsuffix: $fqdnsuffix"
     info "stsname: $stsname"
