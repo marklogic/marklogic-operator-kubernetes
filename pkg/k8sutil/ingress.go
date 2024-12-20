@@ -45,7 +45,7 @@ func generateIngressDef(ingressMeta metav1.ObjectMeta, ownerRef metav1.OwnerRefe
 		Rules:            ingressRules,
 	}
 	if cr.Spec.HAProxy.Ingress.TLS != nil {
-		ingressSpec.TLS = []networkingv1.IngressTLS{*cr.Spec.HAProxy.Ingress.TLS}
+		ingressSpec.TLS = cr.Spec.HAProxy.Ingress.TLS
 	}
 	ingressDef := &networkingv1.Ingress{
 		TypeMeta: metav1.TypeMeta{

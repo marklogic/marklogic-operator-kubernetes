@@ -21,75 +21,75 @@ spec:
   ## An out of box load balancer with configured to handle cookie based session affinity that required by most MarkLogic applications.
   ## It also support multi-statement transaction and ODBC connections.  
   ## Uncomment the following lines to enable HAProxy configuration
-  haproxy: 
-    enabled: false
-    # pathBasedRouting: true
-    # frontendPort: 8080
-    # tcpPorts:
-    #   enabled: true
-    #   ports:
-    #     - name: odbc
-    #       type: TCP
-    #       port: 5432
-    # appServers:
-    #   - name: "app-service"
-    #     port: 8000
-    #     path: "/console"
-    #   - name: "admin"
-    #     port: 8001
-    #     path: "/adminUI"
-    #   - name: "manage"
-    #     port: 8002
-    #     path: "/manage"
-    # stats:
-    #   enabled: true
-    #   port: 1024
-  # resources:
-  #   requests:
-  #     memory: "4Gi"
-  #     cpu: "1"
-  #   limits:
-  #     memory: "4Gi"
-  #     cpu: "1"
-    ## Configure Ingress
-    ## ref: https://kubernetes.io/docs/concepts/services-networking/ingress/
-    # ingress: 
-    #   enabled: true
-    #   ingressClassName: "alb"
+  # haproxy:
+  #   enabled: true
+  #   pathBasedRouting: true
+  #   frontendPort: 8080
+  #   tcpPorts:
+  #     enabled: true
+  #     ports:
+  #       - name: odbc
+  #         type: TCP
+  #         port: 5432
+  #   appServers:
+  #     - name: "app-service"
+  #       port: 8000
+  #       path: "/console"
+  #     - name: "admin"
+  #       port: 8001
+  #       path: "/adminUI"
+  #     - name: "manage"
+  #       port: 8002
+  #       path: "/manage"
+  #   stats:
+  #     enabled: true
+  #     port: 1024
+  #   resources:
+  #     requests:
+  #       memory: "4Gi"
+  #       cpu: "1"
+  #     limits:
+  #       memory: "4Gi"
+  #       cpu: "1"
+  #   # Configure Ingress
+  #   # ref: https://kubernetes.io/docs/concepts/services-networking/ingress/
+  #   ingress: 
+  #     enabled: true
+  #     ingressClassName: "alb"
 
-    #   ## Ingress labels
-    #   ## ref: https://kubernetes.io/docs/concepts/overvsiew/working-with-objects/labels/
-    #   labels:
-    #     app.kubernetes.io/name: marklogiccluster
-    #     app.kubernetes.io/instance: marklogiccluster-sample
+  #     ## Ingress labels
+  #     ## ref: https://kubernetes.io/docs/concepts/overvsiew/working-with-objects/labels/
+  #     labels:
+  #       app.kubernetes.io/name: marklogiccluster
+  #       app.kubernetes.io/instance: marklogiccluster-sample
     
-    #   ## Ingress annotations
-    #   ## ref: https://kubernetes.io/docs/concepts/overview/working-with-objects/annotations/
-    #   annotations: 
-    #     alb.ingress.kubernetes.io/healthcheck-port: '80'
-    #     alb.ingress.kubernetes.io/healthcheck-path: /adminUI
-    #     alb.ingress.kubernetes.io/success-codes: '200-401'
-    #     alb.ingress.kubernetes.io/load-balancer-name: mlingress
-    #     alb.ingress.kubernetes.io/scheme: internet-facing
-    #     alb.ingress.kubernetes.io/listen-ports: '[{"HTTP":80}]'
-    #     alb.ingress.kubernetes.io/target-group-attributes: load_balancing.algorithm.type=least_outstanding_requests
-    #     # alb.ingress.kubernetes.io/certificate-arn: arn:aws:acm:us-west-2:XXXXXXXXXXX:certificate/XxXXXXXX-xxxx-XXXX-XXXX-XXXXXXXxxxxXXX
-    #     alb.ingress.kubernetes.io/target-type: ip
-    #     alb.ingress.kubernetes.io/group.name: mlingress-group
-    #     alb.ingress.kubernetes.io/load-balancer-attributes: idle_timeout.timeout_seconds=600,routing.http.xff_header_processing.mode=append
+  #     ## Ingress annotations
+  #     ## ref: https://kubernetes.io/docs/concepts/overview/working-with-objects/annotations/
+  #     annotations: 
+  #       alb.ingress.kubernetes.io/healthcheck-port: '80'
+  #       alb.ingress.kubernetes.io/healthcheck-path: /adminUI
+  #       alb.ingress.kubernetes.io/success-codes: '200-401'
+  #       alb.ingress.kubernetes.io/load-balancer-name: mlingress
+  #       alb.ingress.kubernetes.io/scheme: internet-facing
+  #       alb.ingress.kubernetes.io/listen-ports: '[{"HTTP":80}]'
+  #       alb.ingress.kubernetes.io/target-group-attributes: load_balancing.algorithm.type=least_outstanding_requests
+  #       # alb.ingress.kubernetes.io/certificate-arn: arn:aws:acm:us-west-2:XXXXXXXXXXX:certificate/XxXXXXXX-xxxx-XXXX-XXXX-XXXXXXXxxxxXXX
+  #       alb.ingress.kubernetes.io/target-type: ip
+  #       alb.ingress.kubernetes.io/group.name: mlingress-group
+  #       alb.ingress.kubernetes.io/load-balancer-attributes: idle_timeout.timeout_seconds=600,routing.http.xff_header_processing.mode=append
 
-      ## Ingress hosts
-      ## add default hosts and additional hosts
-      ## ref: https://kubernetes.io/docs/concepts/services-networking/ingress/#ingress-rules
-      # host: ""
-      # additionalHosts: []
+  #     # Ingress hosts
+  #     # add default hosts and additional hosts
+  #     # ref: https://kubernetes.io/docs/concepts/services-networking/ingress/#ingress-rules
+  #     host: ""
+  #     additionalHosts: []
     
-      ## Ingress TLS
-      ## ref: https://kubernetes.io/docs/concepts/services-networking/ingress/#tls
-      # tls: {}
-          # - secretName: your-certificate-name
-          #   hosts:
-          #     - marklogic.example.com
+  #     ## Ingress TLS
+  #     ## ref: https://kubernetes.io/docs/concepts/services-networking/ingress/#tls
+  #     tls:
+  #       secretName: your-certificate-name
+  #       hosts:
+  #         - marklogic.example.com
   
   # logCollection:
   #   enabled: true

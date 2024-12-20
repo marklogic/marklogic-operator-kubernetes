@@ -119,13 +119,7 @@ func (in *HAProxy) DeepCopyInto(out *HAProxy) {
 		**out = **in
 	}
 	out.Stats = in.Stats
-	if in.Resources != nil {
-		in, out := &in.Resources, &out.Resources
-		*out = make(v1.ResourceList, len(*in))
-		for key, val := range *in {
-			(*out)[key] = val.DeepCopy()
-		}
-	}
+	in.Resources.DeepCopyInto(&out.Resources)
 	if in.Affinity != nil {
 		in, out := &in.Affinity, &out.Affinity
 		*out = new(v1.Affinity)
@@ -185,8 +179,10 @@ func (in *Ingress) DeepCopyInto(out *Ingress) {
 	}
 	if in.TLS != nil {
 		in, out := &in.TLS, &out.TLS
-		*out = new(networkingv1.IngressTLS)
-		(*in).DeepCopyInto(*out)
+		*out = make([]networkingv1.IngressTLS, len(*in))
+		for i := range *in {
+			(*in)[i].DeepCopyInto(&(*out)[i])
+		}
 	}
 	if in.AdditionalHosts != nil {
 		in, out := &in.AdditionalHosts, &out.AdditionalHosts
