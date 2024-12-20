@@ -96,11 +96,11 @@ type HAProxy struct {
 	// +kubebuilder:default:={enabled: false, secretName: "", certFileName: ""}
 	Tls *TlsForHAProxy `json:"tls,omitempty"`
 	// +kubebuilder:default:={enabled: false, port: 1024, auth: {enabled: false, username: "", password: ""}}
-	Stats        Stats               `json:"stats,omitempty"`
-	Resources    corev1.ResourceList `json:"resources,omitempty"`
-	Affinity     *corev1.Affinity    `json:"affinity,omitempty"`
-	NodeSelector map[string]string   `json:"nodeSelector,omitempty"`
-	Ingress      Ingress             `json:"ingress,omitempty"`
+	Stats        Stats                       `json:"stats,omitempty"`
+	Resources    corev1.ResourceRequirements `json:"resources,omitempty"`
+	Affinity     *corev1.Affinity            `json:"affinity,omitempty"`
+	NodeSelector map[string]string           `json:"nodeSelector,omitempty"`
+	Ingress      Ingress                     `json:"ingress,omitempty"`
 }
 
 type AppServers struct {
@@ -157,6 +157,6 @@ type Ingress struct {
 	Labels           map[string]string          `json:"labels,omitempty"`
 	Annotations      map[string]string          `json:"annotations,omitempty"`
 	Host             string                     `json:"host,omitempty"`
-	TLS              *networkingv1.IngressTLS   `json:"tls,omitempty"`
+	TLS              []networkingv1.IngressTLS  `json:"tls,omitempty"`
 	AdditionalHosts  []networkingv1.IngressRule `json:"additionalHosts,omitempty"`
 }
