@@ -78,7 +78,7 @@ var _ = Describe("MarklogicCluster Controller", func() {
 					EnableConverters: true,
 					MarkLogicGroups:  marklogicGroups,
 					LogCollection:    &databasev1alpha1.LogCollection{Enabled: true, Image: "fluent/fluent-bit:3.1.1", Files: databasev1alpha1.LogFilesConfig{ErrorLogs: true, AccessLogs: true, RequestLogs: true, CrashLogs: true, AuditLogs: true}, Outputs: "stdout"},
-					HAProxy: databasev1alpha1.HAProxy{
+					HAProxy: &databasev1alpha1.HAProxy{
 						Enabled:          true,
 						ReplicaCount:     1,
 						FrontendPort:     80,

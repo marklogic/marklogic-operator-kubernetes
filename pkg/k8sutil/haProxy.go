@@ -83,7 +83,7 @@ func (cc *ClusterContext) ReconcileHAProxy() result.ReconcileResult {
 		}
 	}
 	haproxyDeployment := &appsv1.Deployment{}
-	err = client.Get(cc.Ctx, types.NamespacedName{Name: "marklogic-haproxy", Namespace: "default"}, haproxyDeployment)
+	err = client.Get(cc.Ctx, types.NamespacedName{Name: "marklogic-haproxy", Namespace: cr.Namespace}, haproxyDeployment)
 	if err != nil {
 		logger.Error(err, "Failed to get HAProxy Deployment")
 		return result.Error(err)
@@ -186,7 +186,7 @@ func (cc *ClusterContext) createHAProxyDeployment() error {
 	deploymentDef := &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "marklogic-haproxy",
-			Namespace: "default",
+			Namespace: cc.Request.Namespace,
 			Labels:    labels,
 		},
 		Spec: appsv1.DeploymentSpec{
@@ -322,7 +322,7 @@ func (cc *ClusterContext) createHAProxyService() error {
 	serviceDef := &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "marklogic-haproxy",
-			Namespace: "default",
+			Namespace: cc.Request.Namespace,
 			Labels: map[string]string{
 				"app.kubernetes.io/instance": "marklogic",
 				"app.kubernetes.io/name":     "haproxy",

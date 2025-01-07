@@ -386,7 +386,11 @@ func (in *MarklogicClusterSpec) DeepCopyInto(out *MarklogicClusterSpec) {
 		*out = new(LogCollection)
 		(*in).DeepCopyInto(*out)
 	}
-	in.HAProxy.DeepCopyInto(&out.HAProxy)
+	if in.HAProxy != nil {
+		in, out := &in.HAProxy, &out.HAProxy
+		*out = new(HAProxy)
+		(*in).DeepCopyInto(*out)
+	}
 	if in.Tls != nil {
 		in, out := &in.Tls, &out.Tls
 		*out = new(Tls)
