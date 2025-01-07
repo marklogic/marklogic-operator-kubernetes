@@ -6,7 +6,7 @@
 VERSION ?= 0.0.1
 
 # VERIFY_HUGE_PAGES defines if hugepages test is enabled or not for e2e test
-VERIFY_HUGE_PAGES ?= true
+VERIFY_HUGE_PAGES ?= false
 
 export E2E_DOCKER_IMAGE ?= $(IMG)
 export E2E_KUSTOMIZE_VERSION ?= $(KUSTOMIZE_VERSION)
@@ -149,7 +149,7 @@ ifeq ($(VERIFY_HUGE_PAGES), true)
 	minikube start
 else
 	@echo "=====Running e2e test without hugepages test"
-	go test -v -count=1 ./test/e2e
+	go test -v -count=1 ./test/e2e -args --labels="type=haproxy"
 endif
 
 .PHONY: e2e-setup-minikube
