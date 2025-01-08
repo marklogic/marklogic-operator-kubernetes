@@ -235,8 +235,12 @@ func generateMarkLogicGroupParams(cr *databasev1alpha1.MarklogicCluster, index i
 		ContainerSecurityContext:      clusterParams.ContainerSecurityContext,
 		IsBootstrap:                   cr.Spec.MarkLogicGroups[index].IsBootstrap,
 		LogCollection:                 clusterParams.LogCollection,
-		IsPathBasedRouting:            cr.Spec.HAProxy.PathBasedRouting,
 		Tls:                           clusterParams.Tls,
+	}
+	if cr.Spec.MarkLogicGroups[index].HAProxy == nil {
+		MarkLogicGroupParameters.IsPathBasedRouting = false
+	} else {
+		MarkLogicGroupParameters.IsPathBasedRouting = cr.Spec.MarkLogicGroups[index].HAProxy.PathBasedRouting
 	}
 	if cr.Spec.MarkLogicGroups[index].Image != "" {
 		MarkLogicGroupParameters.Image = cr.Spec.MarkLogicGroups[index].Image
