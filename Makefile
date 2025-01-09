@@ -139,7 +139,7 @@ ifeq ($(VERIFY_HUGE_PAGES), true)
 	minikube start
 
 	@echo "=====Running e2e test including hugepages test"
-	go test -v -count=1 ./test/e2e -verifyHugePages
+	go test -v -count=1 -timeout 30m ./test/e2e -verifyHugePages
 
 	@echo "=====Resetting hugepages value to 0"
 	sudo sysctl -w vm.nr_hugepages=0
@@ -149,7 +149,7 @@ ifeq ($(VERIFY_HUGE_PAGES), true)
 	minikube start
 else
 	@echo "=====Running e2e test without hugepages test"
-	go test -v -count=1 ./test/e2e -args --labels="type=haproxy"
+	go test -v -count=1 -timeout 30m ./test/e2e
 endif
 
 .PHONY: e2e-setup-minikube
