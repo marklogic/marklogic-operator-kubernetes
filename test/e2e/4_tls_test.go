@@ -95,7 +95,7 @@ func TestTlsWithSelfSigned(t *testing.T) {
 	feature.Assess("HTTPS connnection enabled", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 		podName := "ml-0"
 		url := "https://localhost:8002/manage/v2/groups"
-		command := fmt.Sprintf("curl -k -u %s:%s %s", adminUsername, adminPassword, url)
+		command := fmt.Sprintf("curl -k --anyauth -u %s:%s %s", adminUsername, adminPassword, url)
 
 		_, err := utils.ExecCmdInPod(podName, namespace, mlContainerName, command)
 		if err != nil {
@@ -110,7 +110,7 @@ func TestTlsWithSelfSigned(t *testing.T) {
 	feature.Assess("HTTPS connnection enabled", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 		podName := "ml-0"
 		url := "https://localhost:8002/manage/v2/hosts?view=status&format=json"
-		command := fmt.Sprintf("curl -k -u %s:%s %s", adminUsername, adminPassword, url)
+		command := fmt.Sprintf("curl -k --anyauth -u %s:%s %s", adminUsername, adminPassword, url)
 
 		_, err := utils.ExecCmdInPod(podName, namespace, mlContainerName, command)
 		if err != nil {
@@ -221,7 +221,7 @@ func TestTlsWithNamedCert(t *testing.T) {
 		client := c.Client()
 
 		podName := "marklogic-1"
-		err := utils.WaitForPod(ctx, t, client, namespace, podName, 120*time.Second)
+		err := utils.WaitForPod(ctx, t, client, namespace, podName, 150*time.Second)
 		if err != nil {
 			t.Fatalf("Failed to wait for pod creation: %v", err)
 		}
@@ -233,7 +233,7 @@ func TestTlsWithNamedCert(t *testing.T) {
 		hostnamesSlice := []string{"marklogic-0.marklogic.marklogic-tlsnamed.svc.cluster.local", "marklogic-1.marklogic.marklogic-tlsnamed.svc.cluster.local"}
 		time.Sleep(5 * time.Second)
 		url := "https://localhost:8002/manage/v2/certificates?format=json"
-		command := fmt.Sprintf("curl -k -u %s:%s %s", adminUsername, adminPassword, url)
+		command := fmt.Sprintf("curl -k --anyauth -u %s:%s %s", adminUsername, adminPassword, url)
 		certs, err := utils.ExecCmdInPod(podName, namespace, mlContainerName, command)
 		if err != nil {
 			t.Fatalf("Failed to get certificates list: %v", err)
@@ -242,7 +242,7 @@ func TestTlsWithNamedCert(t *testing.T) {
 		t.Log("Certificates URL list", certURIs)
 		cert0Url := fmt.Sprintf("https://localhost:8002%s?format=json", certURIs[0])
 		cert1Url := fmt.Sprintf("https://localhost:8002%s?format=json", certURIs[1])
-		command = fmt.Sprintf("curl -k -u %s:%s %s", adminUsername, adminPassword, cert0Url)
+		command = fmt.Sprintf("curl -k --anyauth -u %s:%s %s", adminUsername, adminPassword, cert0Url)
 		cert0Detail, err := utils.ExecCmdInPod(podName, namespace, mlContainerName, command)
 		if err != nil {
 			t.Fatalf("Failed to execute and get first certificate: %v", err)
@@ -250,7 +250,7 @@ func TestTlsWithNamedCert(t *testing.T) {
 		cert0Temporary := gjson.Get(cert0Detail, `certificate-default.temporary`).Bool()
 		cert0HostName := gjson.Get(cert0Detail, `certificate-default.host-name`).String()
 
-		command = fmt.Sprintf("curl -k -u %s:%s %s", adminUsername, adminPassword, cert1Url)
+		command = fmt.Sprintf("curl -k --anyauth -u %s:%s %s", adminUsername, adminPassword, cert1Url)
 		cert1Detail, err := utils.ExecCmdInPod(podName, namespace, mlContainerName, command)
 		if err != nil {
 			t.Fatalf("Failed to execute and get second certificate: %v", err)
@@ -399,7 +399,7 @@ func TestTlsWithMultiNode(t *testing.T) {
 		hostnamesSlice := []string{"enode-0.enode.marklogic-tlsednode.svc.cluster.local", "dnode-0.dnode.marklogic-tlsednode.svc.cluster.local"}
 		time.Sleep(5 * time.Second)
 		url := "https://localhost:8002/manage/v2/certificates?format=json"
-		command := fmt.Sprintf("curl -k -u %s:%s %s", adminUsername, adminPassword, url)
+		command := fmt.Sprintf("curl -k --anyauth -u %s:%s %s", adminUsername, adminPassword, url)
 		certs, err := utils.ExecCmdInPod(podName, namespace, mlContainerName, command)
 		if err != nil {
 			t.Fatalf("Failed to get certificates list: %v", err)
@@ -408,7 +408,7 @@ func TestTlsWithMultiNode(t *testing.T) {
 		t.Log("Dnode Cert Url", certURIs)
 		cert0Url := fmt.Sprintf("https://localhost:8002%s?format=json", certURIs[0])
 		cert1Url := fmt.Sprintf("https://localhost:8002%s?format=json", certURIs[1])
-		command = fmt.Sprintf("curl -k -u %s:%s %s", adminUsername, adminPassword, cert0Url)
+		command = fmt.Sprintf("curl -k --anyauth -u %s:%s %s", adminUsername, adminPassword, cert0Url)
 		cert0Detail, err := utils.ExecCmdInPod(podName, namespace, mlContainerName, command)
 		if err != nil {
 			t.Fatalf("Failed to execute and get first certificate: %v", err)
@@ -416,7 +416,7 @@ func TestTlsWithMultiNode(t *testing.T) {
 		cert0Temporary := gjson.Get(cert0Detail, `certificate-default.temporary`).Bool()
 		cert0HostName := gjson.Get(cert0Detail, `certificate-default.host-name`).String()
 
-		command = fmt.Sprintf("curl -k -u %s:%s %s", adminUsername, adminPassword, cert1Url)
+		command = fmt.Sprintf("curl -k --anyauth -u %s:%s %s", adminUsername, adminPassword, cert1Url)
 		cert1Detail, err := utils.ExecCmdInPod(podName, namespace, mlContainerName, command)
 		if err != nil {
 			t.Fatalf("Failed to execute and get second certificate: %v", err)
