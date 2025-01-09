@@ -134,7 +134,7 @@ func TestMlClusterWithEdnode(t *testing.T) {
 		podName := "dnode-0"
 		containerName := "marklogic-server"
 		url := "http://localhost:8002/manage/v2/groups"
-		curlCommand := fmt.Sprintf("curl %s -u %s:%s", url, adminUsername, adminPassword)
+		curlCommand := fmt.Sprintf("curl %s --anyauth -u %s:%s", url, adminUsername, adminPassword)
 
 		output, err := utils.ExecCmdInPod(podName, mlClusterNs, containerName, curlCommand)
 		if err != nil {
