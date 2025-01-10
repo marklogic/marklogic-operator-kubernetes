@@ -19,7 +19,7 @@ import (
 )
 
 func TestHAPorxyPathBaseEnabled(t *testing.T) {
-	feature := features.New("HAProxy Test with Pathbased Routing").WithLabel("type", "haproxy-pathbased-enabled")
+	feature := features.New("HAProxy Test with Pathbased Routing Enabled").WithLabel("type", "haproxy-pathbased-enabled")
 	namespace := "haproxy-pathbased"
 	releaseName := "ml"
 	replicas := int32(1)
@@ -130,7 +130,7 @@ func TestHAPorxyPathBaseEnabled(t *testing.T) {
 }
 
 func TestHAPorxWithNoPathBasedDisabled(t *testing.T) {
-	feature := features.New("HAProxy Test with Pathbased Routing").WithLabel("type", "haproxy-pathbased-disabled")
+	feature := features.New("HAProxy Test with Pathbased Routing Disabled").WithLabel("type", "haproxy-pathbased-disabled")
 	namespace := "haproxy-test"
 	releaseName := "ml"
 	replicas := int32(1)
@@ -160,19 +160,22 @@ func TestHAPorxWithNoPathBasedDisabled(t *testing.T) {
 			HAProxy: &databasev1alpha1.HAProxy{
 				Enabled:          true,
 				PathBasedRouting: false,
-				FrontendPort:     8080,
+				FrontendPort:     8090,
 				AppServers: []databasev1alpha1.AppServers{
 					{
 						Name: "app-service",
 						Port: 8000,
+						Path: "/console",
 					},
 					{
 						Name: "admin",
 						Port: 8001,
+						Path: "/adminUI",
 					},
 					{
 						Name: "manage",
 						Port: 8002,
+						Path: "/manage",
 					},
 				},
 			},
@@ -193,6 +196,11 @@ func TestHAPorxWithNoPathBasedDisabled(t *testing.T) {
 			t.Fatalf("Failed to create MarklogicCluster: %s", err)
 		}
 		// wait for resource to be created
+
+		t.Logf("MarklogicCluster CR: %+v", cr.Spec.HAProxy)
+		t.Logf("PathBasedRouting CR: %+v", cr.Spec.HAProxy.PathBasedRouting)
+		t.Logf("Enabled CR: %+v", cr.Spec.HAProxy.Enabled)
+
 		if err := wait.For(
 			conditions.New(client.Resources()).ResourceMatch(cr, func(object k8s.Object) bool {
 				return true

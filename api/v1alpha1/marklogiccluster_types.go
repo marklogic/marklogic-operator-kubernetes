@@ -61,8 +61,9 @@ type MarklogicClusterSpec struct {
 	HugePages *HugePages `json:"hugePages,omitempty"`
 	// +kubebuilder:default:={enabled: false, image: "fluent/fluent-bit:3.1.1", resources: {requests: {cpu: "100m", memory: "200Mi"}, limits: {cpu: "200m", memory: "500Mi"}}, files: {errorLogs: true, accessLogs: true, requestLogs: true}, outputs: "stdout"}
 	LogCollection *LogCollection `json:"logCollection,omitempty"`
-	HAProxy       *HAProxy       `json:"haproxy,omitempty"`
-	Tls           *Tls           `json:"tls,omitempty"`
+	// +kubebuilder:default:={enabled: false, image: "haproxytech/haproxy-alpine:3.1", replicas: 1, frontendPort: 80, appServers: {{name: "AppServices", type: "http", port: 8000, targetPort: 8000, path: "/console"}, {name: "Admin", type: "http", port: 8001, targetPort: 8001, path: "/adminUI"}, {name: "Manage", type: "http", port: 8002, targetPort: 8002, path: "/manage"}}, pathBasedRouting: true, service: {type: ClusterIP}, tcpPorts: {enabled: false}, timeout: {client: 600, connect: 600, server: 600}, tls: {enabled: false, secretName: "", certFileName: ""}, stats: {enabled: false, port: 1024, auth: {enabled: false, username: "", password: ""}}, resources: {requests: {cpu: "100m", memory: "200Mi"}, limits: {cpu: "200m", memory: "500Mi"}} }
+	HAProxy *HAProxy `json:"haproxy,omitempty"`
+	Tls     *Tls     `json:"tls,omitempty"`
 
 	MarkLogicGroups []*MarklogicGroups `json:"markLogicGroups,omitempty"`
 }
