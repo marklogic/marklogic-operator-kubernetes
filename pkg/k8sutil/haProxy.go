@@ -157,8 +157,8 @@ resolvers dns
 	result += parseTemplateToString(baseConfig, data) + "\n"
 	haProxyData["haproxy.cfg"] += result + "\n"
 
-	haProxyData["haproxy.cfg"] += generateFrontendConfig(cr)
-	haProxyData["haproxy.cfg"] += generateBackendConfig(cr) + "\n"
+	haProxyData["haproxy.cfg"] += generateFrontendConfig(cr) + "\n"
+	haProxyData["haproxy.cfg"] += generateBackendConfig(cr)
 
 	if cr.Spec.HAProxy.Stats.Enabled {
 		haProxyData["haproxy.cfg"] += generateStatsConfig(cr)
