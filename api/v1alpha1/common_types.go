@@ -79,22 +79,27 @@ type HAProxy struct {
 	// +kubebuilder:default:="haproxytech/haproxy-alpine:3.1"
 	Image string `json:"image,omitempty"`
 	// +kubebuilder:default:=1
-
 	ReplicaCount int32 `json:"replicas,omitempty"`
 	// +kubebuilder:default:=80
-	FrontendPort       int32                       `json:"frontendPort,omitempty"`
-	AppServers         []AppServers                `json:"appServers,omitempty"`
-	PathBasedRouting   bool                        `json:"pathBasedRouting,omitempty"`
-	RestartWhenUpgrade bool                        `json:"restartWhenUpgrade,omitempty"`
-	Service            ServiceForHAProxy           `json:"service,omitempty"`
-	TcpPorts           Tcpports                    `json:"tcpPorts,omitempty"`
-	Timeout            Timeout                     `json:"timeout,omitempty"`
-	Tls                *TlsForHAProxy              `json:"tls,omitempty"`
-	Stats              Stats                       `json:"stats,omitempty"`
-	Resources          corev1.ResourceRequirements `json:"resources,omitempty"`
-	Affinity           *corev1.Affinity            `json:"affinity,omitempty"`
-	NodeSelector       map[string]string           `json:"nodeSelector,omitempty"`
-	Ingress            Ingress                     `json:"ingress,omitempty"`
+	FrontendPort int32        `json:"frontendPort,omitempty"`
+	AppServers   []AppServers `json:"appServers,omitempty"`
+	// +kubebuilder:default:=true
+	PathBasedRouting   *bool `json:"pathBasedRouting,omitempty"`
+	RestartWhenUpgrade *bool `json:"restartWhenUpgrade,omitempty"`
+	// +kubebuilder:default:={type: ClusterIP}
+	Service      *corev1.ServiceType         `json:"service,omitempty"`
+	// +kubebuilder:default:={enabled: false}
+	TcpPorts     Tcpports                    `json:"tcpPorts,omitempty"`
+	// +kubebuilder:default:={client: 600, connect: 600, server: 600}
+	Timeout      Timeout                     `json:"timeout,omitempty"`
+	// +kubebuilder:default:={enabled: false, secretName: "", certFileName: ""}
+	Tls          *TlsForHAProxy              `json:"tls,omitempty"`
+	// +kubebuilder:default:={enabled: false, port: 1024, auth: {enabled: false, username: "", password: ""}}
+	Stats        Stats                       `json:"stats,omitempty"`
+	Resources    corev1.ResourceRequirements `json:"resources,omitempty"`
+	Affinity     *corev1.Affinity            `json:"affinity,omitempty"`
+	NodeSelector map[string]string           `json:"nodeSelector,omitempty"`
+	Ingress      Ingress                     `json:"ingress,omitempty"`
 }
 
 type AppServers struct {
@@ -115,10 +120,6 @@ type StatsAuth struct {
 	Enabled  bool   `json:"enabled,omitempty"`
 	Username string `json:"username,omitempty"`
 	Password string `json:"password,omitempty"`
-}
-
-type ServiceForHAProxy struct {
-	Type corev1.ServiceType `json:"type,omitempty"`
 }
 
 type Tcpports struct {

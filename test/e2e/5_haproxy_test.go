@@ -23,6 +23,7 @@ func TestHAPorxyPathBaseEnabled(t *testing.T) {
 	namespace := "haproxy-pathbased"
 	releaseName := "ml"
 	replicas := int32(1)
+	trueVal := true
 
 	cr := &databasev1alpha1.MarklogicCluster{
 		TypeMeta: metav1.TypeMeta{
@@ -48,7 +49,7 @@ func TestHAPorxyPathBaseEnabled(t *testing.T) {
 			},
 			HAProxy: &databasev1alpha1.HAProxy{
 				Enabled:          true,
-				PathBasedRouting: true,
+				PathBasedRouting: &trueVal,
 				FrontendPort:     8080,
 				AppServers: []databasev1alpha1.AppServers{
 					{
@@ -134,6 +135,7 @@ func TestHAPorxWithNoPathBasedDisabled(t *testing.T) {
 	namespace := "haproxy-test"
 	releaseName := "ml"
 	replicas := int32(1)
+	falseVal := false
 
 	cr := &databasev1alpha1.MarklogicCluster{
 		TypeMeta: metav1.TypeMeta{
@@ -159,7 +161,7 @@ func TestHAPorxWithNoPathBasedDisabled(t *testing.T) {
 			},
 			HAProxy: &databasev1alpha1.HAProxy{
 				Enabled:          true,
-				PathBasedRouting: false,
+				PathBasedRouting: &falseVal,
 				FrontendPort:     8090,
 				AppServers: []databasev1alpha1.AppServers{
 					{
@@ -198,7 +200,7 @@ func TestHAPorxWithNoPathBasedDisabled(t *testing.T) {
 		// wait for resource to be created
 
 		t.Logf("MarklogicCluster CR: %+v", cr.Spec.HAProxy)
-		t.Logf("PathBasedRouting CR: %+v", cr.Spec.HAProxy.PathBasedRouting)
+		t.Logf("PathBasedRouting CR: %+v", *cr.Spec.HAProxy.PathBasedRouting)
 		t.Logf("Enabled CR: %+v", cr.Spec.HAProxy.Enabled)
 
 		if err := wait.For(

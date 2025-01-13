@@ -32,7 +32,7 @@ func generateFrontendConfig(cr *databasev1alpha1.MarklogicCluster) string {
 	var result string
 	pathBasedRouting := cr.Spec.HAProxy.PathBasedRouting
 	appServers := cr.Spec.HAProxy.AppServers
-	if pathBasedRouting {
+	if *pathBasedRouting {
 		frontEndDef = `
 frontend marklogic-pathbased-frontend
 	mode http
@@ -93,7 +93,7 @@ backend marklogic-{{ .PortNumber}}-backend
   stick match req.cook(SessionId)
   default-server check`
 
-	if pathBasedRouting {
+	if *pathBasedRouting {
 		backendTemplate += `
   http-request replace-path {{.Path}}(/)?(.*) /\2`
 	}

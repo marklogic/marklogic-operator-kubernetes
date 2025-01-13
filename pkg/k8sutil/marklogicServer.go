@@ -38,7 +38,7 @@ type MarkLogicGroupParameters struct {
 	ContainerSecurityContext      *corev1.SecurityContext
 	IsBootstrap                   bool
 	LogCollection                 *databasev1alpha1.LogCollection
-	IsPathBasedRouting            bool
+	IsPathBasedRouting            *bool
 	Tls                           *databasev1alpha1.Tls
 }
 
@@ -237,8 +237,9 @@ func generateMarkLogicGroupParams(cr *databasev1alpha1.MarklogicCluster, index i
 		LogCollection:                 clusterParams.LogCollection,
 		Tls:                           clusterParams.Tls,
 	}
+
 	if cr.Spec.MarkLogicGroups[index].HAProxy == nil {
-		MarkLogicGroupParameters.IsPathBasedRouting = false
+		MarkLogicGroupParameters.IsPathBasedRouting = &[]bool{false}[0]
 	} else {
 		MarkLogicGroupParameters.IsPathBasedRouting = cr.Spec.MarkLogicGroups[index].HAProxy.PathBasedRouting
 	}

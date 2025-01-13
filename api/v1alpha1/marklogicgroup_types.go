@@ -79,7 +79,7 @@ type MarklogicGroupSpec struct {
 	DoNotDelete *bool `json:"doNotDelete,omitempty"`
 
 	Service          Service `json:"service,omitempty"`
-	PathBasedRouting bool    `json:"pathBasedRouting,omitempty"`
+	PathBasedRouting *bool   `json:"pathBasedRouting,omitempty"`
 
 	Tls *Tls `json:"tls,omitempty"`
 }

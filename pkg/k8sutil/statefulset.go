@@ -52,7 +52,7 @@ type containerParameters struct {
 	SecurityContext    *corev1.SecurityContext
 	EnableConverters   bool
 	HugePages          *databasev1alpha1.HugePages
-	PathBasedRouting   bool
+	PathBasedRouting   *bool
 	Tls                *databasev1alpha1.Tls
 }
 
@@ -543,7 +543,7 @@ func getEnvironmentVariables(containerParams containerParameters) []corev1.EnvVa
 		Value: strconv.FormatBool(containerParams.EnableConverters),
 	}, corev1.EnvVar{
 		Name:  "PATH_BASED_ROUTING",
-		Value: strconv.FormatBool(containerParams.PathBasedRouting),
+		Value: strconv.FormatBool(*containerParams.PathBasedRouting),
 	},
 	)
 

@@ -82,7 +82,7 @@ var _ = Describe("MarklogicCluster Controller", func() {
 						Enabled:          true,
 						ReplicaCount:     1,
 						FrontendPort:     80,
-						PathBasedRouting: true,
+						PathBasedRouting: &[]bool{true}[0],
 						AppServers: []databasev1alpha1.AppServers{
 							{Name: "AppServices", Type: "http", Port: 8000, TargetPort: 8000, Path: "/console"},
 							{Name: "Admin", Type: "http", Port: 8001, TargetPort: 8001, Path: "/adminUI"},

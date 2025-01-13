@@ -303,7 +303,7 @@ func (cc *ClusterContext) createHAProxyService() error {
 			Protocol:   corev1.ProtocolTCP,
 		},
 	}
-	if cr.Spec.HAProxy.PathBasedRouting {
+	if *cr.Spec.HAProxy.PathBasedRouting {
 		servicePort = []corev1.ServicePort{
 			{
 				Name:       "stat",
