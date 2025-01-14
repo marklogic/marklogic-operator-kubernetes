@@ -3,6 +3,7 @@ package e2e
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -112,12 +113,31 @@ func TestHAPorxyPathBaseEnabled(t *testing.T) {
 		podName := "ml-0"
 		fqdn := fmt.Sprintf("marklogic-haproxy.%s.svc.cluster.local", namespace)
 		url := "http://" + fqdn + ":8080/adminUI"
-		t.Log("URL for haproxy: ", url)
+		t.Log("URL for testing haproxy service: ", url)
+		// curl command to check if haproxy is working for path based routing
 		command := fmt.Sprintf("curl --anyauth -u %s:%s %s", adminUsername, adminPassword, url)
 		time.Sleep(5 * time.Second)
 		_, err := utils.ExecCmdInPod(podName, namespace, mlContainerName, command)
 		if err != nil {
-			t.Fatalf("Failed to execute curl command in pod: %v", err)
+			t.Fatalf("Failed to execute curl command to check haproxy service: %v", err)
+		}
+		return ctx
+	})
+
+	feature.Assess("HAProxy with PathBased Enabled Set Authentication to BASIC", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
+		svcName := "ml"
+		podName := "ml-0"
+		fqdn := fmt.Sprintf("%s.%s.%s.svc.cluster.local", podName,svcName,namespace)
+		url := "http://" + fqdn + ":8001"
+		t.Log("URL for testing authentication method: ", url)
+		// curl command to check if haproxy is working for path based routing
+		command := fmt.Sprintf("curl -I %s", url)
+		res, err := utils.ExecCmdInPod(podName, namespace, mlContainerName, command)
+		if err != nil {
+			t.Fatalf("Failed to execute curl command to check authentication method: %v", err)
+		}
+		if !strings.Contains(res, "WWW-Authenticate: Basic") {
+			t.Fatalf("Failed to check authentication method is Basic: %v", err)
 		}
 		return ctx
 	})
@@ -235,6 +255,24 @@ func TestHAPorxWithNoPathBasedDisabled(t *testing.T) {
 		_, err := utils.ExecCmdInPod(podName, namespace, mlContainerName, command)
 		if err != nil {
 			t.Fatalf("Failed to execute curl command in pod: %v", err)
+		}
+		return ctx
+	})
+
+	feature.Assess("HAProxy with PathBased Disabled Remain the Auth to Digest", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
+		svcName := "ml"
+		podName := "ml-0"
+		fqdn := fmt.Sprintf("%s.%s.%s.svc.cluster.local", podName,svcName,namespace)
+		url := "http://" + fqdn + ":8001"
+		t.Log("URL for testing authentication method: ", url)
+		// curl command to check if haproxy is working for path based routing
+		command := fmt.Sprintf("curl -I %s", url)
+		res, err := utils.ExecCmdInPod(podName, namespace, mlContainerName, command)
+		if err != nil {
+			t.Fatalf("Failed to execute curl command to check authentication method: %v", err)
+		}
+		if !strings.Contains(res, "WWW-Authenticate: Digest") {
+			t.Fatalf("Failed to check authentication method is Digest: %v", err)
 		}
 		return ctx
 	})
