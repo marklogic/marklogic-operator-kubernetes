@@ -62,6 +62,7 @@ type MarkLogicClusterParameters struct {
 	LogCollection                 *databasev1alpha1.LogCollection
 	PodSecurityContext            *corev1.PodSecurityContext
 	ContainerSecurityContext      *corev1.SecurityContext
+	IsPathBasedRouting            *bool
 	Tls                           *databasev1alpha1.Tls
 	TerminationGracePeriodSeconds *int64
 }
@@ -205,6 +206,7 @@ func generateMarkLogicClusterParams(cr *databasev1alpha1.MarklogicCluster) *Mark
 		PodSecurityContext:            cr.Spec.PodSecurityContext,
 		ContainerSecurityContext:      cr.Spec.ContainerSecurityContext,
 		Tls:                           cr.Spec.Tls,
+		IsPathBasedRouting:            cr.Spec.HAProxy.PathBasedRouting,
 		TerminationGracePeriodSeconds: cr.Spec.TerminationGracePeriodSeconds,
 	}
 
@@ -234,13 +236,12 @@ func generateMarkLogicGroupParams(cr *databasev1alpha1.MarklogicCluster, index i
 		PodSecurityContext:            clusterParams.PodSecurityContext,
 		ContainerSecurityContext:      clusterParams.ContainerSecurityContext,
 		IsBootstrap:                   cr.Spec.MarkLogicGroups[index].IsBootstrap,
+		IsPathBasedRouting:            clusterParams.IsPathBasedRouting,
 		LogCollection:                 clusterParams.LogCollection,
 		Tls:                           clusterParams.Tls,
 	}
 
-	if cr.Spec.MarkLogicGroups[index].HAProxy == nil {
-		MarkLogicGroupParameters.IsPathBasedRouting = &[]bool{false}[0]
-	} else {
+	if cr.Spec.MarkLogicGroups[index].HAProxy != nil {
 		MarkLogicGroupParameters.IsPathBasedRouting = cr.Spec.MarkLogicGroups[index].HAProxy.PathBasedRouting
 	}
 	if cr.Spec.MarkLogicGroups[index].Image != "" {
