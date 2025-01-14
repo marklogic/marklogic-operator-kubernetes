@@ -84,16 +84,15 @@ type HAProxy struct {
 	FrontendPort int32        `json:"frontendPort,omitempty"`
 	AppServers   []AppServers `json:"appServers,omitempty"`
 	// +kubebuilder:default:=true
-	PathBasedRouting   *bool `json:"pathBasedRouting,omitempty"`
-	RestartWhenUpgrade *bool `json:"restartWhenUpgrade,omitempty"`
-	// +kubebuilder:default:={type: ClusterIP}
-	Service      *corev1.ServiceType         `json:"service,omitempty"`
+	PathBasedRouting   *bool               `json:"pathBasedRouting,omitempty"`
+	RestartWhenUpgrade *bool               `json:"restartWhenUpgrade,omitempty"`
+	Service            *corev1.ServiceType `json:"service,omitempty"`
 	// +kubebuilder:default:={enabled: false}
-	TcpPorts     Tcpports                    `json:"tcpPorts,omitempty"`
+	TcpPorts Tcpports `json:"tcpPorts,omitempty"`
 	// +kubebuilder:default:={client: 600, connect: 600, server: 600}
-	Timeout      Timeout                     `json:"timeout,omitempty"`
+	Timeout Timeout `json:"timeout,omitempty"`
 	// +kubebuilder:default:={enabled: false, secretName: "", certFileName: ""}
-	Tls          *TlsForHAProxy              `json:"tls,omitempty"`
+	Tls *TlsForHAProxy `json:"tls,omitempty"`
 	// +kubebuilder:default:={enabled: false, port: 1024, auth: {enabled: false, username: "", password: ""}}
 	Stats        Stats                       `json:"stats,omitempty"`
 	Resources    corev1.ResourceRequirements `json:"resources,omitempty"`
