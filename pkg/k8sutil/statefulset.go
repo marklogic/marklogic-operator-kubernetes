@@ -541,11 +541,20 @@ func getEnvironmentVariables(containerParams containerParameters) []corev1.EnvVa
 	}, corev1.EnvVar{
 		Name:  "INSTALL_CONVERTERS",
 		Value: strconv.FormatBool(containerParams.EnableConverters),
-	}, corev1.EnvVar{
-		Name:  "PATH_BASED_ROUTING",
-		Value: strconv.FormatBool(*containerParams.PathBasedRouting),
 	},
 	)
+
+	if containerParams.PathBasedRouting == nil || !*containerParams.PathBasedRouting {
+		envVars = append(envVars, corev1.EnvVar{
+			Name:  "PATH_BASED_ROUTING",
+			Value: "false",
+		})
+	} else {
+		envVars = append(envVars, corev1.EnvVar{
+			Name:  "PATH_BASED_ROUTING",
+			Value: "true",
+		})
+	}
 
 	if containerParams.LicenseKey != "" {
 		envVars = append(envVars, corev1.EnvVar{
