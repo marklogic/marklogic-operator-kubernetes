@@ -127,7 +127,7 @@ func TestHAPorxyPathBaseEnabled(t *testing.T) {
 	feature.Assess("HAProxy with PathBased Enabled Set Authentication to BASIC", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 		svcName := "ml"
 		podName := "ml-0"
-		fqdn := fmt.Sprintf("%s.%s.%s.svc.cluster.local", podName,svcName,namespace)
+		fqdn := fmt.Sprintf("%s.%s.%s.svc.cluster.local", podName, svcName, namespace)
 		url := "http://" + fqdn + ":8001"
 		t.Log("URL for testing authentication method: ", url)
 		// curl command to check if haproxy is working for path based routing
@@ -262,7 +262,7 @@ func TestHAPorxWithNoPathBasedDisabled(t *testing.T) {
 	feature.Assess("HAProxy with PathBased Disabled Remain the Auth to Digest", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 		svcName := "ml"
 		podName := "ml-0"
-		fqdn := fmt.Sprintf("%s.%s.%s.svc.cluster.local", podName,svcName,namespace)
+		fqdn := fmt.Sprintf("%s.%s.%s.svc.cluster.local", podName, svcName, namespace)
 		url := "http://" + fqdn + ":8001"
 		t.Log("URL for testing authentication method: ", url)
 		// curl command to check if haproxy is working for path based routing
