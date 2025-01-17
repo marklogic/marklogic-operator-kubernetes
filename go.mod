@@ -1,8 +1,6 @@
 module github.com/marklogic/marklogic-kubernetes-operator
 
-go 1.23.0
-
-toolchain go1.23.4
+go 1.23.5
 
 require (
 	github.com/cisco-open/k8s-objectmatcher v1.10.0
