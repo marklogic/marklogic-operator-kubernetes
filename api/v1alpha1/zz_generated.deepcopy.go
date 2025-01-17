@@ -605,11 +605,6 @@ func (in *MarklogicGroupSpec) DeepCopyInto(out *MarklogicGroupSpec) {
 		**out = **in
 	}
 	in.Service.DeepCopyInto(&out.Service)
-	if in.PathBasedRouting != nil {
-		in, out := &in.PathBasedRouting, &out.PathBasedRouting
-		*out = new(bool)
-		**out = **in
-	}
 	if in.Tls != nil {
 		in, out := &in.Tls, &out.Tls
 		*out = new(Tls)

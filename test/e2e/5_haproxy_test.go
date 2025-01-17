@@ -137,7 +137,7 @@ func TestHAPorxyPathBaseEnabled(t *testing.T) {
 			t.Fatalf("Failed to execute curl command to check authentication method: %v", err)
 		}
 		if !strings.Contains(res, "WWW-Authenticate: Basic") {
-			t.Fatalf("Failed to check authentication method is Basic: %v", err)
+			t.Fatalf("Failed to check authentication method is Basic: %v", res)
 		}
 		return ctx
 	})
@@ -272,7 +272,7 @@ func TestHAPorxWithNoPathBasedDisabled(t *testing.T) {
 			t.Fatalf("Failed to execute curl command to check authentication method: %v", err)
 		}
 		if !strings.Contains(res, "WWW-Authenticate: Digest") {
-			t.Fatalf("Failed to check authentication method is Digest: %v", err)
+			t.Fatalf("Failed to check authentication method is Digest: %v", res)
 		}
 		return ctx
 	})
