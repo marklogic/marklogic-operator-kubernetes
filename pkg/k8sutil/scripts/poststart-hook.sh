@@ -624,6 +624,7 @@ EOF
 
 function configure_path_based_routing {
     # Authentication configuration when path based is used
+    info "Path based routing: $PATH_BASED_ROUTING"
     if [[ $PATH_BASED_ROUTING == "true" ]]; then                    
         log "Info:  path based routing is set. Adapting authentication method"
         resp=$(curl --anyauth -w "%{http_code}" --user $MARKLOGIC_ADMIN_USERNAME:$MARKLOGIC_ADMIN_PASSWORD -m 20 -s -X PUT -H "Content-type: application/json" -d '{"authentication":"basic"}' http://localhost:8002/manage/v2/servers/Admin/properties?group-id=${MARKLOGIC_GROUP})

@@ -81,14 +81,12 @@ type HAProxy struct {
 	// +kubebuilder:default:=1
 	ReplicaCount int32 `json:"replicas,omitempty"`
 	// +kubebuilder:default:=80
-	FrontendPort int32 `json:"frontendPort,omitempty"`
-	// +kubebuilder:default:={{name: "AppServices", type: "http", port: 8000, targetPort: 8000, path: "/console"}, {name: "Admin", type: "http", port: 8001, targetPort: 8001, path: "/adminUI"}, {name: "Manage", type: "http", port: 8002, targetPort: 8002, path: "/manage"}}
-	AppServers []AppServers `json:"appServers,omitempty"`
+	FrontendPort int32        `json:"frontendPort,omitempty"`
+	AppServers   []AppServers `json:"appServers,omitempty"`
 	// +kubebuilder:default:=true
-	PathBasedRouting   bool `json:"pathBasedRouting,omitempty"`
-	RestartWhenUpgrade bool `json:"restartWhenUpgrade,omitempty"`
-	// +kubebuilder:default:={type: ClusterIP}
-	Service ServiceForHAProxy `json:"service,omitempty"`
+	PathBasedRouting   *bool               `json:"pathBasedRouting,omitempty"`
+	RestartWhenUpgrade *bool               `json:"restartWhenUpgrade,omitempty"`
+	Service            *corev1.ServiceType `json:"service,omitempty"`
 	// +kubebuilder:default:={enabled: false}
 	TcpPorts Tcpports `json:"tcpPorts,omitempty"`
 	// +kubebuilder:default:={client: 600, connect: 600, server: 600}
@@ -121,10 +119,6 @@ type StatsAuth struct {
 	Enabled  bool   `json:"enabled,omitempty"`
 	Username string `json:"username,omitempty"`
 	Password string `json:"password,omitempty"`
-}
-
-type ServiceForHAProxy struct {
-	Type corev1.ServiceType `json:"type,omitempty"`
 }
 
 type Tcpports struct {

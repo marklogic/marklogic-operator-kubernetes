@@ -39,6 +39,7 @@ var clusterHugePages = &databasev1alpha1.HugePages{
 	Enabled:   true,
 	MountPath: "/dev/hugepages",
 }
+var trueVal = true
 var enodeReplicas = int32(2)
 var dnodeReplicas = int32(1)
 var policy = []networkingv1.PolicyType{networkingv1.PolicyTypeIngress, networkingv1.PolicyTypeEgress}
@@ -82,7 +83,7 @@ var _ = Describe("MarklogicCluster Controller", func() {
 						Enabled:          true,
 						ReplicaCount:     1,
 						FrontendPort:     80,
-						PathBasedRouting: true,
+						PathBasedRouting: &[]bool{true}[0],
 						AppServers: []databasev1alpha1.AppServers{
 							{Name: "AppServices", Type: "http", Port: 8000, TargetPort: 8000, Path: "/console"},
 							{Name: "Admin", Type: "http", Port: 8001, TargetPort: 8001, Path: "/adminUI"},
@@ -144,7 +145,7 @@ var _ = Describe("MarklogicCluster Controller", func() {
 			Expect(clusterCR.Spec.HAProxy.Enabled).Should(Equal(true))
 			Expect(clusterCR.Spec.HAProxy.ReplicaCount).Should(Equal(int32(1)))
 			Expect(clusterCR.Spec.HAProxy.FrontendPort).Should(Equal(int32(80)))
-			Expect(clusterCR.Spec.HAProxy.PathBasedRouting).Should(Equal(true))
+			Expect(clusterCR.Spec.HAProxy.PathBasedRouting).Should(Equal(&trueVal))
 			Expect(clusterCR.Spec.HAProxy.AppServers[0].Name).Should(Equal("AppServices"))
 			Expect(clusterCR.Spec.HAProxy.AppServers[0].Type).Should(Equal("http"))
 			Expect(clusterCR.Spec.HAProxy.AppServers[0].Port).Should(Equal(int32(8000)))
