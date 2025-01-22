@@ -77,7 +77,8 @@ type NetworkPolicy struct {
 type HAProxy struct {
 	Enabled bool `json:"enabled,omitempty"`
 	// +kubebuilder:default:="haproxytech/haproxy-alpine:3.1"
-	Image string `json:"image,omitempty"`
+	Image            string                        `json:"image,omitempty"`
+	ImagePullSecrets []corev1.LocalObjectReference `json:"imagePullSecrets,omitempty"`
 	// +kubebuilder:default:=1
 	ReplicaCount int32 `json:"replicas,omitempty"`
 	// +kubebuilder:default:=80

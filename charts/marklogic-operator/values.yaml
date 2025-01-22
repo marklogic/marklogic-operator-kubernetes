@@ -13,6 +13,7 @@ controllerManager:
     image:
       repository: gcr.io/kubebuilder/kube-rbac-proxy
       tag: v0.15.0
+    imagePullSecrets: []
     resources:
       limits:
         cpu: 500m
