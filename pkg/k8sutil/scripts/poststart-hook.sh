@@ -407,6 +407,7 @@ function configure_group {
             "-o" "/tmp/groups.out" $LOCAL_HTTPS_OPTION
 
         response_code=$?
+        info "response_code: $response_code"
         if [ "${response_code}" = "200" ]; then
             current_group=$( \
                 cat "/tmp/groups.out" | 
@@ -442,7 +443,7 @@ function configure_group {
         fi
 
         if [[ "$MARKLOGIC_CLUSTER_TYPE" == "non-bootstrap" ]]; then
-            info "creating group for other Helm Chart"
+            info "creating group $MARKLOGIC_GROUP"
 
             # Create a group if group is not already exits
             GROUP_RESP_CODE=$( curl --anyauth --retry 5 -m 20 -s -o /dev/null -w "%{http_code}" $HTTPS_OPTION -X GET $HTTP_PROTOCOL://${MARKLOGIC_BOOTSTRAP_HOST}:8002/manage/v2/groups/${MARKLOGIC_GROUP} --anyauth --user ${MARKLOGIC_ADMIN_USERNAME}:${MARKLOGIC_ADMIN_PASSWORD} )
@@ -451,12 +452,19 @@ function configure_group {
             else 
                 res_code=$(curl --anyauth --retry 5 --user ${MARKLOGIC_ADMIN_USERNAME}:${MARKLOGIC_ADMIN_PASSWORD} $HTTPS_OPTION -m 20 -s -w '%{http_code}' -X POST -d "${group_cfg}" -H "Content-type: application/json" $HTTP_PROTOCOL://${MARKLOGIC_BOOTSTRAP_HOST}:8002/manage/v2/groups)
                 if [[ ${res_code} -eq 201 ]]; then
-                    log "Info: [initContainer] Successfully configured group $MARKLOGIC_GROUP on the MarkLogic cluster."
+                    log "Info: Successfully configured group $MARKLOGIC_GROUP on the MarkLogic cluster."
                 else
-                    log "Info: [initContainer] Expected response code 201, got $res_code"
+                    log "Info: Expected response code 201, got $res_code"
                 fi
             fi
-            
+            log "Info: Group $MARKLOGIC_GROUP has been created, configuring App-server App-Services in group $MARKLOGIC_GROUP on the MarkLogic cluster."
+            res_code=`curl --retry 5 --retry-max-time 60 --anyauth --user ${MARKLOGIC_ADMIN_USERNAME}:${MARKLOGIC_ADMIN_PASSWORD} -m 20 -s ${HTTPS_OPTION} -w '%{http_code}' -X POST -d '{"server-name":"App-Services", "root":"/", "port":8000,"modules-database":"Modules", "content-database":"Documents", "error-handler":"/MarkLogic/rest-api/8000-error-handler.xqy", "url-rewriter":"/MarkLogic/rest-api/8000-rewriter.xml"}' -H "Content-type: application/json" "${HTTP_PROTOCOL}://${MARKLOGIC_BOOTSTRAP_HOST}:8002/manage/v2/servers?group-id=${MARKLOGIC_GROUP}&server-type=http"`
+            if [[ ${res_code} -eq 201 ]]; then
+              log "Info: Successfully configured App-server App-Services into group $MARKLOGIC_GROUP on the MarkLogic cluster."
+            else
+              log "Info: Expected response code 201, got $res_code"
+              exit 1
+            fi        
         fi
     else
         info "not bootstrap host. Skip group configuration"
