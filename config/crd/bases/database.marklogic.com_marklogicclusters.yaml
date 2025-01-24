@@ -6929,7 +6929,11 @@ spec:
                         type: object
                       type: array
                   type: object
+                maxItems: 5
                 type: array
+                x-kubernetes-validations:
+                - message: MarkLogicGroups must have unique group names
+                  rule: self.all(x, self.filter(y, y.groupConfig.name==x.groupConfig.name).size()==1)
               networkPolicy:
                 properties:
                   egress:

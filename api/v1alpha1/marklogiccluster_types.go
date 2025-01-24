@@ -64,6 +64,8 @@ type MarklogicClusterSpec struct {
 	HAProxy       *HAProxy       `json:"haproxy,omitempty"`
 	Tls           *Tls           `json:"tls,omitempty"`
 
+	// +kubebuilder:validation:MaxItems=5
+	// +kubebuilder:validation:XValidation:rule="self.all(x, self.filter(y, y.groupConfig.name==x.groupConfig.name).size()==1)", message="MarkLogicGroups must have unique group names"
 	MarkLogicGroups []*MarklogicGroups `json:"markLogicGroups,omitempty"`
 }
 
