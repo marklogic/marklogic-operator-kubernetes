@@ -410,6 +410,28 @@ func (in *MarklogicClusterSpec) DeepCopyInto(out *MarklogicClusterSpec) {
 		*out = new(Tls)
 		(*in).DeepCopyInto(*out)
 	}
+	if in.AdditionalVolumes != nil {
+		in, out := &in.AdditionalVolumes, &out.AdditionalVolumes
+		*out = new([]v1.Volume)
+		if **in != nil {
+			in, out := *in, *out
+			*out = make([]v1.Volume, len(*in))
+			for i := range *in {
+				(*in)[i].DeepCopyInto(&(*out)[i])
+			}
+		}
+	}
+	if in.AdditionalVolumeMounts != nil {
+		in, out := &in.AdditionalVolumeMounts, &out.AdditionalVolumeMounts
+		*out = new([]v1.VolumeMount)
+		if **in != nil {
+			in, out := *in, *out
+			*out = make([]v1.VolumeMount, len(*in))
+			for i := range *in {
+				(*in)[i].DeepCopyInto(&(*out)[i])
+			}
+		}
+	}
 	if in.MarkLogicGroups != nil {
 		in, out := &in.MarkLogicGroups, &out.MarkLogicGroups
 		*out = make([]*MarklogicGroups, len(*in))
@@ -605,6 +627,28 @@ func (in *MarklogicGroupSpec) DeepCopyInto(out *MarklogicGroupSpec) {
 		**out = **in
 	}
 	in.Service.DeepCopyInto(&out.Service)
+	if in.AdditionalVolumes != nil {
+		in, out := &in.AdditionalVolumes, &out.AdditionalVolumes
+		*out = new([]v1.Volume)
+		if **in != nil {
+			in, out := *in, *out
+			*out = make([]v1.Volume, len(*in))
+			for i := range *in {
+				(*in)[i].DeepCopyInto(&(*out)[i])
+			}
+		}
+	}
+	if in.AdditionalVolumeMounts != nil {
+		in, out := &in.AdditionalVolumeMounts, &out.AdditionalVolumeMounts
+		*out = new([]v1.VolumeMount)
+		if **in != nil {
+			in, out := *in, *out
+			*out = make([]v1.VolumeMount, len(*in))
+			for i := range *in {
+				(*in)[i].DeepCopyInto(&(*out)[i])
+			}
+		}
+	}
 	if in.Tls != nil {
 		in, out := &in.Tls, &out.Tls
 		*out = new(Tls)
@@ -715,6 +759,28 @@ func (in *MarklogicGroups) DeepCopyInto(out *MarklogicGroups) {
 		in, out := &in.Tls, &out.Tls
 		*out = new(Tls)
 		(*in).DeepCopyInto(*out)
+	}
+	if in.AdditionalVolumes != nil {
+		in, out := &in.AdditionalVolumes, &out.AdditionalVolumes
+		*out = new([]v1.Volume)
+		if **in != nil {
+			in, out := *in, *out
+			*out = make([]v1.Volume, len(*in))
+			for i := range *in {
+				(*in)[i].DeepCopyInto(&(*out)[i])
+			}
+		}
+	}
+	if in.AdditionalVolumeMounts != nil {
+		in, out := &in.AdditionalVolumeMounts, &out.AdditionalVolumeMounts
+		*out = new([]v1.VolumeMount)
+		if **in != nil {
+			in, out := *in, *out
+			*out = make([]v1.VolumeMount, len(*in))
+			for i := range *in {
+				(*in)[i].DeepCopyInto(&(*out)[i])
+			}
+		}
 	}
 }
 
