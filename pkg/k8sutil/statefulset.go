@@ -32,28 +32,30 @@ type statefulSetParameters struct {
 }
 
 type containerParameters struct {
-	Name               string
-	Namespace          string
-	ClusterDomain      string
-	Image              string
-	ImagePullPolicy    corev1.PullPolicy
-	Resources          *corev1.ResourceRequirements
-	PersistenceEnabled *bool
-	Volumes            []corev1.Volume
-	MountPaths         []corev1.VolumeMount
-	LicenseKey         string
-	Licensee           string
-	BootstrapHost      string
-	LivenessProbe      databasev1alpha1.ContainerProbe
-	ReadinessProbe     databasev1alpha1.ContainerProbe
-	LogCollection      *databasev1alpha1.LogCollection
-	GroupConfig        *databasev1alpha1.GroupConfig
-	PodSecurityContext *corev1.PodSecurityContext
-	SecurityContext    *corev1.SecurityContext
-	EnableConverters   bool
-	HugePages          *databasev1alpha1.HugePages
-	PathBasedRouting   bool
-	Tls                *databasev1alpha1.Tls
+	Name                   string
+	Namespace              string
+	ClusterDomain          string
+	Image                  string
+	ImagePullPolicy        corev1.PullPolicy
+	Resources              *corev1.ResourceRequirements
+	PersistenceEnabled     *bool
+	Volumes                []corev1.Volume
+	MountPaths             []corev1.VolumeMount
+	LicenseKey             string
+	Licensee               string
+	BootstrapHost          string
+	LivenessProbe          databasev1alpha1.ContainerProbe
+	ReadinessProbe         databasev1alpha1.ContainerProbe
+	LogCollection          *databasev1alpha1.LogCollection
+	GroupConfig            *databasev1alpha1.GroupConfig
+	PodSecurityContext     *corev1.PodSecurityContext
+	SecurityContext        *corev1.SecurityContext
+	EnableConverters       bool
+	HugePages              *databasev1alpha1.HugePages
+	PathBasedRouting       bool
+	Tls                    *databasev1alpha1.Tls
+	AdditionalVolumes      *[]corev1.Volume
+	AdditionalVolumeMounts *[]corev1.VolumeMount
 }
 
 func (oc *OperatorContext) ReconcileStatefulset() (reconcile.Result, error) {
@@ -348,21 +350,23 @@ func generateStatefulSetsParams(cr *databasev1alpha1.MarklogicGroup) statefulSet
 func generateContainerParams(cr *databasev1alpha1.MarklogicGroup) containerParameters {
 	trueProperty := true
 	containerParams := containerParameters{
-		Image:              cr.Spec.Image,
-		Resources:          cr.Spec.Resources,
-		Name:               cr.Spec.Name,
-		Namespace:          cr.Namespace,
-		ClusterDomain:      cr.Spec.ClusterDomain,
-		BootstrapHost:      cr.Spec.BootstrapHost,
-		LivenessProbe:      cr.Spec.LivenessProbe,
-		ReadinessProbe:     cr.Spec.ReadinessProbe,
-		GroupConfig:        cr.Spec.GroupConfig,
-		EnableConverters:   cr.Spec.EnableConverters,
-		PodSecurityContext: cr.Spec.PodSecurityContext,
-		SecurityContext:    cr.Spec.ContainerSecurityContext,
-		LogCollection:      cr.Spec.LogCollection,
-		PathBasedRouting:   cr.Spec.PathBasedRouting,
-		Tls:                cr.Spec.Tls,
+		Image:                  cr.Spec.Image,
+		Resources:              cr.Spec.Resources,
+		Name:                   cr.Spec.Name,
+		Namespace:              cr.Namespace,
+		ClusterDomain:          cr.Spec.ClusterDomain,
+		BootstrapHost:          cr.Spec.BootstrapHost,
+		LivenessProbe:          cr.Spec.LivenessProbe,
+		ReadinessProbe:         cr.Spec.ReadinessProbe,
+		GroupConfig:            cr.Spec.GroupConfig,
+		EnableConverters:       cr.Spec.EnableConverters,
+		PodSecurityContext:     cr.Spec.PodSecurityContext,
+		SecurityContext:        cr.Spec.ContainerSecurityContext,
+		LogCollection:          cr.Spec.LogCollection,
+		PathBasedRouting:       cr.Spec.PathBasedRouting,
+		Tls:                    cr.Spec.Tls,
+		AdditionalVolumes:      cr.Spec.AdditionalVolumes,
+		AdditionalVolumeMounts: cr.Spec.AdditionalVolumeMounts,
 	}
 
 	if cr.Spec.Storage != nil {
@@ -443,6 +447,9 @@ func generateVolumes(stsName string, containerParams containerParameters) []core
 				},
 			},
 		})
+	}
+	if containerParams.AdditionalVolumes != nil {
+		volumes = append(volumes, *containerParams.AdditionalVolumes...)
 	}
 	if containerParams.Tls != nil && containerParams.Tls.EnableOnDefaultAppServers {
 		volumes = append(volumes, corev1.Volume{
@@ -643,6 +650,9 @@ func getVolumeMount(containerParams containerParameters) []corev1.VolumeMount {
 				Name:      "certs",
 				MountPath: "/run/secrets/marklogic-certs/",
 			})
+	}
+	if containerParams.AdditionalVolumeMounts != nil {
+		VolumeMounts = append(VolumeMounts, *containerParams.AdditionalVolumeMounts...)
 	}
 	return VolumeMounts
 }

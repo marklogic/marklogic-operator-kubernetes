@@ -40,6 +40,8 @@ type MarkLogicGroupParameters struct {
 	LogCollection                 *databasev1alpha1.LogCollection
 	PathBasedRouting              bool
 	Tls                           *databasev1alpha1.Tls
+	AdditionalVolumes             *[]corev1.Volume
+	AdditionalVolumeMounts        *[]corev1.VolumeMount
 }
 
 type MarkLogicClusterParameters struct {
@@ -65,6 +67,8 @@ type MarkLogicClusterParameters struct {
 	PathBasedRouting              bool
 	Tls                           *databasev1alpha1.Tls
 	TerminationGracePeriodSeconds *int64
+	AdditionalVolumes             *[]corev1.Volume
+	AdditionalVolumeMounts        *[]corev1.VolumeMount
 }
 
 func MarkLogicGroupLogger(namespace string, name string) logr.Logger {
@@ -118,6 +122,8 @@ func GenerateMarkLogicGroupDef(cr *databasev1alpha1.MarklogicCluster, index int,
 			ContainerSecurityContext:      params.ContainerSecurityContext,
 			PathBasedRouting:              params.PathBasedRouting,
 			Tls:                           params.Tls,
+			AdditionalVolumes:             params.AdditionalVolumes,
+			AdditionalVolumeMounts:        params.AdditionalVolumeMounts,
 		},
 	}
 	AddOwnerRefToObject(MarkLogicGroupDef, ownerDef)
@@ -207,6 +213,8 @@ func generateMarkLogicClusterParams(cr *databasev1alpha1.MarklogicCluster) *Mark
 		ContainerSecurityContext:      cr.Spec.ContainerSecurityContext,
 		Tls:                           cr.Spec.Tls,
 		TerminationGracePeriodSeconds: cr.Spec.TerminationGracePeriodSeconds,
+		AdditionalVolumes:             cr.Spec.AdditionalVolumes,
+		AdditionalVolumeMounts:        cr.Spec.AdditionalVolumeMounts,
 	}
 	if cr.Spec.HAProxy == nil || cr.Spec.HAProxy.PathBasedRouting == nil || !*cr.Spec.HAProxy.PathBasedRouting {
 		markLogicClusterParameters.PathBasedRouting = false
@@ -243,6 +251,8 @@ func generateMarkLogicGroupParams(cr *databasev1alpha1.MarklogicCluster, index i
 		LogCollection:                 clusterParams.LogCollection,
 		PathBasedRouting:              clusterParams.PathBasedRouting,
 		Tls:                           clusterParams.Tls,
+		AdditionalVolumeMounts:        clusterParams.AdditionalVolumeMounts,
+		AdditionalVolumes:             clusterParams.AdditionalVolumes,
 	}
 
 	if cr.Spec.MarkLogicGroups[index].HAProxy != nil && cr.Spec.MarkLogicGroups[index].HAProxy.PathBasedRouting != nil {
@@ -283,6 +293,12 @@ func generateMarkLogicGroupParams(cr *databasev1alpha1.MarklogicCluster, index i
 	}
 	if cr.Spec.MarkLogicGroups[index].Tls != nil {
 		MarkLogicGroupParameters.Tls = cr.Spec.MarkLogicGroups[index].Tls
+	}
+	if cr.Spec.MarkLogicGroups[index].AdditionalVolumes != nil {
+		MarkLogicGroupParameters.AdditionalVolumes = cr.Spec.MarkLogicGroups[index].AdditionalVolumes
+	}
+	if cr.Spec.MarkLogicGroups[index].AdditionalVolumeMounts != nil {
+		MarkLogicGroupParameters.AdditionalVolumeMounts = cr.Spec.MarkLogicGroups[index].AdditionalVolumeMounts
 	}
 	return MarkLogicGroupParameters
 }

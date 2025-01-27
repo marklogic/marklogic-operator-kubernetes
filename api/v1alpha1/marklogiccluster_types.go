@@ -60,9 +60,11 @@ type MarklogicClusterSpec struct {
 	// +kubebuilder:default:={enabled: false, mountPath: "/dev/hugepages"}
 	HugePages *HugePages `json:"hugePages,omitempty"`
 	// +kubebuilder:default:={enabled: false, image: "fluent/fluent-bit:3.1.1", resources: {requests: {cpu: "100m", memory: "200Mi"}, limits: {cpu: "200m", memory: "500Mi"}}, files: {errorLogs: true, accessLogs: true, requestLogs: true}, outputs: "stdout"}
-	LogCollection *LogCollection `json:"logCollection,omitempty"`
-	HAProxy       *HAProxy       `json:"haproxy,omitempty"`
-	Tls           *Tls           `json:"tls,omitempty"`
+	LogCollection          *LogCollection        `json:"logCollection,omitempty"`
+	HAProxy                *HAProxy              `json:"haproxy,omitempty"`
+	Tls                    *Tls                  `json:"tls,omitempty"`
+	AdditionalVolumes      *[]corev1.Volume      `json:"additionalVolumes,omitempty"`
+	AdditionalVolumeMounts *[]corev1.VolumeMount `json:"additionalVolumeMounts,omitempty"`
 
 	MarkLogicGroups []*MarklogicGroups `json:"markLogicGroups,omitempty"`
 }
@@ -85,6 +87,8 @@ type MarklogicGroups struct {
 	HAProxy                   *HAProxy                          `json:"haproxy,omitempty"`
 	IsBootstrap               bool                              `json:"isBootstrap,omitempty"`
 	Tls                       *Tls                              `json:"tls,omitempty"`
+	AdditionalVolumes         *[]corev1.Volume                  `json:"additionalVolumes,omitempty"`
+	AdditionalVolumeMounts    *[]corev1.VolumeMount             `json:"additionalVolumeMounts,omitempty"`
 }
 
 type Tls struct {

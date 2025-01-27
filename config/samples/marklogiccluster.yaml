@@ -139,6 +139,15 @@ spec:
   #           port: 8000
   tls:
     enableOnDefaultAppServers: false
+  # additionalVolumes:
+  # - name: "logsdir"
+  #   emptyDir: {}
+
+  ## specify additional list of volumeMounts
+  # additionalVolumeMounts: 
+  # - name: "logsdir"
+  #   mountPath: "/var/opt/MarkLogic/Logs"
+
   markLogicGroups:
   - replicas: 1
     name: dnode

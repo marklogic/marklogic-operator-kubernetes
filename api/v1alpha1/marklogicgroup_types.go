@@ -81,6 +81,9 @@ type MarklogicGroupSpec struct {
 	Service          Service `json:"service,omitempty"`
 	PathBasedRouting bool    `json:"pathBasedRouting,omitempty"`
 
+	AdditionalVolumes      *[]corev1.Volume      `json:"additionalVolumes,omitempty"`
+	AdditionalVolumeMounts *[]corev1.VolumeMount `json:"additionalVolumeMounts,omitempty"`
+
 	Tls *Tls `json:"tls,omitempty"`
 }
 
