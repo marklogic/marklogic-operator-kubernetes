@@ -52,11 +52,12 @@ type AdminAuth struct {
 }
 
 type LogCollection struct {
-	Enabled   bool                         `json:"enabled,omitempty"`
-	Image     string                       `json:"image,omitempty"`
-	Resources *corev1.ResourceRequirements `json:"resources,omitempty"`
-	Files     LogFilesConfig               `json:"files,omitempty"`
-	Outputs   string                       `json:"outputs,omitempty"`
+	Enabled          bool                          `json:"enabled,omitempty"`
+	Image            string                        `json:"image,omitempty"`
+	ImagePullSecrets []corev1.LocalObjectReference `json:"imagePullSecrets,omitempty"`
+	Resources        *corev1.ResourceRequirements  `json:"resources,omitempty"`
+	Files            LogFilesConfig                `json:"files,omitempty"`
+	Outputs          string                        `json:"outputs,omitempty"`
 }
 
 type LogFilesConfig struct {

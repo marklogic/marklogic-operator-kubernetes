@@ -13,7 +13,6 @@ controllerManager:
     image:
       repository: gcr.io/kubebuilder/kube-rbac-proxy
       tag: v0.15.0
-    imagePullSecrets: []
     resources:
       limits:
         cpu: 500m
@@ -34,9 +33,6 @@ controllerManager:
     image:
       repository: ml-marklogic-operator-dev.bed-artifactory.bedford.progress.com/marklogic-kubernetes-operator
       tag: 1.0.0-ea2
-    imagePullSecrets: []
-    # - name: "your-secret-name-1"
-    # - name: "your-secret-name-2"
     resources:
       limits:
         cpu: 500m

@@ -12,6 +12,8 @@ spec:
   replicas: 1
   name: marklogic
   image: "progressofficial/marklogic-db:11.3.0-ubi-rootless"
+  ## Configure the imagePullSecrets to pull the image from private repository that requires credential
+  # imagePullSecrets: []
   auth:
     adminUsername: user
     adminPassword: pass
