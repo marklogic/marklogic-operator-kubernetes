@@ -505,8 +505,10 @@ func generateVolumes(stsName string, containerParams containerParameters) []core
 func generatePVCTemplate(storage *databasev1alpha1.Storage) corev1.PersistentVolumeClaim {
 	pvcTemplate := corev1.PersistentVolumeClaim{}
 	pvcTemplate.CreationTimestamp = metav1.Time{}
-	pvcTemplate.Name = "data"
-	pvcTemplate.Spec.StorageClassName = &storage.StorageClass
+	pvcTemplate.Name = "datadir"
+	if pvcTemplate.Spec.StorageClassName != nil {
+		pvcTemplate.Spec.StorageClassName = &storage.StorageClassName
+	}
 	pvcTemplate.Spec.AccessModes = []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce}
 	pvcTemplate.Spec.Resources.Requests.Storage().Add(resource.MustParse(storage.Size))
 	pvcTemplate.Spec.Resources.Requests = corev1.ResourceList{
@@ -623,7 +625,7 @@ func getVolumeMount(containerParams containerParameters) []corev1.VolumeMount {
 	// if persistenceEnabled != nil && *persistenceEnabled {
 	VolumeMounts = append(VolumeMounts,
 		corev1.VolumeMount{
-			Name:      "data",
+			Name:      "datadir",
 			MountPath: "/var/opt/MarkLogic",
 		},
 		corev1.VolumeMount{
