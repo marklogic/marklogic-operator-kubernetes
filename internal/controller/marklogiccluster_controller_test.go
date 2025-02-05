@@ -48,10 +48,12 @@ var marklogicGroups = []*databasev1alpha1.MarklogicGroups{
 	{
 		Name:     "dnode",
 		Replicas: &dnodeReplicas,
+		Service:  databasev1alpha1.Service{Type: corev1.ServiceTypeClusterIP},
 	},
 	{
 		Name:     "enode",
 		Replicas: &enodeReplicas,
+		Service:  databasev1alpha1.Service{Type: corev1.ServiceTypeClusterIP},
 	},
 }
 
