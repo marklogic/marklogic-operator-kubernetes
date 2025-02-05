@@ -716,6 +716,7 @@ func (in *MarklogicGroups) DeepCopyInto(out *MarklogicGroups) {
 		*out = new(Storage)
 		(*in).DeepCopyInto(*out)
 	}
+	in.Service.DeepCopyInto(&out.Service)
 	if in.Resources != nil {
 		in, out := &in.Resources, &out.Resources
 		*out = new(v1.ResourceRequirements)

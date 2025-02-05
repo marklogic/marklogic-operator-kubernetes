@@ -154,6 +154,21 @@ spec:
     groupConfig:
       name: dnode
       enableXdqpSsl: true
+    # service: 
+    #   ## service type could be ClusterIP, NodePort or LoadBalancer, default is ClusterIP
+    #   type: ClusterIP
+    #   # Uncomment the following lines to add additional ports to the service
+    #   additionalPorts: 
+    #   - name: app1
+    #     port: 8010
+    #     targetPort: 8010
+    #     protocol: TCP
+    #   - name: app2
+    #     port: 8011
+    #     targetPort: 8011
+    #     protocol: TCP
+    #   # Uncomment the following lines to add annotations to the service
+    #   annotations: {}
     # storage:
     #   size: 10Gi
     # resources:
@@ -170,3 +185,14 @@ spec:
       name: enode
       enableXdqpSsl: true
     isBootstrap: false
+    # service: 
+    #   ## service type could be ClusterIP, NodePort or LoadBalancer, default is ClusterIP
+    #   type: ClusterIP
+    #   # Uncomment the following lines to add additional ports to the service
+    #   additionalPorts: 
+    #   - name: app1
+    #     port: 8010 
+    #     targetPort: 8010
+    #     protocol: TCP
+    #   # Uncomment the following lines to add annotations to the service
+    #   annotations: {}

@@ -77,6 +77,7 @@ type MarklogicGroups struct {
 	ImagePullPolicy           string                            `json:"imagePullPolicy,omitempty"`
 	ImagePullSecrets          []corev1.LocalObjectReference     `json:"imagePullSecrets,omitempty"`
 	Storage                   *Storage                          `json:"storage,omitempty"`
+	Service                   Service                           `json:"service,omitempty"`
 	Resources                 *corev1.ResourceRequirements      `json:"resources,omitempty"`
 	Affinity                  *corev1.Affinity                  `json:"affinity,omitempty"`
 	TopologySpreadConstraints []corev1.TopologySpreadConstraint `json:"topologySpreadConstraints,omitempty"`

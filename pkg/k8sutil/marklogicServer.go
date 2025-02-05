@@ -2,6 +2,7 @@ package k8sutil
 
 import (
 	"fmt"
+
 	"github.com/cisco-open/k8s-objectmatcher/patch"
 	"github.com/go-logr/logr"
 	databasev1alpha1 "github.com/marklogic/marklogic-kubernetes-operator/api/v1alpha1"
@@ -22,6 +23,7 @@ type MarkLogicGroupParameters struct {
 	ImagePullPolicy               string
 	ImagePullSecrets              []corev1.LocalObjectReference
 	License                       *databasev1alpha1.License
+	Service                       databasev1alpha1.Service
 	Storage                       *databasev1alpha1.Storage
 	Auth                          *databasev1alpha1.AdminAuth
 	TerminationGracePeriodSeconds *int64
@@ -116,6 +118,7 @@ func GenerateMarkLogicGroupDef(cr *databasev1alpha1.MarklogicCluster, index int,
 			Affinity:                      params.Affinity,
 			NodeSelector:                  params.NodeSelector,
 			Storage:                       params.Storage,
+			Service:                       params.Service,
 			LogCollection:                 params.LogCollection,
 			TopologySpreadConstraints:     params.TopologySpreadConstraints,
 			PodSecurityContext:            params.PodSecurityContext,
@@ -230,6 +233,7 @@ func generateMarkLogicGroupParams(cr *databasev1alpha1.MarklogicCluster, index i
 		Replicas:                      cr.Spec.MarkLogicGroups[index].Replicas,
 		Name:                          cr.Spec.MarkLogicGroups[index].Name,
 		GroupConfig:                   cr.Spec.MarkLogicGroups[index].GroupConfig,
+		Service:                       cr.Spec.MarkLogicGroups[index].Service,
 		Image:                         clusterParams.Image,
 		ImagePullPolicy:               clusterParams.ImagePullPolicy,
 		ImagePullSecrets:              clusterParams.ImagePullSecrets,
