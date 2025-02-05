@@ -985,6 +985,7 @@ spec:
                   enableXdqpSsl:
                     type: boolean
                   name:
+                    default: Default
                     type: string
                 type: object
               hugePages:
