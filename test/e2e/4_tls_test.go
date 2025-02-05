@@ -18,7 +18,7 @@ import (
 	"sigs.k8s.io/e2e-framework/klient/wait/conditions"
 	"sigs.k8s.io/e2e-framework/pkg/envconf"
 	"sigs.k8s.io/e2e-framework/pkg/features"
-	e2eutils "sigs.k8s.io/e2e-framework/support/utils"
+	e2eutils "sigs.k8s.io/e2e-framework/pkg/utils"
 )
 
 func TestTlsWithSelfSigned(t *testing.T) {
