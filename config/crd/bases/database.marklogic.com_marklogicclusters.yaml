@@ -6934,8 +6934,8 @@ spec:
                 type: array
                 x-kubernetes-validations:
                 - message: MarkLogicGroups must have unique groupConfig names
-                  rule: size(self) == size(self.map(x, x.groupConfig.name).filter(y,
-                    self.map(x, x.groupConfig.name).filter(z, z == y).size() == 1))
+                  rule: size(self) == 1 || (size(self) == size(self.map(x, x.groupConfig.name).filter(y,
+                    self.map(x, x.groupConfig.name).filter(z, z == y).size() == 1)))
                 - message: MarkLogicGroups must have unique names
                   rule: size(self) == size(self.map(x, x.name).filter(y, self.map(x,
                     x.name).filter(z, z == y).size() == 1))

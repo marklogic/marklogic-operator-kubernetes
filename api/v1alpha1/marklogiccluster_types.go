@@ -65,7 +65,7 @@ type MarklogicClusterSpec struct {
 	Tls           *Tls           `json:"tls,omitempty"`
 
 	// +kubebuilder:validation:MaxItems=100
-	// +kubebuilder:validation:XValidation:rule="size(self) == size(self.map(x, x.groupConfig.name).filter(y, self.map(x, x.groupConfig.name).filter(z, z == y).size() == 1))", message="MarkLogicGroups must have unique groupConfig names"
+	// +kubebuilder:validation:XValidation:rule="size(self) == 1 || (size(self) == size(self.map(x, x.groupConfig.name).filter(y, self.map(x, x.groupConfig.name).filter(z, z == y).size() == 1)))", message="MarkLogicGroups must have unique groupConfig names"
 	// +kubebuilder:validation:XValidation:rule="size(self) == size(self.map(x, x.name).filter(y, self.map(x, x.name).filter(z, z == y).size() == 1))", message="MarkLogicGroups must have unique names"
 	MarkLogicGroups []*MarklogicGroups `json:"markLogicGroups,omitempty"`
 }
