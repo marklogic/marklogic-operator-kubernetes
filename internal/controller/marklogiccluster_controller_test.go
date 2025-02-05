@@ -46,11 +46,17 @@ var policy = []networkingv1.PolicyType{networkingv1.PolicyTypeIngress, networkin
 
 var marklogicGroups = []*databasev1alpha1.MarklogicGroups{
 	{
-		Name:     "dnode",
+		Name: "dnode",
+		GroupConfig: &databasev1alpha1.GroupConfig{
+			Name: "dnode",
+		},
 		Replicas: &dnodeReplicas,
 	},
 	{
-		Name:     "enode",
+		Name: "enode",
+		GroupConfig: &databasev1alpha1.GroupConfig{
+			Name: "enode",
+		},
 		Replicas: &enodeReplicas,
 	},
 }
