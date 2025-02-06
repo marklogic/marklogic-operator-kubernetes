@@ -213,7 +213,7 @@ func generateStatefulSetsDef(stsMeta metav1.ObjectMeta, params statefulSetParame
 	// add EmptyDir volume if storage is not provided
 	if containerParams.PersistenceEnabled == nil || !*containerParams.PersistenceEnabled {
 		emptyDir := corev1.Volume{
-			Name:         "data",
+			Name:         "datadir",
 			VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}},
 		}
 		statefulSet.Spec.Template.Spec.Volumes = append(statefulSet.Spec.Template.Spec.Volumes, emptyDir)
