@@ -32,6 +32,8 @@ import (
 	"k8s.io/apimachinery/pkg/api/errors"
 	"sigs.k8s.io/e2e-framework/klient"
 	"sigs.k8s.io/e2e-framework/pkg/envconf"
+	"sigs.k8s.io/e2e-framework/pkg/utils"
+
 )
 
 const (
@@ -151,8 +153,13 @@ func GetProjectDir() (string, error) {
 func WaitForPod(ctx context.Context, t *testing.T, client klient.Client, namespace, podName string, timeout time.Duration) error {
 	start := time.Now()
 	pod := &corev1.Pod{}
+	p := utils.RunCommand(`kubectl get ns`)
+	t.Logf("Kubernetes namespace: %s", p.Result())
 	for {
+		t.Logf("Waiting for pod %s in namespace %s ", podName, namespace)
+
 		err := client.Resources(namespace).Get(ctx, podName, namespace, pod)
+		t.Logf("Pod : %v", pod)
 		t.Logf("Pod %s is in phase %s", pod.Name, pod.Status.Phase)
 		if err == nil {
 			if pod.Status.Phase == "Running" {
