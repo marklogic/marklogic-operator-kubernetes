@@ -227,6 +227,7 @@ func (cc *ClusterContext) createHAProxyDeployment() error {
 							},
 						},
 					},
+					ImagePullSecrets: cr.Spec.HAProxy.ImagePullSecrets,
 					Volumes: []corev1.Volume{
 						{
 							Name: "haproxy-config",

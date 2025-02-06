@@ -2,6 +2,7 @@ package k8sutil
 
 import (
 	"fmt"
+
 	"github.com/cisco-open/k8s-objectmatcher/patch"
 	"github.com/go-logr/logr"
 	databasev1alpha1 "github.com/marklogic/marklogic-kubernetes-operator/api/v1alpha1"
@@ -105,6 +106,7 @@ func GenerateMarkLogicGroupDef(cr *databasev1alpha1.MarklogicCluster, index int,
 			GroupConfig:                   params.GroupConfig,
 			Auth:                          params.Auth,
 			Image:                         params.Image,
+			ImagePullSecrets:              params.ImagePullSecrets,
 			License:                       params.License,
 			TerminationGracePeriodSeconds: params.TerminationGracePeriodSeconds,
 			BootstrapHost:                 bootStrapHostName,

@@ -13,6 +13,8 @@ spec:
   name: enode
   bootstrapHost: "dnode-0.dnode.default.svc.cluster.local"
   image: "marklogicdb/marklogic-db:11.1.0-centos-1.1.1"
+  ## Configure the imagePullSecrets to pull the image from private repository that requires credential
+  # imagePullSecrets: []
   # storage:
   #   size: 10Gi
   terminationGracePeriodSeconds: 9

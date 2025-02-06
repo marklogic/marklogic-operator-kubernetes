@@ -29,6 +29,7 @@ type statefulSetParameters struct {
 	Affinity                      *corev1.Affinity
 	TopologySpreadConstraints     []corev1.TopologySpreadConstraint
 	PriorityClassName             string
+	ImagePullSecrets              []corev1.LocalObjectReference
 }
 
 type containerParameters struct {
@@ -206,6 +207,7 @@ func generateStatefulSetsDef(stsMeta metav1.ObjectMeta, params statefulSetParame
 					Affinity:                      params.Affinity,
 					TopologySpreadConstraints:     params.TopologySpreadConstraints,
 					PriorityClassName:             params.PriorityClassName,
+					ImagePullSecrets:              params.ImagePullSecrets,
 				},
 			},
 		},
@@ -340,6 +342,7 @@ func generateStatefulSetsParams(cr *databasev1alpha1.MarklogicGroup) statefulSet
 		Affinity:                      cr.Spec.Affinity,
 		TopologySpreadConstraints:     cr.Spec.TopologySpreadConstraints,
 		PriorityClassName:             cr.Spec.PriorityClassName,
+		ImagePullSecrets:              cr.Spec.ImagePullSecrets,
 	}
 	if cr.Spec.Storage != nil {
 		params.PersistentVolumeClaim = generatePVCTemplate(cr.Spec.Storage)
