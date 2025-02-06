@@ -133,6 +133,7 @@ func (status *MarklogicGroupStatus) GetConditionStatus(conditionType string) met
 }
 
 type GroupConfig struct {
+	// +kubebuilder:default:="Default"
 	Name          string `json:"name,omitempty"`
 	EnableXdqpSsl bool   `json:"enableXdqpSsl,omitempty"`
 }

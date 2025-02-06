@@ -3,7 +3,7 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   annotations:
-    controller-gen.kubebuilder.io/version: v0.16.4
+    controller-gen.kubebuilder.io/version: v0.17.1
   name: marklogicclusters.database.marklogic.com
 spec:
   group: database.marklogic.com
@@ -7051,6 +7051,7 @@ spec:
                         enableXdqpSsl:
                           type: boolean
                         name:
+                          default: Default
                           type: string
                       type: object
                     haproxy:
@@ -10635,7 +10636,15 @@ spec:
                         type: object
                       type: array
                   type: object
+                maxItems: 100
                 type: array
+                x-kubernetes-validations:
+                - message: MarkLogicGroups must have unique groupConfig names
+                  rule: size(self) == 1 || (size(self) == size(self.map(x, x.groupConfig.name).filter(y,
+                    self.map(x, x.groupConfig.name).filter(z, z == y).size() == 1)))
+                - message: MarkLogicGroups must have unique names
+                  rule: size(self) == size(self.map(x, x.name).filter(y, self.map(x,
+                    x.name).filter(z, z == y).size() == 1))
               networkPolicy:
                 properties:
                   egress:
