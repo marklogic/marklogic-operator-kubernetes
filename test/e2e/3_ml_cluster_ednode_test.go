@@ -131,12 +131,12 @@ func TestMlClusterWithEdnode(t *testing.T) {
 
 	// Assessment to check for MarkLogic groups are created
 	feature.Assess("MarkLogic groups created", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
+		t.Log("Checking MarkLogic groups")
 		podName := "dnode-0"
-		containerName := "marklogic-server"
 		url := "http://localhost:8002/manage/v2/groups"
 		curlCommand := fmt.Sprintf("curl %s --anyauth -u %s:%s", url, adminUsername, adminPassword)
 
-		output, err := utils.ExecCmdInPod(podName, mlClusterNs, containerName, curlCommand)
+		output, err := utils.ExecCmdInPod(podName, mlClusterNs, mlContainerName, curlCommand)
 		if err != nil {
 			t.Fatalf("Failed to execute curl command in pod: %v", err)
 		}
