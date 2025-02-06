@@ -11,6 +11,7 @@ import (
 
 	"sigs.k8s.io/e2e-framework/pkg/envconf"
 	"sigs.k8s.io/e2e-framework/pkg/features"
+	"sigs.k8s.io/e2e-framework/pkg/utils"
 )
 
 func TestOperatorReady(t *testing.T) {
@@ -34,6 +35,8 @@ func TestOperatorReady(t *testing.T) {
 
 	// Assessment to check for CRD in cluster
 	feature.Assess("CRD installed", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
+		p := utils.RunCommand(`kubectl get ns`)
+		t.Logf("Kubernetes namespace: %s", p.Result())
 		client := c.Client()
 		apiextensionsV1.AddToScheme(client.Resources().GetScheme())
 		name := "marklogicclusters.database.marklogic.com"

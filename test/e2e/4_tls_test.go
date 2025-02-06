@@ -397,7 +397,7 @@ func TestTlsWithMultiNode(t *testing.T) {
 	feature.Assess("Verify Named Cert on Multi Node", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 		podName := "dnode-0"
 		hostnamesSlice := []string{"enode-0.enode.marklogic-tlsednode.svc.cluster.local", "dnode-0.dnode.marklogic-tlsednode.svc.cluster.local"}
-		time.Sleep(5 * time.Second)
+		time.Sleep(10 * time.Second)
 		url := "https://localhost:8002/manage/v2/certificates?format=json"
 		command := fmt.Sprintf("curl -k --anyauth -u %s:%s %s", adminUsername, adminPassword, url)
 		certs, err := utils.ExecCmdInPod(podName, namespace, mlContainerName, command)

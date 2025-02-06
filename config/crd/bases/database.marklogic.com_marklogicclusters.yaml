@@ -8554,7 +8554,7 @@ spec:
                       properties:
                         size:
                           type: string
-                        storageClass:
+                        storageClassName:
                           type: string
                         volumeMount:
                           properties:
@@ -11582,7 +11582,7 @@ spec:
                 properties:
                   size:
                     type: string
-                  storageClass:
+                  storageClassName:
                     type: string
                   volumeMount:
                     properties:

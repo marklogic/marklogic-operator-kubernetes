@@ -38,7 +38,7 @@ func (cc *ClusterContext) ReconsileMarklogicClusterHandler() (reconcile.Result, 
 			return result.Output()
 		}
 	}
-	if cc.MarklogicCluster.Spec.HAProxy.Enabled {
+	if cc.MarklogicCluster.Spec.HAProxy != nil && cc.MarklogicCluster.Spec.HAProxy.Enabled {
 		if result := cc.ReconcileHAProxy(); result.Completed() {
 			return result.Output()
 		}

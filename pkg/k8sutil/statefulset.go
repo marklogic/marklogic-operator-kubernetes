@@ -213,7 +213,7 @@ func generateStatefulSetsDef(stsMeta metav1.ObjectMeta, params statefulSetParame
 	// add EmptyDir volume if storage is not provided
 	if containerParams.PersistenceEnabled == nil || !*containerParams.PersistenceEnabled {
 		emptyDir := corev1.Volume{
-			Name:         "data",
+			Name:         "datadir",
 			VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}},
 		}
 		statefulSet.Spec.Template.Spec.Volumes = append(statefulSet.Spec.Template.Spec.Volumes, emptyDir)
@@ -505,8 +505,10 @@ func generateVolumes(stsName string, containerParams containerParameters) []core
 func generatePVCTemplate(storage *databasev1alpha1.Storage) corev1.PersistentVolumeClaim {
 	pvcTemplate := corev1.PersistentVolumeClaim{}
 	pvcTemplate.CreationTimestamp = metav1.Time{}
-	pvcTemplate.Name = "data"
-	pvcTemplate.Spec.StorageClassName = &storage.StorageClass
+	pvcTemplate.Name = "datadir"
+	if pvcTemplate.Spec.StorageClassName != nil {
+		pvcTemplate.Spec.StorageClassName = &storage.StorageClassName
+	}
 	pvcTemplate.Spec.AccessModes = []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce}
 	pvcTemplate.Spec.Resources.Requests.Storage().Add(resource.MustParse(storage.Size))
 	pvcTemplate.Spec.Resources.Requests = corev1.ResourceList{
@@ -623,7 +625,7 @@ func getVolumeMount(containerParams containerParameters) []corev1.VolumeMount {
 	// if persistenceEnabled != nil && *persistenceEnabled {
 	VolumeMounts = append(VolumeMounts,
 		corev1.VolumeMount{
-			Name:      "data",
+			Name:      "datadir",
 			MountPath: "/var/opt/MarkLogic",
 		},
 		corev1.VolumeMount{
@@ -662,7 +664,7 @@ func getFluentBitVolumeMount() []corev1.VolumeMount {
 
 	VolumeMountsFluentBit = append(VolumeMountsFluentBit,
 		corev1.VolumeMount{
-			Name:      "data",
+			Name:      "datadir",
 			MountPath: "/var/opt/MarkLogic",
 		},
 		corev1.VolumeMount{
