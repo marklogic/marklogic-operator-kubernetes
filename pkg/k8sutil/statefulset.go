@@ -664,7 +664,7 @@ func getFluentBitVolumeMount() []corev1.VolumeMount {
 
 	VolumeMountsFluentBit = append(VolumeMountsFluentBit,
 		corev1.VolumeMount{
-			Name:      "data",
+			Name:      "datadir",
 			MountPath: "/var/opt/MarkLogic",
 		},
 		corev1.VolumeMount{
