@@ -85,7 +85,7 @@ type HAProxy struct {
 	// +kubebuilder:default:=80
 	FrontendPort int32        `json:"frontendPort,omitempty"`
 	AppServers   []AppServers `json:"appServers,omitempty"`
-	// +kubebuilder:default:=true
+	// +kubebuilder:default:=false
 	PathBasedRouting   *bool               `json:"pathBasedRouting,omitempty"`
 	RestartWhenUpgrade *bool               `json:"restartWhenUpgrade,omitempty"`
 	Service            *corev1.ServiceType `json:"service,omitempty"`

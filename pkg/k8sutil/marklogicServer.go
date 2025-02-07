@@ -220,7 +220,7 @@ func generateMarkLogicClusterParams(cr *databasev1alpha1.MarklogicCluster) *Mark
 		AdditionalVolumes:             cr.Spec.AdditionalVolumes,
 		AdditionalVolumeMounts:        cr.Spec.AdditionalVolumeMounts,
 	}
-	if cr.Spec.HAProxy == nil || cr.Spec.HAProxy.PathBasedRouting == nil || !*cr.Spec.HAProxy.PathBasedRouting {
+	if cr.Spec.HAProxy == nil || cr.Spec.HAProxy.PathBasedRouting == nil || !cr.Spec.HAProxy.Enabled || !*cr.Spec.HAProxy.PathBasedRouting {
 		markLogicClusterParameters.PathBasedRouting = false
 	} else {
 		markLogicClusterParameters.PathBasedRouting = true
