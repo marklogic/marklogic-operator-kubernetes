@@ -1,8 +1,6 @@
 apiVersion: database.marklogic.com/v1alpha1
 kind: MarklogicCluster
 metadata:
-  annotations:
-    fluentbit.io/exclude: "true"
   labels:
     app.kubernetes.io/name: marklogiccluster
     app.kubernetes.io/instance: marklogiccluster-sample
