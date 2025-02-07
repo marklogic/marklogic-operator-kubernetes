@@ -60,7 +60,7 @@ var (
 			},
 			LogCollection: &databasev1alpha1.LogCollection{
 				Enabled: true,
-				Image:   "fluent/fluent-bit:3.1.1",
+				Image:   "fluent/fluent-bit:3.2.5",
 				Files: databasev1alpha1.LogFilesConfig{
 					ErrorLogs:   true,
 					AccessLogs:  true,
