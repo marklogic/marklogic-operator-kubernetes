@@ -62,7 +62,7 @@ var typeNamespaceNameSvc = types.NamespacedName{Name: svcName, Namespace: Namesp
 var netPolicyName = Name
 var typeNsNameNetPolicy = types.NamespacedName{Name: netPolicyName, Namespace: Namespace}
 
-const fluentBitImage = "fluent/fluent-bit:3.1.1"
+const fluentBitImage = "fluent/fluent-bit:3.2.5"
 
 var groupConfig = &databasev1alpha1.GroupConfig{
 	Name:          "dnode",
@@ -116,7 +116,7 @@ var _ = Describe("MarkLogicGroup controller", func() {
 						RunAsNonRoot:             &runAsNonRoot,
 						AllowPrivilegeEscalation: &allowPrivilegeEscalation,
 					},
-					LogCollection: &databasev1alpha1.LogCollection{Enabled: true, Image: "fluent/fluent-bit:3.1.1", Files: databasev1alpha1.LogFilesConfig{ErrorLogs: true, AccessLogs: true, RequestLogs: true, CrashLogs: true, AuditLogs: true}, Outputs: "stdout"},
+					LogCollection: &databasev1alpha1.LogCollection{Enabled: true, Image: "fluent/fluent-bit:3.2.5", Files: databasev1alpha1.LogFilesConfig{ErrorLogs: true, AccessLogs: true, RequestLogs: true, CrashLogs: true, AuditLogs: true}, Outputs: "stdout"},
 				},
 			}
 			Expect(k8sClient.Create(ctx, mlGroup)).Should(Succeed())

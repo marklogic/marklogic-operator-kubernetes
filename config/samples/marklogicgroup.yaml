@@ -49,7 +49,7 @@ spec:
     enabled: true
     ## Configure the imagePullSecrets to pull the image from private repository that requires credential
     # imagePullSecrets: []
-    image: fluent/fluent-bit:3.1.1
+    image: fluent/fluent-bit:3.2.5
     files:
       errorLogs: true
       accessLogs: true

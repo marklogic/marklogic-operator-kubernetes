@@ -86,7 +86,7 @@ var _ = Describe("MarklogicCluster Controller", func() {
 					HugePages:        clusterHugePages,
 					EnableConverters: true,
 					MarkLogicGroups:  marklogicGroups,
-					LogCollection:    &databasev1alpha1.LogCollection{Enabled: true, Image: "fluent/fluent-bit:3.1.1", Files: databasev1alpha1.LogFilesConfig{ErrorLogs: true, AccessLogs: true, RequestLogs: true, CrashLogs: true, AuditLogs: true}, Outputs: "stdout"},
+					LogCollection:    &databasev1alpha1.LogCollection{Enabled: true, Image: "fluent/fluent-bit:3.2.5", Files: databasev1alpha1.LogFilesConfig{ErrorLogs: true, AccessLogs: true, RequestLogs: true, CrashLogs: true, AuditLogs: true}, Outputs: "stdout"},
 					HAProxy: &databasev1alpha1.HAProxy{
 						Enabled:          true,
 						ReplicaCount:     1,

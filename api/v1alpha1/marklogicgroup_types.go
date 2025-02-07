@@ -66,7 +66,7 @@ type MarklogicGroupSpec struct {
 	// +kubebuilder:default:={enabled: false, initialDelaySeconds: 10, timeoutSeconds: 5, periodSeconds: 30, successThreshold: 1, failureThreshold: 3}
 	ReadinessProbe ContainerProbe `json:"readinessProbe,omitempty"`
 
-	// +kubebuilder:default:={enabled: false, image: "fluent/fluent-bit:3.1.1", resources: {requests: {cpu: "100m", memory: "200Mi"}, limits: {cpu: "200m", memory: "500Mi"}}, files: {errorLogs: true, accessLogs: true, requestLogs: true}, outputs: "stdout"}
+	// +kubebuilder:default:={enabled: false, image: "fluent/fluent-bit:3.2.5", resources: {requests: {cpu: "100m", memory: "200Mi"}, limits: {cpu: "200m", memory: "500Mi"}}, files: {errorLogs: true, accessLogs: true, requestLogs: true}, outputs: "stdout"}
 	LogCollection *LogCollection `json:"logCollection,omitempty"`
 
 	// +kubebuilder:default:={name: "Default", enableXdqpSsl: true}

@@ -21,9 +21,9 @@ spec:
   ## An out of box load balancer with configured to handle cookie based session affinity that required by most MarkLogic applications.
   ## It also support multi-statement transaction and ODBC connections.  
   ## Uncomment the following lines to enable HAProxy configuration
-  # haproxy:
-  #   enabled: true
-  #   pathBasedRouting: true
+  haproxy:
+    enabled: true
+    pathBasedRouting: false
   #   frontendPort: 8080
   #   tcpPorts:
   #     enabled: true
@@ -93,7 +93,7 @@ spec:
   
   # logCollection:
   #   enabled: true
-  #   image: fluent/fluent-bit:3.1.1
+  #   image: fluent/fluent-bit:3.2.5
   #   files:
   #     errorLogs: true
   #     accessLogs: true
