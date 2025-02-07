@@ -301,12 +301,6 @@ func (cc *ClusterContext) generateHaproxyServiceDef() *corev1.Service {
 	cr := cc.MarklogicCluster
 	defaultPort := []corev1.ServicePort{
 		{
-			Name:       "stat",
-			Port:       1024,
-			TargetPort: intstr.FromInt(int(1024)),
-			Protocol:   corev1.ProtocolTCP,
-		},
-		{
 			Name:       "qconsole",
 			Port:       8000,
 			TargetPort: intstr.FromInt(int(8000)),
@@ -329,12 +323,6 @@ func (cc *ClusterContext) generateHaproxyServiceDef() *corev1.Service {
 
 	if *cr.Spec.HAProxy.PathBasedRouting {
 		servicePort = []corev1.ServicePort{
-			{
-				Name:       "stat",
-				Port:       1024,
-				TargetPort: intstr.FromInt(int(1024)),
-				Protocol:   corev1.ProtocolTCP,
-			},
 			{
 				Name:       "frontend",
 				Port:       cr.Spec.HAProxy.FrontendPort,
@@ -359,6 +347,12 @@ func (cc *ClusterContext) generateHaproxyServiceDef() *corev1.Service {
 				servicePort = append(servicePort, port)
 			}
 		}
+	}
+	if cr.Spec.HAProxy.Stats.Enabled {
+		servicePort = append(servicePort, corev1.ServicePort{
+			Name: "stats",
+			Port: cr.Spec.HAProxy.Stats.Port,
+		})
 	}
 	serviceDef := &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
