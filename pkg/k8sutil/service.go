@@ -70,19 +70,15 @@ func generateServicePorts() []corev1.ServicePort {
 
 func generateServiceDef(serviceMeta metav1.ObjectMeta, ownerRef metav1.OwnerReference, params serviceParameters) *corev1.Service {
 	var svcSpec corev1.ServiceSpec
+	svcSpec = corev1.ServiceSpec{
+		Selector: serviceMeta.GetLabels(),
+		Ports:    append(params.Ports, generateServicePorts()...),
+	}
 	if strings.HasSuffix(serviceMeta.Name, "-cluster") {
-		svcSpec = corev1.ServiceSpec{
-			Selector: serviceMeta.GetLabels(),
-			Ports:    append(params.Ports, generateServicePorts()...),
-			Type:     params.Type,
-		}
+		svcSpec.Type = params.Type
 	} else {
-		svcSpec = corev1.ServiceSpec{
-			Selector:                 serviceMeta.GetLabels(),
-			Ports:                    generateServicePorts(),
-			ClusterIP:                "None",
-			PublishNotReadyAddresses: true,
-		}
+		svcSpec.ClusterIP = "None"
+		svcSpec.PublishNotReadyAddresses = true
 	}
 	service := &corev1.Service{
 		TypeMeta: metav1.TypeMeta{
@@ -132,11 +128,8 @@ func (oc *OperatorContext) CreateOrUpdateService(namespace string, serviceMeta m
 func generateService(svcName string, cr *databasev1alpha1.MarklogicGroup) *corev1.Service {
 	labels := getMarkLogicLabels(cr.Spec.Name)
 	var svcParams serviceParameters = serviceParameters{}
-	svcObjectMeta := generateObjectMeta(svcName, cr.Namespace, labels, map[string]string{})
-	if strings.HasSuffix(svcName, "-cluster") {
-		svcParams = generateServiceParams(cr)
-		svcObjectMeta = generateObjectMeta(svcName, cr.Namespace, labels, svcParams.Annotations)
-	}
+	svcObjectMeta := generateObjectMeta(svcName, cr.Namespace, labels, svcParams.Annotations)
+	svcParams = generateServiceParams(cr)
 	service := generateServiceDef(svcObjectMeta, marklogicServerAsOwner(cr), svcParams)
 	return service
 }
