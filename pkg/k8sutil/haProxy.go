@@ -299,7 +299,7 @@ func (cc *ClusterContext) createHAProxyDeployment() error {
 
 func (cc *ClusterContext) generateHaproxyServiceDef() *corev1.Service {
 	cr := cc.MarklogicCluster
-	servicePort := []corev1.ServicePort{
+	defaultPort := []corev1.ServicePort{
 		{
 			Name:       "stat",
 			Port:       1024,
@@ -325,6 +325,8 @@ func (cc *ClusterContext) generateHaproxyServiceDef() *corev1.Service {
 			Protocol:   corev1.ProtocolTCP,
 		},
 	}
+	servicePort := []corev1.ServicePort{}
+
 	if *cr.Spec.HAProxy.PathBasedRouting {
 		servicePort = []corev1.ServicePort{
 			{
@@ -339,6 +341,23 @@ func (cc *ClusterContext) generateHaproxyServiceDef() *corev1.Service {
 				TargetPort: intstr.FromInt(int(cr.Spec.HAProxy.FrontendPort)),
 				Protocol:   corev1.ProtocolTCP,
 			},
+		}
+	} else {
+		if len(cr.Spec.HAProxy.AppServers) == 0 {
+			servicePort = append(servicePort, defaultPort...)
+		} else {
+			for _, appServer := range cr.Spec.HAProxy.AppServers {
+				port := corev1.ServicePort{
+					Name: appServer.Name,
+					Port: appServer.Port,
+				}
+				if appServer.TargetPort != 0 {
+					port.TargetPort = intstr.FromInt(int(appServer.TargetPort))
+				} else {
+					port.TargetPort = intstr.FromInt(int(appServer.Port))
+				}
+				servicePort = append(servicePort, port)
+			}
 		}
 	}
 	serviceDef := &corev1.Service{
