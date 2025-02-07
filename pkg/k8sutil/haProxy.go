@@ -31,10 +31,13 @@ func (cc *ClusterContext) ReconcileHAProxy() result.ReconcileResult {
 	configMapName := "marklogic-haproxy"
 	objectMeta := generateObjectMeta(configMapName, cr.Namespace, labels, annotations)
 	nsName := types.NamespacedName{Name: objectMeta.Name, Namespace: objectMeta.Namespace}
+	svcName := types.NamespacedName{Name: "marklogic-haproxy", Namespace: cr.Namespace}
 	configmap := &corev1.ConfigMap{}
+	haproxyService := &corev1.Service{}
 	err := client.Get(cc.Ctx, nsName, configmap)
 	data := generateHAProxyConfigMapData(cc.MarklogicCluster)
 	configMapDef := generateHAProxyConfigMap(objectMeta, marklogicClusterAsOwner(cr), data)
+	haproxyServiceDef := cc.generateHaproxyServiceDef()
 	configmapHash := calculateHash(configMapDef.Data)
 	if err != nil {
 		if errors.IsNotFound(err) {
@@ -50,8 +53,7 @@ func (cc *ClusterContext) ReconcileHAProxy() result.ReconcileResult {
 				logger.Info("HAProxy Deployment creation is failed")
 				return result.Error(err)
 			}
-			// createHAProxyService(service corev1.Service)
-			err = cc.createHAProxyService()
+			err = cc.createHAProxyService(haproxyServiceDef)
 			if err != nil {
 				logger.Info("HAProxy Service creation is failed")
 				return result.Error(err)
@@ -67,9 +69,8 @@ func (cc *ClusterContext) ReconcileHAProxy() result.ReconcileResult {
 		patch.IgnoreStatusFields(),
 		patch.IgnoreVolumeClaimTemplateTypeMetaAndStatus(),
 		patch.IgnoreField("kind"))
-
 	if err != nil {
-		logger.Error(err, "Error calculating patch")
+		logger.Error(err, "Error calculating patch for HAProxy configmap")
 		return result.Error(err)
 	}
 	if !patchDiff.IsEmpty() {
@@ -82,6 +83,30 @@ func (cc *ClusterContext) ReconcileHAProxy() result.ReconcileResult {
 			return result.Error(err)
 		}
 	}
+	err = client.Get(cc.Ctx, svcName, haproxyService)
+	if err != nil {
+		logger.Error(err, "Failed to get HAProxy service")
+		return result.Error(err)
+	}
+	patchDiff, err = patch.DefaultPatchMaker.Calculate(haproxyService, haproxyServiceDef,
+		patch.IgnoreStatusFields(),
+		patch.IgnoreVolumeClaimTemplateTypeMetaAndStatus(),
+		patch.IgnoreField("kind"))
+	if err != nil {
+		logger.Error(err, "Error calculating patch for HAProxy service")
+		return result.Error(err)
+	}
+	if !patchDiff.IsEmpty() {
+		logger.Info("HAProxy Service spec is different from the MarkLogicGroup spec, updating the haproxy service")
+		logger.Info(patchDiff.String())
+		haproxyService.Spec = haproxyServiceDef.Spec
+		err := cc.Client.Update(cc.Ctx, haproxyService)
+		if err != nil {
+			logger.Error(err, "Error updating HAProxy service")
+			return result.Error(err)
+		}
+	}
+
 	haproxyDeployment := &appsv1.Deployment{}
 	err = client.Get(cc.Ctx, types.NamespacedName{Name: "marklogic-haproxy", Namespace: cr.Namespace}, haproxyDeployment)
 	if err != nil {
@@ -272,12 +297,8 @@ func (cc *ClusterContext) createHAProxyDeployment() error {
 	return nil
 }
 
-func (cc *ClusterContext) createHAProxyService() error {
-	logger := cc.ReqLogger
-	logger.Info("Creating HAProxy Service")
+func (cc *ClusterContext) generateHaproxyServiceDef() *corev1.Service {
 	cr := cc.MarklogicCluster
-	ownerDef := marklogicClusterAsOwner(cr)
-	client := cc.Client
 	servicePort := []corev1.ServicePort{
 		{
 			Name:       "stat",
@@ -338,7 +359,15 @@ func (cc *ClusterContext) createHAProxyService() error {
 			Type:  corev1.ServiceTypeClusterIP,
 		},
 	}
-	logger.Info("===== HAProxy Service ==== ", "service:", serviceDef)
+	return serviceDef
+}
+
+func (cc *ClusterContext) createHAProxyService(serviceDef *corev1.Service) error {
+	logger := cc.ReqLogger
+	logger.Info("Creating HAProxy Service")
+	cr := cc.MarklogicCluster
+	ownerDef := marklogicClusterAsOwner(cr)
+	client := cc.Client
 	AddOwnerRefToObject(serviceDef, ownerDef)
 	err := client.Create(cc.Ctx, serviceDef)
 	if err != nil {
