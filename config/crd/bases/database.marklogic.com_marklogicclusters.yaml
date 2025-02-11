@@ -3771,7 +3771,7 @@ spec:
                     format: int32
                     type: integer
                   image:
-                    default: haproxytech/haproxy-alpine:3.1.3
+                    default: haproxytech/haproxy-alpine:3.2
                     type: string
                   imagePullSecrets:
                     items:
@@ -4055,8 +4055,6 @@ spec:
                           More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
                         type: object
                     type: object
-                  restartWhenUpgrade:
-                    type: boolean
                   service:
                     description: Service Type string describes ingress methods for
                       a service
@@ -8049,7 +8047,7 @@ spec:
                           format: int32
                           type: integer
                         image:
-                          default: haproxytech/haproxy-alpine:3.1.3
+                          default: haproxytech/haproxy-alpine:3.2
                           type: string
                         imagePullSecrets:
                           items:
@@ -8337,8 +8335,6 @@ spec:
                                 More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
                               type: object
                           type: object
-                        restartWhenUpgrade:
-                          type: boolean
                         service:
                           description: Service Type string describes ingress methods
                             for a service
