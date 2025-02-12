@@ -77,7 +77,7 @@ type NetworkPolicy struct {
 }
 type HAProxy struct {
 	Enabled bool `json:"enabled,omitempty"`
-	// +kubebuilder:default:="haproxytech/haproxy-alpine:3.1"
+	// +kubebuilder:default:="haproxytech/haproxy-alpine:3.2"
 	Image            string                        `json:"image,omitempty"`
 	ImagePullSecrets []corev1.LocalObjectReference `json:"imagePullSecrets,omitempty"`
 	// +kubebuilder:default:=1
@@ -86,9 +86,8 @@ type HAProxy struct {
 	FrontendPort int32        `json:"frontendPort,omitempty"`
 	AppServers   []AppServers `json:"appServers,omitempty"`
 	// +kubebuilder:default:=false
-	PathBasedRouting   *bool               `json:"pathBasedRouting,omitempty"`
-	RestartWhenUpgrade *bool               `json:"restartWhenUpgrade,omitempty"`
-	Service            *corev1.ServiceType `json:"service,omitempty"`
+	PathBasedRouting *bool               `json:"pathBasedRouting,omitempty"`
+	Service          *corev1.ServiceType `json:"service,omitempty"`
 	// +kubebuilder:default:={enabled: false}
 	TcpPorts Tcpports `json:"tcpPorts,omitempty"`
 	// +kubebuilder:default:={client: 600, connect: 600, server: 600}
