@@ -12,10 +12,6 @@ func (oc *OperatorContext) ReconsileMarklogicGroupHandler() (reconcile.Result, e
 	}
 	setOperatorInternalStatus(oc, "Created")
 
-	if result := oc.ReconcileSecret(); result.Completed() {
-		return result.Output()
-	}
-
 	if result := oc.ReconcileConfigMap(); result.Completed() {
 		return result.Output()
 	}
@@ -32,6 +28,9 @@ func (oc *OperatorContext) ReconsileMarklogicGroupHandler() (reconcile.Result, e
 }
 
 func (cc *ClusterContext) ReconsileMarklogicClusterHandler() (reconcile.Result, error) {
+	if result := cc.ReconcileSecret(); result.Completed() {
+		return result.Output()
+	}
 	result, err := cc.ReconsileMarklogicCluster()
 	if cc.MarklogicCluster.Spec.NetworkPolicy.Enabled {
 		if result := cc.ReconcileNetworkPolicy(); result.Completed() {

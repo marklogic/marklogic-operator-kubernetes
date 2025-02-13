@@ -2810,6 +2810,8 @@ spec:
                     type: string
                   adminUsername:
                     type: string
+                  secretName:
+                    type: string
                   walletPassword:
                     type: string
                 type: object

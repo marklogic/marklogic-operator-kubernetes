@@ -44,6 +44,7 @@ type MarkLogicGroupParameters struct {
 	Tls                           *databasev1alpha1.Tls
 	AdditionalVolumes             *[]corev1.Volume
 	AdditionalVolumeMounts        *[]corev1.VolumeMount
+	SecretName                    string
 }
 
 type MarkLogicClusterParameters struct {
@@ -128,6 +129,7 @@ func GenerateMarkLogicGroupDef(cr *databasev1alpha1.MarklogicCluster, index int,
 			Tls:                           params.Tls,
 			AdditionalVolumes:             params.AdditionalVolumes,
 			AdditionalVolumeMounts:        params.AdditionalVolumeMounts,
+			SecretName:                    params.SecretName,
 		},
 	}
 	AddOwnerRefToObject(MarkLogicGroupDef, ownerDef)
@@ -230,7 +232,7 @@ func generateMarkLogicClusterParams(cr *databasev1alpha1.MarklogicCluster) *Mark
 }
 
 func generateMarkLogicGroupParams(cr *databasev1alpha1.MarklogicCluster, index int, clusterParams *MarkLogicClusterParameters) *MarkLogicGroupParameters {
-	MarkLogicGroupParameters := &MarkLogicGroupParameters{
+	markLogicGroupParameters := &MarkLogicGroupParameters{
 		Replicas:                      cr.Spec.MarkLogicGroups[index].Replicas,
 		Name:                          cr.Spec.MarkLogicGroups[index].Name,
 		GroupConfig:                   cr.Spec.MarkLogicGroups[index].GroupConfig,
@@ -260,50 +262,55 @@ func generateMarkLogicGroupParams(cr *databasev1alpha1.MarklogicCluster, index i
 		AdditionalVolumes:             clusterParams.AdditionalVolumes,
 	}
 
+	if cr.Spec.Auth != nil && cr.Spec.Auth.SecretName != nil && *cr.Spec.Auth.SecretName != "" {
+		markLogicGroupParameters.SecretName = *cr.Spec.Auth.SecretName
+	} else {
+		markLogicGroupParameters.SecretName = fmt.Sprintf("%s-admin", cr.ObjectMeta.Name)
+	}
 	if cr.Spec.MarkLogicGroups[index].HAProxy != nil && cr.Spec.MarkLogicGroups[index].HAProxy.PathBasedRouting != nil {
-		MarkLogicGroupParameters.PathBasedRouting = *cr.Spec.MarkLogicGroups[index].HAProxy.PathBasedRouting
+		markLogicGroupParameters.PathBasedRouting = *cr.Spec.MarkLogicGroups[index].HAProxy.PathBasedRouting
 	}
 	if cr.Spec.MarkLogicGroups[index].Image != "" {
-		MarkLogicGroupParameters.Image = cr.Spec.MarkLogicGroups[index].Image
+		markLogicGroupParameters.Image = cr.Spec.MarkLogicGroups[index].Image
 	}
 	if cr.Spec.MarkLogicGroups[index].ImagePullPolicy != "" {
-		MarkLogicGroupParameters.ImagePullPolicy = cr.Spec.MarkLogicGroups[index].ImagePullPolicy
+		markLogicGroupParameters.ImagePullPolicy = cr.Spec.MarkLogicGroups[index].ImagePullPolicy
 	}
 	if cr.Spec.MarkLogicGroups[index].ImagePullSecrets != nil {
-		MarkLogicGroupParameters.ImagePullSecrets = cr.Spec.MarkLogicGroups[index].ImagePullSecrets
+		markLogicGroupParameters.ImagePullSecrets = cr.Spec.MarkLogicGroups[index].ImagePullSecrets
 	}
 	if cr.Spec.MarkLogicGroups[index].Storage != nil {
-		MarkLogicGroupParameters.Storage = cr.Spec.MarkLogicGroups[index].Storage
+		markLogicGroupParameters.Storage = cr.Spec.MarkLogicGroups[index].Storage
 	}
 	if cr.Spec.MarkLogicGroups[index].Resources != nil {
-		MarkLogicGroupParameters.Resources = cr.Spec.MarkLogicGroups[index].Resources
+		markLogicGroupParameters.Resources = cr.Spec.MarkLogicGroups[index].Resources
 	}
 	if cr.Spec.MarkLogicGroups[index].Affinity != nil {
-		MarkLogicGroupParameters.Affinity = cr.Spec.MarkLogicGroups[index].Affinity
+		markLogicGroupParameters.Affinity = cr.Spec.MarkLogicGroups[index].Affinity
 	}
 	if cr.Spec.MarkLogicGroups[index].NodeSelector != nil {
-		MarkLogicGroupParameters.NodeSelector = cr.Spec.MarkLogicGroups[index].NodeSelector
+		markLogicGroupParameters.NodeSelector = cr.Spec.MarkLogicGroups[index].NodeSelector
 	}
 	if cr.Spec.MarkLogicGroups[index].TopologySpreadConstraints != nil {
-		MarkLogicGroupParameters.TopologySpreadConstraints = cr.Spec.MarkLogicGroups[index].TopologySpreadConstraints
+		markLogicGroupParameters.TopologySpreadConstraints = cr.Spec.MarkLogicGroups[index].TopologySpreadConstraints
 	}
 	if cr.Spec.MarkLogicGroups[index].PriorityClassName != "" {
-		MarkLogicGroupParameters.PriorityClassName = cr.Spec.MarkLogicGroups[index].PriorityClassName
+		markLogicGroupParameters.PriorityClassName = cr.Spec.MarkLogicGroups[index].PriorityClassName
 	}
 	if cr.Spec.MarkLogicGroups[index].HugePages != nil {
-		MarkLogicGroupParameters.HugePages = cr.Spec.MarkLogicGroups[index].HugePages
+		markLogicGroupParameters.HugePages = cr.Spec.MarkLogicGroups[index].HugePages
 	}
 	if cr.Spec.MarkLogicGroups[index].LogCollection != nil {
-		MarkLogicGroupParameters.LogCollection = cr.Spec.MarkLogicGroups[index].LogCollection
+		markLogicGroupParameters.LogCollection = cr.Spec.MarkLogicGroups[index].LogCollection
 	}
 	if cr.Spec.MarkLogicGroups[index].Tls != nil {
-		MarkLogicGroupParameters.Tls = cr.Spec.MarkLogicGroups[index].Tls
+		markLogicGroupParameters.Tls = cr.Spec.MarkLogicGroups[index].Tls
 	}
 	if cr.Spec.MarkLogicGroups[index].AdditionalVolumes != nil {
-		MarkLogicGroupParameters.AdditionalVolumes = cr.Spec.MarkLogicGroups[index].AdditionalVolumes
+		markLogicGroupParameters.AdditionalVolumes = cr.Spec.MarkLogicGroups[index].AdditionalVolumes
 	}
 	if cr.Spec.MarkLogicGroups[index].AdditionalVolumeMounts != nil {
-		MarkLogicGroupParameters.AdditionalVolumeMounts = cr.Spec.MarkLogicGroups[index].AdditionalVolumeMounts
+		markLogicGroupParameters.AdditionalVolumeMounts = cr.Spec.MarkLogicGroups[index].AdditionalVolumeMounts
 	}
-	return MarkLogicGroupParameters
+	return markLogicGroupParameters
 }

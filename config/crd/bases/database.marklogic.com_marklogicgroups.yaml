@@ -2811,6 +2811,8 @@ spec:
                     type: string
                   adminUsername:
                     type: string
+                  secretName:
+                    type: string
                   walletPassword:
                     type: string
                 type: object
@@ -3804,6 +3806,8 @@ spec:
                       More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
                     type: object
                 type: object
+              secretName:
+                type: string
               securityContext:
                 default:
                   allowPrivilegeEscalation: false

@@ -170,5 +170,15 @@ var _ = Describe("MarklogicCluster Controller", func() {
 			Expect(clusterCR.Spec.Tls.CertSecretNames).Should(ContainElements("cert-secret-1", "cert-secret-2"))
 			Expect(clusterCR.Spec.Tls.CaSecretName).Should(Equal("ca-secret"))
 		})
+
+		It("Should create a secret for MarkLogic Admin User", func() {
+			// Validating if Secret is created successfully
+			secret := &corev1.Secret{}
+			secretName := clusterName + "-admin"
+			Eventually(func() bool {
+				err := k8sClient.Get(ctx, types.NamespacedName{Name: secretName, Namespace: clusterNS}, secret)
+				return err == nil
+			}, timeout, interval).Should(BeTrue())
+		})
 	})
 })
