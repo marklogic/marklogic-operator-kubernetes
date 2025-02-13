@@ -18,6 +18,7 @@ import (
 	"sigs.k8s.io/e2e-framework/klient/wait/conditions"
 	"sigs.k8s.io/e2e-framework/pkg/envconf"
 	"sigs.k8s.io/e2e-framework/pkg/features"
+	e2eutils "sigs.k8s.io/e2e-framework/pkg/utils"
 )
 
 const (
@@ -28,6 +29,7 @@ const (
 
 var (
 	kubeconfig      *string
+	secretName      = "ml-admin-secrets"
 	home            = homedir.HomeDir()
 	initialPodCount int
 	incrReplica     = int32(2)
@@ -62,8 +64,7 @@ var (
 		Spec: databasev1alpha1.MarklogicClusterSpec{
 			Image: marklogicImage,
 			Auth: &databasev1alpha1.AdminAuth{
-				AdminUsername: &adminUsername,
-				AdminPassword: &adminPassword,
+				SecretName: &secretName,
 			},
 			MarkLogicGroups: marklogicgroups,
 		},
@@ -71,7 +72,7 @@ var (
 )
 
 func TestMlClusterWithEdnode(t *testing.T) {
-	feature := features.New("MarklogicCluster Resource with 2 MarkLogicGroups (Ednode and dnode)")
+	feature := features.New("MarklogicCluster Resource with 2 MarkLogicGroups (Ednode and dnode)").WithLabel("type", "ednode")
 
 	// Setup for MarklogicCluster creation
 	feature.Setup(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
@@ -85,6 +86,11 @@ func TestMlClusterWithEdnode(t *testing.T) {
 			t.Fatalf("Failed to create namespace: %s", err)
 		}
 		databasev1alpha1.AddToScheme(client.Resources(mlClusterNs).GetScheme())
+
+		p := e2eutils.RunCommand("kubectl -n ednode create secret generic ml-admin-secrets --from-literal=username=admin --from-literal=password=Admin@8001 ")
+		if p.Err() != nil {
+			t.Fatalf("Failed to create custom secret for testing: %s", p.Result())
+		}
 
 		if err := client.Resources(mlClusterNs).Create(ctx, mlcluster); err != nil {
 			t.Fatalf("Failed to create MarklogicCluster: %s", err)
