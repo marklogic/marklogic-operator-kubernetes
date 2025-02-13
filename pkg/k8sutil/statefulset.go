@@ -57,6 +57,7 @@ type containerParameters struct {
 	Tls                    *databasev1alpha1.Tls
 	AdditionalVolumes      *[]corev1.Volume
 	AdditionalVolumeMounts *[]corev1.VolumeMount
+	SecretName             string
 }
 
 func (oc *OperatorContext) ReconcileStatefulset() (reconcile.Result, error) {
@@ -370,6 +371,7 @@ func generateContainerParams(cr *databasev1alpha1.MarklogicGroup) containerParam
 		Tls:                    cr.Spec.Tls,
 		AdditionalVolumes:      cr.Spec.AdditionalVolumes,
 		AdditionalVolumeMounts: cr.Spec.AdditionalVolumeMounts,
+		SecretName:             cr.Spec.SecretName,
 	}
 
 	if cr.Spec.Storage != nil {
@@ -425,7 +427,7 @@ func generateVolumes(stsName string, containerParams containerParameters) []core
 		Name: "mladmin-secrets",
 		VolumeSource: corev1.VolumeSource{
 			Secret: &corev1.SecretVolumeSource{
-				SecretName: fmt.Sprintf("%s-admin", stsName),
+				SecretName: containerParams.SecretName,
 			},
 		},
 	})

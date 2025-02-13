@@ -46,6 +46,7 @@ type VolumeMountWrapper struct {
 }
 
 type AdminAuth struct {
+	SecretName     *string `json:"secretName,omitempty"`
 	AdminUsername  *string `json:"adminUsername,omitempty"`
 	AdminPassword  *string `json:"adminPassword,omitempty"`
 	WalletPassword *string `json:"walletPassword,omitempty"`

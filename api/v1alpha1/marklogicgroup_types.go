@@ -83,8 +83,8 @@ type MarklogicGroupSpec struct {
 
 	AdditionalVolumes      *[]corev1.Volume      `json:"additionalVolumes,omitempty"`
 	AdditionalVolumeMounts *[]corev1.VolumeMount `json:"additionalVolumeMounts,omitempty"`
-
-	Tls *Tls `json:"tls,omitempty"`
+	SecretName             string                `json:"secretName,omitempty"`
+	Tls                    *Tls                  `json:"tls,omitempty"`
 }
 
 // InternalState defines the observed state of MarklogicGroup

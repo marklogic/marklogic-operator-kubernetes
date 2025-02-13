@@ -199,16 +199,6 @@ var _ = Describe("MarkLogicGroup controller", func() {
 			}, timeout, interval).Should(BeTrue())
 		})
 
-		It("Should create a secret for MarkLogic Admin User", func() {
-			// Validating if Secret is created successfully
-			secret := &corev1.Secret{}
-			secretName := Name + "-admin"
-			Eventually(func() bool {
-				err := k8sClient.Get(ctx, types.NamespacedName{Name: secretName, Namespace: Namespace}, secret)
-				return err == nil
-			}, timeout, interval).Should(BeTrue())
-		})
-
 		It("Should update the MarklogicGroup CR", func() {
 			// Update the MarklogicGroup CR
 			createdCR := &databasev1alpha1.MarklogicGroup{}
