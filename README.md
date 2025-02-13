@@ -1,64 +1,84 @@
-# MarkLogic Kubernetes Operator
+# MarkLogic Operator for Kuberentes
 
 ## Introduction
 
-The MarkLogic Operator for Kubernetes is an operator that allows you to deploy and manage MarkLogic clusters on Kubernetes. It provides a declarative way to define and manage MarkLogic resources. For detailed documentation, please refer [MarkLogic Kubernetes Operator](https://).
+The MarkLogic Operator for Kubernetes is an operator that allows you to deploy and manage MarkLogic clusters on Kubernetes. It provides a declarative way to define and manage MarkLogic resources. For detailed documentation, please refer [MarkLogic Operator for Kubernetes](https://).
 
 ## Getting Started
 
+### Prerequisites
+
+[Helm](https://helm.sh/docs/intro/install/) v3.0.0 or later and [Kubectl](https://kubernetes.io/docs/tasks/tools/) v1.30 or same as your Kubernetes version must be installed locally in order to use MarkLogic operator helm chart. 
+
 ### Kubernetes Version
 
-This Operator supports Kubernetes 1.30 or later.
+This operator supports Kubernetes 1.30 or later.
 
 ### MarkLogic Version
 
-This Operator supports MarkLogic 11.1 or later.
+This operator supports MarkLogic 11.1 or later.
 
-### Running MarkLogic Operator
+### Run MarkLogic Operator for Kubernetes using Helm Chart
 
-#### Run MarkLogic Operator locally
-To run MarkLogic Kuberentes Operator locally, use following steps:
-1. Check out the source code from the marklogic/marklogic-kubernetes-operator GitHub repository.
-```
-git clone https://github.com/marklogic/marklogic-kubernetes-operator.git
-```
-
-2. Use below commands to run the MarkLogic Operator locally:
-  * Build the project
+1. Add MarkLogic Operator for Kubernees Helm Repo
 ```sh
-make build
-```
-   * Install the CRD to Kubernetes cluster
-```sh
-make install
-```
-   * Run the operator controller
-```sh
-make run
-```
-#### Running Operator using Helm Chart
-
-1. Add MarkLogic Kubernetes Operator Helm Repo
-```sh
-helm repo add marklogic-operator https://raw.githubusercontent.com/marklogic/marklogic-kubernetes-operator/gh-pages/
+helm repo add marklogic-operator-kubernetes https://raw.githubusercontent.com/marklogic/marklogic-operator-kubernetes/gh-pages/
 
 helm repo update
 ```
-3. Install the Helm Chart for MarkLogic Operator: 
+
+2. Install the Helm Chart for MarkLogic Operator: 
 ```sh
-helm upgrade marklogic-operator marklogic-operator/marklogic-operator --version=1.0.0 --install --namespace marklogic-operator-system --create-namespace
+helm upgrade marklogic-operator-kubernetes marklogic-operator-kubernetes/marklogic-operator-kubernetes --version=1.0.0 --install --namespace marklogic-operator-system --create-namespace
 ```
-4. Make sure the Operator Pod is running:
+
+3. Make sure the marklogic operator pod is running:
 ```sh
 kubectl get pods -n marklogic-operator-system 
 ```
 
-### Install MarkLogic Cluster with MarkLogic Operator
-Once MarkLogic Operator is running, use your custom manifests or choose from sample manifests from this repository located in the samples folder under config. For example, to deploy marklogic single group, use the following script: 
+### Install MarkLogic Cluster
+Once MarkLogic operator pod is running, use your custom manifests or choose from sample manifests from this repository located in the ./config/samples directory. For example, to deploy marklogic single group, use the `quick_start.yaml` from the samples: 
 ```sh
-kubectl apply -f marklogicgroup.yaml
+kubectl apply -f quick_start.yaml
 ```
-Please refer [Documentation]() for more sample manifests with different configurations to deploy MarkLogic cluster inside a Kubernetes cluster.
+Once the installation is complete and the pod is in a running state, the MarkLogic admin UI can be accessed using the port-forwarding command as below:
+
+  ```shell
+  kubectl port-forward <pod-name> 8000:8000 8001:8001 --namespace=<namespace-name>
+  ```
+
+If you used the automatically generated admin credentials, use the following steps to extract the admin username, password and wallet-password from a secret:
+
+1. Run the below command to fetch all of the secret names:
+  ```shell
+  kubectl get secrets 
+  ```
+The MarkLogic admin secret name will be in the format  `<marklogicGroup-name>-admin`. For example if markLogicGroup name is `node`, the secret name would be `node-admin`.
+
+2. Using the secret name from step 1 to get MarkLogic admin credentials, retrieve the values using the following commands:
+  ```shell
+  kubectl get secret node-admin -o jsonpath='{.data.username}' | base64 --decode 
+
+  kubectl get secret node-admin -o jsonpath='{.data.password}' | base64 --decode 
+
+  kubectl get secret node-admin -o jsonpath='{.data.wallet-password}' | base64 --decode 
+  ```
+Please refer [Official Documentation]() for more sample manifests with different configurations to deploy MarkLogic cluster inside a Kubernetes cluster.
+
+## Clean Up
+
+#### Cleaning up MarkLogic Cluster
+Use following steps to delete MarkLogic cluster and other resources created from the manifests used in the above [step](#install-marklogic-cluster).
+```sh
+kubectl delete -f quick_start.yaml
+```
+
+#### Deleting Helm chart
+Use following steps to delete MarkLogic Operator Helm chart.
+```sh
+helm delete marklogic-operator-kubernetes
+```
 
 ## Known Issues and Limitations
 
