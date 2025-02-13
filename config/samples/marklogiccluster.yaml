@@ -10,9 +10,10 @@ metadata:
   name: ml-cluster
 spec:
   image: "progressofficial/marklogic-db:11.3.0-ubi-rootless"
-  auth:
-    adminUsername: user
-    adminPassword: pass
+  # auth:
+    # secretName: <SECRET_NAME>
+    # adminUsername: user
+    # adminPassword: pass
 # This is the cluster level configuration that will apply to all the groups
   # storage:
   #   size: 5Gi
@@ -21,9 +22,9 @@ spec:
   ## An out of box load balancer with configured to handle cookie based session affinity that required by most MarkLogic applications.
   ## It also support multi-statement transaction and ODBC connections.  
   ## Uncomment the following lines to enable HAProxy configuration
-  haproxy:
-    enabled: true
-    pathBasedRouting: false
+  # haproxy:
+  #   enabled: true
+  #   pathBasedRouting: false
   #   frontendPort: 8080
   #   tcpPorts:
   #     enabled: true
@@ -41,9 +42,9 @@ spec:
   #     - name: "manage"
   #       port: 8002
   #       path: "/manage"
-  #   stats:
-  #     enabled: true
-  #     port: 1024
+    # stats:
+    #   enabled: true
+    #   port: 1024
   #   resources:
   #     requests:
   #       memory: "4Gi"
