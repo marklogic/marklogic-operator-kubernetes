@@ -442,6 +442,17 @@ func (in *MarklogicClusterSpec) DeepCopyInto(out *MarklogicClusterSpec) {
 			}
 		}
 	}
+	if in.AdditionalVolumeClaimTemplates != nil {
+		in, out := &in.AdditionalVolumeClaimTemplates, &out.AdditionalVolumeClaimTemplates
+		*out = new([]v1.PersistentVolumeClaim)
+		if **in != nil {
+			in, out := *in, *out
+			*out = make([]v1.PersistentVolumeClaim, len(*in))
+			for i := range *in {
+				(*in)[i].DeepCopyInto(&(*out)[i])
+			}
+		}
+	}
 	if in.MarkLogicGroups != nil {
 		in, out := &in.MarkLogicGroups, &out.MarkLogicGroups
 		*out = make([]*MarklogicGroups, len(*in))
@@ -659,6 +670,17 @@ func (in *MarklogicGroupSpec) DeepCopyInto(out *MarklogicGroupSpec) {
 			}
 		}
 	}
+	if in.AdditionalVolumeClaimTemplates != nil {
+		in, out := &in.AdditionalVolumeClaimTemplates, &out.AdditionalVolumeClaimTemplates
+		*out = new([]v1.PersistentVolumeClaim)
+		if **in != nil {
+			in, out := *in, *out
+			*out = make([]v1.PersistentVolumeClaim, len(*in))
+			for i := range *in {
+				(*in)[i].DeepCopyInto(&(*out)[i])
+			}
+		}
+	}
 	if in.Tls != nil {
 		in, out := &in.Tls, &out.Tls
 		*out = new(Tls)
@@ -788,6 +810,17 @@ func (in *MarklogicGroups) DeepCopyInto(out *MarklogicGroups) {
 		if **in != nil {
 			in, out := *in, *out
 			*out = make([]v1.VolumeMount, len(*in))
+			for i := range *in {
+				(*in)[i].DeepCopyInto(&(*out)[i])
+			}
+		}
+	}
+	if in.AdditionalVolumeClaimTemplates != nil {
+		in, out := &in.AdditionalVolumeClaimTemplates, &out.AdditionalVolumeClaimTemplates
+		*out = new([]v1.PersistentVolumeClaim)
+		if **in != nil {
+			in, out := *in, *out
+			*out = make([]v1.PersistentVolumeClaim, len(*in))
 			for i := range *in {
 				(*in)[i].DeepCopyInto(&(*out)[i])
 			}

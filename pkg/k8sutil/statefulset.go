@@ -19,17 +19,18 @@ import (
 )
 
 type statefulSetParameters struct {
-	Replicas                      *int32
-	Name                          string
-	PersistentVolumeClaim         corev1.PersistentVolumeClaim
-	ServiceName                   string
-	TerminationGracePeriodSeconds *int64
-	UpdateStrategy                appsv1.StatefulSetUpdateStrategyType
-	NodeSelector                  map[string]string
-	Affinity                      *corev1.Affinity
-	TopologySpreadConstraints     []corev1.TopologySpreadConstraint
-	PriorityClassName             string
-	ImagePullSecrets              []corev1.LocalObjectReference
+	Replicas                       *int32
+	Name                           string
+	PersistentVolumeClaim          corev1.PersistentVolumeClaim
+	ServiceName                    string
+	TerminationGracePeriodSeconds  *int64
+	UpdateStrategy                 appsv1.StatefulSetUpdateStrategyType
+	NodeSelector                   map[string]string
+	Affinity                       *corev1.Affinity
+	TopologySpreadConstraints      []corev1.TopologySpreadConstraint
+	PriorityClassName              string
+	ImagePullSecrets               []corev1.LocalObjectReference
+	AdditionalVolumeClaimTemplates *[]corev1.PersistentVolumeClaim
 }
 
 type containerParameters struct {
@@ -213,7 +214,7 @@ func generateStatefulSetsDef(stsMeta metav1.ObjectMeta, params statefulSetParame
 			},
 		},
 	}
-	// add EmptyDir volume if storage is not provided
+	// add EmptyDir volume if persistence is not provided
 	if containerParams.Persistence == nil || !containerParams.Persistence.Enabled {
 		emptyDir := corev1.Volume{
 			Name:         "datadir",
@@ -222,6 +223,9 @@ func generateStatefulSetsDef(stsMeta metav1.ObjectMeta, params statefulSetParame
 		statefulSet.Spec.Template.Spec.Volumes = append(statefulSet.Spec.Template.Spec.Volumes, emptyDir)
 	} else {
 		statefulSet.Spec.VolumeClaimTemplates = append(statefulSet.Spec.VolumeClaimTemplates, params.PersistentVolumeClaim)
+	}
+	if params.AdditionalVolumeClaimTemplates != nil {
+		statefulSet.Spec.VolumeClaimTemplates = append(statefulSet.Spec.VolumeClaimTemplates, *params.AdditionalVolumeClaimTemplates...)
 	}
 	if containerParams.Tls != nil && containerParams.Tls.EnableOnDefaultAppServers {
 		copyCertsVM := []corev1.VolumeMount{
@@ -335,15 +339,16 @@ func generateContainerDef(name string, containerParams containerParameters) []co
 
 func generateStatefulSetsParams(cr *databasev1alpha1.MarklogicGroup) statefulSetParameters {
 	params := statefulSetParameters{
-		Replicas:                      cr.Spec.Replicas,
-		Name:                          cr.Spec.Name,
-		TerminationGracePeriodSeconds: cr.Spec.TerminationGracePeriodSeconds,
-		UpdateStrategy:                cr.Spec.UpdateStrategy,
-		NodeSelector:                  cr.Spec.NodeSelector,
-		Affinity:                      cr.Spec.Affinity,
-		TopologySpreadConstraints:     cr.Spec.TopologySpreadConstraints,
-		PriorityClassName:             cr.Spec.PriorityClassName,
-		ImagePullSecrets:              cr.Spec.ImagePullSecrets,
+		Replicas:                       cr.Spec.Replicas,
+		Name:                           cr.Spec.Name,
+		TerminationGracePeriodSeconds:  cr.Spec.TerminationGracePeriodSeconds,
+		UpdateStrategy:                 cr.Spec.UpdateStrategy,
+		NodeSelector:                   cr.Spec.NodeSelector,
+		Affinity:                       cr.Spec.Affinity,
+		TopologySpreadConstraints:      cr.Spec.TopologySpreadConstraints,
+		PriorityClassName:              cr.Spec.PriorityClassName,
+		ImagePullSecrets:               cr.Spec.ImagePullSecrets,
+		AdditionalVolumeClaimTemplates: cr.Spec.AdditionalVolumeClaimTemplates,
 	}
 	if cr.Spec.Persistence != nil && cr.Spec.Persistence.Enabled {
 		params.PersistentVolumeClaim = generatePVCTemplate(cr.Spec.Persistence)
@@ -508,7 +513,6 @@ func generatePVCTemplate(persistence *databasev1alpha1.Persistence) corev1.Persi
 	}
 	pvcTemplate.Spec.AccessModes = persistence.AccessModes
 	pvcTemplate.ObjectMeta.Annotations = persistence.Annotations
-	// pvcTemplate.Spec.Resources.Requests.Storage().Add(resource.MustParse(persistence.Size))
 	pvcTemplate.Spec.Resources.Requests = corev1.ResourceList{
 		corev1.ResourceStorage: resource.MustParse(persistence.Size),
 	}
