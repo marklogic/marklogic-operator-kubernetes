@@ -24,7 +24,7 @@ type MarkLogicGroupParameters struct {
 	ImagePullSecrets              []corev1.LocalObjectReference
 	License                       *databasev1alpha1.License
 	Service                       databasev1alpha1.Service
-	Storage                       *databasev1alpha1.Storage
+	Persistence                   *databasev1alpha1.Persistence
 	Auth                          *databasev1alpha1.AdminAuth
 	TerminationGracePeriodSeconds *int64
 	Resources                     *corev1.ResourceRequirements
@@ -55,7 +55,7 @@ type MarkLogicClusterParameters struct {
 	ImagePullPolicy               string
 	ImagePullSecrets              []corev1.LocalObjectReference
 	ClusterDomain                 string
-	Storage                       *databasev1alpha1.Storage
+	Persistence                   *databasev1alpha1.Persistence
 	License                       *databasev1alpha1.License
 	Affinity                      *corev1.Affinity
 	NodeSelector                  map[string]string
@@ -119,7 +119,7 @@ func GenerateMarkLogicGroupDef(cr *databasev1alpha1.MarklogicCluster, index int,
 			UpdateStrategy:                params.UpdateStrategy,
 			Affinity:                      params.Affinity,
 			NodeSelector:                  params.NodeSelector,
-			Storage:                       params.Storage,
+			Persistence:                   params.Persistence,
 			Service:                       params.Service,
 			LogCollection:                 params.LogCollection,
 			TopologySpreadConstraints:     params.TopologySpreadConstraints,
@@ -204,7 +204,7 @@ func generateMarkLogicClusterParams(cr *databasev1alpha1.MarklogicCluster) *Mark
 		ImagePullPolicy:               cr.Spec.ImagePullPolicy,
 		ImagePullSecrets:              cr.Spec.ImagePullSecrets,
 		ClusterDomain:                 cr.Spec.ClusterDomain,
-		Storage:                       cr.Spec.Storage,
+		Persistence:                   cr.Spec.Persistence,
 		Affinity:                      cr.Spec.Affinity,
 		NodeSelector:                  cr.Spec.NodeSelector,
 		TopologySpreadConstraints:     cr.Spec.TopologySpreadConstraints,
@@ -242,7 +242,7 @@ func generateMarkLogicGroupParams(cr *databasev1alpha1.MarklogicCluster, index i
 		ImagePullSecrets:              clusterParams.ImagePullSecrets,
 		Auth:                          clusterParams.Auth,
 		License:                       clusterParams.License,
-		Storage:                       clusterParams.Storage,
+		Persistence:                   clusterParams.Persistence,
 		TerminationGracePeriodSeconds: clusterParams.TerminationGracePeriodSeconds,
 		Resources:                     clusterParams.Resources,
 		EnableConverters:              clusterParams.EnableConverters,
@@ -279,8 +279,8 @@ func generateMarkLogicGroupParams(cr *databasev1alpha1.MarklogicCluster, index i
 	if cr.Spec.MarkLogicGroups[index].ImagePullSecrets != nil {
 		markLogicGroupParameters.ImagePullSecrets = cr.Spec.MarkLogicGroups[index].ImagePullSecrets
 	}
-	if cr.Spec.MarkLogicGroups[index].Storage != nil {
-		markLogicGroupParameters.Storage = cr.Spec.MarkLogicGroups[index].Storage
+	if cr.Spec.MarkLogicGroups[index].Persistence != nil {
+		markLogicGroupParameters.Persistence = cr.Spec.MarkLogicGroups[index].Persistence
 	}
 	if cr.Spec.MarkLogicGroups[index].Resources != nil {
 		markLogicGroupParameters.Resources = cr.Spec.MarkLogicGroups[index].Resources

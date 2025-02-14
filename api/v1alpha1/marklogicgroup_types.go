@@ -41,7 +41,7 @@ type MarklogicGroupSpec struct {
 	ImagePullSecrets []corev1.LocalObjectReference `json:"imagePullSecrets,omitempty"`
 
 	Auth                          *AdminAuth                   `json:"auth,omitempty"`
-	Storage                       *Storage                     `json:"storage,omitempty"`
+	Persistence                   *Persistence                 `json:"persistence,omitempty"`
 	Resources                     *corev1.ResourceRequirements `json:"resources,omitempty"`
 	TerminationGracePeriodSeconds *int64                       `json:"terminationGracePeriodSeconds,omitempty"`
 	// +kubebuilder:validation:Enum=OnDelete;RollingUpdate

@@ -39,7 +39,7 @@ type containerParameters struct {
 	Image                  string
 	ImagePullPolicy        corev1.PullPolicy
 	Resources              *corev1.ResourceRequirements
-	PersistenceEnabled     *bool
+	Persistence            *databasev1alpha1.Persistence
 	Volumes                []corev1.Volume
 	MountPaths             []corev1.VolumeMount
 	LicenseKey             string
@@ -214,7 +214,7 @@ func generateStatefulSetsDef(stsMeta metav1.ObjectMeta, params statefulSetParame
 		},
 	}
 	// add EmptyDir volume if storage is not provided
-	if containerParams.PersistenceEnabled == nil || !*containerParams.PersistenceEnabled {
+	if containerParams.Persistence == nil || !containerParams.Persistence.Enabled {
 		emptyDir := corev1.Volume{
 			Name:         "datadir",
 			VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}},
@@ -345,14 +345,13 @@ func generateStatefulSetsParams(cr *databasev1alpha1.MarklogicGroup) statefulSet
 		PriorityClassName:             cr.Spec.PriorityClassName,
 		ImagePullSecrets:              cr.Spec.ImagePullSecrets,
 	}
-	if cr.Spec.Storage != nil {
-		params.PersistentVolumeClaim = generatePVCTemplate(cr.Spec.Storage)
+	if cr.Spec.Persistence != nil && cr.Spec.Persistence.Enabled {
+		params.PersistentVolumeClaim = generatePVCTemplate(cr.Spec.Persistence)
 	}
 	return params
 }
 
 func generateContainerParams(cr *databasev1alpha1.MarklogicGroup) containerParameters {
-	trueProperty := true
 	containerParams := containerParameters{
 		Image:                  cr.Spec.Image,
 		Resources:              cr.Spec.Resources,
@@ -372,16 +371,9 @@ func generateContainerParams(cr *databasev1alpha1.MarklogicGroup) containerParam
 		AdditionalVolumes:      cr.Spec.AdditionalVolumes,
 		AdditionalVolumeMounts: cr.Spec.AdditionalVolumeMounts,
 		SecretName:             cr.Spec.SecretName,
+		Persistence:            cr.Spec.Persistence,
 	}
 
-	if cr.Spec.Storage != nil {
-		containerParams.Volumes = cr.Spec.Storage.VolumeMount.Volume
-		containerParams.MountPaths = cr.Spec.Storage.VolumeMount.MountPath
-	}
-
-	if cr.Spec.Storage != nil {
-		containerParams.PersistenceEnabled = &trueProperty
-	}
 	if cr.Spec.License != nil {
 		containerParams.LicenseKey = cr.Spec.License.Key
 		containerParams.Licensee = cr.Spec.License.Licensee
@@ -507,17 +499,18 @@ func generateVolumes(stsName string, containerParams containerParameters) []core
 	return volumes
 }
 
-func generatePVCTemplate(storage *databasev1alpha1.Storage) corev1.PersistentVolumeClaim {
+func generatePVCTemplate(persistence *databasev1alpha1.Persistence) corev1.PersistentVolumeClaim {
 	pvcTemplate := corev1.PersistentVolumeClaim{}
 	pvcTemplate.CreationTimestamp = metav1.Time{}
-	pvcTemplate.Name = "datadir"
+	pvcTemplate.ObjectMeta.Name = "datadir"
 	if pvcTemplate.Spec.StorageClassName != nil {
-		pvcTemplate.Spec.StorageClassName = &storage.StorageClassName
+		pvcTemplate.Spec.StorageClassName = &persistence.StorageClassName
 	}
-	pvcTemplate.Spec.AccessModes = []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce}
-	pvcTemplate.Spec.Resources.Requests.Storage().Add(resource.MustParse(storage.Size))
+	pvcTemplate.Spec.AccessModes = persistence.AccessModes
+	pvcTemplate.ObjectMeta.Annotations = persistence.Annotations
+	// pvcTemplate.Spec.Resources.Requests.Storage().Add(resource.MustParse(persistence.Size))
 	pvcTemplate.Spec.Resources.Requests = corev1.ResourceList{
-		corev1.ResourceStorage: resource.MustParse(storage.Size),
+		corev1.ResourceStorage: resource.MustParse(persistence.Size),
 	}
 	return pvcTemplate
 }
@@ -627,7 +620,6 @@ func getFluentBitEnvironmentVariables() []corev1.EnvVar {
 func getVolumeMount(containerParams containerParameters) []corev1.VolumeMount {
 	var VolumeMounts []corev1.VolumeMount
 
-	// if persistenceEnabled != nil && *persistenceEnabled {
 	VolumeMounts = append(VolumeMounts,
 		corev1.VolumeMount{
 			Name:      "datadir",
