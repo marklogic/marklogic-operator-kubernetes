@@ -2,7 +2,7 @@
 
 ## Introduction
 
-The MarkLogic Operator for Kubernetes is an operator that allows you to deploy and manage MarkLogic clusters on Kubernetes. It provides a declarative way to define and manage MarkLogic resources. For detailed documentation, please refer [MarkLogic Operator for Kubernetes](https://).
+The MarkLogic Operator for Kubernetes is an operator that allows you to deploy and manage MarkLogic clusters on Kubernetes. It provides a declarative way to define and manage MarkLogic resources. For detailed documentation, please refer [MarkLogic Operator for Kubernetes](https://docs.progress.com/bundle/marklogic-server-on-kubernetes).
 
 ## Getting Started
 
@@ -50,7 +50,7 @@ Once the installation is complete and the pod is in a running state, the MarkLog
 
 If you used the automatically generated admin credentials, use the following steps to extract the admin username, password and wallet-password from a secret:
 
-1. Run the below command to fetch all of the secret names:
+1. Run this command to fetch all of the secret names:
   ```shell
   kubectl get secrets 
   ```
@@ -64,7 +64,8 @@ The MarkLogic admin secret name will be in the format  `<marklogicGroup-name>-ad
 
   kubectl get secret node-admin -o jsonpath='{.data.wallet-password}' | base64 --decode 
   ```
-Please refer [Official Documentation]() for more sample manifests with different configurations to deploy MarkLogic cluster inside a Kubernetes cluster.
+
+For additional manifests to deploy a MarkLogic cluster inside a Kubernetes cluster, see [Operator manifest](https://docs.progress.com/bundle/marklogic-server-on-kubernetes/operator/Operator-manifest.html) in the documentation.
 
 ## Clean Up
 

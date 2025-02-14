@@ -8,7 +8,7 @@ metadata:
     app.kubernetes.io/managed-by: kustomize
     app.kubernetes.io/created-by: marklogic-kubernetes-operator
   name: single-node
-  namespace: default
+  namespace: dev-env
 spec:
   image: "progressofficial/marklogic-db:11.3.0-ubi-rootless"
   ## It is recommended to use Kubernetes secrets to store the admin credentials
