@@ -1,7 +1,7 @@
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: {{ include "marklogic-operator.fullname" . }}-proxy-role
+  name: marklogic-operator-proxy-role
   labels:
     app.kubernetes.io/component: kube-rbac-proxy
     app.kubernetes.io/created-by: marklogic-kubernetes-operator
@@ -24,7 +24,7 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: {{ include "marklogic-operator.fullname" . }}-proxy-rolebinding
+  name: marklogic-operator-proxy-rolebinding
   labels:
     app.kubernetes.io/component: kube-rbac-proxy
     app.kubernetes.io/created-by: marklogic-kubernetes-operator
@@ -33,8 +33,8 @@ metadata:
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
-  name: '{{ include "marklogic-operator.fullname" . }}-proxy-role'
+  name: marklogic-operator-proxy-role
 subjects:
 - kind: ServiceAccount
-  name: '{{ include "marklogic-operator.fullname" . }}-controller-manager'
+  name: marklogic-operator-controller-manager
   namespace: '{{ .Release.Namespace }}'

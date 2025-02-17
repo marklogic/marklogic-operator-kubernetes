@@ -1,7 +1,7 @@
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: {{ include "marklogic-operator.fullname" . }}-manager-role
+  name: marklogic-operator-manager-role
   labels:
   {{- include "marklogic-operator.labels" . | nindent 4 }}
 rules:
@@ -80,7 +80,7 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: {{ include "marklogic-operator.fullname" . }}-manager-rolebinding
+  name: marklogic-operator-manager-rolebinding
   labels:
     app.kubernetes.io/component: rbac
     app.kubernetes.io/created-by: marklogic-kubernetes-operator
@@ -89,8 +89,8 @@ metadata:
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
-  name: '{{ include "marklogic-operator.fullname" . }}-manager-role'
+  name: marklogic-operator-manager-role
 subjects:
 - kind: ServiceAccount
-  name: '{{ include "marklogic-operator.fullname" . }}-controller-manager'
+  name: marklogic-operator-controller-manager
   namespace: '{{ .Release.Namespace }}'
