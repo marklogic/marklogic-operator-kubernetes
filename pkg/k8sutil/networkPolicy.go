@@ -45,8 +45,9 @@ func (cc *ClusterContext) getNetworkPolicy(namespace string, networkPolicyName s
 }
 
 func generateNetworkPolicy(networkPolicyName string, cr *databasev1alpha1.MarklogicCluster) *networkingv1.NetworkPolicy {
-	labels := getMarkLogicLabels(cr.GetObjectMeta().GetName())
-	netObjectMeta := generateObjectMeta(networkPolicyName, cr.Namespace, labels, map[string]string{})
+	labels := getCommonLabels(cr.GetObjectMeta().GetName())
+	annotations := getCommonAnnotations()
+	netObjectMeta := generateObjectMeta(networkPolicyName, cr.Namespace, labels, annotations)
 	networkPolicy := generateNetworkPolicyDef(netObjectMeta, marklogicClusterAsOwner(cr), cr)
 	return networkPolicy
 }

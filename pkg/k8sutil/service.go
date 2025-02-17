@@ -126,7 +126,7 @@ func (oc *OperatorContext) CreateOrUpdateService(namespace string, serviceMeta m
 }
 
 func generateService(svcName string, cr *databasev1alpha1.MarklogicGroup) *corev1.Service {
-	labels := getMarkLogicLabels(cr.Spec.Name)
+	labels := getCommonLabels(cr.Spec.Name)
 	var svcParams serviceParameters = serviceParameters{}
 	svcObjectMeta := generateObjectMeta(svcName, cr.Namespace, labels, svcParams.Annotations)
 	svcParams = generateServiceParams(cr)

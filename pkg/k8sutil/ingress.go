@@ -73,7 +73,7 @@ func (cc *ClusterContext) getIngress(namespace string, ingressName string) (*net
 }
 
 func generateIngress(ingressName string, cr *databasev1alpha1.MarklogicCluster) *networkingv1.Ingress {
-	labels := getMarkLogicLabels(cr.GetObjectMeta().GetName())
+	labels := getCommonLabels(cr.GetObjectMeta().GetName())
 	annotations := cr.Spec.HAProxy.Ingress.Annotations
 	ingressObjectMeta := generateObjectMeta(ingressName, cr.Namespace, labels, annotations)
 	ingress := generateIngressDef(ingressObjectMeta, marklogicClusterAsOwner(cr), cr)

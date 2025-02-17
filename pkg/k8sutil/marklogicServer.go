@@ -85,8 +85,8 @@ func MarkLogicGroupLogger(namespace string, name string) logr.Logger {
 func GenerateMarkLogicGroupDef(cr *databasev1alpha1.MarklogicCluster, index int, params *MarkLogicGroupParameters) *databasev1alpha1.MarklogicGroup {
 	logger := MarkLogicGroupLogger(cr.Namespace, cr.ObjectMeta.Name)
 	logger.Info("ReconcileMarkLogicCluster")
-	labels := getMarkLogicLabels(cr.ObjectMeta.Name)
-	annotations := map[string]string{}
+	labels := getCommonLabels(cr.ObjectMeta.Name)
+	annotations := getCommonAnnotations()
 	objectMeta := generateObjectMeta(cr.Spec.MarkLogicGroups[index].Name, cr.Namespace, labels, annotations)
 	bootStrapHostName := ""
 	bootStrapName := ""
