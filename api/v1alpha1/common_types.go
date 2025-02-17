@@ -21,10 +21,15 @@ type ContainerProbe struct {
 }
 
 // Storage is the inteface to add pvc and pv support in marklogic
-type Storage struct {
-	Size             string             `json:"size,omitempty"`
-	VolumeMount      VolumeMountWrapper `json:"volumeMount,omitempty"`
-	StorageClassName string             `json:"storageClassName,omitempty"`
+type Persistence struct {
+	// +kubebuilder:default:=true
+	Enabled bool `json:"enabled,omitempty"`
+	// +kubebuilder:default:="10Gi"
+	Size             string `json:"size,omitempty"`
+	StorageClassName string `json:"storageClassName,omitempty"`
+	// +kubebuilder:default:={ReadWriteOnce}
+	AccessModes []corev1.PersistentVolumeAccessMode `json:"accessModes,omitempty"`
+	Annotations map[string]string                   `json:"annotations,omitempty"`
 }
 
 type HugePages struct {

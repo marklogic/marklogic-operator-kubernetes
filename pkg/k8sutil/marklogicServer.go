@@ -16,62 +16,64 @@ import (
 )
 
 type MarkLogicGroupParameters struct {
-	Replicas                      *int32
-	Name                          string
-	GroupConfig                   *databasev1alpha1.GroupConfig
-	Image                         string
-	ImagePullPolicy               string
-	ImagePullSecrets              []corev1.LocalObjectReference
-	License                       *databasev1alpha1.License
-	Service                       databasev1alpha1.Service
-	Storage                       *databasev1alpha1.Storage
-	Auth                          *databasev1alpha1.AdminAuth
-	TerminationGracePeriodSeconds *int64
-	Resources                     *corev1.ResourceRequirements
-	EnableConverters              bool
-	PriorityClassName             string
-	ClusterDomain                 string
-	UpdateStrategy                appsv1.StatefulSetUpdateStrategyType
-	Affinity                      *corev1.Affinity
-	NodeSelector                  map[string]string
-	TopologySpreadConstraints     []corev1.TopologySpreadConstraint
-	HugePages                     *databasev1alpha1.HugePages
-	PodSecurityContext            *corev1.PodSecurityContext
-	ContainerSecurityContext      *corev1.SecurityContext
-	IsBootstrap                   bool
-	LogCollection                 *databasev1alpha1.LogCollection
-	PathBasedRouting              bool
-	Tls                           *databasev1alpha1.Tls
-	AdditionalVolumes             *[]corev1.Volume
-	AdditionalVolumeMounts        *[]corev1.VolumeMount
-	SecretName                    string
+	Replicas                       *int32
+	Name                           string
+	GroupConfig                    *databasev1alpha1.GroupConfig
+	Image                          string
+	ImagePullPolicy                string
+	ImagePullSecrets               []corev1.LocalObjectReference
+	License                        *databasev1alpha1.License
+	Service                        databasev1alpha1.Service
+	Persistence                    *databasev1alpha1.Persistence
+	Auth                           *databasev1alpha1.AdminAuth
+	TerminationGracePeriodSeconds  *int64
+	Resources                      *corev1.ResourceRequirements
+	EnableConverters               bool
+	PriorityClassName              string
+	ClusterDomain                  string
+	UpdateStrategy                 appsv1.StatefulSetUpdateStrategyType
+	Affinity                       *corev1.Affinity
+	NodeSelector                   map[string]string
+	TopologySpreadConstraints      []corev1.TopologySpreadConstraint
+	HugePages                      *databasev1alpha1.HugePages
+	PodSecurityContext             *corev1.PodSecurityContext
+	ContainerSecurityContext       *corev1.SecurityContext
+	IsBootstrap                    bool
+	LogCollection                  *databasev1alpha1.LogCollection
+	PathBasedRouting               bool
+	Tls                            *databasev1alpha1.Tls
+	AdditionalVolumes              *[]corev1.Volume
+	AdditionalVolumeMounts         *[]corev1.VolumeMount
+	SecretName                     string
+	AdditionalVolumeClaimTemplates *[]corev1.PersistentVolumeClaim
 }
 
 type MarkLogicClusterParameters struct {
-	Auth                          *databasev1alpha1.AdminAuth
-	Replicas                      *int32
-	Name                          string
-	Image                         string
-	ImagePullPolicy               string
-	ImagePullSecrets              []corev1.LocalObjectReference
-	ClusterDomain                 string
-	Storage                       *databasev1alpha1.Storage
-	License                       *databasev1alpha1.License
-	Affinity                      *corev1.Affinity
-	NodeSelector                  map[string]string
-	TopologySpreadConstraints     []corev1.TopologySpreadConstraint
-	PriorityClassName             string
-	EnableConverters              bool
-	Resources                     *corev1.ResourceRequirements
-	HugePages                     *databasev1alpha1.HugePages
-	LogCollection                 *databasev1alpha1.LogCollection
-	PodSecurityContext            *corev1.PodSecurityContext
-	ContainerSecurityContext      *corev1.SecurityContext
-	PathBasedRouting              bool
-	Tls                           *databasev1alpha1.Tls
-	TerminationGracePeriodSeconds *int64
-	AdditionalVolumes             *[]corev1.Volume
-	AdditionalVolumeMounts        *[]corev1.VolumeMount
+	Auth                           *databasev1alpha1.AdminAuth
+	Replicas                       *int32
+	Name                           string
+	Image                          string
+	ImagePullPolicy                string
+	ImagePullSecrets               []corev1.LocalObjectReference
+	ClusterDomain                  string
+	Persistence                    *databasev1alpha1.Persistence
+	License                        *databasev1alpha1.License
+	Affinity                       *corev1.Affinity
+	NodeSelector                   map[string]string
+	TopologySpreadConstraints      []corev1.TopologySpreadConstraint
+	PriorityClassName              string
+	EnableConverters               bool
+	Resources                      *corev1.ResourceRequirements
+	HugePages                      *databasev1alpha1.HugePages
+	LogCollection                  *databasev1alpha1.LogCollection
+	PodSecurityContext             *corev1.PodSecurityContext
+	ContainerSecurityContext       *corev1.SecurityContext
+	PathBasedRouting               bool
+	Tls                            *databasev1alpha1.Tls
+	TerminationGracePeriodSeconds  *int64
+	AdditionalVolumes              *[]corev1.Volume
+	AdditionalVolumeMounts         *[]corev1.VolumeMount
+	AdditionalVolumeClaimTemplates *[]corev1.PersistentVolumeClaim
 }
 
 func MarkLogicGroupLogger(namespace string, name string) logr.Logger {
@@ -103,33 +105,34 @@ func GenerateMarkLogicGroupDef(cr *databasev1alpha1.MarklogicCluster, index int,
 		TypeMeta:   generateTypeMeta("MarklogicGroup", "operator.marklogic.com/v1alpha1"),
 		ObjectMeta: objectMeta,
 		Spec: databasev1alpha1.MarklogicGroupSpec{
-			Replicas:                      params.Replicas,
-			Name:                          params.Name,
-			GroupConfig:                   params.GroupConfig,
-			Auth:                          params.Auth,
-			Image:                         params.Image,
-			ImagePullSecrets:              params.ImagePullSecrets,
-			License:                       params.License,
-			TerminationGracePeriodSeconds: params.TerminationGracePeriodSeconds,
-			BootstrapHost:                 bootStrapHostName,
-			Resources:                     params.Resources,
-			EnableConverters:              params.EnableConverters,
-			PriorityClassName:             params.PriorityClassName,
-			ClusterDomain:                 params.ClusterDomain,
-			UpdateStrategy:                params.UpdateStrategy,
-			Affinity:                      params.Affinity,
-			NodeSelector:                  params.NodeSelector,
-			Storage:                       params.Storage,
-			Service:                       params.Service,
-			LogCollection:                 params.LogCollection,
-			TopologySpreadConstraints:     params.TopologySpreadConstraints,
-			PodSecurityContext:            params.PodSecurityContext,
-			ContainerSecurityContext:      params.ContainerSecurityContext,
-			PathBasedRouting:              params.PathBasedRouting,
-			Tls:                           params.Tls,
-			AdditionalVolumes:             params.AdditionalVolumes,
-			AdditionalVolumeMounts:        params.AdditionalVolumeMounts,
-			SecretName:                    params.SecretName,
+			Replicas:                       params.Replicas,
+			Name:                           params.Name,
+			GroupConfig:                    params.GroupConfig,
+			Auth:                           params.Auth,
+			Image:                          params.Image,
+			ImagePullSecrets:               params.ImagePullSecrets,
+			License:                        params.License,
+			TerminationGracePeriodSeconds:  params.TerminationGracePeriodSeconds,
+			BootstrapHost:                  bootStrapHostName,
+			Resources:                      params.Resources,
+			EnableConverters:               params.EnableConverters,
+			PriorityClassName:              params.PriorityClassName,
+			ClusterDomain:                  params.ClusterDomain,
+			UpdateStrategy:                 params.UpdateStrategy,
+			Affinity:                       params.Affinity,
+			NodeSelector:                   params.NodeSelector,
+			Persistence:                    params.Persistence,
+			Service:                        params.Service,
+			LogCollection:                  params.LogCollection,
+			TopologySpreadConstraints:      params.TopologySpreadConstraints,
+			PodSecurityContext:             params.PodSecurityContext,
+			ContainerSecurityContext:       params.ContainerSecurityContext,
+			PathBasedRouting:               params.PathBasedRouting,
+			Tls:                            params.Tls,
+			AdditionalVolumes:              params.AdditionalVolumes,
+			AdditionalVolumeMounts:         params.AdditionalVolumeMounts,
+			SecretName:                     params.SecretName,
+			AdditionalVolumeClaimTemplates: params.AdditionalVolumeClaimTemplates,
 		},
 	}
 	AddOwnerRefToObject(MarkLogicGroupDef, ownerDef)
@@ -199,28 +202,29 @@ func (cc *ClusterContext) ReconsileMarklogicCluster() (reconcile.Result, error) 
 
 func generateMarkLogicClusterParams(cr *databasev1alpha1.MarklogicCluster) *MarkLogicClusterParameters {
 	markLogicClusterParameters := &MarkLogicClusterParameters{
-		Name:                          cr.ObjectMeta.Name,
-		Image:                         cr.Spec.Image,
-		ImagePullPolicy:               cr.Spec.ImagePullPolicy,
-		ImagePullSecrets:              cr.Spec.ImagePullSecrets,
-		ClusterDomain:                 cr.Spec.ClusterDomain,
-		Storage:                       cr.Spec.Storage,
-		Affinity:                      cr.Spec.Affinity,
-		NodeSelector:                  cr.Spec.NodeSelector,
-		TopologySpreadConstraints:     cr.Spec.TopologySpreadConstraints,
-		PriorityClassName:             cr.Spec.PriorityClassName,
-		License:                       cr.Spec.License,
-		EnableConverters:              cr.Spec.EnableConverters,
-		Resources:                     cr.Spec.Resources,
-		HugePages:                     cr.Spec.HugePages,
-		LogCollection:                 cr.Spec.LogCollection,
-		Auth:                          cr.Spec.Auth,
-		PodSecurityContext:            cr.Spec.PodSecurityContext,
-		ContainerSecurityContext:      cr.Spec.ContainerSecurityContext,
-		Tls:                           cr.Spec.Tls,
-		TerminationGracePeriodSeconds: cr.Spec.TerminationGracePeriodSeconds,
-		AdditionalVolumes:             cr.Spec.AdditionalVolumes,
-		AdditionalVolumeMounts:        cr.Spec.AdditionalVolumeMounts,
+		Name:                           cr.ObjectMeta.Name,
+		Image:                          cr.Spec.Image,
+		ImagePullPolicy:                cr.Spec.ImagePullPolicy,
+		ImagePullSecrets:               cr.Spec.ImagePullSecrets,
+		ClusterDomain:                  cr.Spec.ClusterDomain,
+		Persistence:                    cr.Spec.Persistence,
+		Affinity:                       cr.Spec.Affinity,
+		NodeSelector:                   cr.Spec.NodeSelector,
+		TopologySpreadConstraints:      cr.Spec.TopologySpreadConstraints,
+		PriorityClassName:              cr.Spec.PriorityClassName,
+		License:                        cr.Spec.License,
+		EnableConverters:               cr.Spec.EnableConverters,
+		Resources:                      cr.Spec.Resources,
+		HugePages:                      cr.Spec.HugePages,
+		LogCollection:                  cr.Spec.LogCollection,
+		Auth:                           cr.Spec.Auth,
+		PodSecurityContext:             cr.Spec.PodSecurityContext,
+		ContainerSecurityContext:       cr.Spec.ContainerSecurityContext,
+		Tls:                            cr.Spec.Tls,
+		TerminationGracePeriodSeconds:  cr.Spec.TerminationGracePeriodSeconds,
+		AdditionalVolumes:              cr.Spec.AdditionalVolumes,
+		AdditionalVolumeMounts:         cr.Spec.AdditionalVolumeMounts,
+		AdditionalVolumeClaimTemplates: cr.Spec.AdditionalVolumeClaimTemplates,
 	}
 	if cr.Spec.HAProxy == nil || cr.Spec.HAProxy.PathBasedRouting == nil || !cr.Spec.HAProxy.Enabled || !*cr.Spec.HAProxy.PathBasedRouting {
 		markLogicClusterParameters.PathBasedRouting = false
@@ -233,33 +237,38 @@ func generateMarkLogicClusterParams(cr *databasev1alpha1.MarklogicCluster) *Mark
 
 func generateMarkLogicGroupParams(cr *databasev1alpha1.MarklogicCluster, index int, clusterParams *MarkLogicClusterParameters) *MarkLogicGroupParameters {
 	markLogicGroupParameters := &MarkLogicGroupParameters{
-		Replicas:                      cr.Spec.MarkLogicGroups[index].Replicas,
-		Name:                          cr.Spec.MarkLogicGroups[index].Name,
-		GroupConfig:                   cr.Spec.MarkLogicGroups[index].GroupConfig,
-		Service:                       cr.Spec.MarkLogicGroups[index].Service,
-		Image:                         clusterParams.Image,
-		ImagePullPolicy:               clusterParams.ImagePullPolicy,
-		ImagePullSecrets:              clusterParams.ImagePullSecrets,
-		Auth:                          clusterParams.Auth,
-		License:                       clusterParams.License,
-		Storage:                       clusterParams.Storage,
-		TerminationGracePeriodSeconds: clusterParams.TerminationGracePeriodSeconds,
-		Resources:                     clusterParams.Resources,
-		EnableConverters:              clusterParams.EnableConverters,
-		PriorityClassName:             clusterParams.PriorityClassName,
-		ClusterDomain:                 clusterParams.ClusterDomain,
-		Affinity:                      clusterParams.Affinity,
-		NodeSelector:                  clusterParams.NodeSelector,
-		TopologySpreadConstraints:     clusterParams.TopologySpreadConstraints,
-		HugePages:                     clusterParams.HugePages,
-		PodSecurityContext:            clusterParams.PodSecurityContext,
-		ContainerSecurityContext:      clusterParams.ContainerSecurityContext,
-		IsBootstrap:                   cr.Spec.MarkLogicGroups[index].IsBootstrap,
-		LogCollection:                 clusterParams.LogCollection,
-		PathBasedRouting:              clusterParams.PathBasedRouting,
-		Tls:                           clusterParams.Tls,
-		AdditionalVolumeMounts:        clusterParams.AdditionalVolumeMounts,
-		AdditionalVolumes:             clusterParams.AdditionalVolumes,
+		Replicas:                       cr.Spec.MarkLogicGroups[index].Replicas,
+		Name:                           cr.Spec.MarkLogicGroups[index].Name,
+		GroupConfig:                    cr.Spec.MarkLogicGroups[index].GroupConfig,
+		Service:                        cr.Spec.MarkLogicGroups[index].Service,
+		Image:                          clusterParams.Image,
+		ImagePullPolicy:                clusterParams.ImagePullPolicy,
+		ImagePullSecrets:               clusterParams.ImagePullSecrets,
+		Auth:                           clusterParams.Auth,
+		License:                        clusterParams.License,
+		Persistence:                    clusterParams.Persistence,
+		TerminationGracePeriodSeconds:  clusterParams.TerminationGracePeriodSeconds,
+		Resources:                      clusterParams.Resources,
+		EnableConverters:               clusterParams.EnableConverters,
+		PriorityClassName:              clusterParams.PriorityClassName,
+		ClusterDomain:                  clusterParams.ClusterDomain,
+		Affinity:                       clusterParams.Affinity,
+		NodeSelector:                   clusterParams.NodeSelector,
+		TopologySpreadConstraints:      clusterParams.TopologySpreadConstraints,
+		HugePages:                      clusterParams.HugePages,
+		PodSecurityContext:             clusterParams.PodSecurityContext,
+		ContainerSecurityContext:       clusterParams.ContainerSecurityContext,
+		IsBootstrap:                    cr.Spec.MarkLogicGroups[index].IsBootstrap,
+		LogCollection:                  clusterParams.LogCollection,
+		PathBasedRouting:               clusterParams.PathBasedRouting,
+		Tls:                            clusterParams.Tls,
+		AdditionalVolumeMounts:         clusterParams.AdditionalVolumeMounts,
+		AdditionalVolumes:              clusterParams.AdditionalVolumes,
+		AdditionalVolumeClaimTemplates: clusterParams.AdditionalVolumeClaimTemplates,
+	}
+
+	if cr.Spec.MarkLogicGroups[index].AdditionalVolumeClaimTemplates != nil {
+		markLogicGroupParameters.AdditionalVolumeClaimTemplates = cr.Spec.MarkLogicGroups[index].AdditionalVolumeClaimTemplates
 	}
 
 	if cr.Spec.Auth != nil && cr.Spec.Auth.SecretName != nil && *cr.Spec.Auth.SecretName != "" {
@@ -279,8 +288,8 @@ func generateMarkLogicGroupParams(cr *databasev1alpha1.MarklogicCluster, index i
 	if cr.Spec.MarkLogicGroups[index].ImagePullSecrets != nil {
 		markLogicGroupParameters.ImagePullSecrets = cr.Spec.MarkLogicGroups[index].ImagePullSecrets
 	}
-	if cr.Spec.MarkLogicGroups[index].Storage != nil {
-		markLogicGroupParameters.Storage = cr.Spec.MarkLogicGroups[index].Storage
+	if cr.Spec.MarkLogicGroups[index].Persistence != nil {
+		markLogicGroupParameters.Persistence = cr.Spec.MarkLogicGroups[index].Persistence
 	}
 	if cr.Spec.MarkLogicGroups[index].Resources != nil {
 		markLogicGroupParameters.Resources = cr.Spec.MarkLogicGroups[index].Resources

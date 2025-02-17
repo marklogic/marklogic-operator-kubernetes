@@ -15,8 +15,27 @@ spec:
     # adminUsername: user
     # adminPassword: pass
 # This is the cluster level configuration that will apply to all the groups
-  # storage:
-  #   size: 5Gi
+  # persistence:
+  #   enabled: true
+  #   # size: 10Gi
+  #   annotations: {}
+    # accessModes:
+    #   - ReadWriteOnce
+  
+  # additionalVolumeClaimTemplates: 
+  #   - metadata:
+  #       name: "logsdir"
+  #       annotations: {}
+  #     spec:
+  #       accessModes:
+  #         - ReadWriteOnce
+  #       resources:
+  #         requests:
+  #           storage: 10Gi
+
+  # additionalVolumeMounts:
+  #   - name: "logsdir"
+  #     mountPath: "/var/opt/MarkLogic/Logs"
 
   ## Configuration for the HAProxy load balancer
   ## An out of box load balancer with configured to handle cookie based session affinity that required by most MarkLogic applications.
@@ -181,6 +200,8 @@ spec:
     #     cpu: "1"
     isBootstrap: true
   - replicas: 1
+    haproxy:
+      enabled: false
     name: enode
     groupConfig:
       name: enode

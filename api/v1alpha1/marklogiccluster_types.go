@@ -42,7 +42,7 @@ type MarklogicClusterSpec struct {
 	ImagePullSecrets []corev1.LocalObjectReference `json:"imagePullSecrets,omitempty"`
 
 	Auth                          *AdminAuth                   `json:"auth,omitempty"`
-	Storage                       *Storage                     `json:"storage,omitempty"`
+	Persistence                   *Persistence                 `json:"persistence,omitempty"`
 	Resources                     *corev1.ResourceRequirements `json:"resources,omitempty"`
 	TerminationGracePeriodSeconds *int64                       `json:"terminationGracePeriodSeconds,omitempty"`
 	// +kubebuilder:validation:Enum=OnDelete;RollingUpdate
@@ -60,11 +60,12 @@ type MarklogicClusterSpec struct {
 	// +kubebuilder:default:={enabled: false, mountPath: "/dev/hugepages"}
 	HugePages *HugePages `json:"hugePages,omitempty"`
 	// +kubebuilder:default:={enabled: false, image: "fluent/fluent-bit:3.2.5", resources: {requests: {cpu: "100m", memory: "200Mi"}, limits: {cpu: "200m", memory: "500Mi"}}, files: {errorLogs: true, accessLogs: true, requestLogs: true}, outputs: "stdout"}
-	LogCollection          *LogCollection        `json:"logCollection,omitempty"`
-	HAProxy                *HAProxy              `json:"haproxy,omitempty"`
-	Tls                    *Tls                  `json:"tls,omitempty"`
-	AdditionalVolumes      *[]corev1.Volume      `json:"additionalVolumes,omitempty"`
-	AdditionalVolumeMounts *[]corev1.VolumeMount `json:"additionalVolumeMounts,omitempty"`
+	LogCollection                  *LogCollection                  `json:"logCollection,omitempty"`
+	HAProxy                        *HAProxy                        `json:"haproxy,omitempty"`
+	Tls                            *Tls                            `json:"tls,omitempty"`
+	AdditionalVolumes              *[]corev1.Volume                `json:"additionalVolumes,omitempty"`
+	AdditionalVolumeMounts         *[]corev1.VolumeMount           `json:"additionalVolumeMounts,omitempty"`
+	AdditionalVolumeClaimTemplates *[]corev1.PersistentVolumeClaim `json:"additionalVolumeClaimTemplates,omitempty"`
 
 	// +kubebuilder:validation:MaxItems=100
 	// +kubebuilder:validation:XValidation:rule="size(self) == 1 || (size(self) == size(self.map(x, x.groupConfig.name).filter(y, self.map(x, x.groupConfig.name).filter(z, z == y).size() == 1)))", message="MarkLogicGroups must have unique groupConfig names"
@@ -73,26 +74,27 @@ type MarklogicClusterSpec struct {
 }
 
 type MarklogicGroups struct {
-	Replicas                  *int32                            `json:"replicas,omitempty"`
-	Name                      string                            `json:"name,omitempty"`
-	GroupConfig               *GroupConfig                      `json:"groupConfig,omitempty"`
-	Image                     string                            `json:"image,omitempty"`
-	ImagePullPolicy           string                            `json:"imagePullPolicy,omitempty"`
-	ImagePullSecrets          []corev1.LocalObjectReference     `json:"imagePullSecrets,omitempty"`
-	Storage                   *Storage                          `json:"storage,omitempty"`
-	Service                   Service                           `json:"service,omitempty"`
-	Resources                 *corev1.ResourceRequirements      `json:"resources,omitempty"`
-	Affinity                  *corev1.Affinity                  `json:"affinity,omitempty"`
-	TopologySpreadConstraints []corev1.TopologySpreadConstraint `json:"topologySpreadConstraints,omitempty"`
-	NodeSelector              map[string]string                 `json:"nodeSelector,omitempty"`
-	PriorityClassName         string                            `json:"priorityClassName,omitempty"`
-	HugePages                 *HugePages                        `json:"hugePages,omitempty"`
-	LogCollection             *LogCollection                    `json:"logCollection,omitempty"`
-	HAProxy                   *HAProxy                          `json:"haproxy,omitempty"`
-	IsBootstrap               bool                              `json:"isBootstrap,omitempty"`
-	Tls                       *Tls                              `json:"tls,omitempty"`
-	AdditionalVolumes         *[]corev1.Volume                  `json:"additionalVolumes,omitempty"`
-	AdditionalVolumeMounts    *[]corev1.VolumeMount             `json:"additionalVolumeMounts,omitempty"`
+	Replicas                       *int32                            `json:"replicas,omitempty"`
+	Name                           string                            `json:"name,omitempty"`
+	GroupConfig                    *GroupConfig                      `json:"groupConfig,omitempty"`
+	Image                          string                            `json:"image,omitempty"`
+	ImagePullPolicy                string                            `json:"imagePullPolicy,omitempty"`
+	ImagePullSecrets               []corev1.LocalObjectReference     `json:"imagePullSecrets,omitempty"`
+	Persistence                    *Persistence                      `json:"persistence,omitempty"`
+	Service                        Service                           `json:"service,omitempty"`
+	Resources                      *corev1.ResourceRequirements      `json:"resources,omitempty"`
+	Affinity                       *corev1.Affinity                  `json:"affinity,omitempty"`
+	TopologySpreadConstraints      []corev1.TopologySpreadConstraint `json:"topologySpreadConstraints,omitempty"`
+	NodeSelector                   map[string]string                 `json:"nodeSelector,omitempty"`
+	PriorityClassName              string                            `json:"priorityClassName,omitempty"`
+	HugePages                      *HugePages                        `json:"hugePages,omitempty"`
+	LogCollection                  *LogCollection                    `json:"logCollection,omitempty"`
+	HAProxy                        *HAProxy                          `json:"haproxy,omitempty"`
+	IsBootstrap                    bool                              `json:"isBootstrap,omitempty"`
+	Tls                            *Tls                              `json:"tls,omitempty"`
+	AdditionalVolumes              *[]corev1.Volume                  `json:"additionalVolumes,omitempty"`
+	AdditionalVolumeMounts         *[]corev1.VolumeMount             `json:"additionalVolumeMounts,omitempty"`
+	AdditionalVolumeClaimTemplates *[]corev1.PersistentVolumeClaim   `json:"additionalVolumeClaimTemplates,omitempty"`
 }
 
 type Tls struct {
