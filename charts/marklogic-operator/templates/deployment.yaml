@@ -1,7 +1,7 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: {{ include "marklogic-operator.fullname" . }}-controller-manager
+  name: marklogic-operator-controller-manager
   labels:
     app.kubernetes.io/component: manager
     app.kubernetes.io/created-by: marklogic-kubernetes-operator
@@ -66,5 +66,5 @@ spec:
       imagePullSecrets: {{ .Values.imagePullSecrets | default list | toJson }}
       securityContext: {{- toYaml .Values.controllerManager.podSecurityContext | nindent
         8 }}
-      serviceAccountName: {{ include "marklogic-operator.fullname" . }}-controller-manager
+      serviceAccountName: marklogic-operator-controller-manager
       terminationGracePeriodSeconds: 10
