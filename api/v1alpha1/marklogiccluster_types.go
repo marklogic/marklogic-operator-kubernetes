@@ -41,7 +41,8 @@ type MarklogicClusterSpec struct {
 	ImagePullPolicy  string                        `json:"imagePullPolicy,omitempty"`
 	ImagePullSecrets []corev1.LocalObjectReference `json:"imagePullSecrets,omitempty"`
 
-	Auth                          *AdminAuth                   `json:"auth,omitempty"`
+	Auth *AdminAuth `json:"auth,omitempty"`
+	// +kubebuilder:default:={enabled: true, size: "10Gi"}
 	Persistence                   *Persistence                 `json:"persistence,omitempty"`
 	Resources                     *corev1.ResourceRequirements `json:"resources,omitempty"`
 	TerminationGracePeriodSeconds *int64                       `json:"terminationGracePeriodSeconds,omitempty"`
@@ -68,33 +69,40 @@ type MarklogicClusterSpec struct {
 	AdditionalVolumeClaimTemplates *[]corev1.PersistentVolumeClaim `json:"additionalVolumeClaimTemplates,omitempty"`
 
 	// +kubebuilder:validation:MaxItems=100
+	// +kubebuilder:validation:MinItems=1
+	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:XValidation:rule="size(self) == 1 || (size(self) == size(self.map(x, x.groupConfig.name).filter(y, self.map(x, x.groupConfig.name).filter(z, z == y).size() == 1)))", message="MarkLogicGroups must have unique groupConfig names"
 	// +kubebuilder:validation:XValidation:rule="size(self) == size(self.map(x, x.name).filter(y, self.map(x, x.name).filter(z, z == y).size() == 1))", message="MarkLogicGroups must have unique names"
+	// +kubebuilder:validation:XValidation:rule="size(self.filter(x, x.isBootstrap == true)) == 1", message="Exactly one MarkLogicGroup must have isBootstrap set to true"
 	MarkLogicGroups []*MarklogicGroups `json:"markLogicGroups,omitempty"`
 }
 
 type MarklogicGroups struct {
-	Replicas                       *int32                            `json:"replicas,omitempty"`
-	Name                           string                            `json:"name,omitempty"`
-	GroupConfig                    *GroupConfig                      `json:"groupConfig,omitempty"`
-	Image                          string                            `json:"image,omitempty"`
-	ImagePullPolicy                string                            `json:"imagePullPolicy,omitempty"`
-	ImagePullSecrets               []corev1.LocalObjectReference     `json:"imagePullSecrets,omitempty"`
-	Persistence                    *Persistence                      `json:"persistence,omitempty"`
-	Service                        Service                           `json:"service,omitempty"`
-	Resources                      *corev1.ResourceRequirements      `json:"resources,omitempty"`
-	Affinity                       *corev1.Affinity                  `json:"affinity,omitempty"`
-	TopologySpreadConstraints      []corev1.TopologySpreadConstraint `json:"topologySpreadConstraints,omitempty"`
-	NodeSelector                   map[string]string                 `json:"nodeSelector,omitempty"`
-	PriorityClassName              string                            `json:"priorityClassName,omitempty"`
-	HugePages                      *HugePages                        `json:"hugePages,omitempty"`
-	LogCollection                  *LogCollection                    `json:"logCollection,omitempty"`
-	HAProxy                        *HAProxy                          `json:"haproxy,omitempty"`
-	IsBootstrap                    bool                              `json:"isBootstrap,omitempty"`
-	Tls                            *Tls                              `json:"tls,omitempty"`
-	AdditionalVolumes              *[]corev1.Volume                  `json:"additionalVolumes,omitempty"`
-	AdditionalVolumeMounts         *[]corev1.VolumeMount             `json:"additionalVolumeMounts,omitempty"`
-	AdditionalVolumeClaimTemplates *[]corev1.PersistentVolumeClaim   `json:"additionalVolumeClaimTemplates,omitempty"`
+	// +kubebuilder:default:=1
+	Replicas *int32 `json:"replicas,omitempty"`
+	// +kubebuilder:validation:Required
+	Name string `json:"name,omitempty"`
+	// +kubebuilder:default:={name: "Default", enableXdqpSsl: true}
+	GroupConfig               *GroupConfig                      `json:"groupConfig,omitempty"`
+	Image                     string                            `json:"image,omitempty"`
+	ImagePullPolicy           string                            `json:"imagePullPolicy,omitempty"`
+	ImagePullSecrets          []corev1.LocalObjectReference     `json:"imagePullSecrets,omitempty"`
+	Persistence               *Persistence                      `json:"persistence,omitempty"`
+	Service                   Service                           `json:"service,omitempty"`
+	Resources                 *corev1.ResourceRequirements      `json:"resources,omitempty"`
+	Affinity                  *corev1.Affinity                  `json:"affinity,omitempty"`
+	TopologySpreadConstraints []corev1.TopologySpreadConstraint `json:"topologySpreadConstraints,omitempty"`
+	NodeSelector              map[string]string                 `json:"nodeSelector,omitempty"`
+	PriorityClassName         string                            `json:"priorityClassName,omitempty"`
+	HugePages                 *HugePages                        `json:"hugePages,omitempty"`
+	LogCollection             *LogCollection                    `json:"logCollection,omitempty"`
+	HAProxy                   *HAProxy                          `json:"haproxy,omitempty"`
+	// +kubebuilder:default:=false
+	IsBootstrap                    bool                            `json:"isBootstrap,omitempty"`
+	Tls                            *Tls                            `json:"tls,omitempty"`
+	AdditionalVolumes              *[]corev1.Volume                `json:"additionalVolumes,omitempty"`
+	AdditionalVolumeMounts         *[]corev1.VolumeMount           `json:"additionalVolumeMounts,omitempty"`
+	AdditionalVolumeClaimTemplates *[]corev1.PersistentVolumeClaim `json:"additionalVolumeClaimTemplates,omitempty"`
 }
 
 type Tls struct {
