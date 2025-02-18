@@ -23,11 +23,10 @@ func (cc *ClusterContext) ReconcileHAProxy() result.ReconcileResult {
 	cr := cc.MarklogicCluster
 
 	logger.Info("Reconciling HAProxy Config")
-	labels := map[string]string{
-		"app.kubernetes.io/instance": "marklogic",
-		"app.kubernetes.io/name":     "haproxy",
-	}
-	annotations := map[string]string{}
+
+	labels := getCommonLabels(cr.GetObjectMeta().GetName())
+	labels["app.kubernetes.io/component"] = "haproxy"
+	annotations := getCommonAnnotations()
 	configMapName := "marklogic-haproxy"
 	objectMeta := generateObjectMeta(configMapName, cr.Namespace, labels, annotations)
 	nsName := types.NamespacedName{Name: objectMeta.Name, Namespace: objectMeta.Namespace}
@@ -37,7 +36,7 @@ func (cc *ClusterContext) ReconcileHAProxy() result.ReconcileResult {
 	err := client.Get(cc.Ctx, nsName, configmap)
 	data := generateHAProxyConfigMapData(cc.MarklogicCluster)
 	configMapDef := generateHAProxyConfigMap(objectMeta, marklogicClusterAsOwner(cr), data)
-	haproxyServiceDef := cc.generateHaproxyServiceDef()
+	haproxyServiceDef := cc.generateHaproxyServiceDef(objectMeta)
 	configmapHash := calculateHash(configMapDef.Data)
 	if err != nil {
 		if errors.IsNotFound(err) {
@@ -48,7 +47,7 @@ func (cc *ClusterContext) ReconcileHAProxy() result.ReconcileResult {
 				return result.Error(err)
 			}
 			logger.Info("HAProxy configmap creation is successful")
-			err = cc.createHAProxyDeployment()
+			err = cc.createHAProxyDeployment(objectMeta)
 			if err != nil {
 				logger.Info("HAProxy Deployment creation is failed")
 				return result.Error(err)
@@ -197,37 +196,28 @@ resolvers dns
 }
 
 // createHAproxy Deployment
-func (cc *ClusterContext) createHAProxyDeployment() error {
+func (cc *ClusterContext) createHAProxyDeployment(meta metav1.ObjectMeta) error {
 	logger := cc.ReqLogger
 	logger.Info("Creating HAProxy Deployment")
-	labels := map[string]string{
-		"app.kubernetes.io/instance": "marklogic",
-		"app.kubernetes.io/name":     "haproxy",
-	}
 	client := cc.Client
 	cr := cc.MarklogicCluster
 	ownerDef := marklogicClusterAsOwner(cr)
 	defaultMode := int32(420)
 	deploymentDef := &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      "marklogic-haproxy",
-			Namespace: cc.Request.Namespace,
-			Labels:    labels,
+			Name:        "marklogic-haproxy",
+			Namespace:   cc.Request.Namespace,
+			Labels:      meta.Labels,
+			Annotations: meta.Annotations,
 		},
 		Spec: appsv1.DeploymentSpec{
 			Replicas: &cr.Spec.HAProxy.ReplicaCount,
 			Selector: &metav1.LabelSelector{
-				MatchLabels: map[string]string{
-					"app.kubernetes.io/instance": "marklogic",
-					"app.kubernetes.io/name":     "haproxy",
-				},
+				MatchLabels: meta.Labels,
 			},
 			Template: corev1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{
-					Labels: map[string]string{
-						"app.kubernetes.io/instance": "marklogic",
-						"app.kubernetes.io/name":     "haproxy",
-					},
+					Labels: meta.Labels,
 					Annotations: map[string]string{
 						"comfigmap-hash": calculateHash(generateHAProxyConfigMapData(cr)),
 					},
@@ -297,7 +287,7 @@ func (cc *ClusterContext) createHAProxyDeployment() error {
 	return nil
 }
 
-func (cc *ClusterContext) generateHaproxyServiceDef() *corev1.Service {
+func (cc *ClusterContext) generateHaproxyServiceDef(meta metav1.ObjectMeta) *corev1.Service {
 	cr := cc.MarklogicCluster
 	defaultPort := []corev1.ServicePort{
 		{
@@ -356,20 +346,15 @@ func (cc *ClusterContext) generateHaproxyServiceDef() *corev1.Service {
 	}
 	serviceDef := &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      "marklogic-haproxy",
-			Namespace: cc.Request.Namespace,
-			Labels: map[string]string{
-				"app.kubernetes.io/instance": "marklogic",
-				"app.kubernetes.io/name":     "haproxy",
-			},
+			Name:        "marklogic-haproxy",
+			Namespace:   cc.Request.Namespace,
+			Labels:      meta.Labels,
+			Annotations: meta.Annotations,
 		},
 		Spec: corev1.ServiceSpec{
-			Selector: map[string]string{
-				"app.kubernetes.io/instance": "marklogic",
-				"app.kubernetes.io/name":     "haproxy",
-			},
-			Ports: servicePort,
-			Type:  corev1.ServiceTypeClusterIP,
+			Selector: meta.Labels,
+			Ports:    servicePort,
+			Type:     corev1.ServiceTypeClusterIP,
 		},
 	}
 	return serviceDef
@@ -392,16 +377,13 @@ func (cc *ClusterContext) createHAProxyService(serviceDef *corev1.Service) error
 }
 
 func generateHAProxyConfigMap(objectMeta metav1.ObjectMeta, owner metav1.OwnerReference, data map[string]string) *corev1.ConfigMap {
-	labels := map[string]string{
-		"app.kubernetes.io/component": "haproxy",
-	}
-	annotations := map[string]string{}
+
 	return &corev1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:        objectMeta.Name,
 			Namespace:   objectMeta.Namespace,
-			Labels:      labels,
-			Annotations: annotations,
+			Labels:      objectMeta.Labels,
+			Annotations: objectMeta.Annotations,
 			OwnerReferences: []metav1.OwnerReference{
 				owner,
 			},

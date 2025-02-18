@@ -19,8 +19,8 @@ func (cc *ClusterContext) ReconcileSecret() result.ReconcileResult {
 	}
 
 	logger.Info("Reconciling MarkLogic Secret")
-	labels := getMarkLogicLabels(mlc.ObjectMeta.Name)
-	annotations := map[string]string{}
+	labels := getCommonLabels(mlc.ObjectMeta.Name)
+	annotations := getCommonAnnotations()
 	secretName := mlc.ObjectMeta.Name + "-admin"
 	objectMeta := generateObjectMeta(secretName, mlc.Namespace, labels, annotations)
 	nsName := types.NamespacedName{Name: objectMeta.Name, Namespace: objectMeta.Namespace}

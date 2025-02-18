@@ -64,8 +64,8 @@ type containerParameters struct {
 func (oc *OperatorContext) ReconcileStatefulset() (reconcile.Result, error) {
 	cr := oc.GetMarkLogicServer()
 	logger := oc.ReqLogger
-	labels := getMarkLogicLabels(cr.Spec.Name)
-	annotations := map[string]string{}
+	labels := getCommonLabels(cr.Spec.Name)
+	annotations := getCommonAnnotations()
 	objectMeta := generateObjectMeta(cr.Spec.Name, cr.Namespace, labels, annotations)
 	currentSts, err := oc.GetStatefulSet(cr.Namespace, objectMeta.Name)
 	containerParams := generateContainerParams(cr)
@@ -198,7 +198,8 @@ func generateStatefulSetsDef(stsMeta metav1.ObjectMeta, params statefulSetParame
 			UpdateStrategy:      appsv1.StatefulSetUpdateStrategy{Type: params.UpdateStrategy},
 			Template: corev1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{
-					Labels: stsMeta.GetLabels(),
+					Labels:      stsMeta.GetLabels(),
+					Annotations: stsMeta.GetAnnotations(),
 				},
 				Spec: corev1.PodSpec{
 					Containers:                    generateContainerDef("marklogic-server", containerParams),
