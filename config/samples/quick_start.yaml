@@ -12,8 +12,9 @@ metadata:
 spec:
   image: "progressofficial/marklogic-db:11.3.0-ubi-rootless"
   ## It is recommended to use Kubernetes secrets to store the admin credentials
-  ## If you do not provide the admin credentials, the operator will generate a secret for you containing admin credentials
+  ## If you do not provide the secret with admin credentials, the operator will generate a secret for you containing admin credentials
   # auth:
+  #   secretName: marklogic-admin-secret
   #   adminUsername: admin
   #   adminPassword: admin
   markLogicGroups:
