@@ -3,7 +3,7 @@
 # To re-generate a bundle for another specific version without changing the standard setup, you can:
 # - use the VERSION as arg of the bundle target (e.g make bundle VERSION=0.0.2)
 # - use environment variables to overwrite this value (e.g export VERSION=0.0.2)
-VERSION ?= 0.0.1
+VERSION ?= 1.0.0
 
 # VERIFY_HUGE_PAGES defines if hugepages test is enabled or not for e2e test
 VERIFY_HUGE_PAGES ?= false
@@ -64,7 +64,8 @@ endif
 OPERATOR_SDK_VERSION ?= v1.34.2
 
 # Image URL to use all building/pushing image targets
-IMG ?= ml-marklogic-operator-dev.bed-artifactory.bedford.progress.com/marklogic-kubernetes-operator:1.0.0-ea2
+# Image for dev: ml-marklogic-operator-dev.bed-artifactory.bedford.progress.com/marklogic-kubernetes-operator
+IMG ?= marklogic-operator-kubernetes:$(VERSION)
 
 
 # Get the currently used golang install path (in GOPATH/bin, unless GOBIN is set)
