@@ -48,15 +48,18 @@ var marklogicGroups = []*databasev1alpha1.MarklogicGroups{
 	{
 		Name: "dnode",
 		GroupConfig: &databasev1alpha1.GroupConfig{
-			Name: "dnode",
+			Name:          "dnode",
+			EnableXdqpSsl: true,
 		},
-		Replicas: &dnodeReplicas,
-		Service:  databasev1alpha1.Service{Type: corev1.ServiceTypeClusterIP},
+		Replicas:    &dnodeReplicas,
+		Service:     databasev1alpha1.Service{Type: corev1.ServiceTypeClusterIP},
+		IsBootstrap: true,
 	},
 	{
 		Name: "enode",
 		GroupConfig: &databasev1alpha1.GroupConfig{
-			Name: "enode",
+			Name:          "enode",
+			EnableXdqpSsl: true,
 		},
 		Replicas: &enodeReplicas,
 		Service:  databasev1alpha1.Service{Type: corev1.ServiceTypeClusterIP},
