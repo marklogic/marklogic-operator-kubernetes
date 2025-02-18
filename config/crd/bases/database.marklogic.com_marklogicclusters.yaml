@@ -7988,8 +7988,12 @@ spec:
                           type: object
                       type: object
                     groupConfig:
+                      default:
+                        enableXdqpSsl: true
+                        name: Default
                       properties:
                         enableXdqpSsl:
+                          default: true
                           type: boolean
                         name:
                           default: Default
@@ -9350,6 +9354,7 @@ spec:
                         x-kubernetes-map-type: atomic
                       type: array
                     isBootstrap:
+                      default: false
                       type: boolean
                     logCollection:
                       properties:
@@ -9473,17 +9478,18 @@ spec:
                             type: string
                           type: object
                         enabled:
-                          default: true
                           type: boolean
                         size:
-                          default: 10Gi
                           type: string
                         storageClassName:
                           type: string
+                      required:
+                      - size
                       type: object
                     priorityClassName:
                       type: string
                     replicas:
+                      default: 1
                       format: int32
                       type: integer
                     resources:
@@ -9818,8 +9824,11 @@ spec:
                         - whenUnsatisfiable
                         type: object
                       type: array
+                  required:
+                  - name
                   type: object
                 maxItems: 100
+                minItems: 1
                 type: array
                 x-kubernetes-validations:
                 - message: MarkLogicGroups must have unique groupConfig names
@@ -9828,6 +9837,9 @@ spec:
                 - message: MarkLogicGroups must have unique names
                   rule: size(self) == size(self.map(x, x.name).filter(y, self.map(x,
                     x.name).filter(z, z == y).size() == 1))
+                - message: Exactly one MarkLogicGroup must have isBootstrap set to
+                    true
+                  rule: size(self.filter(x, x.isBootstrap == true)) == 1
               networkPolicy:
                 properties:
                   egress:
@@ -10271,6 +10283,9 @@ spec:
                   type: string
                 type: object
               persistence:
+                default:
+                  enabled: true
+                  size: 10Gi
                 description: Storage is the inteface to add pvc and pv support in
                   marklogic
                 properties:
@@ -10285,13 +10300,13 @@ spec:
                       type: string
                     type: object
                   enabled:
-                    default: true
                     type: boolean
                   size:
-                    default: 10Gi
                     type: string
                   storageClassName:
                     type: string
+                required:
+                - size
                 type: object
               podSecurityContext:
                 description: |-
@@ -10983,6 +10998,7 @@ spec:
                 type: string
             required:
             - image
+            - markLogicGroups
             type: object
             x-kubernetes-validations:
             - message: HAProxy and Pathbased Routing is enabled. PathBasedRouting

@@ -22,9 +22,8 @@ type ContainerProbe struct {
 
 // Storage is the inteface to add pvc and pv support in marklogic
 type Persistence struct {
-	// +kubebuilder:default:=true
 	Enabled bool `json:"enabled,omitempty"`
-	// +kubebuilder:default:="10Gi"
+	// +kubebuilder:validation:Required
 	Size             string `json:"size,omitempty"`
 	StorageClassName string `json:"storageClassName,omitempty"`
 	// +kubebuilder:default:={ReadWriteOnce}

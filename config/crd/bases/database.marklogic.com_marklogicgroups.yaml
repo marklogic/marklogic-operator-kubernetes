@@ -3276,6 +3276,7 @@ spec:
                   name: Default
                 properties:
                   enableXdqpSsl:
+                    default: true
                     type: boolean
                   name:
                     default: Default
@@ -3931,13 +3932,13 @@ spec:
                       type: string
                     type: object
                   enabled:
-                    default: true
                     type: boolean
                   size:
-                    default: 10Gi
                     type: string
                   storageClassName:
                     type: string
+                required:
+                - size
                 type: object
               podSecurityContext:
                 default:
