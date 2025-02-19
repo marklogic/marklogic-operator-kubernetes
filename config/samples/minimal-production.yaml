@@ -1,0 +1,207 @@
+apiVersion: database.marklogic.com/v1alpha1
+kind: MarklogicCluster
+metadata:
+  labels:
+    app.kubernetes.io/name: marklogiccluster
+    app.kubernetes.io/instance: marklogiccluster-production
+    app.kubernetes.io/part-of: marklogic-operator-kubernetes
+    app.kubernetes.io/created-by: marklogic-operator-kubernetes
+  annotations: {}
+  name: ml-cluster
+  namespace: prod
+spec:
+  image: "progressofficial/marklogic-db:11.3.1-ubi-rootless-2.1.1"
+  ## It is recommended to use Kubernetes secrets to store the admin credentials
+  ## To create a secret, run the following command in the same namespace as the CR:
+  ## kubectl create secret generic admincreds --from-literal=username=admin --from-literal=password=admin
+  ## If you do not provide the admin credentials, the operator will generate a secret for you containing admin credentials
+  auth:
+    secretName: admincreds
+  tls:
+    enableOnDefaultAppServers: true 
+  ## To configure networkPolicy, set enabled: true and uncomment the following lines 
+  ## Below is an example of networkPolicy, update it as per your requirements
+  ## ref: https://kubernetes.io/docs/concepts/services-networking/network-policies
+  # networkPolicy:
+  #   enabled: true
+  #   policyTypes:
+  #     - Ingress
+  #     - Egress
+  #   podSelector: {}
+  #   ingress: {}
+  #   egress:
+  #     - to:
+  #         - podSelector:
+  #             matchLabels:
+  #               app.kubernetes.io/name: marklogiccluster
+  #               app.kubernetes.io/instance: marklogiccluster-prod-sample
+  #       ports:
+  #         - protocol: TCP
+  #           port: 8000
+  
+## Configuration for the HAProxy load balancer
+## An out of box load balancer configured to handle cookie based session affinity that's required by most MarkLogic applications.
+  haproxy:
+    enabled: true
+    pathBasedRouting: true
+    frontendPort: 8080
+    tcpPorts:
+      enabled: false
+      ports:
+        - name: odbc
+          type: TCP
+          port: 5432
+    appServers:
+      - name: "app-service"
+        port: 8000
+        path: "/console"
+      - name: "admin"
+        port: 8001
+        path: "/adminUI"
+      - name: "manage"
+        port: 8002
+        path: "/manage"
+    stats:
+      enabled: true
+      port: 1024
+    resources:
+      requests:
+        memory: "4Gi"
+        cpu: "1"
+      limits:
+        memory: "4Gi"
+        cpu: "1"
+  ## Configure Ingress
+  ## ref: https://kubernetes.io/docs/concepts/services-networking/ingress/
+    ingress: 
+      enabled: true
+      ingressClassName: "alb"
+
+      ## Ingress labels
+      ## ref: https://kubernetes.io/docs/concepts/overvsiew/working-with-objects/labels/
+      labels:
+        app.kubernetes.io/name: marklogiccluster
+        app.kubernetes.io/instance: marklogiccluster-production
+    
+      ## Ingress annotations
+      ## Update the annotations as per your requirements
+      ## ref: https://kubernetes.io/docs/concepts/overview/working-with-objects/annotations/
+      annotations: 
+        alb.ingress.kubernetes.io/healthcheck-port: '80'
+        alb.ingress.kubernetes.io/healthcheck-path: /adminUI
+        alb.ingress.kubernetes.io/success-codes: '200-401'
+        alb.ingress.kubernetes.io/load-balancer-name: mlingress
+        alb.ingress.kubernetes.io/scheme: internet-facing
+        alb.ingress.kubernetes.io/listen-ports: '[{"HTTP":80}]'
+        alb.ingress.kubernetes.io/target-group-attributes: load_balancing.algorithm.type=least_outstanding_requests
+        alb.ingress.kubernetes.io/certificate-arn: arn:aws:acm:us-west-2:XXXXXXXXXXX:certificate/XxXXXXXX-xxxx-XXXX-XXXX-XXXXXXXxxxxXXX
+        alb.ingress.kubernetes.io/target-type: ip
+        alb.ingress.kubernetes.io/group.name: mlingress-group
+        alb.ingress.kubernetes.io/load-balancer-attributes: idle_timeout.timeout_seconds=600,routing.http.xff_header_processing.mode=append
+
+      # Ingress hosts
+      # add default hosts and additional hosts
+      # ref: https://kubernetes.io/docs/concepts/services-networking/ingress/#ingress-rules
+      host: "myhost.example.com"
+      additionalHosts: []
+    
+      ## Ingress TLS
+      ## ref: https://kubernetes.io/docs/concepts/services-networking/ingress/#tls
+      tls: []
+        # secretName: your-certificate-name
+        # hosts:
+        #   - marklogic.example.com
+        
+## Configure options for log collection
+## Log collection will collect all logs for each file type enabled, parse them, 
+## And export them to a logging backend specified in the outputs section below
+  # logCollection:
+  #   enabled: true
+  #   image: fluent/fluent-bit:3.1.1
+  #   files:
+  #     errorLogs: true
+  #     accessLogs: true
+  #     requestLogs: true
+  #     crashLogs: true
+  #     auditLogs: true
+  #   outputs: |-
+  #       [OUTPUT]
+  #         name loki
+  #         match *
+  #         host loki.loki.svc.cluster.local
+  #         port 3100
+  #         labels job=fluent-bit
+  #         http_user admin
+  #         http_passwd admin
+  # additionalVolumes:
+  # - name: "logsdir"
+  #   emptyDir: {}
+
+  ## specify additional list of volumeMounts
+  # additionalVolumeMounts: 
+  # - name: "logsdir"
+  #   mountPath: "/var/opt/MarkLogic/Logs"
+
+
+## Below is an example of markLogicGroups: dnode and enode with sample production configurations, update it as per your requirements
+  markLogicGroups:
+  - name: dnode
+    replicas: 3
+    groupConfig:
+      name: dnode
+    isBootstrap: true
+    haproxy:
+      enabled: false
+    persistence:
+      enabled: true
+      size: 100Gi
+    resources:
+      requests:
+        memory: "64Gi"
+        cpu: "8"
+        hugepages-2Mi: 24Gi
+      limits:
+        memory: "64Gi"
+        cpu: "8"
+        hugepages-2Mi: 24Gi
+    hugePages: 
+      enabled: true
+      mountPath: /dev/hugepages
+    service:
+      type: ClusterIP
+      additionalPorts: 
+      - name: app1
+        port: 8010
+        targetPort: 8010
+        protocol: TCP
+      - name: app2
+        port: 8011
+        targetPort: 8011
+        protocol: TCP
+      annotations: {}
+  - name: enode
+    replicas: 3
+    haproxy:
+      enabled: true
+    groupConfig:
+      name: enode
+    resources:
+      requests:
+        memory: "64Gi"
+        cpu: "8"
+        hugepages-2Mi: 24Gi
+      limits:
+        memory: "64Gi"
+        cpu: "8"
+        hugepages-2Mi: 24Gi
+    hugePages: 
+      enabled: true
+      mountPath: /dev/hugepages
+    service: 
+      type: ClusterIP
+      additionalPorts: 
+      - name: app1
+        port: 8012
+        targetPort: 8012
+        protocol: TCP
+      annotations: {}

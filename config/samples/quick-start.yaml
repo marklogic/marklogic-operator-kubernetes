@@ -1,30 +1,27 @@
 apiVersion: database.marklogic.com/v1alpha1
 kind: MarklogicCluster
 metadata:
+  name: single-node
   labels:
     app.kubernetes.io/name: marklogiccluster
-    app.kubernetes.io/instance: marklogiccluster-sample
+    app.kubernetes.io/instance: marklogiccluster-quickstart
     app.kubernetes.io/part-of: marklogic-operator-kubernetes
-    app.kubernetes.io/managed-by: kustomize
     app.kubernetes.io/created-by: marklogic-operator-kubernetes
-  name: single-node
-  namespace: dev-env
+  annotations: {}
 spec:
   image: "progressofficial/marklogic-db:11.3.0-ubi-rootless"
   ## It is recommended to use Kubernetes secrets to store the admin credentials
-  ## If you do not provide the secret with admin credentials, the operator will generate a secret for you containing admin credentials
-  # auth:
-  #   secretName: marklogic-admin-secret
-  #   adminUsername: admin
-  #   adminPassword: admin
+  ## To create a secret, run the following command in the same namespace as the CR:
+  ## kubectl create secret generic admincreds --from-literal=username=admin --from-literal=password=admin
+  ## If you do not provide the admin credentials, the operator will generate a secret for you containing admin credentials
+  persistence:
+    enabled: true
+    size: 10Gi
   markLogicGroups:
   - replicas: 1
     name: node
     groupConfig:
       name: node
-      enableXdqpSsl: true
-    storage:
-      size: 10Gi
     resources:
       requests:
         memory: "4Gi"
@@ -33,5 +30,3 @@ spec:
         memory: "4Gi"
         cpu: 2000m
     isBootstrap: true
-
-  
