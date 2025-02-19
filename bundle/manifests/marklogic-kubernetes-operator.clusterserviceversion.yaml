@@ -244,7 +244,7 @@ spec:
                 - --leader-elect
                 command:
                 - /manager
-                image: pengzhouml/marklogic-operator-kubernetes:0.5.2
+                image: progressofficial/marklogic-operator-kubernetes:1.0.0
                 livenessProbe:
                   httpGet:
                     path: /healthz
