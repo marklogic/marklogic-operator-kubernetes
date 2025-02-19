@@ -509,7 +509,7 @@ func generatePVCTemplate(persistence *databasev1alpha1.Persistence) corev1.Persi
 	pvcTemplate := corev1.PersistentVolumeClaim{}
 	pvcTemplate.CreationTimestamp = metav1.Time{}
 	pvcTemplate.ObjectMeta.Name = "datadir"
-	if pvcTemplate.Spec.StorageClassName != nil {
+	if persistence != nil && persistence.StorageClassName != "" {
 		pvcTemplate.Spec.StorageClassName = &persistence.StorageClassName
 	}
 	pvcTemplate.Spec.AccessModes = persistence.AccessModes
