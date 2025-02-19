@@ -4,7 +4,7 @@ import (
 	"math/rand"
 	"time"
 
-	databasev1alpha1 "github.com/marklogic/marklogic-kubernetes-operator/api/v1alpha1"
+	databasev1alpha1 "github.com/marklogic/marklogic-operator-kubernetes/api/v1alpha1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )

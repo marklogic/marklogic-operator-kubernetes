@@ -1,4 +1,4 @@
-# Contributing to MarkLogic-kubernetes-operator
+# Contributing to marklogic-operator-kubernetes
 
 Thank you for your interest in contributing to this project! We welcome contributions from the community to make this project better.
 
@@ -38,4 +38,4 @@ The MarkLogic kubernetes operator team will use the PRs for "inspiration" but no
 
 **Important:** Please open an issue in the [Issue Tracker][] and get your proposed changes pre-approved by at least one of the project maintainers before you start coding. Nothing is more frustrating than seeing your hard work go to waste because your vision does not align with that of the project maintainers.
 
-[Issue Tracker]: https://github.com/marklogic/marklogic-kubernetes-operator/issues
+[Issue Tracker]: https://github.com/marklogic/marklogic-operator-kubernetes/issues

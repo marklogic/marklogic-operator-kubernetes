@@ -9,13 +9,13 @@ import (
 	"testing"
 	"time"
 
-	databasev1alpha1 "github.com/marklogic/marklogic-kubernetes-operator/api/v1alpha1"
+	databasev1alpha1 "github.com/marklogic/marklogic-operator-kubernetes/api/v1alpha1"
 	coreV1 "k8s.io/api/core/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	"github.com/marklogic/marklogic-kubernetes-operator/test/utils"
+	"github.com/marklogic/marklogic-operator-kubernetes/test/utils"
 	"sigs.k8s.io/e2e-framework/klient/k8s"
 	"sigs.k8s.io/e2e-framework/klient/wait"
 	"sigs.k8s.io/e2e-framework/klient/wait/conditions"

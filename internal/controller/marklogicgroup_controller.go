@@ -29,8 +29,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	"github.com/go-logr/logr"
-	databasev1alpha1 "github.com/marklogic/marklogic-kubernetes-operator/api/v1alpha1"
-	"github.com/marklogic/marklogic-kubernetes-operator/pkg/k8sutil"
+	databasev1alpha1 "github.com/marklogic/marklogic-operator-kubernetes/api/v1alpha1"
+	"github.com/marklogic/marklogic-operator-kubernetes/pkg/k8sutil"
 )
 
 // MarklogicGroupReconciler reconciles a MarklogicGroup object

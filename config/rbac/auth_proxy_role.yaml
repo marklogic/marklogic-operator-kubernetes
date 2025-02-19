@@ -5,8 +5,8 @@ metadata:
     app.kubernetes.io/name: clusterrole
     app.kubernetes.io/instance: proxy-role
     app.kubernetes.io/component: kube-rbac-proxy
-    app.kubernetes.io/created-by: marklogic-kubernetes-operator
-    app.kubernetes.io/part-of: marklogic-kubernetes-operator
+    app.kubernetes.io/created-by: marklogic-operator-kubernetes
+    app.kubernetes.io/part-of: marklogic-operator-kubernetes
     app.kubernetes.io/managed-by: kustomize
   name: proxy-role
 rules:

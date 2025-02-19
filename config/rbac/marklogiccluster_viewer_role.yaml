@@ -6,8 +6,8 @@ metadata:
     app.kubernetes.io/name: clusterrole
     app.kubernetes.io/instance: marklogiccluster-viewer-role
     app.kubernetes.io/component: rbac
-    app.kubernetes.io/created-by: marklogic-kubernetes-operator
-    app.kubernetes.io/part-of: marklogic-kubernetes-operator
+    app.kubernetes.io/created-by: marklogic-operator-kubernetes
+    app.kubernetes.io/part-of: marklogic-operator-kubernetes
     app.kubernetes.io/managed-by: kustomize
   name: marklogiccluster-viewer-role
 rules:

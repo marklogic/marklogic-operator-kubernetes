@@ -3,7 +3,7 @@ package k8sutil
 import (
 	"embed"
 
-	"github.com/marklogic/marklogic-kubernetes-operator/pkg/result"
+	"github.com/marklogic/marklogic-operator-kubernetes/pkg/result"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
