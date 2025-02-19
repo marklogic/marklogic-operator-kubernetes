@@ -1,11 +1,6 @@
 apiVersion: database.marklogic.com/v1alpha1
 kind: MarklogicCluster
 metadata:
-  labels:
-    app.kubernetes.io/name: marklogiccluster
-    app.kubernetes.io/instance: marklogiccluster-production
-    app.kubernetes.io/part-of: marklogic-operator-kubernetes
-    app.kubernetes.io/created-by: marklogic-operator-kubernetes
   annotations: {}
   name: ml-cluster
   namespace: prod
@@ -79,10 +74,7 @@ spec:
 
       ## Ingress labels
       ## ref: https://kubernetes.io/docs/concepts/overvsiew/working-with-objects/labels/
-      labels:
-        app.kubernetes.io/name: marklogiccluster
-        app.kubernetes.io/instance: marklogiccluster-production
-    
+      labels: {}
       ## Ingress annotations
       ## Update the annotations as per your requirements
       ## ref: https://kubernetes.io/docs/concepts/overview/working-with-objects/annotations/
