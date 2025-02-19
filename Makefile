@@ -41,8 +41,8 @@ BUNDLE_METADATA_OPTS ?= $(BUNDLE_CHANNELS) $(BUNDLE_DEFAULT_CHANNEL)
 # This variable is used to construct full image tags for bundle and catalog images.
 #
 # For example, running 'make bundle-build bundle-push catalog-build catalog-push' will build and push both
-# marklogic.com/marklogic-kubernetes-operator-bundle:$VERSION and marklogic.com/marklogic-kubernetes-operator-catalog:$VERSION.
-IMAGE_TAG_BASE ?= ml-docker-db-dev-tierpoint.bed-artifactory.bedford.progress.com/ml-marklogic-operator-dev/marklogic-kubernetes-operator
+# marklogic.com/marklogic-operator-kubernetes-bundle:$VERSION and marklogic.com/marklogic-operator-kubernetes-catalog:$VERSION.
+IMAGE_TAG_BASE ?= ml-docker-db-dev-tierpoint.bed-artifactory.bedford.progress.com/ml-marklogic-operator-dev/marklogic-operator-kubernetes
 
 # BUNDLE_IMG defines the image:tag used for the bundle.
 # You can use it as an arg. (E.g make bundle-build BUNDLE_IMG=<some-registry>/<project-name-bundle>:<tag>)
@@ -64,7 +64,7 @@ endif
 OPERATOR_SDK_VERSION ?= v1.34.2
 
 # Image URL to use all building/pushing image targets
-# Image for dev: ml-marklogic-operator-dev.bed-artifactory.bedford.progress.com/marklogic-kubernetes-operator
+# Image for dev: ml-marklogic-operator-dev.bed-artifactory.bedford.progress.com/marklogic-operator-kubernetes
 IMG ?= marklogic-operator-kubernetes:$(VERSION)
 
 

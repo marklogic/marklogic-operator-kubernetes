@@ -4,7 +4,7 @@ metadata:
   annotations:
     alm-examples: '[]'
     capabilities: Basic Install
-  name: marklogic-kubernetes-operator.v0.0.0
+  name: marklogic-operator-kubernetes.v0.0.0
   namespace: placeholder
 spec:
   apiservicedefinitions: {}
@@ -21,7 +21,7 @@ spec:
       name: marklogicgroups.database.marklogic.com
       version: v1alpha1
   description: Operator for managing marklogic server
-  displayName: marklogic-kubernetes-operator
+  displayName: marklogic-operator-kubernetes
   icon:
   - base64data: ""
     mediatype: ""
@@ -43,7 +43,7 @@ spec:
   - datbase
   links:
   - name: Marklogic Kubernetes Operator
-    url: https://marklogic-kubernetes-operator.domain
+    url: https://marklogic-operator-kubernetes.domain
   maturity: alpha
   provider:
     name: Progress Software Corp

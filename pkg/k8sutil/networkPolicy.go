@@ -7,8 +7,8 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 
 	"github.com/cisco-open/k8s-objectmatcher/patch"
-	databasev1alpha1 "github.com/marklogic/marklogic-kubernetes-operator/api/v1alpha1"
-	"github.com/marklogic/marklogic-kubernetes-operator/pkg/result"
+	databasev1alpha1 "github.com/marklogic/marklogic-operator-kubernetes/api/v1alpha1"
+	"github.com/marklogic/marklogic-operator-kubernetes/pkg/result"
 )
 
 func generateNetworkPolicyDef(networkPolicyMeta metav1.ObjectMeta, ownerRef metav1.OwnerReference, cr *databasev1alpha1.MarklogicCluster) *networkingv1.NetworkPolicy {

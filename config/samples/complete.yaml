@@ -4,9 +4,9 @@ metadata:
   labels:
     app.kubernetes.io/name: marklogicgroup
     app.kubernetes.io/instance: marklogicgroup-sample
-    app.kubernetes.io/part-of: marklogic-kubernetes-operator
+    app.kubernetes.io/part-of: marklogic-operator-kubernetes
     app.kubernetes.io/managed-by: kustomize
-    app.kubernetes.io/created-by: marklogic-kubernetes-operator
+    app.kubernetes.io/created-by: marklogic-operator-kubernetes
   name: marklogicgroup-sample
 spec:
   replicas: 1

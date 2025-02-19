@@ -1,4 +1,4 @@
-module github.com/marklogic/marklogic-kubernetes-operator
+module github.com/marklogic/marklogic-operator-kubernetes
 
 go 1.23.6
 

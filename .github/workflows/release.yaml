@@ -49,7 +49,7 @@ jobs:
         shell: bash
         working-directory: dest
         run: |
-          helm repo index . --url https://raw.githubusercontent.com/marklogic/marklogic-kubernetes-operator/gh-pages/
+          helm repo index . --url https://raw.githubusercontent.com/marklogic/marklogic-operator-kubernetes/gh-pages/
           git add $(git ls-files -o --exclude-standard)
           git add index.yaml
           git commit -m "Updated from ref: $GITHUB_SHA"

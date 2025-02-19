@@ -9,11 +9,11 @@ metadata:
           "kind": "MarklogicCluster",
           "metadata": {
             "labels": {
-              "app.kubernetes.io/created-by": "marklogic-kubernetes-operator",
+              "app.kubernetes.io/created-by": "marklogic-operator-kubernetes",
               "app.kubernetes.io/instance": "marklogiccluster-sample",
               "app.kubernetes.io/managed-by": "kustomize",
               "app.kubernetes.io/name": "marklogiccluster",
-              "app.kubernetes.io/part-of": "marklogic-kubernetes-operator"
+              "app.kubernetes.io/part-of": "marklogic-operator-kubernetes"
             },
             "name": "marklogiccluster-sample"
           },
@@ -43,11 +43,11 @@ metadata:
           "kind": "MarklogicGroup",
           "metadata": {
             "labels": {
-              "app.kubernetes.io/created-by": "marklogic-kubernetes-operator",
+              "app.kubernetes.io/created-by": "marklogic-operator-kubernetes",
               "app.kubernetes.io/instance": "marklogicgroup-sample",
               "app.kubernetes.io/managed-by": "kustomize",
               "app.kubernetes.io/name": "marklogicgroup",
-              "app.kubernetes.io/part-of": "marklogic-kubernetes-operator"
+              "app.kubernetes.io/part-of": "marklogic-operator-kubernetes"
             },
             "name": "marklogicgroup-sample"
           },
@@ -71,7 +71,7 @@ metadata:
     createdAt: "2024-06-21T06:42:12Z"
     operators.operatorframework.io/builder: operator-sdk-v1.34.2
     operators.operatorframework.io/project_layout: go.kubebuilder.io/v4
-  name: marklogic-kubernetes-operator.v0.0.1
+  name: marklogic-operator-kubernetes.v0.0.1
   namespace: placeholder
 spec:
   apiservicedefinitions: {}
@@ -88,7 +88,7 @@ spec:
       name: marklogicgroups.database.marklogic.com
       version: v1alpha1
   description: Operator for managing marklogic server
-  displayName: marklogic-kubernetes-operator
+  displayName: marklogic-operator-kubernetes
   icon:
   - base64data: ""
     mediatype: ""
@@ -194,11 +194,11 @@ spec:
       deployments:
       - label:
           app.kubernetes.io/component: manager
-          app.kubernetes.io/created-by: marklogic-kubernetes-operator
+          app.kubernetes.io/created-by: marklogic-operator-kubernetes
           app.kubernetes.io/instance: controller-manager
           app.kubernetes.io/managed-by: kustomize
           app.kubernetes.io/name: deployment
-          app.kubernetes.io/part-of: marklogic-kubernetes-operator
+          app.kubernetes.io/part-of: marklogic-operator-kubernetes
           control-plane: controller-manager
         name: marklogic-operator-controller-manager
         spec:
@@ -244,7 +244,7 @@ spec:
                 - --leader-elect
                 command:
                 - /manager
-                image: pengzhouml/marklogic-kubernetes-operator:0.5.2
+                image: pengzhouml/marklogic-operator-kubernetes:0.5.2
                 livenessProbe:
                   httpGet:
                     path: /healthz
@@ -323,7 +323,7 @@ spec:
   - datbase
   links:
   - name: Marklogic Kubernetes Operator
-    url: https://marklogic-kubernetes-operator.domain
+    url: https://marklogic-operator-kubernetes.domain
   maturity: alpha
   provider:
     name: Progress Software Corp
