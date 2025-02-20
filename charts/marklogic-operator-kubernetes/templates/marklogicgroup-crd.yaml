@@ -5,7 +5,7 @@ metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.17.1
   labels:
-  {{- include "marklogic-operator.labels" . | nindent 4 }}
+  {{- include "marklogic-operator-kubernetes.labels" . | nindent 4 }}
 spec:
   group: database.marklogic.com
   names:

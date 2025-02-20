@@ -6,7 +6,7 @@ metadata:
     app.kubernetes.io/component: kube-rbac-proxy
     app.kubernetes.io/created-by: marklogic-operator-kubernetes
     app.kubernetes.io/part-of: marklogic-operator-kubernetes
-  {{- include "marklogic-operator.labels" . | nindent 4 }}
+  {{- include "marklogic-operator-kubernetes.labels" . | nindent 4 }}
 rules:
 - apiGroups:
   - authentication.k8s.io
@@ -29,7 +29,7 @@ metadata:
     app.kubernetes.io/component: kube-rbac-proxy
     app.kubernetes.io/created-by: marklogic-operator-kubernetes
     app.kubernetes.io/part-of: marklogic-operator-kubernetes
-  {{- include "marklogic-operator.labels" . | nindent 4 }}
+  {{- include "marklogic-operator-kubernetes.labels" . | nindent 4 }}
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole

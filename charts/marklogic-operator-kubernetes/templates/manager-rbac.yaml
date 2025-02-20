@@ -3,7 +3,7 @@ kind: ClusterRole
 metadata:
   name: marklogic-operator-manager-role
   labels:
-  {{- include "marklogic-operator.labels" . | nindent 4 }}
+  {{- include "marklogic-operator-kubernetes.labels" . | nindent 4 }}
 rules:
 - apiGroups:
   - ""
@@ -85,7 +85,7 @@ metadata:
     app.kubernetes.io/component: rbac
     app.kubernetes.io/created-by: marklogic-operator-kubernetes
     app.kubernetes.io/part-of: marklogic-operator-kubernetes
-  {{- include "marklogic-operator.labels" . | nindent 4 }}
+  {{- include "marklogic-operator-kubernetes.labels" . | nindent 4 }}
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
