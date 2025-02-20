@@ -22,19 +22,26 @@ This operator supports MarkLogic 11.1 or later.
 
 1. Add MarkLogic Operator for Kubernees Helm Repo:
 ```sh
-helm repo add marklogic-operator-kubernetes https://raw.githubusercontent.com/marklogic/marklogic-operator-kubernetes/gh-pages/
+helm repo add marklogic-operator https://marklogic.github.io/marklogic-operator-kubernetes/
 
 helm repo update
 ```
 
 2. Install the Helm Chart for MarkLogic Operator: 
 ```sh
-helm upgrade marklogic-operator-kubernetes marklogic-operator-kubernetes/marklogic-operator-kubernetes --version=1.0.0 --install --namespace marklogic-operator-system --create-namespace
+helm upgrade marklogic-operator marklogic-operator/marklogic-operator-kubernetes --version=1.0.0 --install --namespace marklogic-operator-system --create-namespace
 ```
 
 3. Make sure the Marklogic Operator pod is running:
 ```sh
 kubectl get pods -n marklogic-operator-system 
+```
+
+4. Use this command to verify CRDs are correctly installed:
+```sh
+ % kubectl get crd -n marklogic-operator-system | grep 'marklogic'
+ marklogicclusters.database.marklogic.com                          2025-02-18T09:20:59Z
+ marklogicgroups.database.marklogic.com                            2025-02-18T09:21:00Z
 ```
 
 ### Install MarkLogic Cluster
@@ -52,34 +59,34 @@ If you used the automatically generated admin credentials, use these steps to ex
 
 1. Run this command to fetch all of the secret names:
   ```shell
-  kubectl get secrets 
+  kubectl get secrets --namespace=<namespace-name>
   ```
 The MarkLogic admin secret name is in the format  `<marklogicCluster-name>-admin`. For example if markLogicCluster name is `single-node`, the secret name is `single-node-admin`.
 
 2. Using the secret name from step 1, retrieve the MarkLogic admin credentials using these commands:
   ```shell
-  kubectl get secret single-node-admin -o jsonpath='{.data.username}' | base64 --decode 
+  kubectl get secret single-node-admin --namespace=<namespace-name> -o jsonpath='{.data.username}' | base64 --decode 
 
-  kubectl get secret single-node-admin -o jsonpath='{.data.password}' | base64 --decode 
+  kubectl get secret single-node-admin --namespace=<namespace-name> -o jsonpath='{.data.password}' | base64 --decode 
 
-  kubectl get secret single-node-admin -o jsonpath='{.data.wallet-password}' | base64 --decode 
+  kubectl get secret single-node-admin --namespace=<namespace-name> -o jsonpath='{.data.wallet-password}' | base64 --decode 
   ```
 
-Please note that if configurations are provided for both the cluster and the group, the values specified for the cluster will take precedence and be applied.
 For additional manifests to deploy a MarkLogic cluster inside a Kubernetes cluster, see [Operator manifest](https://docs.progress.com/bundle/marklogic-server-on-kubernetes/operator/Operator-manifest.html) in the documentation.
 
 ## Clean Up
 
 #### Cleaning up MarkLogic Cluster
-Use these steps to delete MarkLogic cluster and other resources created from the manifests used in the above [step](#install-marklogic-cluster).
+Use this step to delete MarkLogic cluster and other resources created from the manifests used in the above [step](#install-marklogic-cluster):
 ```sh
 kubectl delete -f quick_start.yaml
 ```
 
 #### Deleting Helm chart
-Use these steps to delete MarkLogic Operator Helm chart.
+Use these steps to delete MarkLogic Operator Helm chart and the namespace created:
 ```sh
-helm delete marklogic-operator-kubernetes
+helm delete marklogic-operator
+helm delete namespace marklogic-operator-system
 ```
 
 ## Known Issues and Limitations
