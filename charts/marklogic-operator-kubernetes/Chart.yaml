@@ -1,6 +1,6 @@
 apiVersion: v2
-name: marklogic-operator
-description: A Helm chart for MarkLogic Operator
+name: marklogic-operator-kubernetes
+description: A Helm chart for MarkLogic Operator for Kubernetes
 # A chart can be either an 'application' or a 'library' chart.
 #
 # Application charts are a collection of templates that can be packaged into versioned archives
@@ -18,4 +18,4 @@ version: 1.0.0
 # incremented each time you make changes to the application. Versions are not expected to
 # follow Semantic Versioning. They should reflect the version the application is using.
 # It is recommended to use it with quotes.
-appVersion: 1.0.0
+appVersion: "1.0.0"

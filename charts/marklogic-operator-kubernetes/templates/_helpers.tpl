@@ -1,7 +1,7 @@
 {{/*
 Expand the name of the chart.
 */}}
-{{- define "marklogic-operator.name" -}}
+{{- define "marklogic-operator-kubernetes.name" -}}
 {{- default .Chart.Name .Values.nameOverride | trunc 63 | trimSuffix "-" }}
 {{- end }}
 
@@ -10,7 +10,7 @@ Create a default fully qualified app name.
 We truncate at 63 chars because some Kubernetes name fields are limited to this (by the DNS naming spec).
 If release name contains chart name it will be used as a full name.
 */}}
-{{- define "marklogic-operator.fullname" -}}
+{{- define "marklogic-operator-kubernetes.fullname" -}}
 {{- if .Values.fullnameOverride }}
 {{- .Values.fullnameOverride | trunc 63 | trimSuffix "-" }}
 {{- else }}
@@ -26,16 +26,16 @@ If release name contains chart name it will be used as a full name.
 {{/*
 Create chart name and version as used by the chart label.
 */}}
-{{- define "marklogic-operator.chart" -}}
+{{- define "marklogic-operator-kubernetes.chart" -}}
 {{- printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" | trunc 63 | trimSuffix "-" }}
 {{- end }}
 
 {{/*
 Common labels
 */}}
-{{- define "marklogic-operator.labels" -}}
-helm.sh/chart: {{ include "marklogic-operator.chart" . }}
-{{ include "marklogic-operator.selectorLabels" . }}
+{{- define "marklogic-operator-kubernetes.labels" -}}
+helm.sh/chart: {{ include "marklogic-operator-kubernetes.chart" . }}
+{{ include "marklogic-operator-kubernetes.selectorLabels" . }}
 {{- if .Chart.AppVersion }}
 app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
 {{- end }}
@@ -45,17 +45,17 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{/*
 Selector labels
 */}}
-{{- define "marklogic-operator.selectorLabels" -}}
-app.kubernetes.io/name: {{ include "marklogic-operator.name" . }}
+{{- define "marklogic-operator-kubernetes.selectorLabels" -}}
+app.kubernetes.io/name: {{ include "marklogic-operator-kubernetes.name" . }}
 app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end }}
 
 {{/*
 Create the name of the service account to use
 */}}
-{{- define "marklogic-operator.serviceAccountName" -}}
+{{- define "marklogic-operator-kubernetes.serviceAccountName" -}}
 {{- if .Values.serviceAccount.create }}
-{{- default (include "marklogic-operator.fullname" .) .Values.serviceAccount.name }}
+{{- default (include "marklogic-operator-kubernetes.fullname" .) .Values.serviceAccount.name }}
 {{- else }}
 {{- default "default" .Values.serviceAccount.name }}
 {{- end }}

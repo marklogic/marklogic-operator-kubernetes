@@ -7,11 +7,11 @@ metadata:
     app.kubernetes.io/created-by: marklogic-operator-kubernetes
     app.kubernetes.io/part-of: marklogic-operator-kubernetes
     control-plane: controller-manager
-  {{- include "marklogic-operator.labels" . | nindent 4 }}
+  {{- include "marklogic-operator-kubernetes.labels" . | nindent 4 }}
 spec:
   type: {{ .Values.metricsService.type }}
   selector:
     control-plane: controller-manager
-    {{- include "marklogic-operator.selectorLabels" . | nindent 4 }}
+    {{- include "marklogic-operator-kubernetes.selectorLabels" . | nindent 4 }}
   ports:
   {{- .Values.metricsService.ports | toYaml | nindent 2 }}
