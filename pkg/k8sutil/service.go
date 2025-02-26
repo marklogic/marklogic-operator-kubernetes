@@ -9,7 +9,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
 
-	databasev1alpha1 "github.com/marklogic/marklogic-operator-kubernetes/api/v1alpha1"
+	marklogicv1 "github.com/marklogic/marklogic-operator-kubernetes/api/v1"
 	"github.com/marklogic/marklogic-operator-kubernetes/pkg/result"
 )
 
@@ -19,7 +19,7 @@ type serviceParameters struct {
 	Annotations map[string]string
 }
 
-func generateServiceParams(cr *databasev1alpha1.MarklogicGroup) serviceParameters {
+func generateServiceParams(cr *marklogicv1.MarklogicGroup) serviceParameters {
 	return serviceParameters{
 		Type:        cr.Spec.Service.Type,
 		Ports:       cr.Spec.Service.AdditionalPorts,
@@ -125,7 +125,7 @@ func (oc *OperatorContext) CreateOrUpdateService(namespace string, serviceMeta m
 	return nil
 }
 
-func generateService(svcName string, cr *databasev1alpha1.MarklogicGroup) *corev1.Service {
+func generateService(svcName string, cr *marklogicv1.MarklogicGroup) *corev1.Service {
 	labels := getCommonLabels(cr.Spec.Name)
 	var svcParams serviceParameters = serviceParameters{}
 	svcObjectMeta := generateObjectMeta(svcName, cr.Namespace, labels, svcParams.Annotations)

@@ -7,11 +7,11 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 
 	"github.com/cisco-open/k8s-objectmatcher/patch"
-	databasev1alpha1 "github.com/marklogic/marklogic-operator-kubernetes/api/v1alpha1"
+	marklogicv1 "github.com/marklogic/marklogic-operator-kubernetes/api/v1"
 	"github.com/marklogic/marklogic-operator-kubernetes/pkg/result"
 )
 
-func generateIngressDef(ingressMeta metav1.ObjectMeta, ownerRef metav1.OwnerReference, cr *databasev1alpha1.MarklogicCluster) *networkingv1.Ingress {
+func generateIngressDef(ingressMeta metav1.ObjectMeta, ownerRef metav1.OwnerReference, cr *marklogicv1.MarklogicCluster) *networkingv1.Ingress {
 	pathType := networkingv1.PathTypePrefix
 	var ingressRules []networkingv1.IngressRule
 	for _, appServer := range cr.Spec.HAProxy.AppServers {
@@ -72,7 +72,7 @@ func (cc *ClusterContext) getIngress(namespace string, ingressName string) (*net
 	return ingress, nil
 }
 
-func generateIngress(ingressName string, cr *databasev1alpha1.MarklogicCluster) *networkingv1.Ingress {
+func generateIngress(ingressName string, cr *marklogicv1.MarklogicCluster) *networkingv1.Ingress {
 	labels := getCommonLabels(cr.GetObjectMeta().GetName())
 	annotations := cr.Spec.HAProxy.Ingress.Annotations
 	ingressObjectMeta := generateObjectMeta(ingressName, cr.Namespace, labels, annotations)

@@ -29,7 +29,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	"github.com/go-logr/logr"
-	databasev1alpha1 "github.com/marklogic/marklogic-operator-kubernetes/api/v1alpha1"
+	marklogicv1 "github.com/marklogic/marklogic-operator-kubernetes/api/v1"
 	"github.com/marklogic/marklogic-operator-kubernetes/pkg/k8sutil"
 )
 
@@ -83,7 +83,7 @@ func (r *MarklogicClusterReconciler) Reconcile(ctx context.Context, req ctrl.Req
 // SetupWithManager sets up the controller with the Manager.
 func (r *MarklogicClusterReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
-		For(&databasev1alpha1.MarklogicCluster{}).
-		Owns(&databasev1alpha1.MarklogicGroup{}).
+		For(&marklogicv1.MarklogicCluster{}).
+		Owns(&marklogicv1.MarklogicGroup{}).
 		Complete(r)
 }

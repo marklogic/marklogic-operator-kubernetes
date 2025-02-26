@@ -29,13 +29,13 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
 
-	databasev1alpha1 "github.com/marklogic/marklogic-operator-kubernetes/api/v1alpha1"
+	marklogicv1 "github.com/marklogic/marklogic-operator-kubernetes/api/v1"
 )
 
 var clusterName = "marklogic-cluster-test"
 var clusterNS = "cluster-test-ns"
 var clusterTestNSName = types.NamespacedName{Name: clusterName, Namespace: clusterNS}
-var clusterHugePages = &databasev1alpha1.HugePages{
+var clusterHugePages = &marklogicv1.HugePages{
 	Enabled:   true,
 	MountPath: "/dev/hugepages",
 }
@@ -44,25 +44,25 @@ var enodeReplicas = int32(2)
 var dnodeReplicas = int32(1)
 var policy = []networkingv1.PolicyType{networkingv1.PolicyTypeIngress, networkingv1.PolicyTypeEgress}
 
-var marklogicGroups = []*databasev1alpha1.MarklogicGroups{
+var marklogicGroups = []*marklogicv1.MarklogicGroups{
 	{
 		Name: "dnode",
-		GroupConfig: &databasev1alpha1.GroupConfig{
+		GroupConfig: &marklogicv1.GroupConfig{
 			Name:          "dnode",
 			EnableXdqpSsl: true,
 		},
 		Replicas:    &dnodeReplicas,
-		Service:     databasev1alpha1.Service{Type: corev1.ServiceTypeClusterIP},
+		Service:     marklogicv1.Service{Type: corev1.ServiceTypeClusterIP},
 		IsBootstrap: true,
 	},
 	{
 		Name: "enode",
-		GroupConfig: &databasev1alpha1.GroupConfig{
+		GroupConfig: &marklogicv1.GroupConfig{
 			Name:          "enode",
 			EnableXdqpSsl: true,
 		},
 		Replicas: &enodeReplicas,
-		Service:  databasev1alpha1.Service{Type: corev1.ServiceTypeClusterIP},
+		Service:  marklogicv1.Service{Type: corev1.ServiceTypeClusterIP},
 	},
 }
 
@@ -74,7 +74,7 @@ var _ = Describe("MarklogicCluster Controller", func() {
 				ObjectMeta: metav1.ObjectMeta{Name: clusterNS},
 			}
 			Expect(k8sClient.Create(ctx, &ns)).Should(Succeed())
-			mlCluster := &databasev1alpha1.MarklogicCluster{
+			mlCluster := &marklogicv1.MarklogicCluster{
 				TypeMeta: metav1.TypeMeta{
 					Kind:       "MarklogicCluster",
 					APIVersion: "database.marklogic.com/v1alpha1",
@@ -83,29 +83,29 @@ var _ = Describe("MarklogicCluster Controller", func() {
 					Name:      clusterName,
 					Namespace: clusterNS,
 				},
-				Spec: databasev1alpha1.MarklogicClusterSpec{
+				Spec: marklogicv1.MarklogicClusterSpec{
 					Image:            imageName,
 					Resources:        &corev1.ResourceRequirements{Requests: corev1.ResourceList{"cpu": resource.MustParse("100m"), "memory": resource.MustParse("256Mi"), "hugepages-2Mi": resource.MustParse("100Mi")}, Limits: corev1.ResourceList{"cpu": resource.MustParse("100m"), "memory": resource.MustParse("256Mi"), "hugepages-2Mi": resource.MustParse("100Mi")}},
 					HugePages:        clusterHugePages,
 					EnableConverters: true,
 					MarkLogicGroups:  marklogicGroups,
-					LogCollection:    &databasev1alpha1.LogCollection{Enabled: true, Image: "fluent/fluent-bit:3.2.5", Files: databasev1alpha1.LogFilesConfig{ErrorLogs: true, AccessLogs: true, RequestLogs: true, CrashLogs: true, AuditLogs: true}, Outputs: "stdout"},
-					HAProxy: &databasev1alpha1.HAProxy{
+					LogCollection:    &marklogicv1.LogCollection{Enabled: true, Image: "fluent/fluent-bit:3.2.5", Files: marklogicv1.LogFilesConfig{ErrorLogs: true, AccessLogs: true, RequestLogs: true, CrashLogs: true, AuditLogs: true}, Outputs: "stdout"},
+					HAProxy: &marklogicv1.HAProxy{
 						Enabled:          true,
 						ReplicaCount:     1,
 						FrontendPort:     80,
 						PathBasedRouting: &[]bool{true}[0],
-						AppServers: []databasev1alpha1.AppServers{
+						AppServers: []marklogicv1.AppServers{
 							{Name: "AppServices", Type: "http", Port: 8000, TargetPort: 8000, Path: "/console"},
 							{Name: "Admin", Type: "http", Port: 8001, TargetPort: 8001, Path: "/adminUI"},
 							{Name: "Manage", Type: "http", Port: 8002, TargetPort: 8002, Path: "/manage"},
 						},
-						Ingress: databasev1alpha1.Ingress{
+						Ingress: marklogicv1.Ingress{
 							Enabled:          true,
 							IngressClassName: "alb",
 							Host:             "marklogic-cluster-test.cluster.local",
 						}},
-					NetworkPolicy: databasev1alpha1.NetworkPolicy{
+					NetworkPolicy: marklogicv1.NetworkPolicy{
 						Enabled:     true,
 						PolicyTypes: policy,
 						PodSelector: metav1.LabelSelector{MatchLabels: map[string]string{"app.kubernetes.io/name": "marklogic", "app.kubernetes.io/instance": "dnode"}},
@@ -122,7 +122,7 @@ var _ = Describe("MarklogicCluster Controller", func() {
 							},
 						},
 					},
-					Tls: &databasev1alpha1.Tls{
+					Tls: &marklogicv1.Tls{
 						EnableOnDefaultAppServers: true,
 						CertSecretNames: []string{
 							"cert-secret-1",
@@ -133,7 +133,7 @@ var _ = Describe("MarklogicCluster Controller", func() {
 				},
 			}
 			Expect(k8sClient.Create(ctx, mlCluster)).Should(Succeed())
-			clusterCR := &databasev1alpha1.MarklogicCluster{}
+			clusterCR := &marklogicv1.MarklogicCluster{}
 			Eventually(func() bool {
 				err := k8sClient.Get(ctx, clusterTestNSName, clusterCR)
 				return err == nil

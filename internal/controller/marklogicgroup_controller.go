@@ -29,7 +29,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	"github.com/go-logr/logr"
-	databasev1alpha1 "github.com/marklogic/marklogic-operator-kubernetes/api/v1alpha1"
+	marklogicv1 "github.com/marklogic/marklogic-operator-kubernetes/api/v1"
 	"github.com/marklogic/marklogic-operator-kubernetes/pkg/k8sutil"
 )
 
@@ -99,7 +99,7 @@ func (r *MarklogicGroupReconciler) SetupWithManager(mgr ctrl.Manager) error {
 
 	builder := ctrl.NewControllerManagedBy(mgr).
 		Named("marklogicgroup-controller").
-		For(&databasev1alpha1.MarklogicGroup{}).
+		For(&marklogicv1.MarklogicGroup{}).
 		Owns(&appsv1.StatefulSet{}).
 		Owns(&corev1.Service{})
 

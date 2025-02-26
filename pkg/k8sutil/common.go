@@ -4,7 +4,7 @@ import (
 	"math/rand"
 	"time"
 
-	databasev1alpha1 "github.com/marklogic/marklogic-operator-kubernetes/api/v1alpha1"
+	marklogicv1 "github.com/marklogic/marklogic-operator-kubernetes/api/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
@@ -34,7 +34,7 @@ func AddOwnerRefToObject(obj metav1.Object, ownerRef metav1.OwnerReference) {
 	obj.SetOwnerReferences(append(obj.GetOwnerReferences(), ownerRef))
 }
 
-func marklogicServerAsOwner(cr *databasev1alpha1.MarklogicGroup) metav1.OwnerReference {
+func marklogicServerAsOwner(cr *marklogicv1.MarklogicGroup) metav1.OwnerReference {
 	trueVar := true
 	return metav1.OwnerReference{
 		APIVersion: cr.APIVersion,
@@ -91,7 +91,7 @@ func getFluentBitLabels(name string) map[string]string {
 	}
 }
 
-func marklogicClusterAsOwner(cr *databasev1alpha1.MarklogicCluster) metav1.OwnerReference {
+func marklogicClusterAsOwner(cr *marklogicv1.MarklogicCluster) metav1.OwnerReference {
 	trueVar := true
 	return metav1.OwnerReference{
 		APIVersion: cr.APIVersion,
@@ -102,7 +102,7 @@ func marklogicClusterAsOwner(cr *databasev1alpha1.MarklogicCluster) metav1.Owner
 	}
 }
 
-func setOperatorInternalStatus(oc *OperatorContext, newState databasev1alpha1.InternalState) error {
+func setOperatorInternalStatus(oc *OperatorContext, newState marklogicv1.InternalState) error {
 	oc.ReqLogger.Info("common::setOperatorProgressStatus")
 	currentState := oc.MarklogicGroup.Status.MarklogicGroupStatus
 
