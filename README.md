@@ -40,8 +40,8 @@ kubectl get pods -n marklogic-operator-system
 4. Use this command to verify CRDs are correctly installed:
 ```sh
  % kubectl get crd -n marklogic-operator-system | grep 'marklogic'
- marklogicclusters.database.marklogic.com                          2025-02-18T09:20:59Z
- marklogicgroups.database.marklogic.com                            2025-02-18T09:21:00Z
+ marklogicclusters.marklogic.progress.com                          2025-02-18T09:20:59Z
+ marklogicgroups.marklogic.progress.com                            2025-02-18T09:21:00Z
 ```
 
 ### Install MarkLogic Cluster

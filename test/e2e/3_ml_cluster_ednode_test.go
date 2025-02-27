@@ -54,7 +54,7 @@ var (
 	}
 	mlcluster = &marklogicv1.MarklogicCluster{
 		TypeMeta: metav1.TypeMeta{
-			APIVersion: "marklogic.com/v1alpha1",
+			APIVersion: "marklogic.progress.com/v1",
 			Kind:       "MarklogicCluster",
 		},
 		ObjectMeta: metav1.ObjectMeta{

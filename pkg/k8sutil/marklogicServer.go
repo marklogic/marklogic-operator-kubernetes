@@ -102,7 +102,7 @@ func GenerateMarkLogicGroupDef(cr *marklogicv1.MarklogicCluster, index int, para
 	}
 	ownerDef := marklogicClusterAsOwner(cr)
 	MarkLogicGroupDef := &marklogicv1.MarklogicGroup{
-		TypeMeta:   generateTypeMeta("MarklogicGroup", "operator.marklogic.com/v1alpha1"),
+		TypeMeta:   generateTypeMeta("MarklogicGroup", "marklogic.progress.com/v1"),
 		ObjectMeta: objectMeta,
 		Spec: marklogicv1.MarklogicGroupSpec{
 			Replicas:                       params.Replicas,
