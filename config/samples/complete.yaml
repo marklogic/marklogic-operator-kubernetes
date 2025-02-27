@@ -1,4 +1,4 @@
-apiVersion: database.marklogic.com/v1alpha1
+apiVersion: marklogic.progress.com/v1
 kind: MarklogicCluster
 metadata:
   name: ml-cluster
@@ -78,11 +78,11 @@ spec:
       port: 1024
     resources:
       requests:
-        memory: "4Gi"
-        cpu: "1"
+        cpu: 250m
+        memory: 128Mi
       limits:
-        memory: "4Gi"
-        cpu: "1"
+        cpu: 250m
+        memory: 128Mi
   ## Configure Ingress
   ## ref: https://kubernetes.io/docs/concepts/services-networking/ingress/
     ingress: 
