@@ -1,4 +1,4 @@
-apiVersion: marklogic.progress.com/v1alpha1
+apiVersion: marklogic.progress.com/v1
 kind: MarklogicCluster
 metadata:
   annotations: {}

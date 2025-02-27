@@ -29,7 +29,7 @@ func TestTlsWithSelfSigned(t *testing.T) {
 
 	cr := &marklogicv1.MarklogicCluster{
 		TypeMeta: metav1.TypeMeta{
-			APIVersion: "marklogic.com/v1alpha1",
+			APIVersion: "marklogic.progress.com/v1",
 			Kind:       "MarklogicCluster",
 		},
 		ObjectMeta: metav1.ObjectMeta{
@@ -140,7 +140,7 @@ func TestTlsWithNamedCert(t *testing.T) {
 
 	cr := &marklogicv1.MarklogicCluster{
 		TypeMeta: metav1.TypeMeta{
-			APIVersion: "marklogic.com/v1alpha1",
+			APIVersion: "marklogic.progress.com/v1",
 			Kind:       "MarklogicCluster",
 		},
 		ObjectMeta: metav1.ObjectMeta{
@@ -288,7 +288,7 @@ func TestTlsWithMultiNode(t *testing.T) {
 
 	cr := &marklogicv1.MarklogicCluster{
 		TypeMeta: metav1.TypeMeta{
-			APIVersion: "marklogic.com/v1alpha1",
+			APIVersion: "marklogic.progress.com/v1",
 			Kind:       "MarklogicCluster",
 		},
 		ObjectMeta: metav1.ObjectMeta{
