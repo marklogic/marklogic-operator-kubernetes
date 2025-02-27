@@ -1,4 +1,4 @@
-apiVersion: database.marklogic.com/v1alpha1
+apiVersion: marklogic.progress.com/v1
 kind: MarklogicCluster
 metadata:
   name: single-node

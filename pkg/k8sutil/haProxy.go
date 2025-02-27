@@ -6,7 +6,7 @@ import (
 	"sort"
 
 	"github.com/cisco-open/k8s-objectmatcher/patch"
-	databasev1alpha1 "github.com/marklogic/marklogic-operator-kubernetes/api/v1alpha1"
+	marklogicv1 "github.com/marklogic/marklogic-operator-kubernetes/api/v1"
 	"github.com/marklogic/marklogic-operator-kubernetes/pkg/result"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -128,7 +128,7 @@ func (cc *ClusterContext) ReconcileHAProxy() result.ReconcileResult {
 }
 
 // generateHAProxyData generates the HAProxy Config Data
-func generateHAProxyConfigMapData(cr *databasev1alpha1.MarklogicCluster) map[string]string {
+func generateHAProxyConfigMapData(cr *marklogicv1.MarklogicCluster) map[string]string {
 	var result string
 	// HAProxy Config Data
 	haProxyData := make(map[string]string)

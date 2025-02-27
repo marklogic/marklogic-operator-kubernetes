@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	databasev1alpha1 "github.com/marklogic/marklogic-operator-kubernetes/api/v1alpha1"
+	marklogicv1 "github.com/marklogic/marklogic-operator-kubernetes/api/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/util/homedir"
@@ -33,12 +33,12 @@ var (
 	home            = homedir.HomeDir()
 	initialPodCount int
 	incrReplica     = int32(2)
-	marklogicgroups = []*databasev1alpha1.MarklogicGroups{
+	marklogicgroups = []*marklogicv1.MarklogicGroups{
 		{
 			Name:        dnodeGrpName,
 			Replicas:    &replicas,
 			IsBootstrap: true,
-			GroupConfig: &databasev1alpha1.GroupConfig{
+			GroupConfig: &marklogicv1.GroupConfig{
 				Name:          "dnode",
 				EnableXdqpSsl: true,
 			},
@@ -46,13 +46,13 @@ var (
 		{
 			Name:     enodeGrpName,
 			Replicas: &replicas,
-			GroupConfig: &databasev1alpha1.GroupConfig{
+			GroupConfig: &marklogicv1.GroupConfig{
 				Name:          "enode",
 				EnableXdqpSsl: true,
 			},
 		},
 	}
-	mlcluster = &databasev1alpha1.MarklogicCluster{
+	mlcluster = &marklogicv1.MarklogicCluster{
 		TypeMeta: metav1.TypeMeta{
 			APIVersion: "marklogic.com/v1alpha1",
 			Kind:       "MarklogicCluster",
@@ -61,9 +61,9 @@ var (
 			Name:      "mlclusterednode",
 			Namespace: mlClusterNs,
 		},
-		Spec: databasev1alpha1.MarklogicClusterSpec{
+		Spec: marklogicv1.MarklogicClusterSpec{
 			Image: marklogicImage,
-			Auth: &databasev1alpha1.AdminAuth{
+			Auth: &marklogicv1.AdminAuth{
 				SecretName: &secretName,
 			},
 			MarkLogicGroups: marklogicgroups,
@@ -85,7 +85,7 @@ func TestMlClusterWithEdnode(t *testing.T) {
 		if err := client.Resources().Create(ctx, namespace); err != nil {
 			t.Fatalf("Failed to create namespace: %s", err)
 		}
-		databasev1alpha1.AddToScheme(client.Resources(mlClusterNs).GetScheme())
+		marklogicv1.AddToScheme(client.Resources(mlClusterNs).GetScheme())
 
 		p := e2eutils.RunCommand("kubectl -n ednode create secret generic ml-admin-secrets --from-literal=username=admin --from-literal=password=Admin@8001 ")
 		if p.Err() != nil {
@@ -111,7 +111,7 @@ func TestMlClusterWithEdnode(t *testing.T) {
 	// Assessment to check for MarklogicCluster deployment
 	feature.Assess("MarklogicCluster with 2 MarkLogicGroups deployed Ok", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 		client := c.Client()
-		var mlcluster databasev1alpha1.MarklogicCluster
+		var mlcluster marklogicv1.MarklogicCluster
 		if err := client.Resources().Get(ctx, "mlclusterednode", mlClusterNs, &mlcluster); err != nil {
 			t.Log("====MarklogicCluster not found====")
 			t.Fatal(err)
@@ -155,7 +155,7 @@ func TestMlClusterWithEdnode(t *testing.T) {
 	// Scale the MarkLogic group
 	feature.Setup(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 		client := c.Client()
-		var mlcluster databasev1alpha1.MarklogicCluster
+		var mlcluster marklogicv1.MarklogicCluster
 		if err := client.Resources().Get(ctx, "mlclusterednode", mlClusterNs, &mlcluster); err != nil {
 			t.Fatal(err)
 		}

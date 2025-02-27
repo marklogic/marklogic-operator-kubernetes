@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	databasev1alpha1 "github.com/marklogic/marklogic-operator-kubernetes/api/v1alpha1"
+	marklogicv1 "github.com/marklogic/marklogic-operator-kubernetes/api/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
@@ -27,7 +27,7 @@ func TestTlsWithSelfSigned(t *testing.T) {
 	releaseName := "ml"
 	replicas := int32(1)
 
-	cr := &databasev1alpha1.MarklogicCluster{
+	cr := &marklogicv1.MarklogicCluster{
 		TypeMeta: metav1.TypeMeta{
 			APIVersion: "marklogic.com/v1alpha1",
 			Kind:       "MarklogicCluster",
@@ -36,20 +36,20 @@ func TestTlsWithSelfSigned(t *testing.T) {
 			Name:      "marklogicclusters",
 			Namespace: namespace,
 		},
-		Spec: databasev1alpha1.MarklogicClusterSpec{
+		Spec: marklogicv1.MarklogicClusterSpec{
 			Image: marklogicImage,
-			Auth: &databasev1alpha1.AdminAuth{
+			Auth: &marklogicv1.AdminAuth{
 				AdminUsername: &adminUsername,
 				AdminPassword: &adminPassword,
 			},
-			MarkLogicGroups: []*databasev1alpha1.MarklogicGroups{
+			MarkLogicGroups: []*marklogicv1.MarklogicGroups{
 				{
 					Name:        releaseName,
 					Replicas:    &replicas,
 					IsBootstrap: true,
 				},
 			},
-			Tls: &databasev1alpha1.Tls{
+			Tls: &marklogicv1.Tls{
 				EnableOnDefaultAppServers: true,
 			},
 		},
@@ -63,7 +63,7 @@ func TestTlsWithSelfSigned(t *testing.T) {
 				Name: namespace,
 			},
 		})
-		databasev1alpha1.AddToScheme(client.Resources(namespace).GetScheme())
+		marklogicv1.AddToScheme(client.Resources(namespace).GetScheme())
 
 		if err := client.Resources(namespace).Create(ctx, cr); err != nil {
 			t.Fatalf("Failed to create MarklogicCluster: %s", err)
@@ -138,7 +138,7 @@ func TestTlsWithNamedCert(t *testing.T) {
 	releaseName := "marklogic"
 	replicas := int32(2)
 
-	cr := &databasev1alpha1.MarklogicCluster{
+	cr := &marklogicv1.MarklogicCluster{
 		TypeMeta: metav1.TypeMeta{
 			APIVersion: "marklogic.com/v1alpha1",
 			Kind:       "MarklogicCluster",
@@ -147,20 +147,20 @@ func TestTlsWithNamedCert(t *testing.T) {
 			Name:      "marklogicclusters",
 			Namespace: namespace,
 		},
-		Spec: databasev1alpha1.MarklogicClusterSpec{
+		Spec: marklogicv1.MarklogicClusterSpec{
 			Image: marklogicImage,
-			Auth: &databasev1alpha1.AdminAuth{
+			Auth: &marklogicv1.AdminAuth{
 				AdminUsername: &adminUsername,
 				AdminPassword: &adminPassword,
 			},
-			MarkLogicGroups: []*databasev1alpha1.MarklogicGroups{
+			MarkLogicGroups: []*marklogicv1.MarklogicGroups{
 				{
 					Name:        releaseName,
 					Replicas:    &replicas,
 					IsBootstrap: true,
 				},
 			},
-			Tls: &databasev1alpha1.Tls{
+			Tls: &marklogicv1.Tls{
 				EnableOnDefaultAppServers: true,
 				CertSecretNames:           []string{"marklogic-0-cert", "marklogic-1-cert"},
 				CaSecretName:              "ca-cert",
@@ -175,7 +175,7 @@ func TestTlsWithNamedCert(t *testing.T) {
 				Name: namespace,
 			},
 		})
-		databasev1alpha1.AddToScheme(client.Resources(namespace).GetScheme())
+		marklogicv1.AddToScheme(client.Resources(namespace).GetScheme())
 
 		if err := client.Resources(namespace).Create(ctx, cr); err != nil {
 			t.Fatalf("Failed to create MarklogicCluster: %s", err)
@@ -286,7 +286,7 @@ func TestTlsWithMultiNode(t *testing.T) {
 	enodeSize := int32(1)
 	dnodeSize := int32(1)
 
-	cr := &databasev1alpha1.MarklogicCluster{
+	cr := &marklogicv1.MarklogicCluster{
 		TypeMeta: metav1.TypeMeta{
 			APIVersion: "marklogic.com/v1alpha1",
 			Kind:       "MarklogicCluster",
@@ -295,22 +295,22 @@ func TestTlsWithMultiNode(t *testing.T) {
 			Name:      "marklogicclusters",
 			Namespace: namespace,
 		},
-		Spec: databasev1alpha1.MarklogicClusterSpec{
+		Spec: marklogicv1.MarklogicClusterSpec{
 			Image: marklogicImage,
-			Auth: &databasev1alpha1.AdminAuth{
+			Auth: &marklogicv1.AdminAuth{
 				AdminUsername: &adminUsername,
 				AdminPassword: &adminPassword,
 			},
-			MarkLogicGroups: []*databasev1alpha1.MarklogicGroups{
+			MarkLogicGroups: []*marklogicv1.MarklogicGroups{
 				{
 					Name:     dnodeName,
 					Replicas: &dnodeSize,
-					GroupConfig: &databasev1alpha1.GroupConfig{
+					GroupConfig: &marklogicv1.GroupConfig{
 						Name:          dnodeName,
 						EnableXdqpSsl: true,
 					},
 					IsBootstrap: true,
-					Tls: &databasev1alpha1.Tls{
+					Tls: &marklogicv1.Tls{
 						EnableOnDefaultAppServers: true,
 						CertSecretNames:           []string{"dnode-0-cert"},
 						CaSecretName:              "ca-cert",
@@ -319,12 +319,12 @@ func TestTlsWithMultiNode(t *testing.T) {
 				{
 					Name:     enodeName,
 					Replicas: &enodeSize,
-					GroupConfig: &databasev1alpha1.GroupConfig{
+					GroupConfig: &marklogicv1.GroupConfig{
 						Name:          enodeName,
 						EnableXdqpSsl: true,
 					},
 					IsBootstrap: false,
-					Tls: &databasev1alpha1.Tls{
+					Tls: &marklogicv1.Tls{
 						EnableOnDefaultAppServers: true,
 						CertSecretNames:           []string{"enode-0-cert"},
 						CaSecretName:              "ca-cert",
@@ -341,7 +341,7 @@ func TestTlsWithMultiNode(t *testing.T) {
 				Name: namespace,
 			},
 		})
-		databasev1alpha1.AddToScheme(client.Resources(namespace).GetScheme())
+		marklogicv1.AddToScheme(client.Resources(namespace).GetScheme())
 
 		if err := client.Resources(namespace).Create(ctx, cr); err != nil {
 			t.Fatalf("Failed to create MarklogicCluster: %s", err)

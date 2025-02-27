@@ -6,7 +6,7 @@ import (
 	"strconv"
 
 	"github.com/cisco-open/k8s-objectmatcher/patch"
-	databasev1alpha1 "github.com/marklogic/marklogic-operator-kubernetes/api/v1alpha1"
+	marklogicv1 "github.com/marklogic/marklogic-operator-kubernetes/api/v1"
 	"github.com/marklogic/marklogic-operator-kubernetes/pkg/result"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -40,22 +40,22 @@ type containerParameters struct {
 	Image                  string
 	ImagePullPolicy        corev1.PullPolicy
 	Resources              *corev1.ResourceRequirements
-	Persistence            *databasev1alpha1.Persistence
+	Persistence            *marklogicv1.Persistence
 	Volumes                []corev1.Volume
 	MountPaths             []corev1.VolumeMount
 	LicenseKey             string
 	Licensee               string
 	BootstrapHost          string
-	LivenessProbe          databasev1alpha1.ContainerProbe
-	ReadinessProbe         databasev1alpha1.ContainerProbe
-	LogCollection          *databasev1alpha1.LogCollection
-	GroupConfig            *databasev1alpha1.GroupConfig
+	LivenessProbe          marklogicv1.ContainerProbe
+	ReadinessProbe         marklogicv1.ContainerProbe
+	LogCollection          *marklogicv1.LogCollection
+	GroupConfig            *marklogicv1.GroupConfig
 	PodSecurityContext     *corev1.PodSecurityContext
 	SecurityContext        *corev1.SecurityContext
 	EnableConverters       bool
-	HugePages              *databasev1alpha1.HugePages
+	HugePages              *marklogicv1.HugePages
 	PathBasedRouting       bool
-	Tls                    *databasev1alpha1.Tls
+	Tls                    *marklogicv1.Tls
 	AdditionalVolumes      *[]corev1.Volume
 	AdditionalVolumeMounts *[]corev1.VolumeMount
 	SecretName             string
@@ -173,7 +173,7 @@ func (oc *OperatorContext) GetStatefulSet(namespace string, stateful string) (*a
 	return statefulInfo, nil
 }
 
-func (oc *OperatorContext) createStatefulSet(statefulset *appsv1.StatefulSet, cr *databasev1alpha1.MarklogicGroup) error {
+func (oc *OperatorContext) createStatefulSet(statefulset *appsv1.StatefulSet, cr *marklogicv1.MarklogicGroup) error {
 	logger := oc.ReqLogger
 	err := oc.Client.Create(context.TODO(), statefulset)
 	// _, err := GenerateK8sClient().AppsV1().StatefulSets(namespace).Create(context.TODO(), stateful, metav1.CreateOptions{})
@@ -338,7 +338,7 @@ func generateContainerDef(name string, containerParams containerParameters) []co
 	return containerDef
 }
 
-func generateStatefulSetsParams(cr *databasev1alpha1.MarklogicGroup) statefulSetParameters {
+func generateStatefulSetsParams(cr *marklogicv1.MarklogicGroup) statefulSetParameters {
 	params := statefulSetParameters{
 		Replicas:                       cr.Spec.Replicas,
 		Name:                           cr.Spec.Name,
@@ -357,7 +357,7 @@ func generateStatefulSetsParams(cr *databasev1alpha1.MarklogicGroup) statefulSet
 	return params
 }
 
-func generateContainerParams(cr *databasev1alpha1.MarklogicGroup) containerParameters {
+func generateContainerParams(cr *marklogicv1.MarklogicGroup) containerParameters {
 	containerParams := containerParameters{
 		Image:                  cr.Spec.Image,
 		Resources:              cr.Spec.Resources,
@@ -505,7 +505,7 @@ func generateVolumes(stsName string, containerParams containerParameters) []core
 	return volumes
 }
 
-func generatePVCTemplate(persistence *databasev1alpha1.Persistence) corev1.PersistentVolumeClaim {
+func generatePVCTemplate(persistence *marklogicv1.Persistence) corev1.PersistentVolumeClaim {
 	pvcTemplate := corev1.PersistentVolumeClaim{}
 	pvcTemplate.CreationTimestamp = metav1.Time{}
 	pvcTemplate.ObjectMeta.Name = "datadir"
@@ -677,7 +677,7 @@ func getFluentBitVolumeMount() []corev1.VolumeMount {
 	return VolumeMountsFluentBit
 }
 
-func getLivenessProbe(probe databasev1alpha1.ContainerProbe) *corev1.Probe {
+func getLivenessProbe(probe marklogicv1.ContainerProbe) *corev1.Probe {
 	return &corev1.Probe{
 		InitialDelaySeconds: probe.InitialDelaySeconds,
 		PeriodSeconds:       probe.PeriodSeconds,
@@ -692,7 +692,7 @@ func getLivenessProbe(probe databasev1alpha1.ContainerProbe) *corev1.Probe {
 	}
 }
 
-func getReadinessProbe(probe databasev1alpha1.ContainerProbe) *corev1.Probe {
+func getReadinessProbe(probe marklogicv1.ContainerProbe) *corev1.Probe {
 	return &corev1.Probe{
 		InitialDelaySeconds: probe.InitialDelaySeconds,
 		PeriodSeconds:       probe.PeriodSeconds,

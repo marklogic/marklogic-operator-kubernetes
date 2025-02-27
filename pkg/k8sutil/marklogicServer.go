@@ -5,7 +5,7 @@ import (
 
 	"github.com/cisco-open/k8s-objectmatcher/patch"
 	"github.com/go-logr/logr"
-	databasev1alpha1 "github.com/marklogic/marklogic-operator-kubernetes/api/v1alpha1"
+	marklogicv1 "github.com/marklogic/marklogic-operator-kubernetes/api/v1"
 	"github.com/marklogic/marklogic-operator-kubernetes/pkg/result"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -18,14 +18,14 @@ import (
 type MarkLogicGroupParameters struct {
 	Replicas                       *int32
 	Name                           string
-	GroupConfig                    *databasev1alpha1.GroupConfig
+	GroupConfig                    *marklogicv1.GroupConfig
 	Image                          string
 	ImagePullPolicy                string
 	ImagePullSecrets               []corev1.LocalObjectReference
-	License                        *databasev1alpha1.License
-	Service                        databasev1alpha1.Service
-	Persistence                    *databasev1alpha1.Persistence
-	Auth                           *databasev1alpha1.AdminAuth
+	License                        *marklogicv1.License
+	Service                        marklogicv1.Service
+	Persistence                    *marklogicv1.Persistence
+	Auth                           *marklogicv1.AdminAuth
 	TerminationGracePeriodSeconds  *int64
 	Resources                      *corev1.ResourceRequirements
 	EnableConverters               bool
@@ -35,13 +35,13 @@ type MarkLogicGroupParameters struct {
 	Affinity                       *corev1.Affinity
 	NodeSelector                   map[string]string
 	TopologySpreadConstraints      []corev1.TopologySpreadConstraint
-	HugePages                      *databasev1alpha1.HugePages
+	HugePages                      *marklogicv1.HugePages
 	PodSecurityContext             *corev1.PodSecurityContext
 	ContainerSecurityContext       *corev1.SecurityContext
 	IsBootstrap                    bool
-	LogCollection                  *databasev1alpha1.LogCollection
+	LogCollection                  *marklogicv1.LogCollection
 	PathBasedRouting               bool
-	Tls                            *databasev1alpha1.Tls
+	Tls                            *marklogicv1.Tls
 	AdditionalVolumes              *[]corev1.Volume
 	AdditionalVolumeMounts         *[]corev1.VolumeMount
 	SecretName                     string
@@ -49,27 +49,27 @@ type MarkLogicGroupParameters struct {
 }
 
 type MarkLogicClusterParameters struct {
-	Auth                           *databasev1alpha1.AdminAuth
+	Auth                           *marklogicv1.AdminAuth
 	Replicas                       *int32
 	Name                           string
 	Image                          string
 	ImagePullPolicy                string
 	ImagePullSecrets               []corev1.LocalObjectReference
 	ClusterDomain                  string
-	Persistence                    *databasev1alpha1.Persistence
-	License                        *databasev1alpha1.License
+	Persistence                    *marklogicv1.Persistence
+	License                        *marklogicv1.License
 	Affinity                       *corev1.Affinity
 	NodeSelector                   map[string]string
 	TopologySpreadConstraints      []corev1.TopologySpreadConstraint
 	PriorityClassName              string
 	EnableConverters               bool
 	Resources                      *corev1.ResourceRequirements
-	HugePages                      *databasev1alpha1.HugePages
-	LogCollection                  *databasev1alpha1.LogCollection
+	HugePages                      *marklogicv1.HugePages
+	LogCollection                  *marklogicv1.LogCollection
 	PodSecurityContext             *corev1.PodSecurityContext
 	ContainerSecurityContext       *corev1.SecurityContext
 	PathBasedRouting               bool
-	Tls                            *databasev1alpha1.Tls
+	Tls                            *marklogicv1.Tls
 	TerminationGracePeriodSeconds  *int64
 	AdditionalVolumes              *[]corev1.Volume
 	AdditionalVolumeMounts         *[]corev1.VolumeMount
@@ -82,7 +82,7 @@ func MarkLogicGroupLogger(namespace string, name string) logr.Logger {
 	return reqLogger
 }
 
-func GenerateMarkLogicGroupDef(cr *databasev1alpha1.MarklogicCluster, index int, params *MarkLogicGroupParameters) *databasev1alpha1.MarklogicGroup {
+func GenerateMarkLogicGroupDef(cr *marklogicv1.MarklogicCluster, index int, params *MarkLogicGroupParameters) *marklogicv1.MarklogicGroup {
 	logger := MarkLogicGroupLogger(cr.Namespace, cr.ObjectMeta.Name)
 	logger.Info("ReconcileMarkLogicCluster")
 	labels := getCommonLabels(cr.ObjectMeta.Name)
@@ -101,10 +101,10 @@ func GenerateMarkLogicGroupDef(cr *databasev1alpha1.MarklogicCluster, index int,
 		bootStrapHostName = fmt.Sprintf("%s-0.%s.%s.svc.%s", bootStrapName, bootStrapName, nsName, clusterName)
 	}
 	ownerDef := marklogicClusterAsOwner(cr)
-	MarkLogicGroupDef := &databasev1alpha1.MarklogicGroup{
+	MarkLogicGroupDef := &marklogicv1.MarklogicGroup{
 		TypeMeta:   generateTypeMeta("MarklogicGroup", "operator.marklogic.com/v1alpha1"),
 		ObjectMeta: objectMeta,
-		Spec: databasev1alpha1.MarklogicGroupSpec{
+		Spec: marklogicv1.MarklogicGroupSpec{
 			Replicas:                       params.Replicas,
 			Name:                           params.Name,
 			GroupConfig:                    params.GroupConfig,
@@ -149,7 +149,7 @@ func (cc *ClusterContext) ReconsileMarklogicCluster() (reconcile.Result, error) 
 
 	for i := 0; i < total; i++ {
 		logger.Info("ReconcileCluster", "Count", i)
-		currentMlg := &databasev1alpha1.MarklogicGroup{}
+		currentMlg := &marklogicv1.MarklogicGroup{}
 		namespace := cr.Namespace
 		name := cr.Spec.MarkLogicGroups[i].Name
 		namespacedName := types.NamespacedName{Name: name, Namespace: namespace}
@@ -200,7 +200,7 @@ func (cc *ClusterContext) ReconsileMarklogicCluster() (reconcile.Result, error) 
 	return result.Done().Output()
 }
 
-func generateMarkLogicClusterParams(cr *databasev1alpha1.MarklogicCluster) *MarkLogicClusterParameters {
+func generateMarkLogicClusterParams(cr *marklogicv1.MarklogicCluster) *MarkLogicClusterParameters {
 	markLogicClusterParameters := &MarkLogicClusterParameters{
 		Name:                           cr.ObjectMeta.Name,
 		Image:                          cr.Spec.Image,
@@ -235,7 +235,7 @@ func generateMarkLogicClusterParams(cr *databasev1alpha1.MarklogicCluster) *Mark
 	return markLogicClusterParameters
 }
 
-func generateMarkLogicGroupParams(cr *databasev1alpha1.MarklogicCluster, index int, clusterParams *MarkLogicClusterParameters) *MarkLogicGroupParameters {
+func generateMarkLogicGroupParams(cr *marklogicv1.MarklogicCluster, index int, clusterParams *MarkLogicClusterParameters) *MarkLogicGroupParameters {
 	markLogicGroupParameters := &MarkLogicGroupParameters{
 		Replicas:                       cr.Spec.MarkLogicGroups[index].Replicas,
 		Name:                           cr.Spec.MarkLogicGroups[index].Name,
