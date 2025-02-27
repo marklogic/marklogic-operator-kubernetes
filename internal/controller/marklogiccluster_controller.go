@@ -41,9 +41,9 @@ type MarklogicClusterReconciler struct {
 	Recorder record.EventRecorder
 }
 
-//+kubebuilder:rbac:groups=database.marklogic.com,resources=marklogicclusters,verbs=get;list;watch;create;update;patch;delete
-//+kubebuilder:rbac:groups=database.marklogic.com,resources=marklogicclusters/status,verbs=get;update;patch
-//+kubebuilder:rbac:groups=database.marklogic.com,resources=marklogicclusters/finalizers,verbs=update
+//+kubebuilder:rbac:groups=marklogic.progress.com,resources=marklogicclusters,verbs=get;list;watch;create;update;patch;delete
+//+kubebuilder:rbac:groups=marklogic.progress.com,resources=marklogicclusters/status,verbs=get;update;patch
+//+kubebuilder:rbac:groups=marklogic.progress.com,resources=marklogicclusters/finalizers,verbs=update
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.

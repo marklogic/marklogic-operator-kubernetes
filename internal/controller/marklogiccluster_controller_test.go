@@ -77,7 +77,7 @@ var _ = Describe("MarklogicCluster Controller", func() {
 			mlCluster := &marklogicv1.MarklogicCluster{
 				TypeMeta: metav1.TypeMeta{
 					Kind:       "MarklogicCluster",
-					APIVersion: "database.marklogic.com/v1alpha1",
+					APIVersion: "marklogic.progress.com/v1alpha1",
 				},
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      clusterName,

@@ -16,7 +16,7 @@ limitations under the License.
 
 // Package v1 contains API Schema definitions for the database v1 API group
 // +kubebuilder:object:generate=true
-// +groupName=database.marklogic.com
+// +groupName=marklogic.progress.com
 package v1
 
 import (

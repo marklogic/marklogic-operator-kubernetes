@@ -88,7 +88,7 @@ var _ = Describe("MarkLogicGroup controller", func() {
 			mlGroup := &marklogicv1.MarklogicGroup{
 				TypeMeta: metav1.TypeMeta{
 					Kind:       "MarklogicGroup",
-					APIVersion: "database.marklogic.com/v1alpha1",
+					APIVersion: "marklogic.progress.com/v1alpha1",
 				},
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      Name,

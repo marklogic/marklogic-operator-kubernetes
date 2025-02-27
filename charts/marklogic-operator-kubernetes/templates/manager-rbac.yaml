@@ -36,7 +36,7 @@ rules:
   - update
   - watch
 - apiGroups:
-  - database.marklogic.com
+  - marklogic.progress.com
   resources:
   - marklogicclusters
   - marklogicgroups
@@ -49,14 +49,14 @@ rules:
   - update
   - watch
 - apiGroups:
-  - database.marklogic.com
+  - marklogic.progress.com
   resources:
   - marklogicclusters/finalizers
   - marklogicgroups/finalizers
   verbs:
   - update
 - apiGroups:
-  - database.marklogic.com
+  - marklogic.progress.com
   resources:
   - marklogicclusters/status
   - marklogicgroups/status

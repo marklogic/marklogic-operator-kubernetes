@@ -47,9 +47,9 @@ const (
 	ConditionTypeError      = "Error"
 )
 
-//+kubebuilder:rbac:groups=database.marklogic.com,resources=marklogicgroups,verbs=get;list;watch;create;update;patch;delete
-//+kubebuilder:rbac:groups=database.marklogic.com,resources=marklogicgroups/status,verbs=get;update;patch
-//+kubebuilder:rbac:groups=database.marklogic.com,resources=marklogicgroups/finalizers,verbs=update
+//+kubebuilder:rbac:groups=marklogic.progress.com,resources=marklogicgroups,verbs=get;list;watch;create;update;patch;delete
+//+kubebuilder:rbac:groups=marklogic.progress.com,resources=marklogicgroups/status,verbs=get;update;patch
+//+kubebuilder:rbac:groups=marklogic.progress.com,resources=marklogicgroups/finalizers,verbs=update
 //+kubebuilder:rbac:groups=apps,resources=statefulsets;replicasets;deployments;daemonsets,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups=core,resources=pods;services;secrets;configmaps,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups=networking.k8s.io,resources=ingresses,verbs=get;list;watch;create;update;patch;delete

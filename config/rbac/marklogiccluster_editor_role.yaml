@@ -12,7 +12,7 @@ metadata:
   name: marklogiccluster-editor-role
 rules:
 - apiGroups:
-  - database.marklogic.com
+  - marklogic.progress.com
   resources:
   - marklogicclusters
   verbs:
@@ -24,7 +24,7 @@ rules:
   - update
   - watch
 - apiGroups:
-  - database.marklogic.com
+  - marklogic.progress.com
   resources:
   - marklogicclusters/status
   verbs:
