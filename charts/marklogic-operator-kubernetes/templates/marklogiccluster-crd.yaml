@@ -9808,8 +9808,25 @@ spec:
                   rule: size(self) == 1 || (size(self) == size(self.map(x, x.groupConfig.name).filter(y,
                     self.map(x, x.groupConfig.name).filter(z, z == y).size() == 1)))
                 - message: MarkLogicGroups must have unique names
+                  rule: size(self) == 1 || (size(self) == size(self.map(x, x.name).filter(y,
+                    self.map(x, x.name).filter(z, z == y).size() == 1)))
+                - message: MarkLogicGroups must have unique names
                   rule: size(self) == size(self.map(x, x.name).filter(y, self.map(x,
                     x.name).filter(z, z == y).size() == 1))
+                - message: Name of MarkLogikGroup must not be changed
+                  rule: self[0].name == oldSelf[0].name
+                - message: Name of MarkLogikGroup must not be changed
+                  rule: 'size(self) >= 2 && size(oldSelf) >= 2 ? self[1].name == oldSelf[1].name
+                    : true'
+                - message: Name of MarkLogikGroup must not be changed
+                  rule: 'size(self) >= 3 && size(oldSelf) >= 3 ? self[2].name == oldSelf[2].name
+                    : true'
+                - message: Name of MarkLogikGroup must not be changed
+                  rule: 'size(self) >= 4 && size(oldSelf) >= 4 ? self[3].name == oldSelf[3].name
+                    : true'
+                - message: Name of MarkLogikGroup must not be changed
+                  rule: 'size(self) >= 5 && size(oldSelf) >= 5 ? self[4].name == oldSelf[4].name
+                    : true'
                 - message: Exactly one MarkLogicGroup must have isBootstrap set to true
                   rule: size(self.filter(x, x.isBootstrap == true)) == 1
               networkPolicy:
