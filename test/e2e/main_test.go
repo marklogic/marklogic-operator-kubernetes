@@ -11,37 +11,64 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"sigs.k8s.io/e2e-framework/klient/conf"
 	"sigs.k8s.io/e2e-framework/klient/wait"
 	"sigs.k8s.io/e2e-framework/klient/wait/conditions"
 	"sigs.k8s.io/e2e-framework/pkg/env"
 	"sigs.k8s.io/e2e-framework/pkg/envconf"
 	"sigs.k8s.io/e2e-framework/pkg/envfuncs"
-	"sigs.k8s.io/e2e-framework/support/kind"
-	"sigs.k8s.io/e2e-framework/support/utils"
+	"sigs.k8s.io/e2e-framework/pkg/utils"
 )
 
 var (
-	testEnv env.Environment
+	testEnv        env.Environment
+	dockerImage    = os.Getenv("E2E_DOCKER_IMAGE")
+	kustomizeVer   = os.Getenv("E2E_KUSTOMIZE_VERSION")
+	ctrlgenVer     = os.Getenv("E2E_CONTROLLER_TOOLS_VERSION")
+	marklogicImage = os.Getenv("E2E_MARKLOGIC_IMAGE_VERSION")
+	kubernetesVer  = os.Getenv("E2E_KUBERNETES_VERSION")
+)
 
-	dockerImage  = "marklogic-controller:v0.0.1"
-	kustomizeVer = "v5.1.1"
-	ctrlgenVer   = "v0.14.0"
-	namespace    = "marklogic-operator-system"
+const (
+	namespace = "marklogic-operator-system"
 )
 
 func TestMain(m *testing.M) {
 	testEnv = env.New()
-	kindClusterName := "kind-test"
-	kindCluster := kind.NewCluster(kindClusterName)
+	path := conf.ResolveKubeConfigFile()
+	cfg, err := envconf.NewFromFlags()
+	if err != nil {
+		log.Fatalf("Failed to create config: %s", err)
+	}
+	cfg = cfg.WithKubeconfigFile(path)
+
+	testEnv = env.NewWithConfig(cfg)
+
+	log.Printf("Running tests with the following configurations: path=%s", path)
+
+	log.Printf("Docker image: %s", dockerImage)
+	log.Printf("Kustomize version: %s", kustomizeVer)
+	log.Printf("Controller-gen version: %s", ctrlgenVer)
+	log.Printf("MarkLogic image: %s", marklogicImage)
+	log.Printf("Kubernetes version: %s", kubernetesVer)
 
 	// Use Environment.Setup to configure pre-test setup
 	testEnv.Setup(
-		envfuncs.CreateCluster(kindCluster, kindClusterName),
 		envfuncs.CreateNamespace(namespace),
 
 		// install tool dependencies
 		func(ctx context.Context, cfg *envconf.Config) (context.Context, error) {
 			log.Println("Installing bin tools...")
+
+			// change dir for Make file or it will fail
+			if err := os.Chdir("../.."); err != nil {
+				log.Printf("Unable to set working directory: %s", err)
+				return ctx, err
+			}
+			wd, _ := os.Getwd()
+			os.Setenv("GOBIN", wd+"/bin")
+			os.Setenv("PATH", os.Getenv("PATH")+":"+os.Getenv("GOBIN"))
+
 			if p := utils.RunCommand(fmt.Sprintf("go install sigs.k8s.io/kustomize/kustomize/v5@%s", kustomizeVer)); p.Err() != nil {
 				log.Printf("Failed to install kustomize binary: %s: %s", p.Err(), p.Result())
 				return ctx, p.Err()
@@ -50,52 +77,24 @@ func TestMain(m *testing.M) {
 				log.Printf("Failed to install controller-gen binary: %s: %s", p.Err(), p.Result())
 				return ctx, p.Err()
 			}
+
+			p := utils.RunCommand("kustomize version")
+			log.Printf("Kustomize version: %s", p.Result())
 			return ctx, nil
 		},
 
 		// generate and deploy resource configurations
 		func(ctx context.Context, cfg *envconf.Config) (context.Context, error) {
 			log.Println("Building source components...")
-			origWd, _ := os.Getwd()
 
-			// change dir for Make file or it will fail
-			if err := os.Chdir("../.."); err != nil {
-				log.Printf("Unable to set working directory: %s", err)
-				return ctx, err
-			}
-
-			// generate manifest files
-			log.Println("Generate manifests...")
-			log.Print(os.ReadDir(".")) // debug
-			if p := utils.RunCommand(`controller-gen rbac:roleName=manager-role crd webhook paths="./..." output:crd:artifacts:config=config/crd/bases`); p.Err() != nil {
-				log.Printf("Failed to generate manifests: %s: %s", p.Err(), p.Result())
-				return ctx, p.Err()
-			}
-
-			// generate api objects
-			log.Println("Generate API objects...")
-			if p := utils.RunCommand(`controller-gen object:headerFile="hack/boilerplate.go.txt" paths="./..."`); p.Err() != nil {
-				log.Printf("Failed to generate API objects: %s: %s", p.Err(), p.Result())
-				return ctx, p.Err()
-			}
-
-			// Build docker image
-			log.Println("Building docker image...")
-			if p := utils.RunCommand(fmt.Sprintf("docker build -t %s .", dockerImage)); p.Err() != nil {
-				log.Printf("Failed to build docker image: %s: %s", p.Err(), p.Result())
-				return ctx, p.Err()
-			}
-
-			// Load docker image into kind
-			log.Println("Loading docker image into kind cluster...")
-			if err := kindCluster.LoadImage(ctx, dockerImage); err != nil {
-				log.Printf("Failed to load image into kind: %s", err)
-				return ctx, err
-			}
+			c := utils.RunCommand("controller-gen --version")
+			log.Printf("controller-gen: %s", c.Result())
 
 			// Deploy components
 			log.Println("Deploying controller-manager resources...")
-			p := utils.RunCommand(`bash -c "kustomize build config/default | kubectl apply --validate=false -f -"`)
+			p := utils.RunCommand(`kubectl version`)
+			log.Printf("Output of kubectl: %s", p.Result())
+			p = utils.RunCommand(`bash -c "kustomize build config/default | kubectl apply --server-side -f -"`)
 			log.Printf("Output: %s", p.Result())
 			if p.Err() != nil {
 				log.Printf("Failed to deploy resource configurations: %s: %s", p.Err(), p.Result())
@@ -116,10 +115,9 @@ func TestMain(m *testing.M) {
 				return ctx, err
 			}
 
-			if err := os.Chdir(origWd); err != nil {
-				log.Printf("Unable to set working directory: %s", err)
-				return ctx, err
-			}
+			p = utils.RunCommand(`kubectl get nodes`)
+			log.Printf("Kubernetes Nodes: %s", p.Result())
+
 			return ctx, nil
 		},
 	)
@@ -132,7 +130,6 @@ func TestMain(m *testing.M) {
 			return ctx, nil
 		},
 		envfuncs.DeleteNamespace(namespace),
-		envfuncs.DestroyCluster(kindClusterName),
 	)
 
 	// Use Environment.Run to launch the test

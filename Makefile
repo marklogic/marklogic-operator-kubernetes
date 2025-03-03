@@ -3,7 +3,20 @@
 # To re-generate a bundle for another specific version without changing the standard setup, you can:
 # - use the VERSION as arg of the bundle target (e.g make bundle VERSION=0.0.2)
 # - use environment variables to overwrite this value (e.g export VERSION=0.0.2)
-VERSION ?= 0.0.1
+VERSION ?= 1.0.0
+
+# VERIFY_HUGE_PAGES defines if hugepages test is enabled or not for e2e test
+VERIFY_HUGE_PAGES ?= false
+
+export E2E_DOCKER_IMAGE ?= $(IMG)
+export E2E_KUSTOMIZE_VERSION ?= $(KUSTOMIZE_VERSION)
+export E2E_CONTROLLER_TOOLS_VERSION ?= $(CONTROLLER_TOOLS_VERSION)
+export E2E_MARKLOGIC_IMAGE_VERSION ?= progressofficial/marklogic-db:11.3.1-ubi-rootless-2.1.0
+export E2E_KUBERNETES_VERSION ?= v1.31.0
+
+# ENVTEST_K8S_VERSION refers to the version of kubebuilder assets to be downloaded by envtest binary.
+ENVTEST_K8S_VERSION = 1.31.0
+
 
 # CHANNELS define the bundle channels used in the bundle.
 # Add a new line here if you would like to change its default config. (E.g CHANNELS = "candidate,fast,stable")
@@ -28,8 +41,8 @@ BUNDLE_METADATA_OPTS ?= $(BUNDLE_CHANNELS) $(BUNDLE_DEFAULT_CHANNEL)
 # This variable is used to construct full image tags for bundle and catalog images.
 #
 # For example, running 'make bundle-build bundle-push catalog-build catalog-push' will build and push both
-# marklogic.com/marklogic-kubernetes-operator-bundle:$VERSION and marklogic.com/marklogic-kubernetes-operator-catalog:$VERSION.
-IMAGE_TAG_BASE ?= ml-docker-db-dev-tierpoint.bed-artifactory.bedford.progress.com/ml-marklogic-operator-dev/marklogic-kubernetes-operator
+# marklogic.com/marklogic-operator-kubernetes-bundle:$VERSION and marklogic.com/marklogic-operator-kubernetes-catalog:$VERSION.
+IMAGE_TAG_BASE ?= ml-docker-db-dev-tierpoint.bed-artifactory.bedford.progress.com/ml-marklogic-operator-dev/marklogic-operator-kubernetes
 
 # BUNDLE_IMG defines the image:tag used for the bundle.
 # You can use it as an arg. (E.g make bundle-build BUNDLE_IMG=<some-registry>/<project-name-bundle>:<tag>)
@@ -51,9 +64,9 @@ endif
 OPERATOR_SDK_VERSION ?= v1.34.2
 
 # Image URL to use all building/pushing image targets
-IMG ?= ml-marklogic-operator-dev.bed-artifactory.bedford.progress.com/marklogic-kubernetes-operator:1.0.0-ea2
-# ENVTEST_K8S_VERSION refers to the version of kubebuilder assets to be downloaded by envtest binary.
-ENVTEST_K8S_VERSION = 1.28.3
+# Image for dev: ml-marklogic-operator-dev.bed-artifactory.bedford.progress.com/marklogic-operator-kubernetes
+IMG ?= progressofficial/marklogic-operator-kubernetes:$(VERSION)
+
 
 # Get the currently used golang install path (in GOPATH/bin, unless GOBIN is set)
 ifeq (,$(shell go env GOBIN))
@@ -97,7 +110,7 @@ help: ## Display this help.
 
 .PHONY: manifests
 manifests: controller-gen ## Generate WebhookConfiguration, ClusterRole and CustomResourceDefinition objects.
-	$(CONTROLLER_GEN) rbac:roleName=manager-role crd webhook paths="./..." output:crd:artifacts:config=config/crd/bases
+	$(CONTROLLER_GEN) rbac:roleName=manager-role crd:generateEmbeddedObjectMeta=true webhook paths="./..." output:crd:artifacts:config=config/crd/bases
 
 .PHONY: generate
 generate: controller-gen ## Generate code containing DeepCopy, DeepCopyInto, and DeepCopyObject method implementations.
@@ -115,10 +128,44 @@ vet: ## Run go vet against code.
 test: manifests generate fmt vet envtest ## Run tests.
 	KUBEBUILDER_ASSETS="$(shell $(ENVTEST) use $(ENVTEST_K8S_VERSION) --bin-dir $(LOCALBIN) -p path)" go test -v $$(go list ./... | grep -v /e2e) -coverprofile cover.out
 
-# Utilize Kind or modify the e2e tests to load the image locally, enabling compatibility with other vendors.
-.PHONY: e2e-test  # Run the e2e tests against a Kind k8s instance that is spun up.
-e2e-test:
-	go test -v ./test/e2e
+# Utilize minikube or modify the e2e tests to load the image locally, enabling compatibility with other vendors.
+# To run specific e2e test with label, try 	go test -v ./test/e2e -count=1 -args --labels="type=tls-multi-node"
+.PHONY: e2e-test  # Run the e2e tests against a minikube k8s instance that is spun up.
+e2e-test: 
+	@echo "=====Check Huges pages test is enabled or not for e2e test"
+ifeq ($(VERIFY_HUGE_PAGES), true)
+	@echo "=====Setting hugepages value to 1280 for hugepages-e2e test"
+	sudo sysctl -w vm.nr_hugepages=1280
+
+	@echo "=====Restart minikube cluster to apply hugepages value"
+	minikube stop
+	minikube start
+
+	@echo "=====Running e2e test including hugepages test"
+	go test -v -count=1 -timeout 30m ./test/e2e -verifyHugePages
+
+	@echo "=====Resetting hugepages value to 0"
+	sudo sysctl -w vm.nr_hugepages=0
+
+	@echo "=====Restart minikube cluster"
+	minikube stop
+	minikube start
+else
+	@echo "=====Running e2e test without hugepages test"
+	go test -v -count=1 -timeout 30m ./test/e2e
+endif
+
+.PHONY: e2e-setup-minikube
+e2e-setup-minikube: kustomize controller-gen build docker-build
+	minikube delete || true
+	minikube start --driver=docker --kubernetes-version=$(E2E_KUBERNETES_VERSION) --memory=8192 --cpus=2
+	minikube addons enable ingress
+	minikube image load $(IMG)
+
+.PHONY: e2e-cleanup-minikube
+e2e-cleanup-minikube:
+	@echo "=====Delete minikube cluster"
+	minikube delete
 	
 GOLANGCI_LINT = $(shell pwd)/bin/golangci-lint
 GOLANGCI_LINT_VERSION ?= v1.54.2
@@ -151,8 +198,8 @@ run: manifests generate fmt vet ## Run a controller from your host.
 # (i.e. docker build --platform linux/arm64). However, you must enable docker buildKit for it.
 # More info: https://docs.docker.com/develop/develop-images/build_enhancements/
 .PHONY: docker-build
-docker-build: ## Build docker image with the manager.
-	$(CONTAINER_TOOL) build --platform="linux/amd64" -t ${IMG} .
+docker-build: ## Build docker image with the manager. to build for linux, add --platform="linux/amd64"
+	$(CONTAINER_TOOL) buildx build -t ${IMG} .
 
 .PHONY: docker-push
 docker-push: ## Push docker image with the manager.
@@ -212,8 +259,8 @@ CONTROLLER_GEN ?= $(LOCALBIN)/controller-gen
 ENVTEST ?= $(LOCALBIN)/setup-envtest
 
 ## Tool Versions
-KUSTOMIZE_VERSION ?= v5.2.1
-CONTROLLER_TOOLS_VERSION ?= v0.14.0
+KUSTOMIZE_VERSION ?= v5.5.0
+CONTROLLER_TOOLS_VERSION ?= v0.17.1
 
 .PHONY: kustomize
 kustomize: $(KUSTOMIZE) ## Download kustomize locally if necessary. If wrong version is installed, it will be removed before downloading.
@@ -316,7 +363,7 @@ $(HELMIFY): $(LOCALBIN)
 	test -s $(LOCALBIN)/helmify || GOBIN=$(LOCALBIN) go install github.com/arttor/helmify/cmd/helmify@latest
     
 helm: manifests kustomize helmify
-	$(KUSTOMIZE) build config/default | $(HELMIFY) charts/marklogic-operator
+	$(KUSTOMIZE) build config/default | $(HELMIFY) -image-pull-secrets -original-name charts/marklogic-operator-kubernetes 
 
 .PHONY: image-scan
 image-scan: docker-build

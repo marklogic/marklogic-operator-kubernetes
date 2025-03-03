@@ -1,32 +1,37 @@
 package k8sutil
 
 import (
-	"github.com/marklogic/marklogic-kubernetes-operator/pkg/result"
+	"github.com/marklogic/marklogic-operator-kubernetes/pkg/result"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 )
 
-func (oc *OperatorContext) ReconcileSecret() result.ReconcileResult {
-	logger := oc.ReqLogger
-	client := oc.Client
-	mlg := oc.MarklogicGroup
+func (cc *ClusterContext) ReconcileSecret() result.ReconcileResult {
+	logger := cc.ReqLogger
+	client := cc.Client
+	mlc := cc.MarklogicCluster
+
+	if mlc.Spec.Auth != nil && mlc.Spec.Auth.SecretName != nil && *mlc.Spec.Auth.SecretName != "" {
+		logger.Info("MarkLogic Secret is provided, skipping the creation")
+		return result.Continue()
+	}
 
 	logger.Info("Reconciling MarkLogic Secret")
-	labels := getMarkLogicLabels(mlg.Spec.Name)
-	annotations := map[string]string{}
-	secretName := mlg.Spec.Name + "-admin"
-	objectMeta := generateObjectMeta(secretName, mlg.Namespace, labels, annotations)
+	labels := getCommonLabels(mlc.ObjectMeta.Name)
+	annotations := getCommonAnnotations()
+	secretName := mlc.ObjectMeta.Name + "-admin"
+	objectMeta := generateObjectMeta(secretName, mlc.Namespace, labels, annotations)
 	nsName := types.NamespacedName{Name: objectMeta.Name, Namespace: objectMeta.Namespace}
 	secret := &corev1.Secret{}
-	err := client.Get(oc.Ctx, nsName, secret)
+	err := client.Get(cc.Ctx, nsName, secret)
 	if err != nil {
 		if errors.IsNotFound(err) {
 			logger.Info("MarkLogic admin Secret is not found, creating a new one")
-			secretData := oc.generateSecretData()
-			secretDef := generateSecretDef(objectMeta, marklogicServerAsOwner(mlg), secretData)
-			err = oc.createSecret(secretDef)
+			secretData := cc.generateSecretData()
+			secretDef := generateSecretDef(objectMeta, marklogicClusterAsOwner(mlc), secretData)
+			err = cc.createSecret(secretDef)
 			if err != nil {
 				logger.Info("MarkLogic admin Secret creation is failed")
 				return result.Error(err)
@@ -42,9 +47,9 @@ func (oc *OperatorContext) ReconcileSecret() result.ReconcileResult {
 	return result.Continue()
 }
 
-func (oc *OperatorContext) generateSecretData() map[string][]byte {
+func (cc *ClusterContext) generateSecretData() map[string][]byte {
 	// logger := oc.ReqLogger
-	spec := oc.MarklogicGroup.Spec
+	spec := cc.MarklogicCluster.Spec
 	secretData := map[string][]byte{}
 	if spec.Auth != nil && spec.Auth.AdminUsername != nil {
 		secretData["username"] = []byte(*spec.Auth.AdminUsername)
@@ -81,7 +86,7 @@ func generateSecretDef(secretMeta metav1.ObjectMeta, ownerRef metav1.OwnerRefere
 	return secret
 }
 
-func (oc *OperatorContext) createSecret(secret *corev1.Secret) error {
+func (oc *ClusterContext) createSecret(secret *corev1.Secret) error {
 	logger := oc.ReqLogger
 	client := oc.Client
 	err := client.Create(oc.Ctx, secret)

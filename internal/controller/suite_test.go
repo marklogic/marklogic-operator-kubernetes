@@ -34,7 +34,7 @@ import (
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 
-	databasev1alpha1 "github.com/marklogic/marklogic-kubernetes-operator/api/v1alpha1"
+	marklogicv1 "github.com/marklogic/marklogic-operator-kubernetes/api/v1"
 	//+kubebuilder:scaffold:imports
 )
 
@@ -68,7 +68,7 @@ var _ = BeforeSuite(func() {
 	Expect(err).NotTo(HaveOccurred())
 	Expect(cfg).NotTo(BeNil())
 
-	err = databasev1alpha1.AddToScheme(scheme.Scheme)
+	err = marklogicv1.AddToScheme(scheme.Scheme)
 	Expect(err).NotTo(HaveOccurred())
 
 	//+kubebuilder:scaffold:scheme

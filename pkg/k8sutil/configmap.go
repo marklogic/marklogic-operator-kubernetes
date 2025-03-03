@@ -3,7 +3,7 @@ package k8sutil
 import (
 	"embed"
 
-	"github.com/marklogic/marklogic-kubernetes-operator/pkg/result"
+	"github.com/marklogic/marklogic-operator-kubernetes/pkg/result"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -19,8 +19,8 @@ func (oc *OperatorContext) ReconcileConfigMap() result.ReconcileResult {
 	cr := oc.MarklogicGroup
 
 	logger.Info("Reconciling MarkLogic ConfigMap")
-	labels := getMarkLogicLabels(cr.Spec.Name)
-	annotations := map[string]string{}
+	labels := getCommonLabels(cr.Spec.Name)
+	annotations := getCommonAnnotations()
 	configMapName := cr.Spec.Name + "-scripts"
 	objectMeta := generateObjectMeta(configMapName, cr.Namespace, labels, annotations)
 	nsName := types.NamespacedName{Name: objectMeta.Name, Namespace: objectMeta.Namespace}

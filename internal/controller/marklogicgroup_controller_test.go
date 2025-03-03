@@ -20,7 +20,7 @@ import (
 	"context"
 	"time"
 
-	databasev1alpha1 "github.com/marklogic/marklogic-kubernetes-operator/api/v1alpha1"
+	marklogicv1 "github.com/marklogic/marklogic-operator-kubernetes/api/v1"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	appsv1 "k8s.io/api/apps/v1"
@@ -62,14 +62,14 @@ var typeNamespaceNameSvc = types.NamespacedName{Name: svcName, Namespace: Namesp
 var netPolicyName = Name
 var typeNsNameNetPolicy = types.NamespacedName{Name: netPolicyName, Namespace: Namespace}
 
-const fluentBitImage = "fluent/fluent-bit:3.1.1"
+const fluentBitImage = "fluent/fluent-bit:3.2.5"
 
-var groupConfig = &databasev1alpha1.GroupConfig{
+var groupConfig = &marklogicv1.GroupConfig{
 	Name:          "dnode",
 	EnableXdqpSsl: true,
 }
 
-var hugePages = databasev1alpha1.HugePages{
+var hugePages = marklogicv1.HugePages{
 	Enabled:   true,
 	MountPath: "/dev/hugepages",
 }
@@ -85,16 +85,16 @@ var _ = Describe("MarkLogicGroup controller", func() {
 			Expect(k8sClient.Create(ctx, &ns)).Should(Succeed())
 
 			// Declaring the Marklogic Group object and create CR
-			mlGroup := &databasev1alpha1.MarklogicGroup{
+			mlGroup := &marklogicv1.MarklogicGroup{
 				TypeMeta: metav1.TypeMeta{
 					Kind:       "MarklogicGroup",
-					APIVersion: "database.marklogic.com/v1alpha1",
+					APIVersion: "marklogic.progress.com/v1",
 				},
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      Name,
 					Namespace: Namespace,
 				},
-				Spec: databasev1alpha1.MarklogicGroupSpec{
+				Spec: marklogicv1.MarklogicGroupSpec{
 					Replicas:                  &replicas,
 					Name:                      Name,
 					Image:                     imageName,
@@ -116,13 +116,13 @@ var _ = Describe("MarkLogicGroup controller", func() {
 						RunAsNonRoot:             &runAsNonRoot,
 						AllowPrivilegeEscalation: &allowPrivilegeEscalation,
 					},
-					LogCollection: &databasev1alpha1.LogCollection{Enabled: true, Image: "fluent/fluent-bit:3.1.1", Files: databasev1alpha1.LogFilesConfig{ErrorLogs: true, AccessLogs: true, RequestLogs: true, CrashLogs: true, AuditLogs: true}, Outputs: "stdout"},
+					LogCollection: &marklogicv1.LogCollection{Enabled: true, Image: "fluent/fluent-bit:3.2.5", Files: marklogicv1.LogFilesConfig{ErrorLogs: true, AccessLogs: true, RequestLogs: true, CrashLogs: true, AuditLogs: true}, Outputs: "stdout"},
 				},
 			}
 			Expect(k8sClient.Create(ctx, mlGroup)).Should(Succeed())
 
 			// Validating if CR is created successfully
-			createdCR := &databasev1alpha1.MarklogicGroup{}
+			createdCR := &marklogicv1.MarklogicGroup{}
 			Eventually(func() bool {
 				err := k8sClient.Get(ctx, typeNamespaceName, createdCR)
 				return err == nil
@@ -199,19 +199,9 @@ var _ = Describe("MarkLogicGroup controller", func() {
 			}, timeout, interval).Should(BeTrue())
 		})
 
-		It("Should create a secret for MarkLogic Admin User", func() {
-			// Validating if Secret is created successfully
-			secret := &corev1.Secret{}
-			secretName := Name + "-admin"
-			Eventually(func() bool {
-				err := k8sClient.Get(ctx, types.NamespacedName{Name: secretName, Namespace: Namespace}, secret)
-				return err == nil
-			}, timeout, interval).Should(BeTrue())
-		})
-
 		It("Should update the MarklogicGroup CR", func() {
 			// Update the MarklogicGroup CR
-			createdCR := &databasev1alpha1.MarklogicGroup{}
+			createdCR := &marklogicv1.MarklogicGroup{}
 
 			Expect(k8sClient.Get(ctx, typeNamespaceName, createdCR)).Should(Succeed())
 			createdCR.Spec.Replicas = new(int32)
@@ -219,7 +209,7 @@ var _ = Describe("MarkLogicGroup controller", func() {
 			Expect(k8sClient.Update(ctx, createdCR)).Should(Succeed())
 
 			// Validating if CR is updated successfully
-			updatedCR := &databasev1alpha1.MarklogicGroup{}
+			updatedCR := &marklogicv1.MarklogicGroup{}
 			Eventually(func() bool {
 				err := k8sClient.Get(ctx, typeNamespaceName, updatedCR)
 				return err == nil && *updatedCR.Spec.Replicas == 3

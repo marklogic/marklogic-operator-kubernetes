@@ -124,9 +124,22 @@ void runTests() {
     sh "make test"
 }
 
+void runMinikubeSetup() {
+    sh '''
+        make e2e-setup-minikube
+    '''
+}
+
 void runE2eTests() {
-    //TODO: this is just a place holder as kuttl needs a proper environment
-    sh "echo make e2e-tests dockerImage=${params.dockerImage}"
+    sh '''
+        make e2e-test
+    '''
+}
+
+void runMinikubeCleanup() {
+    sh '''
+        make e2e-cleanup-minikube
+    '''
 }
 
 pipeline {
@@ -165,9 +178,21 @@ pipeline {
             }
         }
 
-        stage('Run-e2e-tests') {
+        stage('Run-Minikube-Setup') {
+            steps {
+                runMinikubeSetup()
+            }
+        }
+
+        stage('Run-e2e-Tests') {
             steps {
                 runE2eTests()
+            }
+        }
+
+        stage('Cleanup Environment') {
+            steps {
+                runMinikubeCleanup()
             }
         }
         

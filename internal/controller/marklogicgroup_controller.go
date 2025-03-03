@@ -29,8 +29,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	"github.com/go-logr/logr"
-	databasev1alpha1 "github.com/marklogic/marklogic-kubernetes-operator/api/v1alpha1"
-	"github.com/marklogic/marklogic-kubernetes-operator/pkg/k8sutil"
+	marklogicv1 "github.com/marklogic/marklogic-operator-kubernetes/api/v1"
+	"github.com/marklogic/marklogic-operator-kubernetes/pkg/k8sutil"
 )
 
 // MarklogicGroupReconciler reconciles a MarklogicGroup object
@@ -47,11 +47,12 @@ const (
 	ConditionTypeError      = "Error"
 )
 
-//+kubebuilder:rbac:groups=database.marklogic.com,resources=marklogicgroups,verbs=get;list;watch;create;update;patch;delete
-//+kubebuilder:rbac:groups=database.marklogic.com,resources=marklogicgroups/status,verbs=get;update;patch
-//+kubebuilder:rbac:groups=database.marklogic.com,resources=marklogicgroups/finalizers,verbs=update
+//+kubebuilder:rbac:groups=marklogic.progress.com,resources=marklogicgroups,verbs=get;list;watch;create;update;patch;delete
+//+kubebuilder:rbac:groups=marklogic.progress.com,resources=marklogicgroups/status,verbs=get;update;patch
+//+kubebuilder:rbac:groups=marklogic.progress.com,resources=marklogicgroups/finalizers,verbs=update
 //+kubebuilder:rbac:groups=apps,resources=statefulsets;replicasets;deployments;daemonsets,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups=core,resources=pods;services;secrets;configmaps,verbs=get;list;watch;create;update;patch;delete
+//+kubebuilder:rbac:groups=networking.k8s.io,resources=ingresses,verbs=get;list;watch;create;update;patch;delete
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
@@ -98,7 +99,7 @@ func (r *MarklogicGroupReconciler) SetupWithManager(mgr ctrl.Manager) error {
 
 	builder := ctrl.NewControllerManagedBy(mgr).
 		Named("marklogicgroup-controller").
-		For(&databasev1alpha1.MarklogicGroup{}).
+		For(&marklogicv1.MarklogicGroup{}).
 		Owns(&appsv1.StatefulSet{}).
 		Owns(&corev1.Service{})
 

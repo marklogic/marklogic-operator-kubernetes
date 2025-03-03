@@ -4,7 +4,7 @@ import (
 	"context"
 
 	"github.com/go-logr/logr"
-	databasev1alpha1 "github.com/marklogic/marklogic-kubernetes-operator/api/v1alpha1"
+	marklogicv1 "github.com/marklogic/marklogic-operator-kubernetes/api/v1"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -20,7 +20,7 @@ type OperatorContext struct {
 	Request        *reconcile.Request
 	Client         controllerClient.Client
 	Scheme         *runtime.Scheme
-	MarklogicGroup *databasev1alpha1.MarklogicGroup
+	MarklogicGroup *marklogicv1.MarklogicGroup
 	ReqLogger      logr.Logger
 	Recorder       record.EventRecorder
 
@@ -34,7 +34,7 @@ type ClusterContext struct {
 	Request          *reconcile.Request
 	Client           controllerClient.Client
 	Scheme           *runtime.Scheme
-	MarklogicCluster *databasev1alpha1.MarklogicCluster
+	MarklogicCluster *marklogicv1.MarklogicCluster
 	ReqLogger        logr.Logger
 	Recorder         record.EventRecorder
 
@@ -57,7 +57,7 @@ func CreateOperatorContext(
 	oc.Scheme = scheme
 	oc.ReqLogger = reqLogger
 	oc.Recorder = rec
-	mlg := &databasev1alpha1.MarklogicGroup{}
+	mlg := &marklogicv1.MarklogicGroup{}
 	if err := retrieveMarkLogicGroup(oc, request, mlg); err != nil {
 		oc.ReqLogger.Error(err, "Failed to retrieve MarkLogicServer")
 		return nil, err
@@ -92,7 +92,7 @@ func CreateClusterContext(
 	cc.Scheme = scheme
 	cc.ReqLogger = reqLogger
 	cc.Recorder = rec
-	mlc := &databasev1alpha1.MarklogicCluster{}
+	mlc := &marklogicv1.MarklogicCluster{}
 
 	if err := retrieveMarklogicCluster(cc, request, mlc); err != nil {
 		cc.ReqLogger.Error(err, "Failed to retrieve MarkLogicCluster")
@@ -108,21 +108,21 @@ func CreateClusterContext(
 	return cc, nil
 }
 
-func retrieveMarkLogicGroup(oc *OperatorContext, request *reconcile.Request, mlg *databasev1alpha1.MarklogicGroup) error {
+func retrieveMarkLogicGroup(oc *OperatorContext, request *reconcile.Request, mlg *marklogicv1.MarklogicGroup) error {
 	err := oc.Client.Get(oc.Ctx, request.NamespacedName, mlg)
 	return err
 }
 
-func retrieveMarklogicCluster(cc *ClusterContext, request *reconcile.Request, mlc *databasev1alpha1.MarklogicCluster) error {
+func retrieveMarklogicCluster(cc *ClusterContext, request *reconcile.Request, mlc *marklogicv1.MarklogicCluster) error {
 	err := cc.Client.Get(cc.Ctx, request.NamespacedName, mlc)
 	return err
 }
 
-func (cc *ClusterContext) GetMarkLogicCluster() *databasev1alpha1.MarklogicCluster {
+func (cc *ClusterContext) GetMarkLogicCluster() *marklogicv1.MarklogicCluster {
 	return cc.MarklogicCluster
 }
 
-func (oc *OperatorContext) GetMarkLogicServer() *databasev1alpha1.MarklogicGroup {
+func (oc *OperatorContext) GetMarkLogicServer() *marklogicv1.MarklogicGroup {
 	return oc.MarklogicGroup
 }
 

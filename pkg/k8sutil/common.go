@@ -4,10 +4,13 @@ import (
 	"math/rand"
 	"time"
 
-	databasev1alpha1 "github.com/marklogic/marklogic-kubernetes-operator/api/v1alpha1"
+	marklogicv1 "github.com/marklogic/marklogic-operator-kubernetes/api/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
+
+var CustomLabels = map[string]string{}
+var CustomAnnotations = map[string]string{}
 
 // generateTypeMeta generates the TyeMeta
 func generateTypeMeta(resourceKind string, apiVersion string) metav1.TypeMeta {
@@ -31,7 +34,7 @@ func AddOwnerRefToObject(obj metav1.Object, ownerRef metav1.OwnerReference) {
 	obj.SetOwnerReferences(append(obj.GetOwnerReferences(), ownerRef))
 }
 
-func marklogicServerAsOwner(cr *databasev1alpha1.MarklogicGroup) metav1.OwnerReference {
+func marklogicServerAsOwner(cr *marklogicv1.MarklogicGroup) metav1.OwnerReference {
 	trueVar := true
 	return metav1.OwnerReference{
 		APIVersion: cr.APIVersion,
@@ -46,11 +49,39 @@ func LabelSelectors(labels map[string]string) *metav1.LabelSelector {
 	return &metav1.LabelSelector{MatchLabels: labels}
 }
 
-func getMarkLogicLabels(name string) map[string]string {
-	return map[string]string{
-		"app.kubernetes.io/name":     "marklogic",
-		"app.kubernetes.io/instance": name,
+func SetCommonLabels(labels map[string]string) {
+	CustomLabels = labels
+}
+
+func SetCommonAnnotations(annotations map[string]string) {
+	CustomAnnotations = annotations
+}
+
+func getCommonLabels(name string) map[string]string {
+	defaultLabels := map[string]string{
+		"app.kubernetes.io/name":       "marklogic",
+		"app.kubernetes.io/instance":   name,
+		"app.kubernetes.io/managed-by": "marklogic-operator",
+		"app.kubernetes.io/component":  "database",
 	}
+	mergedLabels := map[string]string{}
+	if len(CustomLabels) > 0 {
+		for k, v := range defaultLabels {
+			mergedLabels[k] = v
+		}
+		for k, v := range CustomLabels {
+			if _, ok := defaultLabels[k]; !ok {
+				mergedLabels[k] = v
+			}
+		}
+	} else {
+		return defaultLabels
+	}
+	return mergedLabels
+}
+
+func getCommonAnnotations() map[string]string {
+	return CustomAnnotations
 }
 
 func getFluentBitLabels(name string) map[string]string {
@@ -60,7 +91,7 @@ func getFluentBitLabels(name string) map[string]string {
 	}
 }
 
-func marklogicClusterAsOwner(cr *databasev1alpha1.MarklogicCluster) metav1.OwnerReference {
+func marklogicClusterAsOwner(cr *marklogicv1.MarklogicCluster) metav1.OwnerReference {
 	trueVar := true
 	return metav1.OwnerReference{
 		APIVersion: cr.APIVersion,
@@ -71,7 +102,7 @@ func marklogicClusterAsOwner(cr *databasev1alpha1.MarklogicCluster) metav1.Owner
 	}
 }
 
-func setOperatorInternalStatus(oc *OperatorContext, newState databasev1alpha1.InternalState) error {
+func setOperatorInternalStatus(oc *OperatorContext, newState marklogicv1.InternalState) error {
 	oc.ReqLogger.Info("common::setOperatorProgressStatus")
 	currentState := oc.MarklogicGroup.Status.MarklogicGroupStatus
 

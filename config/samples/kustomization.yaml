@@ -1,5 +1,6 @@
 ## Append samples of your project ##
 resources:
-- marklogiccluster.yaml
-- marklogicgroup.yaml
+- quick-start.yaml
+- minimal-production.yaml
+- complete.yaml
 #+kubebuilder:scaffold:manifestskustomizesamples
