@@ -14,7 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package v1alpha1
+package v1
 
 import (
 	appsv1 "k8s.io/api/apps/v1"
@@ -41,8 +41,9 @@ type MarklogicClusterSpec struct {
 	ImagePullPolicy  string                        `json:"imagePullPolicy,omitempty"`
 	ImagePullSecrets []corev1.LocalObjectReference `json:"imagePullSecrets,omitempty"`
 
-	Auth                          *AdminAuth                   `json:"auth,omitempty"`
-	Storage                       *Storage                     `json:"storage,omitempty"`
+	Auth *AdminAuth `json:"auth,omitempty"`
+	// +kubebuilder:default:={enabled: true, size: "10Gi"}
+	Persistence                   *Persistence                 `json:"persistence,omitempty"`
 	Resources                     *corev1.ResourceRequirements `json:"resources,omitempty"`
 	TerminationGracePeriodSeconds *int64                       `json:"terminationGracePeriodSeconds,omitempty"`
 	// +kubebuilder:validation:Enum=OnDelete;RollingUpdate
@@ -60,26 +61,39 @@ type MarklogicClusterSpec struct {
 	// +kubebuilder:default:={enabled: false, mountPath: "/dev/hugepages"}
 	HugePages *HugePages `json:"hugePages,omitempty"`
 	// +kubebuilder:default:={enabled: false, image: "fluent/fluent-bit:3.2.5", resources: {requests: {cpu: "100m", memory: "200Mi"}, limits: {cpu: "200m", memory: "500Mi"}}, files: {errorLogs: true, accessLogs: true, requestLogs: true}, outputs: "stdout"}
-	LogCollection          *LogCollection        `json:"logCollection,omitempty"`
-	HAProxy                *HAProxy              `json:"haproxy,omitempty"`
-	Tls                    *Tls                  `json:"tls,omitempty"`
-	AdditionalVolumes      *[]corev1.Volume      `json:"additionalVolumes,omitempty"`
-	AdditionalVolumeMounts *[]corev1.VolumeMount `json:"additionalVolumeMounts,omitempty"`
+	LogCollection                  *LogCollection                  `json:"logCollection,omitempty"`
+	HAProxy                        *HAProxy                        `json:"haproxy,omitempty"`
+	Tls                            *Tls                            `json:"tls,omitempty"`
+	AdditionalVolumes              *[]corev1.Volume                `json:"additionalVolumes,omitempty"`
+	AdditionalVolumeMounts         *[]corev1.VolumeMount           `json:"additionalVolumeMounts,omitempty"`
+	AdditionalVolumeClaimTemplates *[]corev1.PersistentVolumeClaim `json:"additionalVolumeClaimTemplates,omitempty"`
 
 	// +kubebuilder:validation:MaxItems=100
+	// +kubebuilder:validation:MinItems=1
+	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:XValidation:rule="size(self) == 1 || (size(self) == size(self.map(x, x.groupConfig.name).filter(y, self.map(x, x.groupConfig.name).filter(z, z == y).size() == 1)))", message="MarkLogicGroups must have unique groupConfig names"
+	// +kubebuilder:validation:XValidation:rule="size(self) == 1 || (size(self) == size(self.map(x, x.name).filter(y, self.map(x, x.name).filter(z, z == y).size() == 1)))", message="MarkLogicGroups must have unique names"
 	// +kubebuilder:validation:XValidation:rule="size(self) == size(self.map(x, x.name).filter(y, self.map(x, x.name).filter(z, z == y).size() == 1))", message="MarkLogicGroups must have unique names"
+	// +kubebuilder:validation:XValidation:rule="self[0].name == oldSelf[0].name", message="Name of MarkLogikGroup must not be changed"
+	// +kubebuilder:validation:XValidation:rule="size(self) >= 2 && size(oldSelf) >= 2 ? self[1].name == oldSelf[1].name : true", message="Name of MarkLogikGroup must not be changed"
+	// +kubebuilder:validation:XValidation:rule="size(self) >= 3 && size(oldSelf) >= 3 ? self[2].name == oldSelf[2].name : true", message="Name of MarkLogikGroup must not be changed"
+	// +kubebuilder:validation:XValidation:rule="size(self) >= 4 && size(oldSelf) >= 4 ? self[3].name == oldSelf[3].name : true", message="Name of MarkLogikGroup must not be changed"
+	// +kubebuilder:validation:XValidation:rule="size(self) >= 5 && size(oldSelf) >= 5 ? self[4].name == oldSelf[4].name : true", message="Name of MarkLogikGroup must not be changed"
+	// +kubebuilder:validation:XValidation:rule="size(self.filter(x, x.isBootstrap == true)) == 1", message="Exactly one MarkLogicGroup must have isBootstrap set to true"
 	MarkLogicGroups []*MarklogicGroups `json:"markLogicGroups,omitempty"`
 }
 
 type MarklogicGroups struct {
-	Replicas                  *int32                            `json:"replicas,omitempty"`
-	Name                      string                            `json:"name,omitempty"`
+	// +kubebuilder:default:=1
+	Replicas *int32 `json:"replicas,omitempty"`
+	// +kubebuilder:validation:Required
+	Name string `json:"name,omitempty"`
+	// +kubebuilder:default:={name: "Default", enableXdqpSsl: true}
 	GroupConfig               *GroupConfig                      `json:"groupConfig,omitempty"`
 	Image                     string                            `json:"image,omitempty"`
 	ImagePullPolicy           string                            `json:"imagePullPolicy,omitempty"`
 	ImagePullSecrets          []corev1.LocalObjectReference     `json:"imagePullSecrets,omitempty"`
-	Storage                   *Storage                          `json:"storage,omitempty"`
+	Persistence               *Persistence                      `json:"persistence,omitempty"`
 	Service                   Service                           `json:"service,omitempty"`
 	Resources                 *corev1.ResourceRequirements      `json:"resources,omitempty"`
 	Affinity                  *corev1.Affinity                  `json:"affinity,omitempty"`
@@ -89,10 +103,12 @@ type MarklogicGroups struct {
 	HugePages                 *HugePages                        `json:"hugePages,omitempty"`
 	LogCollection             *LogCollection                    `json:"logCollection,omitempty"`
 	HAProxy                   *HAProxy                          `json:"haproxy,omitempty"`
-	IsBootstrap               bool                              `json:"isBootstrap,omitempty"`
-	Tls                       *Tls                              `json:"tls,omitempty"`
-	AdditionalVolumes         *[]corev1.Volume                  `json:"additionalVolumes,omitempty"`
-	AdditionalVolumeMounts    *[]corev1.VolumeMount             `json:"additionalVolumeMounts,omitempty"`
+	// +kubebuilder:default:=false
+	IsBootstrap                    bool                            `json:"isBootstrap,omitempty"`
+	Tls                            *Tls                            `json:"tls,omitempty"`
+	AdditionalVolumes              *[]corev1.Volume                `json:"additionalVolumes,omitempty"`
+	AdditionalVolumeMounts         *[]corev1.VolumeMount           `json:"additionalVolumeMounts,omitempty"`
+	AdditionalVolumeClaimTemplates *[]corev1.PersistentVolumeClaim `json:"additionalVolumeClaimTemplates,omitempty"`
 }
 
 type Tls struct {

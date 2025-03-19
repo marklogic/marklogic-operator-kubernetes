@@ -7,11 +7,11 @@ import (
 	"testing"
 	"time"
 
-	databasev1alpha1 "github.com/marklogic/marklogic-kubernetes-operator/api/v1alpha1"
+	marklogicv1 "github.com/marklogic/marklogic-operator-kubernetes/api/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	"github.com/marklogic/marklogic-kubernetes-operator/test/utils"
+	"github.com/marklogic/marklogic-operator-kubernetes/test/utils"
 	"sigs.k8s.io/e2e-framework/klient/k8s"
 	"sigs.k8s.io/e2e-framework/klient/wait"
 	"sigs.k8s.io/e2e-framework/klient/wait/conditions"
@@ -26,33 +26,33 @@ func TestHAPorxyPathBaseEnabled(t *testing.T) {
 	replicas := int32(1)
 	trueVal := true
 
-	cr := &databasev1alpha1.MarklogicCluster{
+	cr := &marklogicv1.MarklogicCluster{
 		TypeMeta: metav1.TypeMeta{
-			APIVersion: "marklogic.com/v1alpha1",
+			APIVersion: "marklogic.progress.com/v1",
 			Kind:       "MarklogicCluster",
 		},
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "marklogicclusters",
 			Namespace: namespace,
 		},
-		Spec: databasev1alpha1.MarklogicClusterSpec{
+		Spec: marklogicv1.MarklogicClusterSpec{
 			Image: marklogicImage,
-			Auth: &databasev1alpha1.AdminAuth{
+			Auth: &marklogicv1.AdminAuth{
 				AdminUsername: &adminUsername,
 				AdminPassword: &adminPassword,
 			},
-			MarkLogicGroups: []*databasev1alpha1.MarklogicGroups{
+			MarkLogicGroups: []*marklogicv1.MarklogicGroups{
 				{
 					Name:        releaseName,
 					Replicas:    &replicas,
 					IsBootstrap: true,
 				},
 			},
-			HAProxy: &databasev1alpha1.HAProxy{
+			HAProxy: &marklogicv1.HAProxy{
 				Enabled:          true,
 				PathBasedRouting: &trueVal,
 				FrontendPort:     8080,
-				AppServers: []databasev1alpha1.AppServers{
+				AppServers: []marklogicv1.AppServers{
 					{
 						Name: "app-service",
 						Port: 8000,
@@ -81,7 +81,7 @@ func TestHAPorxyPathBaseEnabled(t *testing.T) {
 				Name: namespace,
 			},
 		})
-		databasev1alpha1.AddToScheme(client.Resources(namespace).GetScheme())
+		marklogicv1.AddToScheme(client.Resources(namespace).GetScheme())
 
 		if err := client.Resources(namespace).Create(ctx, cr); err != nil {
 			t.Fatalf("Failed to create MarklogicCluster: %s", err)
@@ -157,33 +157,33 @@ func TestHAPorxWithNoPathBasedDisabled(t *testing.T) {
 	replicas := int32(1)
 	falseVal := false
 
-	cr := &databasev1alpha1.MarklogicCluster{
+	cr := &marklogicv1.MarklogicCluster{
 		TypeMeta: metav1.TypeMeta{
-			APIVersion: "marklogic.com/v1alpha1",
+			APIVersion: "marklogic.progress.com/v1",
 			Kind:       "MarklogicCluster",
 		},
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "marklogicclusters",
 			Namespace: namespace,
 		},
-		Spec: databasev1alpha1.MarklogicClusterSpec{
+		Spec: marklogicv1.MarklogicClusterSpec{
 			Image: marklogicImage,
-			Auth: &databasev1alpha1.AdminAuth{
+			Auth: &marklogicv1.AdminAuth{
 				AdminUsername: &adminUsername,
 				AdminPassword: &adminPassword,
 			},
-			MarkLogicGroups: []*databasev1alpha1.MarklogicGroups{
+			MarkLogicGroups: []*marklogicv1.MarklogicGroups{
 				{
 					Name:        releaseName,
 					Replicas:    &replicas,
 					IsBootstrap: true,
 				},
 			},
-			HAProxy: &databasev1alpha1.HAProxy{
+			HAProxy: &marklogicv1.HAProxy{
 				Enabled:          true,
 				PathBasedRouting: &falseVal,
 				FrontendPort:     8090,
-				AppServers: []databasev1alpha1.AppServers{
+				AppServers: []marklogicv1.AppServers{
 					{
 						Name: "app-service",
 						Port: 8000,
@@ -212,7 +212,7 @@ func TestHAPorxWithNoPathBasedDisabled(t *testing.T) {
 				Name: namespace,
 			},
 		})
-		databasev1alpha1.AddToScheme(client.Resources(namespace).GetScheme())
+		marklogicv1.AddToScheme(client.Resources(namespace).GetScheme())
 
 		if err := client.Resources(namespace).Create(ctx, cr); err != nil {
 			t.Fatalf("Failed to create MarklogicCluster: %s", err)

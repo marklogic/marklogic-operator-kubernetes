@@ -1,10 +1,11 @@
----
 apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
+  name: marklogicclusters.marklogic.progress.com
   annotations:
     controller-gen.kubebuilder.io/version: v0.17.1
-  name: marklogicclusters.marklogic.progress.com
+  labels:
+  {{- include "marklogic-operator-kubernetes.labels" . | nindent 4 }}
 spec:
   group: marklogic.progress.com
   names:
@@ -275,8 +276,8 @@ spec:
                             Value of Filesystem is implied when not included in claim spec.
                           type: string
                         volumeName:
-                          description: volumeName is the binding reference to the
-                            PersistentVolume backing this claim.
+                          description: volumeName is the binding reference to the PersistentVolume
+                            backing this claim.
                           type: string
                       type: object
                     status:
@@ -300,23 +301,22 @@ spec:
                               that it does not recognizes, then it should ignore that update and let other controllers
                               handle it.
                             type: string
-                          description: "allocatedResourceStatuses stores status of
-                            resource being resized for the given PVC.\nKey names follow
-                            standard Kubernetes label syntax. Valid values are either:\n\t*
-                            Un-prefixed keys:\n\t\t- storage - the capacity of the
-                            volume.\n\t* Custom resources must use implementation-defined
-                            prefixed names such as \"example.com/my-custom-resource\"\nApart
+                          description: "allocatedResourceStatuses stores status of resource
+                            being resized for the given PVC.\nKey names follow standard
+                            Kubernetes label syntax. Valid values are either:\n\t* Un-prefixed
+                            keys:\n\t\t- storage - the capacity of the volume.\n\t*
+                            Custom resources must use implementation-defined prefixed
+                            names such as \"example.com/my-custom-resource\"\nApart
                             from above values - keys that are unprefixed or have kubernetes.io
                             prefix are considered\nreserved and hence may not be used.\n\nClaimResourceStatus
                             can be in any of following states:\n\t- ControllerResizeInProgress:\n\t\tState
-                            set when resize controller starts resizing the volume
-                            in control-plane.\n\t- ControllerResizeFailed:\n\t\tState
-                            set when resize has failed in resize controller with a
-                            terminal error.\n\t- NodeResizePending:\n\t\tState set
-                            when resize controller has finished resizing the volume
-                            but further resizing of\n\t\tvolume is needed on the node.\n\t-
-                            NodeResizeInProgress:\n\t\tState set when kubelet starts
-                            resizing the volume.\n\t- NodeResizeFailed:\n\t\tState
+                            set when resize controller starts resizing the volume in
+                            control-plane.\n\t- ControllerResizeFailed:\n\t\tState set
+                            when resize has failed in resize controller with a terminal
+                            error.\n\t- NodeResizePending:\n\t\tState set when resize
+                            controller has finished resizing the volume but further
+                            resizing of\n\t\tvolume is needed on the node.\n\t- NodeResizeInProgress:\n\t\tState
+                            set when kubelet starts resizing the volume.\n\t- NodeResizeFailed:\n\t\tState
                             set when resizing has failed in kubelet with a terminal
                             error. Transient errors don't set\n\t\tNodeResizeFailed.\nFor
                             example: if expanding a PVC for more capacity - this field
@@ -325,16 +325,15 @@ spec:
                             = \"ControllerResizeFailed\"\n     - pvc.status.allocatedResourceStatus['storage']
                             = \"NodeResizePending\"\n     - pvc.status.allocatedResourceStatus['storage']
                             = \"NodeResizeInProgress\"\n     - pvc.status.allocatedResourceStatus['storage']
-                            = \"NodeResizeFailed\"\nWhen this field is not set, it
-                            means that no resize operation is in progress for the
-                            given PVC.\n\nA controller that receives PVC update with
-                            previously unknown resourceName or ClaimResourceStatus\nshould
-                            ignore the update for the purpose it was designed. For
-                            example - a controller that\nonly is responsible for resizing
-                            capacity of the volume, should ignore PVC updates that
-                            change other valid\nresources associated with PVC.\n\nThis
-                            is an alpha field and requires enabling RecoverVolumeExpansionFailure
-                            feature."
+                            = \"NodeResizeFailed\"\nWhen this field is not set, it means
+                            that no resize operation is in progress for the given PVC.\n\nA
+                            controller that receives PVC update with previously unknown
+                            resourceName or ClaimResourceStatus\nshould ignore the update
+                            for the purpose it was designed. For example - a controller
+                            that\nonly is responsible for resizing capacity of the volume,
+                            should ignore PVC updates that change other valid\nresources
+                            associated with PVC.\n\nThis is an alpha field and requires
+                            enabling RecoverVolumeExpansionFailure feature."
                           type: object
                           x-kubernetes-map-type: granular
                         allocatedResources:
@@ -346,10 +345,10 @@ spec:
                             x-kubernetes-int-or-string: true
                           description: "allocatedResources tracks the resources allocated
                             to a PVC including its capacity.\nKey names follow standard
-                            Kubernetes label syntax. Valid values are either:\n\t*
-                            Un-prefixed keys:\n\t\t- storage - the capacity of the
-                            volume.\n\t* Custom resources must use implementation-defined
-                            prefixed names such as \"example.com/my-custom-resource\"\nApart
+                            Kubernetes label syntax. Valid values are either:\n\t* Un-prefixed
+                            keys:\n\t\t- storage - the capacity of the volume.\n\t*
+                            Custom resources must use implementation-defined prefixed
+                            names such as \"example.com/my-custom-resource\"\nApart
                             from above values - keys that are unprefixed or have kubernetes.io
                             prefix are considered\nreserved and hence may not be used.\n\nCapacity
                             reported here may be larger than the actual capacity when
@@ -359,15 +358,14 @@ spec:
                             alone is used for quota calculation.\nIf a volume expansion
                             capacity request is lowered, allocatedResources is only\nlowered
                             if there are no expansion operations in progress and if
-                            the actual volume capacity\nis equal or lower than the
-                            requested capacity.\n\nA controller that receives PVC
-                            update with previously unknown resourceName\nshould ignore
-                            the update for the purpose it was designed. For example
-                            - a controller that\nonly is responsible for resizing
-                            capacity of the volume, should ignore PVC updates that
-                            change other valid\nresources associated with PVC.\n\nThis
-                            is an alpha field and requires enabling RecoverVolumeExpansionFailure
-                            feature."
+                            the actual volume capacity\nis equal or lower than the requested
+                            capacity.\n\nA controller that receives PVC update with
+                            previously unknown resourceName\nshould ignore the update
+                            for the purpose it was designed. For example - a controller
+                            that\nonly is responsible for resizing capacity of the volume,
+                            should ignore PVC updates that change other valid\nresources
+                            associated with PVC.\n\nThis is an alpha field and requires
+                            enabling RecoverVolumeExpansionFailure feature."
                           type: object
                         capacity:
                           additionalProperties:
@@ -376,8 +374,8 @@ spec:
                             - type: string
                             pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
                             x-kubernetes-int-or-string: true
-                          description: capacity represents the actual resources of
-                            the underlying volume.
+                          description: capacity represents the actual resources of the
+                            underlying volume.
                           type: object
                         conditions:
                           description: |-
@@ -398,8 +396,8 @@ spec:
                                 format: date-time
                                 type: string
                               message:
-                                description: message is the human-readable message
-                                  indicating details about last transition.
+                                description: message is the human-readable message indicating
+                                  details about last transition.
                                 type: string
                               reason:
                                 description: |-
@@ -440,22 +438,22 @@ spec:
                           properties:
                             status:
                               description: "status is the status of the ControllerModifyVolume
-                                operation. It can be in any of following states:\n
-                                - Pending\n   Pending indicates that the PersistentVolumeClaim
-                                cannot be modified due to unmet requirements, such
-                                as\n   the specified VolumeAttributesClass not existing.\n
+                                operation. It can be in any of following states:\n -
+                                Pending\n   Pending indicates that the PersistentVolumeClaim
+                                cannot be modified due to unmet requirements, such as\n
+                                \  the specified VolumeAttributesClass not existing.\n
                                 - InProgress\n   InProgress indicates that the volume
                                 is being modified.\n - Infeasible\n  Infeasible indicates
                                 that the request has been rejected as invalid by the
                                 CSI driver. To\n\t  resolve the error, a valid VolumeAttributesClass
-                                needs to be specified.\nNote: New statuses can be
-                                added in the future. Consumers should check for unknown
-                                statuses and fail appropriately."
+                                needs to be specified.\nNote: New statuses can be added
+                                in the future. Consumers should check for unknown statuses
+                                and fail appropriately."
                               type: string
                             targetVolumeAttributesClassName:
-                              description: targetVolumeAttributesClassName is the
-                                name of the VolumeAttributesClass the PVC currently
-                                being reconciled
+                              description: targetVolumeAttributesClassName is the name
+                                of the VolumeAttributesClass the PVC currently being
+                                reconciled
                               type: string
                           required:
                           - status
@@ -468,8 +466,8 @@ spec:
                 type: array
               additionalVolumeMounts:
                 items:
-                  description: VolumeMount describes a mounting of a Volume within
-                    a container.
+                  description: VolumeMount describes a mounting of a Volume within a
+                    container.
                   properties:
                     mountPath:
                       description: |-
@@ -497,19 +495,19 @@ spec:
                       description: |-
                         RecursiveReadOnly specifies whether read-only mounts should be handled
                         recursively.
-
+  
                         If ReadOnly is false, this field has no meaning and must be unspecified.
-
+  
                         If ReadOnly is true, and this field is set to Disabled, the mount is not made
                         recursively read-only.  If this field is set to IfPossible, the mount is made
                         recursively read-only, if it is supported by the container runtime.  If this
                         field is set to Enabled, the mount is made recursively read-only if it is
                         supported by the container runtime, otherwise the pod will not be started and
                         an error will be generated to indicate the reason.
-
+  
                         If this field is set to IfPossible or Enabled, MountPropagation must be set to
                         None (or be unspecified, which defaults to None).
-
+  
                         If this field is not specified, it is treated as an equivalent of Disabled.
                       type: string
                     subPath:
@@ -531,8 +529,8 @@ spec:
                 type: array
               additionalVolumes:
                 items:
-                  description: Volume represents a named volume in a pod that may
-                    be accessed by any container in the pod.
+                  description: Volume represents a named volume in a pod that may be
+                    accessed by any container in the pod.
                   properties:
                     awsElasticBlockStore:
                       description: |-
@@ -585,8 +583,7 @@ spec:
                             blob storage
                           type: string
                         diskURI:
-                          description: diskURI is the URI of data disk in the blob
-                            storage
+                          description: diskURI is the URI of data disk in the blob storage
                           type: string
                         fsType:
                           default: ext4
@@ -596,10 +593,10 @@ spec:
                             Ex. "ext4", "xfs", "ntfs". Implicitly inferred to be "ext4" if unspecified.
                           type: string
                         kind:
-                          description: 'kind expected values are Shared: multiple
-                            blob disks per storage account  Dedicated: single blob
-                            disk per storage account  Managed: azure managed data
-                            disk (only in managed availability set). defaults to shared'
+                          description: 'kind expected values are Shared: multiple blob
+                            disks per storage account  Dedicated: single blob disk per
+                            storage account  Managed: azure managed data disk (only
+                            in managed availability set). defaults to shared'
                           type: string
                         readOnly:
                           default: false
@@ -896,11 +893,11 @@ spec:
                                 format: int32
                                 type: integer
                               path:
-                                description: 'Required: Path is  the relative path
-                                  name of the file to be created. Must not be absolute
-                                  or contain the ''..'' path. Must be utf-8 encoded.
-                                  The first item of the relative path must not start
-                                  with ''..'''
+                                description: 'Required: Path is  the relative path name
+                                  of the file to be created. Must not be absolute or
+                                  contain the ''..'' path. Must be utf-8 encoded. The
+                                  first item of the relative path must not start with
+                                  ''..'''
                                 type: string
                               resourceFieldRef:
                                 description: |-
@@ -963,7 +960,7 @@ spec:
                         ephemeral represents a volume that is handled by a cluster storage driver.
                         The volume's lifecycle is tied to the pod that defines it - it will be created before the pod starts,
                         and deleted when the pod is removed.
-
+  
                         Use this if:
                         a) the volume is only needed while the pod runs,
                         b) features of normal volumes like restoring from snapshot or capacity
@@ -973,15 +970,15 @@ spec:
                            a PersistentVolumeClaim (see EphemeralVolumeSource for more
                            information on the connection between this volume type
                            and PersistentVolumeClaim).
-
+  
                         Use PersistentVolumeClaim or one of the vendor-specific
                         APIs for volumes that persist for longer than the lifecycle
                         of an individual pod.
-
+  
                         Use CSI for light-weight local ephemeral volumes if the CSI driver is meant to
                         be used that way - see the documentation of the driver for
                         more information.
-
+  
                         A pod can use both types of ephemeral volumes and
                         persistent volumes at the same time.
                       properties:
@@ -994,7 +991,7 @@ spec:
                             `<volume name>` is the name from the `PodSpec.Volumes` array
                             entry. Pod validation will reject the pod if the concatenated name
                             is not valid for a PVC (for example, too long).
-
+  
                             An existing PVC with that name that is not owned by the pod
                             will *not* be used for the pod to avoid using an unrelated
                             volume by mistake. Starting the pod is then blocked until
@@ -1003,10 +1000,10 @@ spec:
                             owner reference to the pod once the pod exists. Normally
                             this should not be necessary, but it may be useful when
                             manually reconstructing a broken cluster.
-
+  
                             This field is read-only and no changes will be made by Kubernetes
                             to the PVC after it has been created.
-
+  
                             Required, must not be nil.
                           properties:
                             metadata:
@@ -1174,8 +1171,8 @@ spec:
                                           relates the key and values.
                                         properties:
                                           key:
-                                            description: key is the label key that
-                                              the selector applies to.
+                                            description: key is the label key that the
+                                              selector applies to.
                                             type: string
                                           operator:
                                             description: |-
@@ -1234,8 +1231,8 @@ spec:
                                     Value of Filesystem is implied when not included in claim spec.
                                   type: string
                                 volumeName:
-                                  description: volumeName is the binding reference
-                                    to the PersistentVolume backing this claim.
+                                  description: volumeName is the binding reference to
+                                    the PersistentVolume backing this claim.
                                   type: string
                               type: object
                           required:
@@ -1243,9 +1240,8 @@ spec:
                           type: object
                       type: object
                     fc:
-                      description: fc represents a Fibre Channel resource that is
-                        attached to a kubelet's host machine and then exposed to the
-                        pod.
+                      description: fc represents a Fibre Channel resource that is attached
+                        to a kubelet's host machine and then exposed to the pod.
                       properties:
                         fsType:
                           description: |-
@@ -1285,8 +1281,8 @@ spec:
                         Deprecated: FlexVolume is deprecated. Consider using a CSIDriver instead.
                       properties:
                         driver:
-                          description: driver is the name of the driver to use for
-                            this volume.
+                          description: driver is the name of the driver to use for this
+                            volume.
                           type: string
                         fsType:
                           description: |-
@@ -1457,11 +1453,11 @@ spec:
                       description: |-
                         image represents an OCI object (a container image or artifact) pulled and mounted on the kubelet's host machine.
                         The volume is resolved at pod startup depending on which PullPolicy value is provided:
-
+  
                         - Always: the kubelet always attempts to pull the reference. Container creation will fail If the pull fails.
                         - Never: the kubelet never pulls the reference and only uses a local image or artifact. Container creation will fail if the reference isn't present.
                         - IfNotPresent: the kubelet pulls if the reference isn't already present on disk. Container creation will fail if the reference isn't present and the pull fails.
-
+  
                         The volume gets re-resolved if the pod gets deleted and recreated, which means that new remote content will become available on pod recreation.
                         A failure to resolve or pull the image during pod startup will block containers from starting and may add significant latency. Failures will be retried using normal volume backoff and will be reported on the pod reason and message.
                         The types of objects that may be mounted by this volume are defined by the container runtime implementation on a host machine and at minimum must include all valid types supported by the container image field.
@@ -1685,12 +1681,12 @@ spec:
                                 description: |-
                                   ClusterTrustBundle allows a pod to access the `.spec.trustBundle` field
                                   of ClusterTrustBundle objects in an auto-updating file.
-
+  
                                   Alpha, gated by the ClusterTrustBundleProjection feature gate.
-
+  
                                   ClusterTrustBundle objects can either be selected by name, or by the
                                   combination of signer name and a label selector.
-
+  
                                   Kubelet performs aggressive normalization of the PEM contents written
                                   into the pod filesystem.  Esoteric PEM features such as inter-block
                                   comments and block headers are stripped.  Certificates are deduplicated.
@@ -1705,9 +1701,9 @@ spec:
                                       everything".
                                     properties:
                                       matchExpressions:
-                                        description: matchExpressions is a list of
-                                          label selector requirements. The requirements
-                                          are ANDed.
+                                        description: matchExpressions is a list of label
+                                          selector requirements. The requirements are
+                                          ANDed.
                                         items:
                                           description: |-
                                             A label selector requirement is a selector that contains values, a key, and an operator that
@@ -1841,18 +1837,18 @@ spec:
                                       file
                                     items:
                                       description: DownwardAPIVolumeFile represents
-                                        information to create the file containing
-                                        the pod field
+                                        information to create the file containing the
+                                        pod field
                                       properties:
                                         fieldRef:
-                                          description: 'Required: Selects a field
-                                            of the pod: only annotations, labels,
-                                            name, namespace and uid are supported.'
+                                          description: 'Required: Selects a field of
+                                            the pod: only annotations, labels, name,
+                                            namespace and uid are supported.'
                                           properties:
                                             apiVersion:
                                               description: Version of the schema the
-                                                FieldPath is written in terms of,
-                                                defaults to "v1".
+                                                FieldPath is written in terms of, defaults
+                                                to "v1".
                                               type: string
                                             fieldPath:
                                               description: Path of the field to select
@@ -1875,10 +1871,9 @@ spec:
                                         path:
                                           description: 'Required: Path is  the relative
                                             path name of the file to be created. Must
-                                            not be absolute or contain the ''..''
-                                            path. Must be utf-8 encoded. The first
-                                            item of the relative path must not start
-                                            with ''..'''
+                                            not be absolute or contain the ''..'' path.
+                                            Must be utf-8 encoded. The first item of
+                                            the relative path must not start with ''..'''
                                           type: string
                                         resourceFieldRef:
                                           description: |-
@@ -1894,13 +1889,12 @@ spec:
                                               - type: integer
                                               - type: string
                                               description: Specifies the output format
-                                                of the exposed resources, defaults
-                                                to "1"
+                                                of the exposed resources, defaults to
+                                                "1"
                                               pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
                                               x-kubernetes-int-or-string: true
                                             resource:
-                                              description: 'Required: resource to
-                                                select'
+                                              description: 'Required: resource to select'
                                               type: string
                                           required:
                                           - resource
@@ -2131,12 +2125,12 @@ spec:
                             Default is "xfs".
                           type: string
                         gateway:
-                          description: gateway is the host address of the ScaleIO
-                            API Gateway.
+                          description: gateway is the host address of the ScaleIO API
+                            Gateway.
                           type: string
                         protectionDomain:
-                          description: protectionDomain is the name of the ScaleIO
-                            Protection Domain for the configured storage.
+                          description: protectionDomain is the name of the ScaleIO Protection
+                            Domain for the configured storage.
                           type: string
                         readOnly:
                           description: |-
@@ -2174,8 +2168,8 @@ spec:
                             with the protection domain.
                           type: string
                         system:
-                          description: system is the name of the storage system as
-                            configured in ScaleIO.
+                          description: system is the name of the storage system as configured
+                            in ScaleIO.
                           type: string
                         volumeName:
                           description: |-
@@ -2311,8 +2305,8 @@ spec:
                             Ex. "ext4", "xfs", "ntfs". Implicitly inferred to be "ext4" if unspecified.
                           type: string
                         storagePolicyID:
-                          description: storagePolicyID is the storage Policy Based
-                            Management (SPBM) profile ID associated with the StoragePolicyName.
+                          description: storagePolicyID is the storage Policy Based Management
+                            (SPBM) profile ID associated with the StoragePolicyName.
                           type: string
                         storagePolicyName:
                           description: storagePolicyName is the storage Policy Based
@@ -2333,8 +2327,7 @@ spec:
                 description: Affinity is a group of affinity scheduling rules.
                 properties:
                   nodeAffinity:
-                    description: Describes node affinity scheduling rules for the
-                      pod.
+                    description: Describes node affinity scheduling rules for the pod.
                     properties:
                       preferredDuringSchedulingIgnoredDuringExecution:
                         description: |-
@@ -2446,8 +2439,8 @@ spec:
                           may or may not try to eventually evict the pod from its node.
                         properties:
                           nodeSelectorTerms:
-                            description: Required. A list of node selector terms.
-                              The terms are ORed.
+                            description: Required. A list of node selector terms. The
+                              terms are ORed.
                             items:
                               description: |-
                                 A null or empty node selector term matches no objects. The requirements of
@@ -2569,8 +2562,8 @@ spec:
                                           relates the key and values.
                                         properties:
                                           key:
-                                            description: key is the label key that
-                                              the selector applies to.
+                                            description: key is the label key that the
+                                              selector applies to.
                                             type: string
                                           operator:
                                             description: |-
@@ -2651,8 +2644,8 @@ spec:
                                           relates the key and values.
                                         properties:
                                           key:
-                                            description: key is the label key that
-                                              the selector applies to.
+                                            description: key is the label key that the
+                                              selector applies to.
                                             type: string
                                           operator:
                                             description: |-
@@ -2742,16 +2735,16 @@ spec:
                                 If it's null, this PodAffinityTerm matches with no Pods.
                               properties:
                                 matchExpressions:
-                                  description: matchExpressions is a list of label
-                                    selector requirements. The requirements are ANDed.
+                                  description: matchExpressions is a list of label selector
+                                    requirements. The requirements are ANDed.
                                   items:
                                     description: |-
                                       A label selector requirement is a selector that contains values, a key, and an operator that
                                       relates the key and values.
                                     properties:
                                       key:
-                                        description: key is the label key that the
-                                          selector applies to.
+                                        description: key is the label key that the selector
+                                          applies to.
                                         type: string
                                       operator:
                                         description: |-
@@ -2823,16 +2816,16 @@ spec:
                                 An empty selector ({}) matches all namespaces.
                               properties:
                                 matchExpressions:
-                                  description: matchExpressions is a list of label
-                                    selector requirements. The requirements are ANDed.
+                                  description: matchExpressions is a list of label selector
+                                    requirements. The requirements are ANDed.
                                   items:
                                     description: |-
                                       A label selector requirement is a selector that contains values, a key, and an operator that
                                       relates the key and values.
                                     properties:
                                       key:
-                                        description: key is the label key that the
-                                          selector applies to.
+                                        description: key is the label key that the selector
+                                          applies to.
                                         type: string
                                       operator:
                                         description: |-
@@ -2891,8 +2884,8 @@ spec:
                     type: object
                   podAntiAffinity:
                     description: Describes pod anti-affinity scheduling rules (e.g.
-                      avoid putting this pod in the same node, zone, etc. as some
-                      other pod(s)).
+                      avoid putting this pod in the same node, zone, etc. as some other
+                      pod(s)).
                     properties:
                       preferredDuringSchedulingIgnoredDuringExecution:
                         description: |-
@@ -2928,8 +2921,8 @@ spec:
                                           relates the key and values.
                                         properties:
                                           key:
-                                            description: key is the label key that
-                                              the selector applies to.
+                                            description: key is the label key that the
+                                              selector applies to.
                                             type: string
                                           operator:
                                             description: |-
@@ -3010,8 +3003,8 @@ spec:
                                           relates the key and values.
                                         properties:
                                           key:
-                                            description: key is the label key that
-                                              the selector applies to.
+                                            description: key is the label key that the
+                                              selector applies to.
                                             type: string
                                           operator:
                                             description: |-
@@ -3101,16 +3094,16 @@ spec:
                                 If it's null, this PodAffinityTerm matches with no Pods.
                               properties:
                                 matchExpressions:
-                                  description: matchExpressions is a list of label
-                                    selector requirements. The requirements are ANDed.
+                                  description: matchExpressions is a list of label selector
+                                    requirements. The requirements are ANDed.
                                   items:
                                     description: |-
                                       A label selector requirement is a selector that contains values, a key, and an operator that
                                       relates the key and values.
                                     properties:
                                       key:
-                                        description: key is the label key that the
-                                          selector applies to.
+                                        description: key is the label key that the selector
+                                          applies to.
                                         type: string
                                       operator:
                                         description: |-
@@ -3182,16 +3175,16 @@ spec:
                                 An empty selector ({}) matches all namespaces.
                               properties:
                                 matchExpressions:
-                                  description: matchExpressions is a list of label
-                                    selector requirements. The requirements are ANDed.
+                                  description: matchExpressions is a list of label selector
+                                    requirements. The requirements are ANDed.
                                   items:
                                     description: |-
                                       A label selector requirement is a selector that contains values, a key, and an operator that
                                       relates the key and values.
                                     properties:
                                       key:
-                                        description: key is the label key that the
-                                          selector applies to.
+                                        description: key is the label key that the selector
+                                          applies to.
                                         type: string
                                       operator:
                                         description: |-
@@ -3271,8 +3264,8 @@ spec:
                     description: Affinity is a group of affinity scheduling rules.
                     properties:
                       nodeAffinity:
-                        description: Describes node affinity scheduling rules for
-                          the pod.
+                        description: Describes node affinity scheduling rules for the
+                          pod.
                         properties:
                           preferredDuringSchedulingIgnoredDuringExecution:
                             description: |-
@@ -3365,8 +3358,8 @@ spec:
                                   type: object
                                   x-kubernetes-map-type: atomic
                                 weight:
-                                  description: Weight associated with matching the
-                                    corresponding nodeSelectorTerm, in the range 1-100.
+                                  description: Weight associated with matching the corresponding
+                                    nodeSelectorTerm, in the range 1-100.
                                   format: int32
                                   type: integer
                               required:
@@ -3470,9 +3463,8 @@ spec:
                             x-kubernetes-map-type: atomic
                         type: object
                       podAffinity:
-                        description: Describes pod affinity scheduling rules (e.g.
-                          co-locate this pod in the same node, zone, etc. as some
-                          other pod(s)).
+                        description: Describes pod affinity scheduling rules (e.g. co-locate
+                          this pod in the same node, zone, etc. as some other pod(s)).
                         properties:
                           preferredDuringSchedulingIgnoredDuringExecution:
                             description: |-
@@ -3500,8 +3492,8 @@ spec:
                                         If it's null, this PodAffinityTerm matches with no Pods.
                                       properties:
                                         matchExpressions:
-                                          description: matchExpressions is a list
-                                            of label selector requirements. The requirements
+                                          description: matchExpressions is a list of
+                                            label selector requirements. The requirements
                                             are ANDed.
                                           items:
                                             description: |-
@@ -3509,8 +3501,8 @@ spec:
                                               relates the key and values.
                                             properties:
                                               key:
-                                                description: key is the label key
-                                                  that the selector applies to.
+                                                description: key is the label key that
+                                                  the selector applies to.
                                                 type: string
                                               operator:
                                                 description: |-
@@ -3582,8 +3574,8 @@ spec:
                                         An empty selector ({}) matches all namespaces.
                                       properties:
                                         matchExpressions:
-                                          description: matchExpressions is a list
-                                            of label selector requirements. The requirements
+                                          description: matchExpressions is a list of
+                                            label selector requirements. The requirements
                                             are ANDed.
                                           items:
                                             description: |-
@@ -3591,8 +3583,8 @@ spec:
                                               relates the key and values.
                                             properties:
                                               key:
-                                                description: key is the label key
-                                                  that the selector applies to.
+                                                description: key is the label key that
+                                                  the selector applies to.
                                                 type: string
                                               operator:
                                                 description: |-
@@ -3691,8 +3683,8 @@ spec:
                                           relates the key and values.
                                         properties:
                                           key:
-                                            description: key is the label key that
-                                              the selector applies to.
+                                            description: key is the label key that the
+                                              selector applies to.
                                             type: string
                                           operator:
                                             description: |-
@@ -3773,8 +3765,8 @@ spec:
                                           relates the key and values.
                                         properties:
                                           key:
-                                            description: key is the label key that
-                                              the selector applies to.
+                                            description: key is the label key that the
+                                              selector applies to.
                                             type: string
                                           operator:
                                             description: |-
@@ -3832,9 +3824,9 @@ spec:
                             x-kubernetes-list-type: atomic
                         type: object
                       podAntiAffinity:
-                        description: Describes pod anti-affinity scheduling rules
-                          (e.g. avoid putting this pod in the same node, zone, etc.
-                          as some other pod(s)).
+                        description: Describes pod anti-affinity scheduling rules (e.g.
+                          avoid putting this pod in the same node, zone, etc. as some
+                          other pod(s)).
                         properties:
                           preferredDuringSchedulingIgnoredDuringExecution:
                             description: |-
@@ -3862,8 +3854,8 @@ spec:
                                         If it's null, this PodAffinityTerm matches with no Pods.
                                       properties:
                                         matchExpressions:
-                                          description: matchExpressions is a list
-                                            of label selector requirements. The requirements
+                                          description: matchExpressions is a list of
+                                            label selector requirements. The requirements
                                             are ANDed.
                                           items:
                                             description: |-
@@ -3871,8 +3863,8 @@ spec:
                                               relates the key and values.
                                             properties:
                                               key:
-                                                description: key is the label key
-                                                  that the selector applies to.
+                                                description: key is the label key that
+                                                  the selector applies to.
                                                 type: string
                                               operator:
                                                 description: |-
@@ -3944,8 +3936,8 @@ spec:
                                         An empty selector ({}) matches all namespaces.
                                       properties:
                                         matchExpressions:
-                                          description: matchExpressions is a list
-                                            of label selector requirements. The requirements
+                                          description: matchExpressions is a list of
+                                            label selector requirements. The requirements
                                             are ANDed.
                                           items:
                                             description: |-
@@ -3953,8 +3945,8 @@ spec:
                                               relates the key and values.
                                             properties:
                                               key:
-                                                description: key is the label key
-                                                  that the selector applies to.
+                                                description: key is the label key that
+                                                  the selector applies to.
                                                 type: string
                                               operator:
                                                 description: |-
@@ -4053,8 +4045,8 @@ spec:
                                           relates the key and values.
                                         properties:
                                           key:
-                                            description: key is the label key that
-                                              the selector applies to.
+                                            description: key is the label key that the
+                                              selector applies to.
                                             type: string
                                           operator:
                                             description: |-
@@ -4135,8 +4127,8 @@ spec:
                                           relates the key and values.
                                         properties:
                                           key:
-                                            description: key is the label key that
-                                              the selector applies to.
+                                            description: key is the label key that the
+                                              selector applies to.
                                             type: string
                                           operator:
                                             description: |-
@@ -4256,25 +4248,24 @@ spec:
                                 the Spec of the parent Ingress.\n2. The `:` delimiter
                                 is not respected because ports are not allowed.\n\t
                                 \ Currently the port of an Ingress is implicitly :80
-                                for http and\n\t  :443 for https.\nBoth these may
-                                change in the future.\nIncoming requests are matched
-                                against the host before the\nIngressRuleValue. If
-                                the host is unspecified, the Ingress routes all\ntraffic
-                                based on the specified IngressRuleValue.\n\nhost can
-                                be \"precise\" which is a domain name without the
-                                terminating dot of\na network host (e.g. \"foo.bar.com\")
-                                or \"wildcard\", which is a domain name\nprefixed
-                                with a single wildcard label (e.g. \"*.foo.com\").\nThe
-                                wildcard character '*' must appear by itself as the
-                                first DNS label and\nmatches only a single label.
-                                You cannot have a wildcard label by itself (e.g. Host
-                                == \"*\").\nRequests will be matched against the Host
-                                field in the following way:\n1. If host is precise,
-                                the request matches this rule if the http host header
-                                is equal to Host.\n2. If host is a wildcard, then
-                                the request matches this rule if the http host header\nis
-                                to equal to the suffix (removing the first label)
-                                of the wildcard rule."
+                                for http and\n\t  :443 for https.\nBoth these may change
+                                in the future.\nIncoming requests are matched against
+                                the host before the\nIngressRuleValue. If the host is
+                                unspecified, the Ingress routes all\ntraffic based on
+                                the specified IngressRuleValue.\n\nhost can be \"precise\"
+                                which is a domain name without the terminating dot of\na
+                                network host (e.g. \"foo.bar.com\") or \"wildcard\",
+                                which is a domain name\nprefixed with a single wildcard
+                                label (e.g. \"*.foo.com\").\nThe wildcard character
+                                '*' must appear by itself as the first DNS label and\nmatches
+                                only a single label. You cannot have a wildcard label
+                                by itself (e.g. Host == \"*\").\nRequests will be matched
+                                against the Host field in the following way:\n1. If
+                                host is precise, the request matches this rule if the
+                                http host header is equal to Host.\n2. If host is a
+                                wildcard, then the request matches this rule if the
+                                http host header\nis to equal to the suffix (removing
+                                the first label) of the wildcard rule."
                               type: string
                             http:
                               description: |-
@@ -4285,8 +4276,8 @@ spec:
                                 or '#'.
                               properties:
                                 paths:
-                                  description: paths is a collection of paths that
-                                    map requests to backends.
+                                  description: paths is a collection of paths that map
+                                    requests to backends.
                                   items:
                                     description: |-
                                       HTTPIngressPath associates a path with a backend. Incoming urls matching the
@@ -4450,10 +4441,10 @@ spec:
                         description: |-
                           Claims lists the names of resources, defined in spec.resourceClaims,
                           that are used by this container.
-
+  
                           This is an alpha field and requires enabling the
                           DynamicResourceAllocation feature gate.
-
+  
                           This field is immutable. It can only be set for containers.
                         items:
                           description: ResourceClaim references one entry in PodSpec.ResourceClaims.
@@ -4503,8 +4494,8 @@ spec:
                         type: object
                     type: object
                   service:
-                    description: Service Type string describes ingress methods for
-                      a service
+                    description: Service Type string describes ingress methods for a
+                      service
                     type: string
                   stats:
                     default:
@@ -4683,10 +4674,10 @@ spec:
                         description: |-
                           Claims lists the names of resources, defined in spec.resourceClaims,
                           that are used by this container.
-
+  
                           This is an alpha field and requires enabling the
                           DynamicResourceAllocation feature gate.
-
+  
                           This field is immutable. It can only be set for containers.
                         items:
                           description: ResourceClaim references one entry in PodSpec.ResourceClaims.
@@ -4741,8 +4732,8 @@ spec:
                   properties:
                     additionalVolumeClaimTemplates:
                       items:
-                        description: PersistentVolumeClaim is a user's request for
-                          and claim to a persistent volume
+                        description: PersistentVolumeClaim is a user's request for and
+                          claim to a persistent volume
                         properties:
                           apiVersion:
                             description: |-
@@ -4913,8 +4904,7 @@ spec:
                                 properties:
                                   matchExpressions:
                                     description: matchExpressions is a list of label
-                                      selector requirements. The requirements are
-                                      ANDed.
+                                      selector requirements. The requirements are ANDed.
                                     items:
                                       description: |-
                                         A label selector requirement is a selector that contains values, a key, and an operator that
@@ -5009,21 +4999,21 @@ spec:
                                 description: "allocatedResourceStatuses stores status
                                   of resource being resized for the given PVC.\nKey
                                   names follow standard Kubernetes label syntax. Valid
-                                  values are either:\n\t* Un-prefixed keys:\n\t\t-
-                                  storage - the capacity of the volume.\n\t* Custom
-                                  resources must use implementation-defined prefixed
-                                  names such as \"example.com/my-custom-resource\"\nApart
-                                  from above values - keys that are unprefixed or
-                                  have kubernetes.io prefix are considered\nreserved
-                                  and hence may not be used.\n\nClaimResourceStatus
-                                  can be in any of following states:\n\t- ControllerResizeInProgress:\n\t\tState
+                                  values are either:\n\t* Un-prefixed keys:\n\t\t- storage
+                                  - the capacity of the volume.\n\t* Custom resources
+                                  must use implementation-defined prefixed names such
+                                  as \"example.com/my-custom-resource\"\nApart from
+                                  above values - keys that are unprefixed or have kubernetes.io
+                                  prefix are considered\nreserved and hence may not
+                                  be used.\n\nClaimResourceStatus can be in any of following
+                                  states:\n\t- ControllerResizeInProgress:\n\t\tState
                                   set when resize controller starts resizing the volume
                                   in control-plane.\n\t- ControllerResizeFailed:\n\t\tState
-                                  set when resize has failed in resize controller
-                                  with a terminal error.\n\t- NodeResizePending:\n\t\tState
-                                  set when resize controller has finished resizing
-                                  the volume but further resizing of\n\t\tvolume is
-                                  needed on the node.\n\t- NodeResizeInProgress:\n\t\tState
+                                  set when resize has failed in resize controller with
+                                  a terminal error.\n\t- NodeResizePending:\n\t\tState
+                                  set when resize controller has finished resizing the
+                                  volume but further resizing of\n\t\tvolume is needed
+                                  on the node.\n\t- NodeResizeInProgress:\n\t\tState
                                   set when kubelet starts resizing the volume.\n\t-
                                   NodeResizeFailed:\n\t\tState set when resizing has
                                   failed in kubelet with a terminal error. Transient
@@ -5035,15 +5025,14 @@ spec:
                                   = \"NodeResizePending\"\n     - pvc.status.allocatedResourceStatus['storage']
                                   = \"NodeResizeInProgress\"\n     - pvc.status.allocatedResourceStatus['storage']
                                   = \"NodeResizeFailed\"\nWhen this field is not set,
-                                  it means that no resize operation is in progress
-                                  for the given PVC.\n\nA controller that receives
-                                  PVC update with previously unknown resourceName
-                                  or ClaimResourceStatus\nshould ignore the update
-                                  for the purpose it was designed. For example - a
-                                  controller that\nonly is responsible for resizing
-                                  capacity of the volume, should ignore PVC updates
-                                  that change other valid\nresources associated with
-                                  PVC.\n\nThis is an alpha field and requires enabling
+                                  it means that no resize operation is in progress for
+                                  the given PVC.\n\nA controller that receives PVC update
+                                  with previously unknown resourceName or ClaimResourceStatus\nshould
+                                  ignore the update for the purpose it was designed.
+                                  For example - a controller that\nonly is responsible
+                                  for resizing capacity of the volume, should ignore
+                                  PVC updates that change other valid\nresources associated
+                                  with PVC.\n\nThis is an alpha field and requires enabling
                                   RecoverVolumeExpansionFailure feature."
                                 type: object
                                 x-kubernetes-map-type: granular
@@ -5055,32 +5044,31 @@ spec:
                                   pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
                                   x-kubernetes-int-or-string: true
                                 description: "allocatedResources tracks the resources
-                                  allocated to a PVC including its capacity.\nKey
-                                  names follow standard Kubernetes label syntax. Valid
-                                  values are either:\n\t* Un-prefixed keys:\n\t\t-
-                                  storage - the capacity of the volume.\n\t* Custom
-                                  resources must use implementation-defined prefixed
-                                  names such as \"example.com/my-custom-resource\"\nApart
-                                  from above values - keys that are unprefixed or
-                                  have kubernetes.io prefix are considered\nreserved
-                                  and hence may not be used.\n\nCapacity reported
-                                  here may be larger than the actual capacity when
-                                  a volume expansion operation\nis requested.\nFor
-                                  storage quota, the larger value from allocatedResources
-                                  and PVC.spec.resources is used.\nIf allocatedResources
-                                  is not set, PVC.spec.resources alone is used for
-                                  quota calculation.\nIf a volume expansion capacity
-                                  request is lowered, allocatedResources is only\nlowered
-                                  if there are no expansion operations in progress
-                                  and if the actual volume capacity\nis equal or lower
-                                  than the requested capacity.\n\nA controller that
-                                  receives PVC update with previously unknown resourceName\nshould
+                                  allocated to a PVC including its capacity.\nKey names
+                                  follow standard Kubernetes label syntax. Valid values
+                                  are either:\n\t* Un-prefixed keys:\n\t\t- storage
+                                  - the capacity of the volume.\n\t* Custom resources
+                                  must use implementation-defined prefixed names such
+                                  as \"example.com/my-custom-resource\"\nApart from
+                                  above values - keys that are unprefixed or have kubernetes.io
+                                  prefix are considered\nreserved and hence may not
+                                  be used.\n\nCapacity reported here may be larger than
+                                  the actual capacity when a volume expansion operation\nis
+                                  requested.\nFor storage quota, the larger value from
+                                  allocatedResources and PVC.spec.resources is used.\nIf
+                                  allocatedResources is not set, PVC.spec.resources
+                                  alone is used for quota calculation.\nIf a volume
+                                  expansion capacity request is lowered, allocatedResources
+                                  is only\nlowered if there are no expansion operations
+                                  in progress and if the actual volume capacity\nis
+                                  equal or lower than the requested capacity.\n\nA controller
+                                  that receives PVC update with previously unknown resourceName\nshould
                                   ignore the update for the purpose it was designed.
                                   For example - a controller that\nonly is responsible
                                   for resizing capacity of the volume, should ignore
                                   PVC updates that change other valid\nresources associated
-                                  with PVC.\n\nThis is an alpha field and requires
-                                  enabling RecoverVolumeExpansionFailure feature."
+                                  with PVC.\n\nThis is an alpha field and requires enabling
+                                  RecoverVolumeExpansionFailure feature."
                                 type: object
                               capacity:
                                 additionalProperties:
@@ -5106,9 +5094,8 @@ spec:
                                       format: date-time
                                       type: string
                                     lastTransitionTime:
-                                      description: lastTransitionTime is the time
-                                        the condition transitioned from one status
-                                        to another.
+                                      description: lastTransitionTime is the time the
+                                        condition transitioned from one status to another.
                                       format: date-time
                                       type: string
                                     message:
@@ -5158,14 +5145,14 @@ spec:
                                       - Pending\n   Pending indicates that the PersistentVolumeClaim
                                       cannot be modified due to unmet requirements,
                                       such as\n   the specified VolumeAttributesClass
-                                      not existing.\n - InProgress\n   InProgress
-                                      indicates that the volume is being modified.\n
-                                      - Infeasible\n  Infeasible indicates that the
-                                      request has been rejected as invalid by the
-                                      CSI driver. To\n\t  resolve the error, a valid
-                                      VolumeAttributesClass needs to be specified.\nNote:
-                                      New statuses can be added in the future. Consumers
-                                      should check for unknown statuses and fail appropriately."
+                                      not existing.\n - InProgress\n   InProgress indicates
+                                      that the volume is being modified.\n - Infeasible\n
+                                      \ Infeasible indicates that the request has been
+                                      rejected as invalid by the CSI driver. To\n\t
+                                      \ resolve the error, a valid VolumeAttributesClass
+                                      needs to be specified.\nNote: New statuses can
+                                      be added in the future. Consumers should check
+                                      for unknown statuses and fail appropriately."
                                     type: string
                                   targetVolumeAttributesClassName:
                                     description: targetVolumeAttributesClassName is
@@ -5176,16 +5163,15 @@ spec:
                                 - status
                                 type: object
                               phase:
-                                description: phase represents the current phase of
-                                  PersistentVolumeClaim.
+                                description: phase represents the current phase of PersistentVolumeClaim.
                                 type: string
                             type: object
                         type: object
                       type: array
                     additionalVolumeMounts:
                       items:
-                        description: VolumeMount describes a mounting of a Volume
-                          within a container.
+                        description: VolumeMount describes a mounting of a Volume within
+                          a container.
                         properties:
                           mountPath:
                             description: |-
@@ -5213,19 +5199,19 @@ spec:
                             description: |-
                               RecursiveReadOnly specifies whether read-only mounts should be handled
                               recursively.
-
+  
                               If ReadOnly is false, this field has no meaning and must be unspecified.
-
+  
                               If ReadOnly is true, and this field is set to Disabled, the mount is not made
                               recursively read-only.  If this field is set to IfPossible, the mount is made
                               recursively read-only, if it is supported by the container runtime.  If this
                               field is set to Enabled, the mount is made recursively read-only if it is
                               supported by the container runtime, otherwise the pod will not be started and
                               an error will be generated to indicate the reason.
-
+  
                               If this field is set to IfPossible or Enabled, MountPropagation must be set to
                               None (or be unspecified, which defaults to None).
-
+  
                               If this field is not specified, it is treated as an equivalent of Disabled.
                             type: string
                           subPath:
@@ -5297,8 +5283,8 @@ spec:
                                   None, Read Only, Read Write.'
                                 type: string
                               diskName:
-                                description: diskName is the Name of the data disk
-                                  in the blob storage
+                                description: diskName is the Name of the data disk in
+                                  the blob storage
                                 type: string
                               diskURI:
                                 description: diskURI is the URI of data disk in the
@@ -5365,8 +5351,7 @@ spec:
                                 x-kubernetes-list-type: atomic
                               path:
                                 description: 'path is Optional: Used as the mounted
-                                  root, rather than the full Ceph tree, default is
-                                  /'
+                                  root, rather than the full Ceph tree, default is /'
                                 type: string
                               readOnly:
                                 description: |-
@@ -5472,8 +5457,8 @@ spec:
                                   the volume setup will error unless it is marked optional. Paths must be
                                   relative and may not contain the '..' path or start with '..'.
                                 items:
-                                  description: Maps a string key to a path within
-                                    a volume.
+                                  description: Maps a string key to a path within a
+                                    volume.
                                   properties:
                                     key:
                                       description: key is the key to project.
@@ -5567,8 +5552,8 @@ spec:
                             - driver
                             type: object
                           downwardAPI:
-                            description: downwardAPI represents downward API about
-                              the pod that should populate this volume
+                            description: downwardAPI represents downward API about the
+                              pod that should populate this volume
                             properties:
                               defaultMode:
                                 description: |-
@@ -5599,8 +5584,8 @@ spec:
                                             is written in terms of, defaults to "v1".
                                           type: string
                                         fieldPath:
-                                          description: Path of the field to select
-                                            in the specified API version.
+                                          description: Path of the field to select in
+                                            the specified API version.
                                           type: string
                                       required:
                                       - fieldPath
@@ -5618,10 +5603,10 @@ spec:
                                       type: integer
                                     path:
                                       description: 'Required: Path is  the relative
-                                        path name of the file to be created. Must
-                                        not be absolute or contain the ''..'' path.
-                                        Must be utf-8 encoded. The first item of the
-                                        relative path must not start with ''..'''
+                                        path name of the file to be created. Must not
+                                        be absolute or contain the ''..'' path. Must
+                                        be utf-8 encoded. The first item of the relative
+                                        path must not start with ''..'''
                                       type: string
                                     resourceFieldRef:
                                       description: |-
@@ -5636,9 +5621,8 @@ spec:
                                           anyOf:
                                           - type: integer
                                           - type: string
-                                          description: Specifies the output format
-                                            of the exposed resources, defaults to
-                                            "1"
+                                          description: Specifies the output format of
+                                            the exposed resources, defaults to "1"
                                           pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
                                           x-kubernetes-int-or-string: true
                                         resource:
@@ -5685,7 +5669,7 @@ spec:
                               ephemeral represents a volume that is handled by a cluster storage driver.
                               The volume's lifecycle is tied to the pod that defines it - it will be created before the pod starts,
                               and deleted when the pod is removed.
-
+  
                               Use this if:
                               a) the volume is only needed while the pod runs,
                               b) features of normal volumes like restoring from snapshot or capacity
@@ -5695,15 +5679,15 @@ spec:
                                  a PersistentVolumeClaim (see EphemeralVolumeSource for more
                                  information on the connection between this volume type
                                  and PersistentVolumeClaim).
-
+  
                               Use PersistentVolumeClaim or one of the vendor-specific
                               APIs for volumes that persist for longer than the lifecycle
                               of an individual pod.
-
+  
                               Use CSI for light-weight local ephemeral volumes if the CSI driver is meant to
                               be used that way - see the documentation of the driver for
                               more information.
-
+  
                               A pod can use both types of ephemeral volumes and
                               persistent volumes at the same time.
                             properties:
@@ -5716,7 +5700,7 @@ spec:
                                   `<volume name>` is the name from the `PodSpec.Volumes` array
                                   entry. Pod validation will reject the pod if the concatenated name
                                   is not valid for a PVC (for example, too long).
-
+  
                                   An existing PVC with that name that is not owned by the pod
                                   will *not* be used for the pod to avoid using an unrelated
                                   volume by mistake. Starting the pod is then blocked until
@@ -5725,10 +5709,10 @@ spec:
                                   owner reference to the pod once the pod exists. Normally
                                   this should not be necessary, but it may be useful when
                                   manually reconstructing a broken cluster.
-
+  
                                   This field is read-only and no changes will be made by Kubernetes
                                   to the PVC after it has been created.
-
+  
                                   Required, must not be nil.
                                 properties:
                                   metadata:
@@ -5888,8 +5872,8 @@ spec:
                                         properties:
                                           matchExpressions:
                                             description: matchExpressions is a list
-                                              of label selector requirements. The
-                                              requirements are ANDed.
+                                              of label selector requirements. The requirements
+                                              are ANDed.
                                             items:
                                               description: |-
                                                 A label selector requirement is a selector that contains values, a key, and an operator that
@@ -6179,11 +6163,11 @@ spec:
                             description: |-
                               image represents an OCI object (a container image or artifact) pulled and mounted on the kubelet's host machine.
                               The volume is resolved at pod startup depending on which PullPolicy value is provided:
-
+  
                               - Always: the kubelet always attempts to pull the reference. Container creation will fail If the pull fails.
                               - Never: the kubelet never pulls the reference and only uses a local image or artifact. Container creation will fail if the reference isn't present.
                               - IfNotPresent: the kubelet pulls if the reference isn't already present on disk. Container creation will fail if the reference isn't present and the pull fails.
-
+  
                               The volume gets re-resolved if the pod gets deleted and recreated, which means that new remote content will become available on pod recreation.
                               A failure to resolve or pull the image during pod startup will block containers from starting and may add significant latency. Failures will be retried using normal volume backoff and will be reported on the pod reason and message.
                               The types of objects that may be mounted by this volume are defined by the container runtime implementation on a host machine and at minimum must include all valid types supported by the container image field.
@@ -6350,8 +6334,8 @@ spec:
                                   Ex. "ext4", "xfs", "ntfs". Implicitly inferred to be "ext4" if unspecified.
                                 type: string
                               pdID:
-                                description: pdID is the ID that identifies Photon
-                                  Controller persistent disk
+                                description: pdID is the ID that identifies Photon Controller
+                                  persistent disk
                                 type: string
                             required:
                             - pdID
@@ -6382,8 +6366,8 @@ spec:
                             - volumeID
                             type: object
                           projected:
-                            description: projected items for all in one resources
-                              secrets, configmaps, and downward API
+                            description: projected items for all in one resources secrets,
+                              configmaps, and downward API
                             properties:
                               defaultMode:
                                 description: |-
@@ -6408,12 +6392,12 @@ spec:
                                       description: |-
                                         ClusterTrustBundle allows a pod to access the `.spec.trustBundle` field
                                         of ClusterTrustBundle objects in an auto-updating file.
-
+  
                                         Alpha, gated by the ClusterTrustBundleProjection feature gate.
-
+  
                                         ClusterTrustBundle objects can either be selected by name, or by the
                                         combination of signer name and a label selector.
-
+  
                                         Kubelet performs aggressive normalization of the PEM contents written
                                         into the pod filesystem.  Esoteric PEM features such as inter-block
                                         comments and block headers are stripped.  Certificates are deduplicated.
@@ -6437,9 +6421,8 @@ spec:
                                                   relates the key and values.
                                                 properties:
                                                   key:
-                                                    description: key is the label
-                                                      key that the selector applies
-                                                      to.
+                                                    description: key is the label key
+                                                      that the selector applies to.
                                                     type: string
                                                   operator:
                                                     description: |-
@@ -6499,8 +6482,8 @@ spec:
                                       - path
                                       type: object
                                     configMap:
-                                      description: configMap information about the
-                                        configMap data to project
+                                      description: configMap information about the configMap
+                                        data to project
                                       properties:
                                         items:
                                           description: |-
@@ -6569,20 +6552,18 @@ spec:
                                               the pod field
                                             properties:
                                               fieldRef:
-                                                description: 'Required: Selects a
-                                                  field of the pod: only annotations,
-                                                  labels, name, namespace and uid
-                                                  are supported.'
+                                                description: 'Required: Selects a field
+                                                  of the pod: only annotations, labels,
+                                                  name, namespace and uid are supported.'
                                                 properties:
                                                   apiVersion:
                                                     description: Version of the schema
-                                                      the FieldPath is written in
-                                                      terms of, defaults to "v1".
+                                                      the FieldPath is written in terms
+                                                      of, defaults to "v1".
                                                     type: string
                                                   fieldPath:
-                                                    description: Path of the field
-                                                      to select in the specified API
-                                                      version.
+                                                    description: Path of the field to
+                                                      select in the specified API version.
                                                     type: string
                                                 required:
                                                 - fieldPath
@@ -6601,11 +6582,10 @@ spec:
                                               path:
                                                 description: 'Required: Path is  the
                                                   relative path name of the file to
-                                                  be created. Must not be absolute
-                                                  or contain the ''..'' path. Must
-                                                  be utf-8 encoded. The first item
-                                                  of the relative path must not start
-                                                  with ''..'''
+                                                  be created. Must not be absolute or
+                                                  contain the ''..'' path. Must be utf-8
+                                                  encoded. The first item of the relative
+                                                  path must not start with ''..'''
                                                 type: string
                                               resourceFieldRef:
                                                 description: |-
@@ -6613,9 +6593,9 @@ spec:
                                                   (limits.cpu, limits.memory, requests.cpu and requests.memory) are currently supported.
                                                 properties:
                                                   containerName:
-                                                    description: 'Container name:
-                                                      required for volumes, optional
-                                                      for env vars'
+                                                    description: 'Container name: required
+                                                      for volumes, optional for env
+                                                      vars'
                                                     type: string
                                                   divisor:
                                                     anyOf:
@@ -6763,8 +6743,8 @@ spec:
                                   Defaults to serivceaccount user
                                 type: string
                               volume:
-                                description: volume is a string that references an
-                                  already created Quobyte volume by name.
+                                description: volume is a string that references an already
+                                  created Quobyte volume by name.
                                 type: string
                             required:
                             - registry
@@ -6941,8 +6921,8 @@ spec:
                                   the volume setup will error unless it is marked optional. Paths must be
                                   relative and may not contain the '..' path or start with '..'.
                                 items:
-                                  description: Maps a string key to a path within
-                                    a volume.
+                                  description: Maps a string key to a path within a
+                                    volume.
                                   properties:
                                     key:
                                       description: key is the key to project.
@@ -7040,9 +7020,8 @@ spec:
                                   Ex. "ext4", "xfs", "ntfs". Implicitly inferred to be "ext4" if unspecified.
                                 type: string
                               storagePolicyID:
-                                description: storagePolicyID is the storage Policy
-                                  Based Management (SPBM) profile ID associated with
-                                  the StoragePolicyName.
+                                description: storagePolicyID is the storage Policy Based
+                                  Management (SPBM) profile ID associated with the StoragePolicyName.
                                 type: string
                               storagePolicyName:
                                 description: storagePolicyName is the storage Policy
@@ -7083,8 +7062,8 @@ spec:
                                   (i.e. it's a no-op). A null preferred scheduling term matches no objects (i.e. is also a no-op).
                                 properties:
                                   preference:
-                                    description: A node selector term, associated
-                                      with the corresponding weight.
+                                    description: A node selector term, associated with
+                                      the corresponding weight.
                                     properties:
                                       matchExpressions:
                                         description: A list of node selector requirements
@@ -7095,8 +7074,8 @@ spec:
                                             that relates the key and values.
                                           properties:
                                             key:
-                                              description: The label key that the
-                                                selector applies to.
+                                              description: The label key that the selector
+                                                applies to.
                                               type: string
                                             operator:
                                               description: |-
@@ -7129,8 +7108,8 @@ spec:
                                             that relates the key and values.
                                           properties:
                                             key:
-                                              description: The label key that the
-                                                selector applies to.
+                                              description: The label key that the selector
+                                                applies to.
                                               type: string
                                             operator:
                                               description: |-
@@ -7158,8 +7137,7 @@ spec:
                                     x-kubernetes-map-type: atomic
                                   weight:
                                     description: Weight associated with matching the
-                                      corresponding nodeSelectorTerm, in the range
-                                      1-100.
+                                      corresponding nodeSelectorTerm, in the range 1-100.
                                     format: int32
                                     type: integer
                                 required:
@@ -7194,8 +7172,8 @@ spec:
                                             that relates the key and values.
                                           properties:
                                             key:
-                                              description: The label key that the
-                                                selector applies to.
+                                              description: The label key that the selector
+                                                applies to.
                                               type: string
                                             operator:
                                               description: |-
@@ -7228,8 +7206,8 @@ spec:
                                             that relates the key and values.
                                           properties:
                                             key:
-                                              description: The label key that the
-                                                selector applies to.
+                                              description: The label key that the selector
+                                                applies to.
                                               type: string
                                             operator:
                                               description: |-
@@ -7294,8 +7272,8 @@ spec:
                                         properties:
                                           matchExpressions:
                                             description: matchExpressions is a list
-                                              of label selector requirements. The
-                                              requirements are ANDed.
+                                              of label selector requirements. The requirements
+                                              are ANDed.
                                             items:
                                               description: |-
                                                 A label selector requirement is a selector that contains values, a key, and an operator that
@@ -7376,8 +7354,8 @@ spec:
                                         properties:
                                           matchExpressions:
                                             description: matchExpressions is a list
-                                              of label selector requirements. The
-                                              requirements are ANDed.
+                                              of label selector requirements. The requirements
+                                              are ANDed.
                                             items:
                                               description: |-
                                                 A label selector requirement is a selector that contains values, a key, and an operator that
@@ -7475,9 +7453,9 @@ spec:
                                       If it's null, this PodAffinityTerm matches with no Pods.
                                     properties:
                                       matchExpressions:
-                                        description: matchExpressions is a list of
-                                          label selector requirements. The requirements
-                                          are ANDed.
+                                        description: matchExpressions is a list of label
+                                          selector requirements. The requirements are
+                                          ANDed.
                                         items:
                                           description: |-
                                             A label selector requirement is a selector that contains values, a key, and an operator that
@@ -7557,9 +7535,9 @@ spec:
                                       An empty selector ({}) matches all namespaces.
                                     properties:
                                       matchExpressions:
-                                        description: matchExpressions is a list of
-                                          label selector requirements. The requirements
-                                          are ANDed.
+                                        description: matchExpressions is a list of label
+                                          selector requirements. The requirements are
+                                          ANDed.
                                         items:
                                           description: |-
                                             A label selector requirement is a selector that contains values, a key, and an operator that
@@ -7656,8 +7634,8 @@ spec:
                                         properties:
                                           matchExpressions:
                                             description: matchExpressions is a list
-                                              of label selector requirements. The
-                                              requirements are ANDed.
+                                              of label selector requirements. The requirements
+                                              are ANDed.
                                             items:
                                               description: |-
                                                 A label selector requirement is a selector that contains values, a key, and an operator that
@@ -7738,8 +7716,8 @@ spec:
                                         properties:
                                           matchExpressions:
                                             description: matchExpressions is a list
-                                              of label selector requirements. The
-                                              requirements are ANDed.
+                                              of label selector requirements. The requirements
+                                              are ANDed.
                                             items:
                                               description: |-
                                                 A label selector requirement is a selector that contains values, a key, and an operator that
@@ -7837,9 +7815,9 @@ spec:
                                       If it's null, this PodAffinityTerm matches with no Pods.
                                     properties:
                                       matchExpressions:
-                                        description: matchExpressions is a list of
-                                          label selector requirements. The requirements
-                                          are ANDed.
+                                        description: matchExpressions is a list of label
+                                          selector requirements. The requirements are
+                                          ANDed.
                                         items:
                                           description: |-
                                             A label selector requirement is a selector that contains values, a key, and an operator that
@@ -7919,9 +7897,9 @@ spec:
                                       An empty selector ({}) matches all namespaces.
                                     properties:
                                       matchExpressions:
-                                        description: matchExpressions is a list of
-                                          label selector requirements. The requirements
-                                          are ANDed.
+                                        description: matchExpressions is a list of label
+                                          selector requirements. The requirements are
+                                          ANDed.
                                         items:
                                           description: |-
                                             A label selector requirement is a selector that contains values, a key, and an operator that
@@ -8002,8 +7980,7 @@ spec:
                     haproxy:
                       properties:
                         affinity:
-                          description: Affinity is a group of affinity scheduling
-                            rules.
+                          description: Affinity is a group of affinity scheduling rules.
                           properties:
                             nodeAffinity:
                               description: Describes node affinity scheduling rules
@@ -8038,8 +8015,8 @@ spec:
                                                 that relates the key and values.
                                               properties:
                                                 key:
-                                                  description: The label key that
-                                                    the selector applies to.
+                                                  description: The label key that the
+                                                    selector applies to.
                                                   type: string
                                                 operator:
                                                   description: |-
@@ -8072,8 +8049,8 @@ spec:
                                                 that relates the key and values.
                                               properties:
                                                 key:
-                                                  description: The label key that
-                                                    the selector applies to.
+                                                  description: The label key that the
+                                                    selector applies to.
                                                   type: string
                                                 operator:
                                                   description: |-
@@ -8137,8 +8114,8 @@ spec:
                                                 that relates the key and values.
                                               properties:
                                                 key:
-                                                  description: The label key that
-                                                    the selector applies to.
+                                                  description: The label key that the
+                                                    selector applies to.
                                                   type: string
                                                 operator:
                                                   description: |-
@@ -8171,8 +8148,8 @@ spec:
                                                 that relates the key and values.
                                               properties:
                                                 key:
-                                                  description: The label key that
-                                                    the selector applies to.
+                                                  description: The label key that the
+                                                    selector applies to.
                                                   type: string
                                                 operator:
                                                   description: |-
@@ -8206,9 +8183,9 @@ spec:
                                   x-kubernetes-map-type: atomic
                               type: object
                             podAffinity:
-                              description: Describes pod affinity scheduling rules
-                                (e.g. co-locate this pod in the same node, zone, etc.
-                                as some other pod(s)).
+                              description: Describes pod affinity scheduling rules (e.g.
+                                co-locate this pod in the same node, zone, etc. as some
+                                other pod(s)).
                               properties:
                                 preferredDuringSchedulingIgnoredDuringExecution:
                                   description: |-
@@ -8222,9 +8199,9 @@ spec:
                                     "weight" to the sum if the node has pods which matches the corresponding podAffinityTerm; the
                                     node(s) with the highest sum are the most preferred.
                                   items:
-                                    description: The weights of all of the matched
-                                      WeightedPodAffinityTerm fields are added per-node
-                                      to find the most preferred node(s)
+                                    description: The weights of all of the matched WeightedPodAffinityTerm
+                                      fields are added per-node to find the most preferred
+                                      node(s)
                                     properties:
                                       podAffinityTerm:
                                         description: Required. A pod affinity term,
@@ -8236,9 +8213,9 @@ spec:
                                               If it's null, this PodAffinityTerm matches with no Pods.
                                             properties:
                                               matchExpressions:
-                                                description: matchExpressions is a
-                                                  list of label selector requirements.
-                                                  The requirements are ANDed.
+                                                description: matchExpressions is a list
+                                                  of label selector requirements. The
+                                                  requirements are ANDed.
                                                 items:
                                                   description: |-
                                                     A label selector requirement is a selector that contains values, a key, and an operator that
@@ -8319,9 +8296,9 @@ spec:
                                               An empty selector ({}) matches all namespaces.
                                             properties:
                                               matchExpressions:
-                                                description: matchExpressions is a
-                                                  list of label selector requirements.
-                                                  The requirements are ANDed.
+                                                description: matchExpressions is a list
+                                                  of label selector requirements. The
+                                                  requirements are ANDed.
                                                 items:
                                                   description: |-
                                                     A label selector requirement is a selector that contains values, a key, and an operator that
@@ -8421,8 +8398,8 @@ spec:
                                         properties:
                                           matchExpressions:
                                             description: matchExpressions is a list
-                                              of label selector requirements. The
-                                              requirements are ANDed.
+                                              of label selector requirements. The requirements
+                                              are ANDed.
                                             items:
                                               description: |-
                                                 A label selector requirement is a selector that contains values, a key, and an operator that
@@ -8503,8 +8480,8 @@ spec:
                                         properties:
                                           matchExpressions:
                                             description: matchExpressions is a list
-                                              of label selector requirements. The
-                                              requirements are ANDed.
+                                              of label selector requirements. The requirements
+                                              are ANDed.
                                             items:
                                               description: |-
                                                 A label selector requirement is a selector that contains values, a key, and an operator that
@@ -8570,9 +8547,9 @@ spec:
                                   x-kubernetes-list-type: atomic
                               type: object
                             podAntiAffinity:
-                              description: Describes pod anti-affinity scheduling
-                                rules (e.g. avoid putting this pod in the same node,
-                                zone, etc. as some other pod(s)).
+                              description: Describes pod anti-affinity scheduling rules
+                                (e.g. avoid putting this pod in the same node, zone,
+                                etc. as some other pod(s)).
                               properties:
                                 preferredDuringSchedulingIgnoredDuringExecution:
                                   description: |-
@@ -8586,9 +8563,9 @@ spec:
                                     "weight" to the sum if the node has pods which matches the corresponding podAffinityTerm; the
                                     node(s) with the highest sum are the most preferred.
                                   items:
-                                    description: The weights of all of the matched
-                                      WeightedPodAffinityTerm fields are added per-node
-                                      to find the most preferred node(s)
+                                    description: The weights of all of the matched WeightedPodAffinityTerm
+                                      fields are added per-node to find the most preferred
+                                      node(s)
                                     properties:
                                       podAffinityTerm:
                                         description: Required. A pod affinity term,
@@ -8600,9 +8577,9 @@ spec:
                                               If it's null, this PodAffinityTerm matches with no Pods.
                                             properties:
                                               matchExpressions:
-                                                description: matchExpressions is a
-                                                  list of label selector requirements.
-                                                  The requirements are ANDed.
+                                                description: matchExpressions is a list
+                                                  of label selector requirements. The
+                                                  requirements are ANDed.
                                                 items:
                                                   description: |-
                                                     A label selector requirement is a selector that contains values, a key, and an operator that
@@ -8683,9 +8660,9 @@ spec:
                                               An empty selector ({}) matches all namespaces.
                                             properties:
                                               matchExpressions:
-                                                description: matchExpressions is a
-                                                  list of label selector requirements.
-                                                  The requirements are ANDed.
+                                                description: matchExpressions is a list
+                                                  of label selector requirements. The
+                                                  requirements are ANDed.
                                                 items:
                                                   description: |-
                                                     A label selector requirement is a selector that contains values, a key, and an operator that
@@ -8785,8 +8762,8 @@ spec:
                                         properties:
                                           matchExpressions:
                                             description: matchExpressions is a list
-                                              of label selector requirements. The
-                                              requirements are ANDed.
+                                              of label selector requirements. The requirements
+                                              are ANDed.
                                             items:
                                               description: |-
                                                 A label selector requirement is a selector that contains values, a key, and an operator that
@@ -8867,8 +8844,8 @@ spec:
                                         properties:
                                           matchExpressions:
                                             description: matchExpressions is a list
-                                              of label selector requirements. The
-                                              requirements are ANDed.
+                                              of label selector requirements. The requirements
+                                              are ANDed.
                                             items:
                                               description: |-
                                                 A label selector requirement is a selector that contains values, a key, and an operator that
@@ -8991,33 +8968,32 @@ spec:
                                     description: "host is the fully qualified domain
                                       name of a network host, as defined by RFC 3986.\nNote
                                       the following deviations from the \"host\" part
-                                      of the\nURI as defined in RFC 3986:\n1. IPs
-                                      are not allowed. Currently an IngressRuleValue
-                                      can only apply to\n   the IP in the Spec of
-                                      the parent Ingress.\n2. The `:` delimiter is
-                                      not respected because ports are not allowed.\n\t
-                                      \ Currently the port of an Ingress is implicitly
-                                      :80 for http and\n\t  :443 for https.\nBoth
-                                      these may change in the future.\nIncoming requests
-                                      are matched against the host before the\nIngressRuleValue.
+                                      of the\nURI as defined in RFC 3986:\n1. IPs are
+                                      not allowed. Currently an IngressRuleValue can
+                                      only apply to\n   the IP in the Spec of the parent
+                                      Ingress.\n2. The `:` delimiter is not respected
+                                      because ports are not allowed.\n\t  Currently
+                                      the port of an Ingress is implicitly :80 for http
+                                      and\n\t  :443 for https.\nBoth these may change
+                                      in the future.\nIncoming requests are matched
+                                      against the host before the\nIngressRuleValue.
                                       If the host is unspecified, the Ingress routes
                                       all\ntraffic based on the specified IngressRuleValue.\n\nhost
                                       can be \"precise\" which is a domain name without
-                                      the terminating dot of\na network host (e.g.
-                                      \"foo.bar.com\") or \"wildcard\", which is a
-                                      domain name\nprefixed with a single wildcard
-                                      label (e.g. \"*.foo.com\").\nThe wildcard character
-                                      '*' must appear by itself as the first DNS label
-                                      and\nmatches only a single label. You cannot
-                                      have a wildcard label by itself (e.g. Host ==
-                                      \"*\").\nRequests will be matched against the
-                                      Host field in the following way:\n1. If host
-                                      is precise, the request matches this rule if
-                                      the http host header is equal to Host.\n2. If
-                                      host is a wildcard, then the request matches
+                                      the terminating dot of\na network host (e.g. \"foo.bar.com\")
+                                      or \"wildcard\", which is a domain name\nprefixed
+                                      with a single wildcard label (e.g. \"*.foo.com\").\nThe
+                                      wildcard character '*' must appear by itself as
+                                      the first DNS label and\nmatches only a single
+                                      label. You cannot have a wildcard label by itself
+                                      (e.g. Host == \"*\").\nRequests will be matched
+                                      against the Host field in the following way:\n1.
+                                      If host is precise, the request matches this rule
+                                      if the http host header is equal to Host.\n2.
+                                      If host is a wildcard, then the request matches
                                       this rule if the http host header\nis to equal
-                                      to the suffix (removing the first label) of
-                                      the wildcard rule."
+                                      to the suffix (removing the first label) of the
+                                      wildcard rule."
                                     type: string
                                   http:
                                     description: |-
@@ -9186,21 +9162,20 @@ spec:
                           format: int32
                           type: integer
                         resources:
-                          description: ResourceRequirements describes the compute
-                            resource requirements.
+                          description: ResourceRequirements describes the compute resource
+                            requirements.
                           properties:
                             claims:
                               description: |-
                                 Claims lists the names of resources, defined in spec.resourceClaims,
                                 that are used by this container.
-
+  
                                 This is an alpha field and requires enabling the
                                 DynamicResourceAllocation feature gate.
-
+  
                                 This field is immutable. It can only be set for containers.
                               items:
-                                description: ResourceClaim references one entry in
-                                  PodSpec.ResourceClaims.
+                                description: ResourceClaim references one entry in PodSpec.ResourceClaims.
                                 properties:
                                   name:
                                     description: |-
@@ -9396,21 +9371,20 @@ spec:
                         outputs:
                           type: string
                         resources:
-                          description: ResourceRequirements describes the compute
-                            resource requirements.
+                          description: ResourceRequirements describes the compute resource
+                            requirements.
                           properties:
                             claims:
                               description: |-
                                 Claims lists the names of resources, defined in spec.resourceClaims,
                                 that are used by this container.
-
+  
                                 This is an alpha field and requires enabling the
                                 DynamicResourceAllocation feature gate.
-
+  
                                 This field is immutable. It can only be set for containers.
                               items:
-                                description: ResourceClaim references one entry in
-                                  PodSpec.ResourceClaims.
+                                description: ResourceClaim references one entry in PodSpec.ResourceClaims.
                                 properties:
                                   name:
                                     description: |-
@@ -9500,10 +9474,10 @@ spec:
                           description: |-
                             Claims lists the names of resources, defined in spec.resourceClaims,
                             that are used by this container.
-
+  
                             This is an alpha field and requires enabling the
                             DynamicResourceAllocation feature gate.
-
+  
                             This field is immutable. It can only be set for containers.
                           items:
                             description: ResourceClaim references one entry in PodSpec.ResourceClaims.
@@ -9565,15 +9539,15 @@ spec:
                                   This is used as a hint for implementations to offer richer behavior for protocols that they understand.
                                   This field follows standard Kubernetes label syntax.
                                   Valid values are either:
-
+  
                                   * Un-prefixed protocol names - reserved for IANA standard service names (as per
                                   RFC-6335 and https://www.iana.org/assignments/service-names).
-
+  
                                   * Kubernetes-defined prefixed names:
                                     * 'kubernetes.io/h2c' - HTTP/2 prior knowledge over cleartext as described in https://www.rfc-editor.org/rfc/rfc9113.html#name-starting-http-2-with-prior-
                                     * 'kubernetes.io/ws'  - WebSocket over cleartext as described in https://www.rfc-editor.org/rfc/rfc6455
                                     * 'kubernetes.io/wss' - WebSocket over TLS as described in https://www.rfc-editor.org/rfc/rfc6455
-
+  
                                   * Other protocols should use implementation-defined prefixed names such as
                                   mycompany.com/my-custom-protocol.
                                 type: string
@@ -9599,8 +9573,7 @@ spec:
                                 format: int32
                                 type: integer
                               port:
-                                description: The port that will be exposed by this
-                                  service.
+                                description: The port that will be exposed by this service.
                                 format: int32
                                 type: integer
                               protocol:
@@ -9713,7 +9686,7 @@ spec:
                               MatchLabelKeys cannot be set when LabelSelector isn't set.
                               Keys that don't exist in the incoming pod labels will
                               be ignored. A null or empty list means only match against labelSelector.
-
+  
                               This is a beta field and requires the MatchLabelKeysInPodTopologySpread feature gate to be enabled (enabled by default).
                             items:
                               type: string
@@ -9752,7 +9725,7 @@ spec:
                               If value is nil, the constraint behaves as if MinDomains is equal to 1.
                               Valid values are integers greater than 0.
                               When value is not nil, WhenUnsatisfiable must be DoNotSchedule.
-
+  
                               For example, in a 3-zone cluster, MaxSkew is set to 2, MinDomains is set to 5 and pods with the same
                               labelSelector spread as 2/2/2:
                               | zone1 | zone2 | zone3 |
@@ -9769,7 +9742,7 @@ spec:
                               when calculating pod topology spread skew. Options are:
                               - Honor: only nodes matching nodeAffinity/nodeSelector are included in the calculations.
                               - Ignore: nodeAffinity/nodeSelector are ignored. All nodes are included in the calculations.
-
+  
                               If this value is nil, the behavior is equivalent to the Honor policy.
                               This is a beta-level feature default enabled by the NodeInclusionPolicyInPodTopologySpread feature flag.
                             type: string
@@ -9780,7 +9753,7 @@ spec:
                               - Honor: nodes without taints, along with tainted nodes for which the incoming pod
                               has a toleration, are included.
                               - Ignore: node taints are ignored. All nodes are included.
-
+  
                               If this value is nil, the behavior is equivalent to the Ignore policy.
                               This is a beta-level feature default enabled by the NodeInclusionPolicyInPodTopologySpread feature flag.
                             type: string
@@ -9835,10 +9808,26 @@ spec:
                   rule: size(self) == 1 || (size(self) == size(self.map(x, x.groupConfig.name).filter(y,
                     self.map(x, x.groupConfig.name).filter(z, z == y).size() == 1)))
                 - message: MarkLogicGroups must have unique names
+                  rule: size(self) == 1 || (size(self) == size(self.map(x, x.name).filter(y,
+                    self.map(x, x.name).filter(z, z == y).size() == 1)))
+                - message: MarkLogicGroups must have unique names
                   rule: size(self) == size(self.map(x, x.name).filter(y, self.map(x,
                     x.name).filter(z, z == y).size() == 1))
-                - message: Exactly one MarkLogicGroup must have isBootstrap set to
-                    true
+                - message: Name of MarkLogikGroup must not be changed
+                  rule: self[0].name == oldSelf[0].name
+                - message: Name of MarkLogikGroup must not be changed
+                  rule: 'size(self) >= 2 && size(oldSelf) >= 2 ? self[1].name == oldSelf[1].name
+                    : true'
+                - message: Name of MarkLogikGroup must not be changed
+                  rule: 'size(self) >= 3 && size(oldSelf) >= 3 ? self[2].name == oldSelf[2].name
+                    : true'
+                - message: Name of MarkLogikGroup must not be changed
+                  rule: 'size(self) >= 4 && size(oldSelf) >= 4 ? self[3].name == oldSelf[3].name
+                    : true'
+                - message: Name of MarkLogikGroup must not be changed
+                  rule: 'size(self) >= 5 && size(oldSelf) >= 5 ? self[4].name == oldSelf[4].name
+                    : true'
+                - message: Exactly one MarkLogicGroup must have isBootstrap set to true
                   rule: size(self.filter(x, x.isBootstrap == true)) == 1
               networkPolicy:
                 properties:
@@ -9924,15 +9913,14 @@ spec:
                                 description: |-
                                   namespaceSelector selects namespaces using cluster-scoped labels. This field follows
                                   standard label selector semantics; if present but empty, it selects all namespaces.
-
+  
                                   If podSelector is also set, then the NetworkPolicyPeer as a whole selects
                                   the pods matching podSelector in the namespaces selected by namespaceSelector.
                                   Otherwise it selects all pods in the namespaces selected by namespaceSelector.
                                 properties:
                                   matchExpressions:
                                     description: matchExpressions is a list of label
-                                      selector requirements. The requirements are
-                                      ANDed.
+                                      selector requirements. The requirements are ANDed.
                                     items:
                                       description: |-
                                         A label selector requirement is a selector that contains values, a key, and an operator that
@@ -9977,15 +9965,14 @@ spec:
                                 description: |-
                                   podSelector is a label selector which selects pods. This field follows standard label
                                   selector semantics; if present but empty, it selects all pods.
-
+  
                                   If namespaceSelector is also set, then the NetworkPolicyPeer as a whole selects
                                   the pods matching podSelector in the Namespaces selected by NamespaceSelector.
                                   Otherwise it selects the pods matching podSelector in the policy's own namespace.
                                 properties:
                                   matchExpressions:
                                     description: matchExpressions is a list of label
-                                      selector requirements. The requirements are
-                                      ANDed.
+                                      selector requirements. The requirements are ANDed.
                                     items:
                                       description: |-
                                         A label selector requirement is a selector that contains values, a key, and an operator that
@@ -10077,15 +10064,14 @@ spec:
                                 description: |-
                                   namespaceSelector selects namespaces using cluster-scoped labels. This field follows
                                   standard label selector semantics; if present but empty, it selects all namespaces.
-
+  
                                   If podSelector is also set, then the NetworkPolicyPeer as a whole selects
                                   the pods matching podSelector in the namespaces selected by namespaceSelector.
                                   Otherwise it selects all pods in the namespaces selected by namespaceSelector.
                                 properties:
                                   matchExpressions:
                                     description: matchExpressions is a list of label
-                                      selector requirements. The requirements are
-                                      ANDed.
+                                      selector requirements. The requirements are ANDed.
                                     items:
                                       description: |-
                                         A label selector requirement is a selector that contains values, a key, and an operator that
@@ -10130,15 +10116,14 @@ spec:
                                 description: |-
                                   podSelector is a label selector which selects pods. This field follows standard label
                                   selector semantics; if present but empty, it selects all pods.
-
+  
                                   If namespaceSelector is also set, then the NetworkPolicyPeer as a whole selects
                                   the pods matching podSelector in the Namespaces selected by NamespaceSelector.
                                   Otherwise it selects the pods matching podSelector in the policy's own namespace.
                                 properties:
                                   matchExpressions:
                                     description: matchExpressions is a list of label
-                                      selector requirements. The requirements are
-                                      ANDed.
+                                      selector requirements. The requirements are ANDed.
                                     items:
                                       description: |-
                                         A label selector requirement is a selector that contains values, a key, and an operator that
@@ -10228,16 +10213,16 @@ spec:
                       label selector matches no objects.
                     properties:
                       matchExpressions:
-                        description: matchExpressions is a list of label selector
-                          requirements. The requirements are ANDed.
+                        description: matchExpressions is a list of label selector requirements.
+                          The requirements are ANDed.
                         items:
                           description: |-
                             A label selector requirement is a selector that contains values, a key, and an operator that
                             relates the key and values.
                           properties:
                             key:
-                              description: key is the label key that the selector
-                                applies to.
+                              description: key is the label key that the selector applies
+                                to.
                               type: string
                             operator:
                               description: |-
@@ -10286,8 +10271,7 @@ spec:
                 default:
                   enabled: true
                   size: 10Gi
-                description: Storage is the inteface to add pvc and pv support in
-                  marklogic
+                description: Storage is the inteface to add pvc and pv support in marklogic
                 properties:
                   accessModes:
                     default:
@@ -10342,11 +10326,11 @@ spec:
                       A special supplemental group that applies to all containers in a pod.
                       Some volume types allow the Kubelet to change the ownership of that volume
                       to be owned by the pod:
-
+  
                       1. The owning GID will be the FSGroup
                       2. The setgid bit is set (new files created in the volume will be owned by FSGroup)
                       3. The permission bits are OR'd with rw-rw----
-
+  
                       If unset, the Kubelet will not modify the ownership and permissions of any volume.
                       Note that this field cannot be set when spec.os.name is windows.
                     format: int64
@@ -10395,10 +10379,10 @@ spec:
                       seLinuxChangePolicy defines how the container's SELinux label is applied to all volumes used by the Pod.
                       It has no effect on nodes that do not support SELinux or to volumes does not support SELinux.
                       Valid values are "MountOption" and "Recursive".
-
+  
                       "Recursive" means relabeling of all files on all Pod volumes by the container runtime.
                       This may be slow for large volumes, but allows mixing privileged and unprivileged Pods sharing the same volume on the same node.
-
+  
                       "MountOption" mounts all eligible Pod volumes with `-o context` mount option.
                       This requires all Pods that share the same volume to use the same SELinux label.
                       It is not possible to share the same volume among privileged and unprivileged Pods.
@@ -10406,13 +10390,13 @@ spec:
                       whose CSI driver announces SELinux support by setting spec.seLinuxMount: true in their
                       CSIDriver instance. Other volumes are always re-labelled recursively.
                       "MountOption" value is allowed only when SELinuxMount feature gate is enabled.
-
+  
                       If not specified and SELinuxMount feature gate is enabled, "MountOption" is used.
                       If not specified and SELinuxMount feature gate is disabled, "MountOption" is used for ReadWriteOncePod volumes
                       and "Recursive" for all other volumes.
-
+  
                       This field affects only Pods that have SELinux label set, either in PodSecurityContext or in SecurityContext of all containers.
-
+  
                       All Pods that use the same volume should use the same seLinuxChangePolicy, otherwise some pods can get stuck in ContainerCreating state.
                       Note that this field cannot be set when spec.os.name is windows.
                     type: string
@@ -10426,20 +10410,20 @@ spec:
                       Note that this field cannot be set when spec.os.name is windows.
                     properties:
                       level:
-                        description: Level is SELinux level label that applies to
-                          the container.
+                        description: Level is SELinux level label that applies to the
+                          container.
                         type: string
                       role:
-                        description: Role is a SELinux role label that applies to
-                          the container.
+                        description: Role is a SELinux role label that applies to the
+                          container.
                         type: string
                       type:
-                        description: Type is a SELinux type label that applies to
-                          the container.
+                        description: Type is a SELinux type label that applies to the
+                          container.
                         type: string
                       user:
-                        description: User is a SELinux user label that applies to
-                          the container.
+                        description: User is a SELinux user label that applies to the
+                          container.
                         type: string
                     type: object
                   seccompProfile:
@@ -10458,7 +10442,7 @@ spec:
                         description: |-
                           type indicates which kind of seccomp profile will be applied.
                           Valid options are:
-
+  
                           Localhost - a profile defined in a file on the node should be used.
                           RuntimeDefault - the container runtime default profile should be used.
                           Unconfined - no profile should be applied.
@@ -10552,10 +10536,10 @@ spec:
                     description: |-
                       Claims lists the names of resources, defined in spec.resourceClaims,
                       that are used by this container.
-
+  
                       This is an alpha field and requires enabling the
                       DynamicResourceAllocation feature gate.
-
+  
                       This field is immutable. It can only be set for containers.
                     items:
                       description: ResourceClaim references one entry in PodSpec.ResourceClaims.
@@ -10722,20 +10706,20 @@ spec:
                       Note that this field cannot be set when spec.os.name is windows.
                     properties:
                       level:
-                        description: Level is SELinux level label that applies to
-                          the container.
+                        description: Level is SELinux level label that applies to the
+                          container.
                         type: string
                       role:
-                        description: Role is a SELinux role label that applies to
-                          the container.
+                        description: Role is a SELinux role label that applies to the
+                          container.
                         type: string
                       type:
-                        description: Type is a SELinux type label that applies to
-                          the container.
+                        description: Type is a SELinux type label that applies to the
+                          container.
                         type: string
                       user:
-                        description: User is a SELinux user label that applies to
-                          the container.
+                        description: User is a SELinux user label that applies to the
+                          container.
                         type: string
                     type: object
                   seccompProfile:
@@ -10756,7 +10740,7 @@ spec:
                         description: |-
                           type indicates which kind of seccomp profile will be applied.
                           Valid options are:
-
+  
                           Localhost - a profile defined in a file on the node should be used.
                           RuntimeDefault - the container runtime default profile should be used.
                           Unconfined - no profile should be applied.
@@ -10876,7 +10860,7 @@ spec:
                         MatchLabelKeys cannot be set when LabelSelector isn't set.
                         Keys that don't exist in the incoming pod labels will
                         be ignored. A null or empty list means only match against labelSelector.
-
+  
                         This is a beta field and requires the MatchLabelKeysInPodTopologySpread feature gate to be enabled (enabled by default).
                       items:
                         type: string
@@ -10915,7 +10899,7 @@ spec:
                         If value is nil, the constraint behaves as if MinDomains is equal to 1.
                         Valid values are integers greater than 0.
                         When value is not nil, WhenUnsatisfiable must be DoNotSchedule.
-
+  
                         For example, in a 3-zone cluster, MaxSkew is set to 2, MinDomains is set to 5 and pods with the same
                         labelSelector spread as 2/2/2:
                         | zone1 | zone2 | zone3 |
@@ -10932,7 +10916,7 @@ spec:
                         when calculating pod topology spread skew. Options are:
                         - Honor: only nodes matching nodeAffinity/nodeSelector are included in the calculations.
                         - Ignore: nodeAffinity/nodeSelector are ignored. All nodes are included in the calculations.
-
+  
                         If this value is nil, the behavior is equivalent to the Honor policy.
                         This is a beta-level feature default enabled by the NodeInclusionPolicyInPodTopologySpread feature flag.
                       type: string
@@ -10943,7 +10927,7 @@ spec:
                         - Honor: nodes without taints, along with tainted nodes for which the incoming pod
                         has a toleration, are included.
                         - Ignore: node taints are ignored. All nodes are included.
-
+  
                         If this value is nil, the behavior is equivalent to the Ignore policy.
                         This is a beta-level feature default enabled by the NodeInclusionPolicyInPodTopologySpread feature flag.
                       type: string
@@ -11001,8 +10985,8 @@ spec:
             - markLogicGroups
             type: object
             x-kubernetes-validations:
-            - message: HAProxy and Pathbased Routing is enabled. PathBasedRouting
-                is only supported for MarkLogic 11.1 and above
+            - message: HAProxy and Pathbased Routing is enabled. PathBasedRouting is
+                only supported for MarkLogic 11.1 and above
               rule: '!(self.haproxy.enabled == true && self.haproxy.pathBasedRouting
                 == true) || int(self.image.split('':'')[1].split(''.'')[0] + self.image.split('':'')[1].split(''.'')[1])
                 >= 111'
@@ -11074,3 +11058,9 @@ spec:
     storage: true
     subresources:
       status: {}
+status:
+  acceptedNames:
+    kind: ""
+    plural: ""
+  conditions: []
+  storedVersions: []

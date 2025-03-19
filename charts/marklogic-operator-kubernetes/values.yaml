@@ -31,8 +31,8 @@ controllerManager:
         drop:
         - ALL
     image:
-      repository: ml-marklogic-operator-dev.bed-artifactory.bedford.progress.com/marklogic-kubernetes-operator
-      tag: 1.0.0-ea2
+      repository: progressofficial/marklogic-operator-kubernetes
+      tag: 1.0.0
     resources:
       limits:
         cpu: 500m

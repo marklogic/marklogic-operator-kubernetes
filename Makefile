@@ -3,7 +3,7 @@
 # To re-generate a bundle for another specific version without changing the standard setup, you can:
 # - use the VERSION as arg of the bundle target (e.g make bundle VERSION=0.0.2)
 # - use environment variables to overwrite this value (e.g export VERSION=0.0.2)
-VERSION ?= 0.0.1
+VERSION ?= 1.0.0
 
 # VERIFY_HUGE_PAGES defines if hugepages test is enabled or not for e2e test
 VERIFY_HUGE_PAGES ?= false
@@ -41,8 +41,8 @@ BUNDLE_METADATA_OPTS ?= $(BUNDLE_CHANNELS) $(BUNDLE_DEFAULT_CHANNEL)
 # This variable is used to construct full image tags for bundle and catalog images.
 #
 # For example, running 'make bundle-build bundle-push catalog-build catalog-push' will build and push both
-# marklogic.com/marklogic-kubernetes-operator-bundle:$VERSION and marklogic.com/marklogic-kubernetes-operator-catalog:$VERSION.
-IMAGE_TAG_BASE ?= ml-docker-db-dev-tierpoint.bed-artifactory.bedford.progress.com/ml-marklogic-operator-dev/marklogic-kubernetes-operator
+# marklogic.com/marklogic-operator-kubernetes-bundle:$VERSION and marklogic.com/marklogic-operator-kubernetes-catalog:$VERSION.
+IMAGE_TAG_BASE ?= ml-docker-db-dev-tierpoint.bed-artifactory.bedford.progress.com/ml-marklogic-operator-dev/marklogic-operator-kubernetes
 
 # BUNDLE_IMG defines the image:tag used for the bundle.
 # You can use it as an arg. (E.g make bundle-build BUNDLE_IMG=<some-registry>/<project-name-bundle>:<tag>)
@@ -64,7 +64,8 @@ endif
 OPERATOR_SDK_VERSION ?= v1.34.2
 
 # Image URL to use all building/pushing image targets
-IMG ?= ml-marklogic-operator-dev.bed-artifactory.bedford.progress.com/marklogic-kubernetes-operator:1.0.0-ea2
+# Image for dev: ml-marklogic-operator-dev.bed-artifactory.bedford.progress.com/marklogic-operator-kubernetes
+IMG ?= progressofficial/marklogic-operator-kubernetes:$(VERSION)
 
 
 # Get the currently used golang install path (in GOPATH/bin, unless GOBIN is set)
@@ -109,7 +110,7 @@ help: ## Display this help.
 
 .PHONY: manifests
 manifests: controller-gen ## Generate WebhookConfiguration, ClusterRole and CustomResourceDefinition objects.
-	$(CONTROLLER_GEN) rbac:roleName=manager-role crd webhook paths="./..." output:crd:artifacts:config=config/crd/bases
+	$(CONTROLLER_GEN) rbac:roleName=manager-role crd:generateEmbeddedObjectMeta=true webhook paths="./..." output:crd:artifacts:config=config/crd/bases
 
 .PHONY: generate
 generate: controller-gen ## Generate code containing DeepCopy, DeepCopyInto, and DeepCopyObject method implementations.
@@ -362,7 +363,7 @@ $(HELMIFY): $(LOCALBIN)
 	test -s $(LOCALBIN)/helmify || GOBIN=$(LOCALBIN) go install github.com/arttor/helmify/cmd/helmify@latest
     
 helm: manifests kustomize helmify
-	$(KUSTOMIZE) build config/default | $(HELMIFY) -image-pull-secrets charts/marklogic-operator
+	$(KUSTOMIZE) build config/default | $(HELMIFY) -image-pull-secrets -original-name charts/marklogic-operator-kubernetes 
 
 .PHONY: image-scan
 image-scan: docker-build

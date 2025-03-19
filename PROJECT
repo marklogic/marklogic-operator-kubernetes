@@ -8,25 +8,25 @@ layout:
 plugins:
   manifests.sdk.operatorframework.io/v2: {}
   scorecard.sdk.operatorframework.io/v2: {}
-projectName: marklogic-kubernetes-operator
-repo: github.com/marklogic/marklogic-kubernetes-operator
+projectName: marklogic-operator-kubernetes
+repo: github.com/marklogic/marklogic-operator-kubernetes
 resources:
 - api:
     crdVersion: v1
     namespaced: true
   controller: true
-  domain: marklogic.com
-  group: database
+  domain: progress.com
+  group: marklogic
   kind: MarklogicGroup
-  path: github.com/marklogic/marklogic-kubernetes-operator/api/v1alpha1
-  version: v1alpha1
+  path: github.com/marklogic/marklogic-operator-kubernetes/api/v1
+  version: v1
 - api:
     crdVersion: v1
     namespaced: true
   controller: true
-  domain: marklogic.com
-  group: database
+  domain: progress.com
+  group: marklogic
   kind: MarklogicCluster
-  path: github.com/marklogic/marklogic-kubernetes-operator/api/v1alpha1
-  version: v1alpha1
+  path: github.com/marklogic/marklogic-operator-kubernetes/api/v1
+  version: v1
 version: "3"

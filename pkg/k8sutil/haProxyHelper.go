@@ -4,8 +4,7 @@ import (
 	"bytes"
 	"text/template"
 
-	"github.com/marklogic/marklogic-kubernetes-operator/api/v1alpha1"
-	databasev1alpha1 "github.com/marklogic/marklogic-kubernetes-operator/api/v1alpha1"
+	marklogicv1 "github.com/marklogic/marklogic-operator-kubernetes/api/v1"
 )
 
 type HAProxyTemplateData struct {
@@ -25,7 +24,7 @@ type HAProxyTemplateData struct {
 // generates frontend config for HAProxy depending on pathBasedRouting flag
 // if pathBasedRouting is disabled, it will generate a frontend for each appServer
 // otherwise, it will generate a single frontend with path based routing
-func generateFrontendConfig(cr *databasev1alpha1.MarklogicCluster) string {
+func generateFrontendConfig(cr *marklogicv1.MarklogicCluster) string {
 
 	var frontEndDef string
 	var data *HAProxyTemplateData
@@ -73,7 +72,7 @@ frontend marklogic-{{ .PortNumber}}
 }
 
 // generates backend config for HAProxy depending on pathBasedRouting flag and appServers
-func generateBackendConfig(cr *databasev1alpha1.MarklogicCluster) string {
+func generateBackendConfig(cr *marklogicv1.MarklogicCluster) string {
 
 	pathBasedRouting := cr.Spec.HAProxy.PathBasedRouting
 	var result string
@@ -164,7 +163,7 @@ server ml-{{.PodName}}-{{.PortNumber}}-{{.Index}} {{.PodName}}-{{.Index}}.{{.Ser
 }
 
 // generates the stats config for HAProxy
-func generateStatsConfig(cr *databasev1alpha1.MarklogicCluster) string {
+func generateStatsConfig(cr *marklogicv1.MarklogicCluster) string {
 	statsDef := `
 frontend stats
   mode http
@@ -190,7 +189,7 @@ frontend stats
 }
 
 // generates the tcp config for HAProxy
-func generateTcpConfig(cr *databasev1alpha1.MarklogicCluster) string {
+func generateTcpConfig(cr *marklogicv1.MarklogicCluster) string {
 	result := ""
 
 	for _, tcpPort := range cr.Spec.HAProxy.TcpPorts.Ports {
@@ -227,7 +226,7 @@ listen marklogic-TCP-{{.PortNumber}}
 	return result
 }
 
-func getSSLConfig(tls *databasev1alpha1.TlsForHAProxy) string {
+func getSSLConfig(tls *marklogicv1.TlsForHAProxy) string {
 	if tls == nil || !tls.Enabled {
 		return ""
 	} else {
@@ -246,7 +245,7 @@ func parseTemplateToString(templateStr string, data interface{}) string {
 	return buf.String()
 }
 
-type Servers []v1alpha1.AppServers
+type Servers []marklogicv1.AppServers
 
 func getPathList(servers Servers) []string {
 	var paths []string

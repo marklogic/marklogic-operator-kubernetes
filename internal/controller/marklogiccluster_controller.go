@@ -29,8 +29,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	"github.com/go-logr/logr"
-	databasev1alpha1 "github.com/marklogic/marklogic-kubernetes-operator/api/v1alpha1"
-	"github.com/marklogic/marklogic-kubernetes-operator/pkg/k8sutil"
+	marklogicv1 "github.com/marklogic/marklogic-operator-kubernetes/api/v1"
+	"github.com/marklogic/marklogic-operator-kubernetes/pkg/k8sutil"
 )
 
 // MarklogicClusterReconciler reconciles a MarklogicCluster object
@@ -41,9 +41,9 @@ type MarklogicClusterReconciler struct {
 	Recorder record.EventRecorder
 }
 
-//+kubebuilder:rbac:groups=database.marklogic.com,resources=marklogicclusters,verbs=get;list;watch;create;update;patch;delete
-//+kubebuilder:rbac:groups=database.marklogic.com,resources=marklogicclusters/status,verbs=get;update;patch
-//+kubebuilder:rbac:groups=database.marklogic.com,resources=marklogicclusters/finalizers,verbs=update
+//+kubebuilder:rbac:groups=marklogic.progress.com,resources=marklogicclusters,verbs=get;list;watch;create;update;patch;delete
+//+kubebuilder:rbac:groups=marklogic.progress.com,resources=marklogicclusters/status,verbs=get;update;patch
+//+kubebuilder:rbac:groups=marklogic.progress.com,resources=marklogicclusters/finalizers,verbs=update
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
@@ -83,7 +83,7 @@ func (r *MarklogicClusterReconciler) Reconcile(ctx context.Context, req ctrl.Req
 // SetupWithManager sets up the controller with the Manager.
 func (r *MarklogicClusterReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
-		For(&databasev1alpha1.MarklogicCluster{}).
-		Owns(&databasev1alpha1.MarklogicGroup{}).
+		For(&marklogicv1.MarklogicCluster{}).
+		Owns(&marklogicv1.MarklogicGroup{}).
 		Complete(r)
 }

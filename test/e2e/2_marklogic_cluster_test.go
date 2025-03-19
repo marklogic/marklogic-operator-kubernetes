@@ -9,13 +9,13 @@ import (
 	"testing"
 	"time"
 
-	databasev1alpha1 "github.com/marklogic/marklogic-kubernetes-operator/api/v1alpha1"
+	marklogicv1 "github.com/marklogic/marklogic-operator-kubernetes/api/v1"
 	coreV1 "k8s.io/api/core/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	"github.com/marklogic/marklogic-kubernetes-operator/test/utils"
+	"github.com/marklogic/marklogic-operator-kubernetes/test/utils"
 	"sigs.k8s.io/e2e-framework/klient/k8s"
 	"sigs.k8s.io/e2e-framework/klient/wait"
 	"sigs.k8s.io/e2e-framework/klient/wait/conditions"
@@ -36,32 +36,32 @@ var (
 	logOutput        = "[OUTPUT]\n\tname loki\n\tmatch *\n\thost loki.loki.svc.cluster.local\n\tport 3100\n\tlabels job=fluent-bit\n\thttp_user admin\n\thttp_passwd admin"
 	adminUsername    = "admin"
 	adminPassword    = "Admin@8001"
-	marklogiccluster = &databasev1alpha1.MarklogicCluster{
+	marklogiccluster = &marklogicv1.MarklogicCluster{
 		TypeMeta: metav1.TypeMeta{
-			APIVersion: "marklogic.com/v1alpha1",
+			APIVersion: "marklogic.progress.com/v1",
 			Kind:       "MarklogicCluster",
 		},
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "marklogicclusters",
 			Namespace: mlNamespace,
 		},
-		Spec: databasev1alpha1.MarklogicClusterSpec{
+		Spec: marklogicv1.MarklogicClusterSpec{
 			Image: marklogicImage,
-			Auth: &databasev1alpha1.AdminAuth{
+			Auth: &marklogicv1.AdminAuth{
 				AdminUsername: &adminUsername,
 				AdminPassword: &adminPassword,
 			},
-			MarkLogicGroups: []*databasev1alpha1.MarklogicGroups{
+			MarkLogicGroups: []*marklogicv1.MarklogicGroups{
 				{
 					Name:        groupName,
 					Replicas:    &replicas,
 					IsBootstrap: true,
 				},
 			},
-			LogCollection: &databasev1alpha1.LogCollection{
+			LogCollection: &marklogicv1.LogCollection{
 				Enabled: true,
 				Image:   "fluent/fluent-bit:3.2.5",
-				Files: databasev1alpha1.LogFilesConfig{
+				Files: marklogicv1.LogFilesConfig{
 					ErrorLogs:   true,
 					AccessLogs:  true,
 					RequestLogs: true,
@@ -195,7 +195,7 @@ func TestMarklogicCluster(t *testing.T) {
 	// Setup for MarklogicCluster creation
 	feature.Setup(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 		client := c.Client()
-		databasev1alpha1.AddToScheme(client.Resources(mlNamespace).GetScheme())
+		marklogicv1.AddToScheme(client.Resources(mlNamespace).GetScheme())
 
 		if err := client.Resources(mlNamespace).Create(ctx, marklogiccluster); err != nil {
 			t.Fatalf("Failed to create MarklogicCluster: %s", err)
@@ -216,7 +216,7 @@ func TestMarklogicCluster(t *testing.T) {
 	// Assessment to check for MarklogicCluster deployment
 	feature.Assess("MarklogicCluster deployed Ok", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 		client := c.Client()
-		var marklogiccluster databasev1alpha1.MarklogicCluster
+		var marklogiccluster marklogicv1.MarklogicCluster
 		if err := client.Resources().Get(ctx, "marklogicclusters", mlNamespace, &marklogiccluster); err != nil {
 			t.Log("====MarklogicCluster not found====")
 			t.Fatal(err)
@@ -324,7 +324,7 @@ func TestMarklogicCluster(t *testing.T) {
 		feature.Setup(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 			t.Log("Updating MarkLogic group resources")
 			client := c.Client()
-			var mlcluster databasev1alpha1.MarklogicCluster
+			var mlcluster marklogicv1.MarklogicCluster
 			var resources = coreV1.ResourceRequirements{
 				Requests: coreV1.ResourceList{
 					"memory": resource.MustParse("8Gi"),

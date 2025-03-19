@@ -1,4 +1,4 @@
-package v1alpha1
+package v1
 
 import (
 	corev1 "k8s.io/api/core/v1"
@@ -21,10 +21,14 @@ type ContainerProbe struct {
 }
 
 // Storage is the inteface to add pvc and pv support in marklogic
-type Storage struct {
-	Size             string             `json:"size,omitempty"`
-	VolumeMount      VolumeMountWrapper `json:"volumeMount,omitempty"`
-	StorageClassName string             `json:"storageClassName,omitempty"`
+type Persistence struct {
+	Enabled bool `json:"enabled,omitempty"`
+	// +kubebuilder:validation:Required
+	Size             string `json:"size,omitempty"`
+	StorageClassName string `json:"storageClassName,omitempty"`
+	// +kubebuilder:default:={ReadWriteOnce}
+	AccessModes []corev1.PersistentVolumeAccessMode `json:"accessModes,omitempty"`
+	Annotations map[string]string                   `json:"annotations,omitempty"`
 }
 
 type HugePages struct {
@@ -46,6 +50,7 @@ type VolumeMountWrapper struct {
 }
 
 type AdminAuth struct {
+	SecretName     *string `json:"secretName,omitempty"`
 	AdminUsername  *string `json:"adminUsername,omitempty"`
 	AdminPassword  *string `json:"adminPassword,omitempty"`
 	WalletPassword *string `json:"walletPassword,omitempty"`
@@ -77,7 +82,7 @@ type NetworkPolicy struct {
 }
 type HAProxy struct {
 	Enabled bool `json:"enabled,omitempty"`
-	// +kubebuilder:default:="haproxytech/haproxy-alpine:3.1"
+	// +kubebuilder:default:="haproxytech/haproxy-alpine:3.2"
 	Image            string                        `json:"image,omitempty"`
 	ImagePullSecrets []corev1.LocalObjectReference `json:"imagePullSecrets,omitempty"`
 	// +kubebuilder:default:=1
@@ -86,9 +91,8 @@ type HAProxy struct {
 	FrontendPort int32        `json:"frontendPort,omitempty"`
 	AppServers   []AppServers `json:"appServers,omitempty"`
 	// +kubebuilder:default:=false
-	PathBasedRouting   *bool               `json:"pathBasedRouting,omitempty"`
-	RestartWhenUpgrade *bool               `json:"restartWhenUpgrade,omitempty"`
-	Service            *corev1.ServiceType `json:"service,omitempty"`
+	PathBasedRouting *bool               `json:"pathBasedRouting,omitempty"`
+	Service          *corev1.ServiceType `json:"service,omitempty"`
 	// +kubebuilder:default:={enabled: false}
 	TcpPorts Tcpports `json:"tcpPorts,omitempty"`
 	// +kubebuilder:default:={client: 600, connect: 600, server: 600}

@@ -1,9 +1,9 @@
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: {{ include "marklogic-operator.fullname" . }}-manager-role
+  name: marklogic-operator-manager-role
   labels:
-  {{- include "marklogic-operator.labels" . | nindent 4 }}
+  {{- include "marklogic-operator-kubernetes.labels" . | nindent 4 }}
 rules:
 - apiGroups:
   - ""
@@ -36,7 +36,7 @@ rules:
   - update
   - watch
 - apiGroups:
-  - database.marklogic.com
+  - marklogic.progress.com
   resources:
   - marklogicclusters
   - marklogicgroups
@@ -49,14 +49,14 @@ rules:
   - update
   - watch
 - apiGroups:
-  - database.marklogic.com
+  - marklogic.progress.com
   resources:
   - marklogicclusters/finalizers
   - marklogicgroups/finalizers
   verbs:
   - update
 - apiGroups:
-  - database.marklogic.com
+  - marklogic.progress.com
   resources:
   - marklogicclusters/status
   - marklogicgroups/status
@@ -80,17 +80,17 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: {{ include "marklogic-operator.fullname" . }}-manager-rolebinding
+  name: marklogic-operator-manager-rolebinding
   labels:
     app.kubernetes.io/component: rbac
-    app.kubernetes.io/created-by: marklogic-kubernetes-operator
-    app.kubernetes.io/part-of: marklogic-kubernetes-operator
-  {{- include "marklogic-operator.labels" . | nindent 4 }}
+    app.kubernetes.io/created-by: marklogic-operator-kubernetes
+    app.kubernetes.io/part-of: marklogic-operator-kubernetes
+  {{- include "marklogic-operator-kubernetes.labels" . | nindent 4 }}
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
-  name: '{{ include "marklogic-operator.fullname" . }}-manager-role'
+  name: marklogic-operator-manager-role
 subjects:
 - kind: ServiceAccount
-  name: '{{ include "marklogic-operator.fullname" . }}-controller-manager'
+  name: marklogic-operator-controller-manager
   namespace: '{{ .Release.Namespace }}'

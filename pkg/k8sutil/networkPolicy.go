@@ -7,11 +7,11 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 
 	"github.com/cisco-open/k8s-objectmatcher/patch"
-	databasev1alpha1 "github.com/marklogic/marklogic-kubernetes-operator/api/v1alpha1"
-	"github.com/marklogic/marklogic-kubernetes-operator/pkg/result"
+	marklogicv1 "github.com/marklogic/marklogic-operator-kubernetes/api/v1"
+	"github.com/marklogic/marklogic-operator-kubernetes/pkg/result"
 )
 
-func generateNetworkPolicyDef(networkPolicyMeta metav1.ObjectMeta, ownerRef metav1.OwnerReference, cr *databasev1alpha1.MarklogicCluster) *networkingv1.NetworkPolicy {
+func generateNetworkPolicyDef(networkPolicyMeta metav1.ObjectMeta, ownerRef metav1.OwnerReference, cr *marklogicv1.MarklogicCluster) *networkingv1.NetworkPolicy {
 	networkPolicySpec := networkingv1.NetworkPolicySpec{
 		PolicyTypes: cr.Spec.NetworkPolicy.PolicyTypes,
 		PodSelector: cr.Spec.NetworkPolicy.PodSelector,
@@ -44,9 +44,10 @@ func (cc *ClusterContext) getNetworkPolicy(namespace string, networkPolicyName s
 	return networkPolicy, nil
 }
 
-func generateNetworkPolicy(networkPolicyName string, cr *databasev1alpha1.MarklogicCluster) *networkingv1.NetworkPolicy {
-	labels := getMarkLogicLabels(cr.GetObjectMeta().GetName())
-	netObjectMeta := generateObjectMeta(networkPolicyName, cr.Namespace, labels, map[string]string{})
+func generateNetworkPolicy(networkPolicyName string, cr *marklogicv1.MarklogicCluster) *networkingv1.NetworkPolicy {
+	labels := getCommonLabels(cr.GetObjectMeta().GetName())
+	annotations := getCommonAnnotations()
+	netObjectMeta := generateObjectMeta(networkPolicyName, cr.Namespace, labels, annotations)
 	networkPolicy := generateNetworkPolicyDef(netObjectMeta, marklogicClusterAsOwner(cr), cr)
 	return networkPolicy
 }

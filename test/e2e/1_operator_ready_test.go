@@ -39,7 +39,7 @@ func TestOperatorReady(t *testing.T) {
 		t.Logf("Kubernetes namespace: %s", p.Result())
 		client := c.Client()
 		apiextensionsV1.AddToScheme(client.Resources().GetScheme())
-		name := "marklogicclusters.database.marklogic.com"
+		name := "marklogicclusters.marklogic.progress.com"
 		var crd apiextensionsV1.CustomResourceDefinition
 		if err := client.Resources().Get(ctx, name, "", &crd); err != nil {
 			t.Fatalf("CRD not found: %s", err)

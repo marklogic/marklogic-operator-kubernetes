@@ -7,17 +7,18 @@ import (
 	"testing"
 	"time"
 
-	databasev1alpha1 "github.com/marklogic/marklogic-kubernetes-operator/api/v1alpha1"
+	marklogicv1 "github.com/marklogic/marklogic-operator-kubernetes/api/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/util/homedir"
 
-	"github.com/marklogic/marklogic-kubernetes-operator/test/utils"
+	"github.com/marklogic/marklogic-operator-kubernetes/test/utils"
 	"sigs.k8s.io/e2e-framework/klient/k8s"
 	"sigs.k8s.io/e2e-framework/klient/wait"
 	"sigs.k8s.io/e2e-framework/klient/wait/conditions"
 	"sigs.k8s.io/e2e-framework/pkg/envconf"
 	"sigs.k8s.io/e2e-framework/pkg/features"
+	e2eutils "sigs.k8s.io/e2e-framework/pkg/utils"
 )
 
 const (
@@ -28,15 +29,16 @@ const (
 
 var (
 	kubeconfig      *string
+	secretName      = "ml-admin-secrets"
 	home            = homedir.HomeDir()
 	initialPodCount int
 	incrReplica     = int32(2)
-	marklogicgroups = []*databasev1alpha1.MarklogicGroups{
+	marklogicgroups = []*marklogicv1.MarklogicGroups{
 		{
 			Name:        dnodeGrpName,
 			Replicas:    &replicas,
 			IsBootstrap: true,
-			GroupConfig: &databasev1alpha1.GroupConfig{
+			GroupConfig: &marklogicv1.GroupConfig{
 				Name:          "dnode",
 				EnableXdqpSsl: true,
 			},
@@ -44,26 +46,25 @@ var (
 		{
 			Name:     enodeGrpName,
 			Replicas: &replicas,
-			GroupConfig: &databasev1alpha1.GroupConfig{
+			GroupConfig: &marklogicv1.GroupConfig{
 				Name:          "enode",
 				EnableXdqpSsl: true,
 			},
 		},
 	}
-	mlcluster = &databasev1alpha1.MarklogicCluster{
+	mlcluster = &marklogicv1.MarklogicCluster{
 		TypeMeta: metav1.TypeMeta{
-			APIVersion: "marklogic.com/v1alpha1",
+			APIVersion: "marklogic.progress.com/v1",
 			Kind:       "MarklogicCluster",
 		},
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "mlclusterednode",
 			Namespace: mlClusterNs,
 		},
-		Spec: databasev1alpha1.MarklogicClusterSpec{
+		Spec: marklogicv1.MarklogicClusterSpec{
 			Image: marklogicImage,
-			Auth: &databasev1alpha1.AdminAuth{
-				AdminUsername: &adminUsername,
-				AdminPassword: &adminPassword,
+			Auth: &marklogicv1.AdminAuth{
+				SecretName: &secretName,
 			},
 			MarkLogicGroups: marklogicgroups,
 		},
@@ -71,7 +72,7 @@ var (
 )
 
 func TestMlClusterWithEdnode(t *testing.T) {
-	feature := features.New("MarklogicCluster Resource with 2 MarkLogicGroups (Ednode and dnode)")
+	feature := features.New("MarklogicCluster Resource with 2 MarkLogicGroups (Ednode and dnode)").WithLabel("type", "ednode")
 
 	// Setup for MarklogicCluster creation
 	feature.Setup(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
@@ -84,7 +85,12 @@ func TestMlClusterWithEdnode(t *testing.T) {
 		if err := client.Resources().Create(ctx, namespace); err != nil {
 			t.Fatalf("Failed to create namespace: %s", err)
 		}
-		databasev1alpha1.AddToScheme(client.Resources(mlClusterNs).GetScheme())
+		marklogicv1.AddToScheme(client.Resources(mlClusterNs).GetScheme())
+
+		p := e2eutils.RunCommand("kubectl -n ednode create secret generic ml-admin-secrets --from-literal=username=admin --from-literal=password=Admin@8001 ")
+		if p.Err() != nil {
+			t.Fatalf("Failed to create custom secret for testing: %s", p.Result())
+		}
 
 		if err := client.Resources(mlClusterNs).Create(ctx, mlcluster); err != nil {
 			t.Fatalf("Failed to create MarklogicCluster: %s", err)
@@ -105,7 +111,7 @@ func TestMlClusterWithEdnode(t *testing.T) {
 	// Assessment to check for MarklogicCluster deployment
 	feature.Assess("MarklogicCluster with 2 MarkLogicGroups deployed Ok", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 		client := c.Client()
-		var mlcluster databasev1alpha1.MarklogicCluster
+		var mlcluster marklogicv1.MarklogicCluster
 		if err := client.Resources().Get(ctx, "mlclusterednode", mlClusterNs, &mlcluster); err != nil {
 			t.Log("====MarklogicCluster not found====")
 			t.Fatal(err)
@@ -149,7 +155,7 @@ func TestMlClusterWithEdnode(t *testing.T) {
 	// Scale the MarkLogic group
 	feature.Setup(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 		client := c.Client()
-		var mlcluster databasev1alpha1.MarklogicCluster
+		var mlcluster marklogicv1.MarklogicCluster
 		if err := client.Resources().Get(ctx, "mlclusterednode", mlClusterNs, &mlcluster); err != nil {
 			t.Fatal(err)
 		}

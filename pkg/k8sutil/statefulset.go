@@ -6,8 +6,8 @@ import (
 	"strconv"
 
 	"github.com/cisco-open/k8s-objectmatcher/patch"
-	databasev1alpha1 "github.com/marklogic/marklogic-kubernetes-operator/api/v1alpha1"
-	"github.com/marklogic/marklogic-kubernetes-operator/pkg/result"
+	marklogicv1 "github.com/marklogic/marklogic-operator-kubernetes/api/v1"
+	"github.com/marklogic/marklogic-operator-kubernetes/pkg/result"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -19,17 +19,18 @@ import (
 )
 
 type statefulSetParameters struct {
-	Replicas                      *int32
-	Name                          string
-	PersistentVolumeClaim         corev1.PersistentVolumeClaim
-	ServiceName                   string
-	TerminationGracePeriodSeconds *int64
-	UpdateStrategy                appsv1.StatefulSetUpdateStrategyType
-	NodeSelector                  map[string]string
-	Affinity                      *corev1.Affinity
-	TopologySpreadConstraints     []corev1.TopologySpreadConstraint
-	PriorityClassName             string
-	ImagePullSecrets              []corev1.LocalObjectReference
+	Replicas                       *int32
+	Name                           string
+	PersistentVolumeClaim          corev1.PersistentVolumeClaim
+	ServiceName                    string
+	TerminationGracePeriodSeconds  *int64
+	UpdateStrategy                 appsv1.StatefulSetUpdateStrategyType
+	NodeSelector                   map[string]string
+	Affinity                       *corev1.Affinity
+	TopologySpreadConstraints      []corev1.TopologySpreadConstraint
+	PriorityClassName              string
+	ImagePullSecrets               []corev1.LocalObjectReference
+	AdditionalVolumeClaimTemplates *[]corev1.PersistentVolumeClaim
 }
 
 type containerParameters struct {
@@ -39,31 +40,32 @@ type containerParameters struct {
 	Image                  string
 	ImagePullPolicy        corev1.PullPolicy
 	Resources              *corev1.ResourceRequirements
-	PersistenceEnabled     *bool
+	Persistence            *marklogicv1.Persistence
 	Volumes                []corev1.Volume
 	MountPaths             []corev1.VolumeMount
 	LicenseKey             string
 	Licensee               string
 	BootstrapHost          string
-	LivenessProbe          databasev1alpha1.ContainerProbe
-	ReadinessProbe         databasev1alpha1.ContainerProbe
-	LogCollection          *databasev1alpha1.LogCollection
-	GroupConfig            *databasev1alpha1.GroupConfig
+	LivenessProbe          marklogicv1.ContainerProbe
+	ReadinessProbe         marklogicv1.ContainerProbe
+	LogCollection          *marklogicv1.LogCollection
+	GroupConfig            *marklogicv1.GroupConfig
 	PodSecurityContext     *corev1.PodSecurityContext
 	SecurityContext        *corev1.SecurityContext
 	EnableConverters       bool
-	HugePages              *databasev1alpha1.HugePages
+	HugePages              *marklogicv1.HugePages
 	PathBasedRouting       bool
-	Tls                    *databasev1alpha1.Tls
+	Tls                    *marklogicv1.Tls
 	AdditionalVolumes      *[]corev1.Volume
 	AdditionalVolumeMounts *[]corev1.VolumeMount
+	SecretName             string
 }
 
 func (oc *OperatorContext) ReconcileStatefulset() (reconcile.Result, error) {
 	cr := oc.GetMarkLogicServer()
 	logger := oc.ReqLogger
-	labels := getMarkLogicLabels(cr.Spec.Name)
-	annotations := map[string]string{}
+	labels := getCommonLabels(cr.Spec.Name)
+	annotations := getCommonAnnotations()
 	objectMeta := generateObjectMeta(cr.Spec.Name, cr.Namespace, labels, annotations)
 	currentSts, err := oc.GetStatefulSet(cr.Namespace, objectMeta.Name)
 	containerParams := generateContainerParams(cr)
@@ -171,7 +173,7 @@ func (oc *OperatorContext) GetStatefulSet(namespace string, stateful string) (*a
 	return statefulInfo, nil
 }
 
-func (oc *OperatorContext) createStatefulSet(statefulset *appsv1.StatefulSet, cr *databasev1alpha1.MarklogicGroup) error {
+func (oc *OperatorContext) createStatefulSet(statefulset *appsv1.StatefulSet, cr *marklogicv1.MarklogicGroup) error {
 	logger := oc.ReqLogger
 	err := oc.Client.Create(context.TODO(), statefulset)
 	// _, err := GenerateK8sClient().AppsV1().StatefulSets(namespace).Create(context.TODO(), stateful, metav1.CreateOptions{})
@@ -196,7 +198,8 @@ func generateStatefulSetsDef(stsMeta metav1.ObjectMeta, params statefulSetParame
 			UpdateStrategy:      appsv1.StatefulSetUpdateStrategy{Type: params.UpdateStrategy},
 			Template: corev1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{
-					Labels: stsMeta.GetLabels(),
+					Labels:      stsMeta.GetLabels(),
+					Annotations: stsMeta.GetAnnotations(),
 				},
 				Spec: corev1.PodSpec{
 					Containers:                    generateContainerDef("marklogic-server", containerParams),
@@ -212,8 +215,8 @@ func generateStatefulSetsDef(stsMeta metav1.ObjectMeta, params statefulSetParame
 			},
 		},
 	}
-	// add EmptyDir volume if storage is not provided
-	if containerParams.PersistenceEnabled == nil || !*containerParams.PersistenceEnabled {
+	// add EmptyDir volume if persistence is not provided
+	if containerParams.Persistence == nil || !containerParams.Persistence.Enabled {
 		emptyDir := corev1.Volume{
 			Name:         "datadir",
 			VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}},
@@ -221,6 +224,9 @@ func generateStatefulSetsDef(stsMeta metav1.ObjectMeta, params statefulSetParame
 		statefulSet.Spec.Template.Spec.Volumes = append(statefulSet.Spec.Template.Spec.Volumes, emptyDir)
 	} else {
 		statefulSet.Spec.VolumeClaimTemplates = append(statefulSet.Spec.VolumeClaimTemplates, params.PersistentVolumeClaim)
+	}
+	if params.AdditionalVolumeClaimTemplates != nil {
+		statefulSet.Spec.VolumeClaimTemplates = append(statefulSet.Spec.VolumeClaimTemplates, *params.AdditionalVolumeClaimTemplates...)
 	}
 	if containerParams.Tls != nil && containerParams.Tls.EnableOnDefaultAppServers {
 		copyCertsVM := []corev1.VolumeMount{
@@ -332,26 +338,26 @@ func generateContainerDef(name string, containerParams containerParameters) []co
 	return containerDef
 }
 
-func generateStatefulSetsParams(cr *databasev1alpha1.MarklogicGroup) statefulSetParameters {
+func generateStatefulSetsParams(cr *marklogicv1.MarklogicGroup) statefulSetParameters {
 	params := statefulSetParameters{
-		Replicas:                      cr.Spec.Replicas,
-		Name:                          cr.Spec.Name,
-		TerminationGracePeriodSeconds: cr.Spec.TerminationGracePeriodSeconds,
-		UpdateStrategy:                cr.Spec.UpdateStrategy,
-		NodeSelector:                  cr.Spec.NodeSelector,
-		Affinity:                      cr.Spec.Affinity,
-		TopologySpreadConstraints:     cr.Spec.TopologySpreadConstraints,
-		PriorityClassName:             cr.Spec.PriorityClassName,
-		ImagePullSecrets:              cr.Spec.ImagePullSecrets,
+		Replicas:                       cr.Spec.Replicas,
+		Name:                           cr.Spec.Name,
+		TerminationGracePeriodSeconds:  cr.Spec.TerminationGracePeriodSeconds,
+		UpdateStrategy:                 cr.Spec.UpdateStrategy,
+		NodeSelector:                   cr.Spec.NodeSelector,
+		Affinity:                       cr.Spec.Affinity,
+		TopologySpreadConstraints:      cr.Spec.TopologySpreadConstraints,
+		PriorityClassName:              cr.Spec.PriorityClassName,
+		ImagePullSecrets:               cr.Spec.ImagePullSecrets,
+		AdditionalVolumeClaimTemplates: cr.Spec.AdditionalVolumeClaimTemplates,
 	}
-	if cr.Spec.Storage != nil {
-		params.PersistentVolumeClaim = generatePVCTemplate(cr.Spec.Storage)
+	if cr.Spec.Persistence != nil && cr.Spec.Persistence.Enabled {
+		params.PersistentVolumeClaim = generatePVCTemplate(cr.Spec.Persistence)
 	}
 	return params
 }
 
-func generateContainerParams(cr *databasev1alpha1.MarklogicGroup) containerParameters {
-	trueProperty := true
+func generateContainerParams(cr *marklogicv1.MarklogicGroup) containerParameters {
 	containerParams := containerParameters{
 		Image:                  cr.Spec.Image,
 		Resources:              cr.Spec.Resources,
@@ -370,16 +376,10 @@ func generateContainerParams(cr *databasev1alpha1.MarklogicGroup) containerParam
 		Tls:                    cr.Spec.Tls,
 		AdditionalVolumes:      cr.Spec.AdditionalVolumes,
 		AdditionalVolumeMounts: cr.Spec.AdditionalVolumeMounts,
+		SecretName:             cr.Spec.SecretName,
+		Persistence:            cr.Spec.Persistence,
 	}
 
-	if cr.Spec.Storage != nil {
-		containerParams.Volumes = cr.Spec.Storage.VolumeMount.Volume
-		containerParams.MountPaths = cr.Spec.Storage.VolumeMount.MountPath
-	}
-
-	if cr.Spec.Storage != nil {
-		containerParams.PersistenceEnabled = &trueProperty
-	}
 	if cr.Spec.License != nil {
 		containerParams.LicenseKey = cr.Spec.License.Key
 		containerParams.Licensee = cr.Spec.License.Licensee
@@ -425,7 +425,7 @@ func generateVolumes(stsName string, containerParams containerParameters) []core
 		Name: "mladmin-secrets",
 		VolumeSource: corev1.VolumeSource{
 			Secret: &corev1.SecretVolumeSource{
-				SecretName: fmt.Sprintf("%s-admin", stsName),
+				SecretName: containerParams.SecretName,
 			},
 		},
 	})
@@ -505,17 +505,17 @@ func generateVolumes(stsName string, containerParams containerParameters) []core
 	return volumes
 }
 
-func generatePVCTemplate(storage *databasev1alpha1.Storage) corev1.PersistentVolumeClaim {
+func generatePVCTemplate(persistence *marklogicv1.Persistence) corev1.PersistentVolumeClaim {
 	pvcTemplate := corev1.PersistentVolumeClaim{}
 	pvcTemplate.CreationTimestamp = metav1.Time{}
-	pvcTemplate.Name = "datadir"
-	if pvcTemplate.Spec.StorageClassName != nil {
-		pvcTemplate.Spec.StorageClassName = &storage.StorageClassName
+	pvcTemplate.ObjectMeta.Name = "datadir"
+	if persistence != nil && persistence.StorageClassName != "" {
+		pvcTemplate.Spec.StorageClassName = &persistence.StorageClassName
 	}
-	pvcTemplate.Spec.AccessModes = []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce}
-	pvcTemplate.Spec.Resources.Requests.Storage().Add(resource.MustParse(storage.Size))
+	pvcTemplate.Spec.AccessModes = persistence.AccessModes
+	pvcTemplate.ObjectMeta.Annotations = persistence.Annotations
 	pvcTemplate.Spec.Resources.Requests = corev1.ResourceList{
-		corev1.ResourceStorage: resource.MustParse(storage.Size),
+		corev1.ResourceStorage: resource.MustParse(persistence.Size),
 	}
 	return pvcTemplate
 }
@@ -625,7 +625,6 @@ func getFluentBitEnvironmentVariables() []corev1.EnvVar {
 func getVolumeMount(containerParams containerParameters) []corev1.VolumeMount {
 	var VolumeMounts []corev1.VolumeMount
 
-	// if persistenceEnabled != nil && *persistenceEnabled {
 	VolumeMounts = append(VolumeMounts,
 		corev1.VolumeMount{
 			Name:      "datadir",
@@ -678,7 +677,7 @@ func getFluentBitVolumeMount() []corev1.VolumeMount {
 	return VolumeMountsFluentBit
 }
 
-func getLivenessProbe(probe databasev1alpha1.ContainerProbe) *corev1.Probe {
+func getLivenessProbe(probe marklogicv1.ContainerProbe) *corev1.Probe {
 	return &corev1.Probe{
 		InitialDelaySeconds: probe.InitialDelaySeconds,
 		PeriodSeconds:       probe.PeriodSeconds,
@@ -693,7 +692,7 @@ func getLivenessProbe(probe databasev1alpha1.ContainerProbe) *corev1.Probe {
 	}
 }
 
-func getReadinessProbe(probe databasev1alpha1.ContainerProbe) *corev1.Probe {
+func getReadinessProbe(probe marklogicv1.ContainerProbe) *corev1.Probe {
 	return &corev1.Probe{
 		InitialDelaySeconds: probe.InitialDelaySeconds,
 		PeriodSeconds:       probe.PeriodSeconds,

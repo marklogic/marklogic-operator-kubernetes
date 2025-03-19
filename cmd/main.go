@@ -34,8 +34,8 @@ import (
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
-	databasev1alpha1 "github.com/marklogic/marklogic-kubernetes-operator/api/v1alpha1"
-	"github.com/marklogic/marklogic-kubernetes-operator/internal/controller"
+	marklogicv1 "github.com/marklogic/marklogic-operator-kubernetes/api/v1"
+	"github.com/marklogic/marklogic-operator-kubernetes/internal/controller"
 	//+kubebuilder:scaffold:imports
 )
 
@@ -47,7 +47,7 @@ var (
 func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
 
-	utilruntime.Must(databasev1alpha1.AddToScheme(scheme))
+	utilruntime.Must(marklogicv1.AddToScheme(scheme))
 	//+kubebuilder:scaffold:scheme
 }
 

@@ -2,8 +2,8 @@
 # since it depends on service name and namespace that are out of this kustomize package.
 # It should be run by config/default
 resources:
-- bases/database.marklogic.com_marklogicgroups.yaml
-- bases/database.marklogic.com_marklogicclusters.yaml
+- bases/marklogic.progress.com_marklogicgroups.yaml
+- bases/marklogic.progress.com_marklogicclusters.yaml
 #+kubebuilder:scaffold:crdkustomizeresource
 
 patches:
