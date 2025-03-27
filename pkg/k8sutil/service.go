@@ -38,7 +38,7 @@ func generateServicePorts() []corev1.ServicePort {
 		{
 			Name:       "xdqp-port1",
 			Port:       7998,
-			TargetPort: intstr.FromInt(int(7997)),
+			TargetPort: intstr.FromInt(int(7998)),
 			Protocol:   corev1.ProtocolTCP,
 		},
 		{
