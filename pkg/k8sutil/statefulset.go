@@ -136,7 +136,6 @@ func (oc *OperatorContext) ReconcileStatefulset() (reconcile.Result, error) {
 	} else {
 		logger.Info("MarkLogic statefulSet spec is the same as the MarkLogicGroup spec")
 	}
-	logger.Info("MarkLogic statefulSet is updated to " + strconv.Itoa(int(*cr.Spec.Replicas)))
 	logger.Info("Operator Status:", "Stage", cr.Status.Stage)
 	if cr.Status.Stage == "STS_CREATED" {
 		logger.Info("MarkLogic statefulSet created successfully, waiting for pods to be ready")
@@ -191,7 +190,7 @@ func generateStatefulSetsDef(stsMeta metav1.ObjectMeta, params statefulSetParame
 		TypeMeta:   generateTypeMeta("StatefulSet", "apps/v1"),
 		ObjectMeta: stsMeta,
 		Spec: appsv1.StatefulSetSpec{
-			Selector:            LabelSelectors(stsMeta.GetLabels()),
+			Selector:            LabelSelectors(getSelectorLabels(params.Name)),
 			ServiceName:         stsMeta.Name,
 			Replicas:            params.Replicas,
 			PodManagementPolicy: appsv1.ParallelPodManagement,
