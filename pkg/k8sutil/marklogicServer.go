@@ -186,6 +186,8 @@ func (cc *ClusterContext) ReconsileMarklogicCluster() (reconcile.Result, error) 
 				logger.Info("MarkLogic statefulSet spec is different from the MarkLogicGroup spec, updating the statefulSet")
 				logger.Info(patchDiff.String())
 				currentMlg.Spec = markLogicGroupDef.Spec
+				currentMlg.ObjectMeta.Labels = markLogicGroupDef.ObjectMeta.Labels
+				currentMlg.ObjectMeta.Annotations = markLogicGroupDef.ObjectMeta.Annotations
 				err := cc.Client.Update(cc.Ctx, currentMlg)
 				if err != nil {
 					logger.Error(err, "Error updating MakrLogicGroup")
