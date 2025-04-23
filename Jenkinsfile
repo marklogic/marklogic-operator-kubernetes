@@ -6,7 +6,7 @@
 import groovy.json.JsonSlurperClassic
 
 emailList = 'vitaly.korolev@progress.com, sumanth.ravipati@progress.com, peng.zhou@progress.com, barkha.choithani@progress.com, romain.winieski@progress.com'
-emailSecList = 'Rangan.Doreswamy@progress.com, Mahalakshmi.Srinivasan@progress.com'
+emailSecList = 'Mahalakshmi.Srinivasan@progress.com'
 gitCredID = 'marklogic-builder-github'
 JIRA_ID = ''
 JIRA_ID_PATTERN = /(?i)(MLE)-\d{3,6}/
@@ -92,7 +92,7 @@ def getReviewState() {
     return reviewState
 }
 
-void resultNotification(message) {
+void resultNotification(status) {
     def author, authorEmail, emailList
     //add author of a PR to email list if available
     if (env.CHANGE_AUTHOR) {
@@ -107,11 +107,11 @@ void resultNotification(message) {
     jira_email_body = "${email_body} <br><br><b>Jira URL: </b><br><a href='${jira_link}'>${jira_link}</a>"
 
     if (JIRA_ID) {
-        def comment = [ body: "Jenkins pipeline build result: ${message}" ]
+        def comment = [ body: "Jenkins pipeline build result: ${status}" ]
         jiraAddComment site: 'JIRA', idOrKey: JIRA_ID, failOnError: false, input: comment
-        mail charset: 'UTF-8', mimeType: 'text/html', to: "${emailList}", body: "${jira_email_body}", subject: "${message}: ${env.JOB_NAME} #${env.BUILD_NUMBER} - ${JIRA_ID}"
+        mail charset: 'UTF-8', mimeType: 'text/html', to: "${emailList}", body: "${jira_email_body}", subject: "🥷 ${status}: ${env.JOB_NAME} #${env.BUILD_NUMBER} - ${JIRA_ID}"
     } else {
-        mail charset: 'UTF-8', mimeType: 'text/html', to: "${emailList}", body: "${email_body}", subject: "${message}: ${env.JOB_NAME} #${env.BUILD_NUMBER}"
+        mail charset: 'UTF-8', mimeType: 'text/html', to: "${emailList}", body: "${email_body}", subject: "🥷 ${status}: ${env.JOB_NAME} #${env.BUILD_NUMBER}"
     }
 }
 
@@ -142,6 +142,9 @@ void runMinikubeCleanup() {
     '''
 }
 
+void runSecurityScan() {
+    build job: 'securityscans/Blackduck/KubeNinjas/kubernetes-operator', wait: false, parameters: [ string(name: 'branch', value: "${env.BRANCH_NAME}") ]
+}
 pipeline {
     agent {
         label {
@@ -169,6 +172,12 @@ pipeline {
         stage('Pre-Build-Check') {
             steps {
                 preBuildCheck()
+            }
+        }
+
+        stage('Run-Security-Scan') {
+            steps {
+                runSecurityScan()
             }
         }
 
@@ -203,13 +212,16 @@ pipeline {
             publishTestResults()
         }
         success {
-            resultNotification('BUILD SUCCESS ✅')
+            resultNotification('✅ Success')
         }
         failure {
-            resultNotification('BUILD ERROR ❌')
+            resultNotification('❌ Failure')
         }
         unstable {
-            resultNotification('BUILD UNSTABLE 🉑')
+            resultNotification('⚠️ Unstable')
+        }
+        aborted {
+            resultNotification('🚫 Aborted')
         }
     }
 }
