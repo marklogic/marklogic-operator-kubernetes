@@ -19,6 +19,8 @@ type MarkLogicGroupParameters struct {
 	Replicas                       *int32
 	Name                           string
 	ServiceAccountName             string
+	Labels                         map[string]string
+	Annotations                    map[string]string
 	GroupConfig                    *marklogicv1.GroupConfig
 	Image                          string
 	ImagePullPolicy                string
@@ -89,6 +91,16 @@ func GenerateMarkLogicGroupDef(cr *marklogicv1.MarklogicCluster, index int, para
 	logger.Info("ReconcileMarkLogicCluster")
 	labels := getCommonLabels(cr.ObjectMeta.Name)
 	annotations := getCommonAnnotations()
+	if params.Labels != nil {
+		for key, value := range params.Labels {
+			labels[key] = value
+		}
+	}
+	if params.Annotations != nil {
+		for key, value := range params.Annotations {
+			annotations[key] = value
+		}
+	}
 	objectMeta := generateObjectMeta(cr.Spec.MarkLogicGroups[index].Name, cr.Namespace, labels, annotations)
 	bootStrapHostName := ""
 	bootStrapName := ""
@@ -246,6 +258,8 @@ func generateMarkLogicGroupParams(cr *marklogicv1.MarklogicCluster, index int, c
 	markLogicGroupParameters := &MarkLogicGroupParameters{
 		Replicas:                       cr.Spec.MarkLogicGroups[index].Replicas,
 		Name:                           cr.Spec.MarkLogicGroups[index].Name,
+		Labels:                         cr.Spec.MarkLogicGroups[index].Labels,
+		Annotations:                    cr.Spec.MarkLogicGroups[index].Annotations,
 		GroupConfig:                    cr.Spec.MarkLogicGroups[index].GroupConfig,
 		Service:                        cr.Spec.MarkLogicGroups[index].Service,
 		Image:                          clusterParams.Image,

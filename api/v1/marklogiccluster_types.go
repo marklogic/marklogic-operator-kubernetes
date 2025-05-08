@@ -91,7 +91,9 @@ type MarklogicGroups struct {
 	// +kubebuilder:default:=1
 	Replicas *int32 `json:"replicas,omitempty"`
 	// +kubebuilder:validation:Required
-	Name string `json:"name,omitempty"`
+	Name        string            `json:"name,omitempty"`
+	Labels      map[string]string `json:"labels,omitempty"`
+	Annotations map[string]string `json:"annotations,omitempty"`
 	// +kubebuilder:default:={name: "Default", enableXdqpSsl: true}
 	GroupConfig               *GroupConfig                      `json:"groupConfig,omitempty"`
 	Image                     string                            `json:"image,omitempty"`

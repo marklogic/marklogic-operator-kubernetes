@@ -733,6 +733,20 @@ func (in *MarklogicGroups) DeepCopyInto(out *MarklogicGroups) {
 		*out = new(int32)
 		**out = **in
 	}
+	if in.Labels != nil {
+		in, out := &in.Labels, &out.Labels
+		*out = make(map[string]string, len(*in))
+		for key, val := range *in {
+			(*out)[key] = val
+		}
+	}
+	if in.Annotations != nil {
+		in, out := &in.Annotations, &out.Annotations
+		*out = make(map[string]string, len(*in))
+		for key, val := range *in {
+			(*out)[key] = val
+		}
+	}
 	if in.GroupConfig != nil {
 		in, out := &in.GroupConfig, &out.GroupConfig
 		*out = new(GroupConfig)

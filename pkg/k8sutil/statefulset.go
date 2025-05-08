@@ -65,9 +65,12 @@ type containerParameters struct {
 func (oc *OperatorContext) ReconcileStatefulset() (reconcile.Result, error) {
 	cr := oc.GetMarkLogicServer()
 	logger := oc.ReqLogger
-	labels := getCommonLabels(cr.Spec.Name)
-	annotations := getCommonAnnotations()
-	objectMeta := generateObjectMeta(cr.Spec.Name, cr.Namespace, labels, annotations)
+	// labels := getCommonLabels()
+	groupLabels := cr.GetLabels()
+	groupLabels["app.kubernetes.io/instance"] = cr.Spec.Name
+	groupAnnotations := cr.GetAnnotations()
+	// annotations := getCommonAnnotations()
+	objectMeta := generateObjectMeta(cr.Spec.Name, cr.Namespace, groupLabels, groupAnnotations)
 	currentSts, err := oc.GetStatefulSet(cr.Namespace, objectMeta.Name)
 	containerParams := generateContainerParams(cr)
 	statefulSetParams := generateStatefulSetsParams(cr)
