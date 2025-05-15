@@ -11004,7 +11004,7 @@ spec:
             - message: HAProxy and Pathbased Routing is enabled. PathBasedRouting
                 is only supported for MarkLogic 11.1 and above
               rule: '!(self.haproxy.enabled == true && self.haproxy.pathBasedRouting
-                == true) || int(self.image.split('':'')[1].split(''.'')[0] + self.image.split('':'')[1].split(''.'')[1])
+                == true) || int(self.image.split('':'')[size(self.image.split('':'')) - 1].split(''.'')[0] + self.image.split('':'')[size(self.image.split('':'')) - 1].split(''.'')[1]) 
                 >= 111'
           status:
             description: MarklogicClusterStatus defines the observed state of MarklogicCluster
