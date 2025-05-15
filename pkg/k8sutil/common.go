@@ -54,6 +54,7 @@ func SetCommonLabels(labels map[string]string) {
 }
 
 func SetCommonAnnotations(annotations map[string]string) {
+	delete(annotations, "kubectl.kubernetes.io/last-applied-configuration")
 	CustomAnnotations = annotations
 }
 
