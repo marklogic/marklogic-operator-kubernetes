@@ -18,6 +18,7 @@ import (
 type MarkLogicGroupParameters struct {
 	Replicas                       *int32
 	Name                           string
+	ServiceAccountName             string
 	GroupConfig                    *marklogicv1.GroupConfig
 	Image                          string
 	ImagePullPolicy                string
@@ -52,6 +53,7 @@ type MarkLogicClusterParameters struct {
 	Auth                           *marklogicv1.AdminAuth
 	Replicas                       *int32
 	Name                           string
+	ServiceAccountName             string
 	Image                          string
 	ImagePullPolicy                string
 	ImagePullSecrets               []corev1.LocalObjectReference
@@ -208,6 +210,7 @@ func generateMarkLogicClusterParams(cr *marklogicv1.MarklogicCluster) *MarkLogic
 		Image:                          cr.Spec.Image,
 		ImagePullPolicy:                cr.Spec.ImagePullPolicy,
 		ImagePullSecrets:               cr.Spec.ImagePullSecrets,
+		ServiceAccountName:             cr.Spec.ServiceAccountName,
 		ClusterDomain:                  cr.Spec.ClusterDomain,
 		Persistence:                    cr.Spec.Persistence,
 		Affinity:                       cr.Spec.Affinity,
@@ -247,6 +250,7 @@ func generateMarkLogicGroupParams(cr *marklogicv1.MarklogicCluster, index int, c
 		ImagePullPolicy:                clusterParams.ImagePullPolicy,
 		ImagePullSecrets:               clusterParams.ImagePullSecrets,
 		Auth:                           clusterParams.Auth,
+		ServiceAccountName:             clusterParams.ServiceAccountName,
 		License:                        clusterParams.License,
 		Persistence:                    clusterParams.Persistence,
 		TerminationGracePeriodSeconds:  clusterParams.TerminationGracePeriodSeconds,

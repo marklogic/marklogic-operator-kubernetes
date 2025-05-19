@@ -31,6 +31,7 @@ type statefulSetParameters struct {
 	PriorityClassName              string
 	ImagePullSecrets               []corev1.LocalObjectReference
 	AdditionalVolumeClaimTemplates *[]corev1.PersistentVolumeClaim
+	ServiceAccountName             string
 }
 
 type containerParameters struct {
@@ -227,6 +228,9 @@ func generateStatefulSetsDef(stsMeta metav1.ObjectMeta, params statefulSetParame
 	if params.AdditionalVolumeClaimTemplates != nil {
 		statefulSet.Spec.VolumeClaimTemplates = append(statefulSet.Spec.VolumeClaimTemplates, *params.AdditionalVolumeClaimTemplates...)
 	}
+	if params.ServiceAccountName != "" {
+		statefulSet.Spec.Template.Spec.ServiceAccountName = params.ServiceAccountName
+	}
 	if containerParams.Tls != nil && containerParams.Tls.EnableOnDefaultAppServers {
 		copyCertsVM := []corev1.VolumeMount{
 			{
@@ -341,6 +345,7 @@ func generateStatefulSetsParams(cr *marklogicv1.MarklogicGroup) statefulSetParam
 	params := statefulSetParameters{
 		Replicas:                       cr.Spec.Replicas,
 		Name:                           cr.Spec.Name,
+		ServiceAccountName:             cr.Spec.ServiceAccountName,
 		TerminationGracePeriodSeconds:  cr.Spec.TerminationGracePeriodSeconds,
 		UpdateStrategy:                 cr.Spec.UpdateStrategy,
 		NodeSelector:                   cr.Spec.NodeSelector,

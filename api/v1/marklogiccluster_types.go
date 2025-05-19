@@ -41,7 +41,8 @@ type MarklogicClusterSpec struct {
 	ImagePullPolicy  string                        `json:"imagePullPolicy,omitempty"`
 	ImagePullSecrets []corev1.LocalObjectReference `json:"imagePullSecrets,omitempty"`
 
-	Auth *AdminAuth `json:"auth,omitempty"`
+	Auth               *AdminAuth `json:"auth,omitempty"`
+	ServiceAccountName string     `json:"serviceAccountName,omitempty"`
 	// +kubebuilder:default:={enabled: true, size: "10Gi"}
 	Persistence                   *Persistence                 `json:"persistence,omitempty"`
 	Resources                     *corev1.ResourceRequirements `json:"resources,omitempty"`
