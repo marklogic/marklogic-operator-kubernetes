@@ -82,7 +82,7 @@ backend marklogic-{{ .PortNumber}}-backend
   mode http
   balance leastconn
   option forwardfor
-  cookie haproxy insert indirect nocache maxidle 30m maxlife 4h
+  cookie haproxy insert indirect httponly nocache maxidle 30m maxlife 4h
   stick-table type string len 32 size 10k expire 4h
   stick store-response res.cook(HostId)
   stick store-response res.cook(SessionId)
