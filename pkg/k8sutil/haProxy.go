@@ -24,8 +24,7 @@ func (cc *ClusterContext) ReconcileHAProxy() result.ReconcileResult {
 
 	logger.Info("Reconciling HAProxy Config")
 
-	labels := getCommonLabels(cr.GetObjectMeta().GetName())
-	labels["app.kubernetes.io/component"] = "haproxy"
+	labels := getHAProxyLabels(cr.GetObjectMeta().GetName())
 	annotations := getCommonAnnotations()
 	configMapName := "marklogic-haproxy"
 	objectMeta := generateObjectMeta(configMapName, cr.Namespace, labels, annotations)
@@ -344,6 +343,7 @@ func (cc *ClusterContext) generateHaproxyServiceDef(meta metav1.ObjectMeta) *cor
 			Port: cr.Spec.HAProxy.Stats.Port,
 		})
 	}
+	selectorLables := getHAProxyLabels(cr.GetObjectMeta().GetName())
 	serviceDef := &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:        "marklogic-haproxy",
@@ -352,7 +352,7 @@ func (cc *ClusterContext) generateHaproxyServiceDef(meta metav1.ObjectMeta) *cor
 			Annotations: meta.Annotations,
 		},
 		Spec: corev1.ServiceSpec{
-			Selector: meta.Labels,
+			Selector: selectorLables,
 			Ports:    servicePort,
 			Type:     corev1.ServiceTypeClusterIP,
 		},

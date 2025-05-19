@@ -68,6 +68,16 @@ func getSelectorLabels(name string) map[string]string {
 	return selectorLabels
 }
 
+func getHAProxyLabels(name string) map[string]string {
+	selectorLabels := map[string]string{
+		"app.kubernetes.io/name":       "marklogic",
+		"app.kubernetes.io/instance":   name,
+		"app.kubernetes.io/managed-by": "marklogic-operator",
+		"app.kubernetes.io/component":  "haproxy",
+	}
+	return selectorLabels
+}
+
 func getCommonLabels(name string) map[string]string {
 	defaultLabels := getSelectorLabels(name)
 	mergedLabels := map[string]string{}
