@@ -10815,6 +10815,8 @@ spec:
                     type: object
                 type: object
               serviceAccountName:
+                description: The name of the service account to assigned to the MarkLogic
+                  pods
                 type: string
               terminationGracePeriodSeconds:
                 format: int64
