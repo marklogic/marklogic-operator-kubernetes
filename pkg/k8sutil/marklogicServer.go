@@ -111,6 +111,7 @@ func GenerateMarkLogicGroupDef(cr *marklogicv1.MarklogicCluster, index int, para
 			Name:                           params.Name,
 			GroupConfig:                    params.GroupConfig,
 			Auth:                           params.Auth,
+			ServiceAccountName:             params.ServiceAccountName,
 			Image:                          params.Image,
 			ImagePullSecrets:               params.ImagePullSecrets,
 			License:                        params.License,
@@ -231,6 +232,7 @@ func generateMarkLogicClusterParams(cr *marklogicv1.MarklogicCluster) *MarkLogic
 		AdditionalVolumeMounts:         cr.Spec.AdditionalVolumeMounts,
 		AdditionalVolumeClaimTemplates: cr.Spec.AdditionalVolumeClaimTemplates,
 	}
+
 	if cr.Spec.HAProxy == nil || cr.Spec.HAProxy.PathBasedRouting == nil || !cr.Spec.HAProxy.Enabled || !*cr.Spec.HAProxy.PathBasedRouting {
 		markLogicClusterParameters.PathBasedRouting = false
 	} else {
