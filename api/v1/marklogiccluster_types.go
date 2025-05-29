@@ -42,6 +42,8 @@ type MarklogicClusterSpec struct {
 	ImagePullSecrets []corev1.LocalObjectReference `json:"imagePullSecrets,omitempty"`
 
 	Auth *AdminAuth `json:"auth,omitempty"`
+	// +kubebuilder:default:="marklogic-workload"
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf", message="ServiceAccountName can not be changed"
 	// The name of the service account to assigned to the MarkLogic pods
 	ServiceAccountName string `json:"serviceAccountName,omitempty"`
 	// +kubebuilder:default:={enabled: true, size: "10Gi"}
