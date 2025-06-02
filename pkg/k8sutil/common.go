@@ -69,13 +69,26 @@ func getSelectorLabels(name string) map[string]string {
 }
 
 func getHAProxyLabels(name string) map[string]string {
-	selectorLabels := map[string]string{
+	defaultHaproxyLabels := map[string]string{
 		"app.kubernetes.io/name":       "marklogic",
 		"app.kubernetes.io/instance":   name,
 		"app.kubernetes.io/managed-by": "marklogic-operator",
 		"app.kubernetes.io/component":  "haproxy",
 	}
-	return selectorLabels
+	mergedLabels := map[string]string{}
+	if len(CustomLabels) > 0 {
+		for k, v := range defaultHaproxyLabels {
+			mergedLabels[k] = v
+		}
+		for k, v := range CustomLabels {
+			if _, ok := defaultHaproxyLabels[k]; !ok {
+				mergedLabels[k] = v
+			}
+		}
+	} else {
+		return defaultHaproxyLabels
+	}
+	return mergedLabels
 }
 
 func getCommonLabels(name string) map[string]string {
