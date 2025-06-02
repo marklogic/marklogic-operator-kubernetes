@@ -368,6 +368,9 @@ func TestMarklogicCluster(t *testing.T) {
 	// Using feature.Teardown to clean up
 	feature.Teardown(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 		client := c.Client()
+		if err := client.Resources(mlNamespace).Delete(ctx, marklogiccluster); err != nil {
+			t.Fatalf("Failed to delete MarklogicCluster: %s", err)
+		}
 		if err := client.Resources().Delete(ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "grafana"}}); err != nil {
 			t.Fatalf("Failed to delete namespace: %s", err)
 		}
