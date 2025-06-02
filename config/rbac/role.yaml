@@ -10,6 +10,7 @@ rules:
   - configmaps
   - pods
   - secrets
+  - serviceaccounts
   - services
   verbs:
   - create
