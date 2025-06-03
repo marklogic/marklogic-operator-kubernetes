@@ -96,7 +96,7 @@ func generateServiceDef(serviceMeta metav1.ObjectMeta, ownerRef metav1.OwnerRefe
 }
 
 func generateService(svcName string, cr *marklogicv1.MarklogicGroup) *corev1.Service {
-	labels := getSelectorLabels(cr.Spec.Name)
+	labels := getCommonLabels(cr.Spec.Name)
 	var svcParams serviceParameters = serviceParameters{}
 	svcParams = generateServiceParams(cr)
 	svcObjectMeta := generateObjectMeta(svcName, cr.Namespace, labels, svcParams.Annotations)
