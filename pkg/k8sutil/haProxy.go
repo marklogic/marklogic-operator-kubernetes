@@ -62,7 +62,8 @@ func (cc *ClusterContext) ReconcileHAProxy() result.ReconcileResult {
 				logger.Info("HAProxy Service creation is failed")
 				return result.Error(err)
 			}
-			logger.Info("HAProxy Test is successful")
+			logger.Info("HAProxy Deployed is successful")
+			return result.Continue()
 		} else {
 			logger.Error(err, "HAProxy configmap creation is failed")
 			return result.Error(err)
@@ -109,9 +110,6 @@ func (cc *ClusterContext) ReconcileHAProxy() result.ReconcileResult {
 		haproxyService.Spec = haproxyServiceDef.Spec
 		haproxyService.ObjectMeta.Labels = haproxyServiceDef.ObjectMeta.Labels
 		haproxyService.ObjectMeta.Annotations = haproxyServiceDef.ObjectMeta.Annotations
-		// if err := patch.DefaultAnnotator.SetLastAppliedAnnotation(haproxyService); err != nil {
-		// 	logger.Error(err, "Failed to set last applied annotation for HAProxy Service")
-		// }
 		err := cc.Client.Update(cc.Ctx, haproxyService)
 		if err != nil {
 			logger.Error(err, "Error updating HAProxy service")
