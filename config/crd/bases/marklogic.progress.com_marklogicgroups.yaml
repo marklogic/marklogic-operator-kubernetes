@@ -4557,6 +4557,8 @@ spec:
                       a service
                     type: string
                 type: object
+              serviceAccountName:
+                type: string
               terminationGracePeriodSeconds:
                 format: int64
                 type: integer

@@ -10814,6 +10814,14 @@ spec:
                         type: string
                     type: object
                 type: object
+              serviceAccountName:
+                default: marklogic-workload
+                description: The name of the service account to assigned to the MarkLogic
+                  pods
+                type: string
+                x-kubernetes-validations:
+                - message: ServiceAccountName can not be changed
+                  rule: self == oldSelf
               terminationGracePeriodSeconds:
                 format: int64
                 type: integer

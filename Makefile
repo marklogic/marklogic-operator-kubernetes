@@ -157,6 +157,7 @@ endif
 
 .PHONY: e2e-setup-minikube
 e2e-setup-minikube: kustomize controller-gen build docker-build
+	minikube version
 	minikube delete || true
 	minikube start --driver=docker --kubernetes-version=$(E2E_KUBERNETES_VERSION) --memory=8192 --cpus=2
 	minikube addons enable ingress
