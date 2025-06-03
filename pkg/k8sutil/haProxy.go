@@ -35,6 +35,7 @@ func (cc *ClusterContext) ReconcileHAProxy() result.ReconcileResult {
 	err := client.Get(cc.Ctx, nsName, configmap)
 	data := generateHAProxyConfigMapData(cc.MarklogicCluster)
 	configMapDef := generateHAProxyConfigMap(objectMeta, marklogicClusterAsOwner(cr), data)
+	haproxyDeploymentDef := cc.createHAProxyDeploymentDef(objectMeta)
 	haproxyServiceDef := cc.generateHaproxyServiceDef(objectMeta)
 	configmapHash := calculateHash(configMapDef.Data)
 	if err != nil {
@@ -49,7 +50,7 @@ func (cc *ClusterContext) ReconcileHAProxy() result.ReconcileResult {
 				return result.Error(err)
 			}
 			logger.Info("HAProxy configmap creation is successful")
-			err = cc.createHAProxyDeployment(objectMeta)
+			err = cc.createHAProxyDeployment(haproxyDeploymentDef)
 			if err != nil {
 				logger.Info("HAProxy Deployment creation is failed")
 				return result.Error(err)
@@ -117,19 +118,26 @@ func (cc *ClusterContext) ReconcileHAProxy() result.ReconcileResult {
 		}
 	}
 
+	// Check if the HAProxy Deployment is updated
+	logger.Info("!!@@##Checking if HAProxy Deployment is updated", "labels:", labels)
 	haproxyDeployment := &appsv1.Deployment{}
-	err = client.Get(cc.Ctx, types.NamespacedName{Name: "marklogic-haproxy", Namespace: cr.Namespace}, haproxyDeployment)
+	deployName := types.NamespacedName{Name: "marklogic-haproxy", Namespace: cr.Namespace}
+	err = client.Get(cc.Ctx, deployName, haproxyDeployment)
 	if err != nil {
 		logger.Error(err, "Failed to get HAProxy Deployment")
 		return result.Error(err)
 	}
-	if haproxyDeployment.Spec.Template.Annotations == nil {
-		haproxyDeployment.Spec.Template.Annotations = make(map[string]string)
+	patchDiff, err = patch.DefaultPatchMaker.Calculate(haproxyDeployment, haproxyDeploymentDef,
+		patch.IgnoreStatusFields(),
+		patch.IgnoreVolumeClaimTemplateTypeMetaAndStatus(),
+		patch.IgnoreField("kind"))
+	if haproxyDeploymentDef.Spec.Template.Annotations == nil {
+		haproxyDeploymentDef.Spec.Template.Annotations = make(map[string]string)
 	}
-	if haproxyDeployment.Spec.Template.Annotations["configmap-hash"] != configmapHash {
+	if haproxyDeployment.Spec.Template.Annotations["configmap-hash"] != configmapHash || !patchDiff.IsEmpty() {
 		logger.Info("HAProxy Deployment is different from the HAProxy ConfigMap, updating the Deployment")
-		haproxyDeployment.Spec.Template.Annotations["configmap-hash"] = configmapHash
-		err := client.Update(cc.Ctx, haproxyDeployment)
+		haproxyDeploymentDef.Spec.Template.Annotations["configmap-hash"] = configmapHash
+		err := client.Update(cc.Ctx, haproxyDeploymentDef)
 		if err != nil {
 			logger.Error(err, "Error updating HAProxy Deployment")
 			return result.Error(err)
@@ -206,12 +214,9 @@ resolvers dns
 	return haProxyData
 }
 
-// createHAproxy Deployment
-func (cc *ClusterContext) createHAProxyDeployment(meta metav1.ObjectMeta) error {
-	logger := cc.ReqLogger
-	logger.Info("Creating HAProxy Deployment")
-	client := cc.Client
+func (cc *ClusterContext) createHAProxyDeploymentDef(meta metav1.ObjectMeta) *appsv1.Deployment {
 	cr := cc.MarklogicCluster
+	selectorLabels := getHAProxySelectorLabels(cr.GetObjectMeta().GetName())
 	ownerDef := marklogicClusterAsOwner(cr)
 	defaultMode := int32(420)
 	deploymentDef := &appsv1.Deployment{
@@ -224,7 +229,7 @@ func (cc *ClusterContext) createHAProxyDeployment(meta metav1.ObjectMeta) error 
 		Spec: appsv1.DeploymentSpec{
 			Replicas: &cr.Spec.HAProxy.ReplicaCount,
 			Selector: &metav1.LabelSelector{
-				MatchLabels: meta.Labels,
+				MatchLabels: selectorLabels,
 			},
 			Template: corev1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{
@@ -288,7 +293,14 @@ func (cc *ClusterContext) createHAProxyDeployment(meta metav1.ObjectMeta) error 
 		})
 	}
 	AddOwnerRefToObject(deploymentDef, ownerDef)
-	logger.Info("===== HAProxy Deployment ==== ", "deployment:", deploymentDef)
+	return deploymentDef
+}
+
+// createHAproxy Deployment
+func (cc *ClusterContext) createHAProxyDeployment(deploymentDef *appsv1.Deployment) error {
+	logger := cc.ReqLogger
+	logger.Info("Creating HAProxy Deployment")
+	client := cc.Client
 	err := client.Create(cc.Ctx, deploymentDef)
 	if err != nil {
 		logger.Error(err, "HAProxy Deployment creation failed")
