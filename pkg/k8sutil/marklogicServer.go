@@ -91,8 +91,6 @@ func GenerateMarkLogicGroupDef(cr *marklogicv1.MarklogicCluster, index int, para
 	logger.Info("ReconcileMarkLogicCluster")
 	labels := getCommonLabels(cr.ObjectMeta.Name)
 	annotations := getCommonAnnotations()
-	logger.Info("!!!!MarkLogicGroupDef - Cluster Level Labels", "Cluster Level Labels", labels, "Annotations", annotations)
-	logger.Info("!!!!MarkLogicGroupDef - Group level Labels", "Group level Labels", params.Labels, "Annotations", params.Annotations)
 	if params.Labels != nil {
 		for key, value := range params.Labels {
 			labels[key] = value
@@ -103,7 +101,6 @@ func GenerateMarkLogicGroupDef(cr *marklogicv1.MarklogicCluster, index int, para
 			annotations[key] = value
 		}
 	}
-	logger.Info("!!!!MarkLogicGroupDef - Computed Labels", "Computed Labels", labels, "Annotations", annotations)
 	objectMeta := generateObjectMeta(cr.Spec.MarkLogicGroups[index].Name, cr.Namespace, labels, annotations)
 	bootStrapHostName := ""
 	bootStrapName := ""
@@ -173,7 +170,6 @@ func (cc *ClusterContext) ReconsileMarklogicCluster() (reconcile.Result, error) 
 		namespacedName := types.NamespacedName{Name: name, Namespace: namespace}
 		clusterParams := generateMarkLogicClusterParams(cr)
 		params := generateMarkLogicGroupParams(cr, i, clusterParams)
-		logger.Info("!!! ReconcileCluster MarkLogicGroup", "MarkLogicGroupParams", params)
 		markLogicGroupDef := GenerateMarkLogicGroupDef(operatorCR, i, params)
 		logger.Info("###MarkLogicGroupDef", "MarkLogicGroupDef Labels", markLogicGroupDef.ObjectMeta.Labels)
 		err := cc.Client.Get(cc.Ctx, namespacedName, currentMlg)

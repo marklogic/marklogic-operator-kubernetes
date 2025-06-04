@@ -81,7 +81,6 @@ func (cc *ClusterContext) ReconcileHAProxy() result.ReconcileResult {
 	}
 	if !patchDiff.IsEmpty() {
 		logger.Info("MarkLogic HAProxy Config spec is different from previous spec, updating the HAProxy ConfigMap")
-		logger.Info(patchDiff.String())
 		configmap.Data = configMapDef.Data
 		// if err := patch.DefaultAnnotator.SetLastAppliedAnnotation(configmap); err != nil {
 		// 	logger.Error(err, "Failed to set last applied annotation for HAProxy ConfigMap")
@@ -107,7 +106,6 @@ func (cc *ClusterContext) ReconcileHAProxy() result.ReconcileResult {
 	}
 	if !patchDiff.IsEmpty() {
 		logger.Info("HAProxy spec is different from the previous spec, updating the haproxy service")
-		logger.Info(patchDiff.String())
 		haproxyService.Spec = haproxyServiceDef.Spec
 		haproxyService.ObjectMeta.Labels = haproxyServiceDef.ObjectMeta.Labels
 		haproxyService.ObjectMeta.Annotations = haproxyServiceDef.ObjectMeta.Annotations

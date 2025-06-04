@@ -130,7 +130,6 @@ func (oc *OperatorContext) ReconcileStatefulset() (reconcile.Result, error) {
 		logger.Error(err, "Error calculating patch")
 		return result.Error(err).Output()
 	}
-	logger.Info("****MarkLogic statefulSet patch diff", "diff", patchDiff)
 	if !patchDiff.IsEmpty() {
 		logger.Info("MarkLogic statefulSet spec is different from the MarkLogicGroup spec, updating the statefulSet")
 		logger.Info(patchDiff.String())
