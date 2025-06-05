@@ -125,6 +125,8 @@ func GenerateMarkLogicGroupDef(cr *marklogicv1.MarklogicCluster, index int, para
 			Auth:                           params.Auth,
 			ServiceAccountName:             params.ServiceAccountName,
 			Image:                          params.Image,
+			Labels:                         params.Labels,
+			Annotations:                    params.Annotations,
 			ImagePullSecrets:               params.ImagePullSecrets,
 			License:                        params.License,
 			TerminationGracePeriodSeconds:  params.TerminationGracePeriodSeconds,

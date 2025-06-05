@@ -85,7 +85,6 @@ func (cc *ClusterContext) ReconcileNetworkPolicy() result.ReconcileResult {
 		}
 		if !patchDiff.IsEmpty() {
 			logger.Info("MarkLogic NetworkPolicy spec is different from the input NetworkPolicy spec, updating the NetworkPolicy")
-			logger.Info(patchDiff.String())
 			err := cc.Client.Update(cc.Ctx, networkPolicyDef)
 			if err != nil {
 				logger.Error(err, "Error updating NetworkPolicy")

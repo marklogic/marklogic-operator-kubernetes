@@ -132,7 +132,6 @@ func (oc *OperatorContext) ReconcileStatefulset() (reconcile.Result, error) {
 	}
 	if !patchDiff.IsEmpty() {
 		logger.Info("MarkLogic statefulSet spec is different from the MarkLogicGroup spec, updating the statefulSet")
-		logger.Info(patchDiff.String())
 		currentSts.Spec = statefulSetDef.Spec
 		currentSts.ObjectMeta.Annotations = statefulSetDef.ObjectMeta.Annotations
 		currentSts.ObjectMeta.Labels = statefulSetDef.ObjectMeta.Labels
