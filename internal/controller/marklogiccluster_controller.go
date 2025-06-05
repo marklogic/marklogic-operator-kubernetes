@@ -107,9 +107,9 @@ func markLogicClusterCreateUpdateDeletePredicate() predicate.Predicate {
 					return true // Reconcile if labels have changed
 				}
 				// If annotations and labels are the same, check if the spec has changed
-				oldObj := e.ObjectOld.(*marklogicv1.MarklogicGroup)
+				oldObj := e.ObjectOld.(*marklogicv1.MarklogicCluster)
 				// Check if the spec has changed
-				newObj := e.ObjectNew.(*marklogicv1.MarklogicGroup)
+				newObj := e.ObjectNew.(*marklogicv1.MarklogicCluster)
 				if !reflect.DeepEqual(oldObj.Spec, newObj.Spec) {
 					return true // Reconcile if spec has changed
 				}
