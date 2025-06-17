@@ -3,6 +3,7 @@ package k8sutil
 import (
 	"strings"
 
+	"github.com/cisco-open/k8s-objectmatcher/patch"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -14,6 +15,7 @@ import (
 )
 
 type serviceParameters struct {
+	StsName     string
 	Ports       []corev1.ServicePort
 	Type        corev1.ServiceType
 	Annotations map[string]string
@@ -21,6 +23,7 @@ type serviceParameters struct {
 
 func generateServiceParams(cr *marklogicv1.MarklogicGroup) serviceParameters {
 	return serviceParameters{
+		StsName:     cr.Spec.Name,
 		Type:        cr.Spec.Service.Type,
 		Ports:       cr.Spec.Service.AdditionalPorts,
 		Annotations: cr.Spec.Service.Annotations,
@@ -71,7 +74,7 @@ func generateServicePorts() []corev1.ServicePort {
 func generateServiceDef(serviceMeta metav1.ObjectMeta, ownerRef metav1.OwnerReference, params serviceParameters) *corev1.Service {
 	var svcSpec corev1.ServiceSpec
 	svcSpec = corev1.ServiceSpec{
-		Selector: serviceMeta.GetLabels(),
+		Selector: getSelectorLabels(params.StsName),
 		Ports:    append(params.Ports, generateServicePorts()...),
 	}
 	if strings.HasSuffix(serviceMeta.Name, "-cluster") {
@@ -92,44 +95,11 @@ func generateServiceDef(serviceMeta metav1.ObjectMeta, ownerRef metav1.OwnerRefe
 	return service
 }
 
-func (oc *OperatorContext) getService(namespace string, serviceName string) (*corev1.Service, error) {
-	logger := oc.ReqLogger
-
-	var serviceInfo *corev1.Service
-	err := oc.Client.Get(oc.Ctx, types.NamespacedName{Name: serviceName, Namespace: namespace}, serviceInfo)
-	if err != nil {
-		logger.Info("MarkLogic service get action is failed")
-		return nil, err
-	}
-	logger.Info("MarkLogic service get action is successful")
-	return serviceInfo, nil
-}
-
-func (oc *OperatorContext) CreateOrUpdateService(namespace string, serviceMeta metav1.ObjectMeta, ownerDef metav1.OwnerReference) error {
-	logger := oc.ReqLogger
-	serviceDef := generateServiceDef(serviceMeta, ownerDef, serviceParameters{})
-	_, err := oc.getService(namespace, serviceMeta.Name)
-	if err != nil {
-		if errors.IsNotFound(err) {
-			logger.Info("MarkLogic service is not found, creating a new one")
-			err = oc.createService(namespace, serviceDef)
-			if err != nil {
-				logger.Info("MarkLogic service creation is failed")
-				return err
-			}
-			logger.Info("MarkLogic service creation is successful")
-			return nil
-		}
-		return err
-	}
-	return nil
-}
-
 func generateService(svcName string, cr *marklogicv1.MarklogicGroup) *corev1.Service {
 	labels := getCommonLabels(cr.Spec.Name)
 	var svcParams serviceParameters = serviceParameters{}
-	svcObjectMeta := generateObjectMeta(svcName, cr.Namespace, labels, svcParams.Annotations)
 	svcParams = generateServiceParams(cr)
+	svcObjectMeta := generateObjectMeta(svcName, cr.Namespace, labels, svcParams.Annotations)
 	service := generateServiceDef(svcObjectMeta, marklogicServerAsOwner(cr), svcParams)
 	return service
 }
@@ -139,18 +109,21 @@ func (oc *OperatorContext) ReconcileServices() result.ReconcileResult {
 	logger.Info("service::Reconciling MarkLogic Service")
 	client := oc.Client
 	cr := oc.MarklogicGroup
-	svc := &corev1.Service{}
+	currentSvc := &corev1.Service{}
 	headlessSvcName := cr.Spec.Name
 	svcName := cr.Spec.Name + "-cluster"
 	services := []string{headlessSvcName, svcName}
 	for _, service := range services {
 		svcNsName := types.NamespacedName{Name: service, Namespace: cr.Namespace}
-		err := client.Get(oc.Ctx, svcNsName, svc)
+		err := client.Get(oc.Ctx, svcNsName, currentSvc)
+		svcDef := generateService(service, cr)
 		if err != nil {
 			if errors.IsNotFound(err) {
 				logger.Info("MarkLogic service not found, creating a new one")
-				svc = generateService(service, cr)
-				err = client.Create(oc.Ctx, svc)
+				if err := patch.DefaultAnnotator.SetLastAppliedAnnotation(svcDef); err != nil {
+					logger.Error(err, "Failed to set last applied annotation for MarkLogic service")
+				}
+				err = client.Create(oc.Ctx, svcDef)
 				if err != nil {
 					logger.Info("MarkLogic service creation has failed")
 					return result.Error(err)
@@ -160,19 +133,33 @@ func (oc *OperatorContext) ReconcileServices() result.ReconcileResult {
 				logger.Error(err, "MarkLogic service creation has failed")
 				return result.Error(err)
 			}
+		} else {
+			patchDiff, err := patch.DefaultPatchMaker.Calculate(currentSvc, svcDef,
+				patch.IgnoreStatusFields(),
+				patch.IgnoreVolumeClaimTemplateTypeMetaAndStatus(),
+				patch.IgnoreField("kind"))
+
+			if err != nil {
+				logger.Error(err, "Error calculating patch")
+				return result.Error(err)
+			}
+			if !patchDiff.IsEmpty() {
+				logger.Info("MarkLogic service spec is different from the MarkLogicGroup spec, updating the service")
+				currentSvc.Spec = svcDef.Spec
+				currentSvc.ObjectMeta.Annotations = svcDef.ObjectMeta.Annotations
+				currentSvc.ObjectMeta.Labels = svcDef.ObjectMeta.Labels
+				if err := patch.DefaultAnnotator.SetLastAppliedAnnotation(currentSvc); err != nil {
+					logger.Error(err, "Failed to set last applied annotation for MarkLogic service")
+				}
+				err := oc.Client.Update(oc.Ctx, currentSvc)
+				if err != nil {
+					logger.Error(err, "Error updating MarkLogic service")
+					return result.Error(err)
+				}
+			} else {
+				logger.Info("MarkLogic service spec is the same")
+			}
 		}
 	}
 	return result.Continue()
-}
-
-func (oc *OperatorContext) createService(namespace string, service *corev1.Service) error {
-	logger := oc.ReqLogger
-	client := oc.Client
-	err := client.Create(oc.Ctx, service)
-	if err != nil {
-		logger.Error(err, "MarkLogic service creation has failed")
-		return err
-	}
-	logger.Info("MarkLogic service creation is successful")
-	return nil
 }
