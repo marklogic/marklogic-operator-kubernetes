@@ -89,40 +89,40 @@ func (oc *OperatorContext) ReconcileStatefulset() (reconcile.Result, error) {
 		logger.Error(err, "Cannot create standalone statefulSet for MarkLogic")
 		return result.Error(err).Output()
 	}
-	// patchClient := client.MergeFrom(oc.MarklogicGroup.DeepCopy())
-	// updated := false
-	// if currentSts.Status.ReadyReplicas == 0 || currentSts.Status.ReadyReplicas != currentSts.Status.Replicas {
-	// 	logger.Info("MarkLogic statefulSet is not ready, setting condition and requeue")
-	// 	condition := metav1.Condition{
-	// 		Type:    "Ready",
-	// 		Status:  metav1.ConditionFalse,
-	// 		Reason:  "MarkLogicGroupStatefulSetNotReady",
-	// 		Message: "MarkLogicGroup statefulSet is not ready",
-	// 	}
-	// 	updated = oc.setCondition(&condition)
-	// 	if updated {
-	// 		err := oc.Client.Status().Patch(oc.Ctx, oc.MarklogicGroup, patchClient)
-	// 		if err != nil {
-	// 			oc.ReqLogger.Error(err, "error updating the MarkLogic Operator Internal status")
-	// 		}
-	// 	}
-	// 	return result.Done().Output()
-	// } else {
-	// 	logger.Info("MarkLogic statefulSet is ready, setting condition")
-	// 	condition := metav1.Condition{
-	// 		Type:    "Ready",
-	// 		Status:  metav1.ConditionTrue,
-	// 		Reason:  "MarkLogicGroupStatefulSetReady",
-	// 		Message: "MarkLogicGroup statefulSet is ready",
-	// 	}
-	// 	updated = oc.setCondition(&condition)
-	// }
-	// if updated {
-	// 	err := oc.Client.Status().Patch(oc.Ctx, oc.MarklogicGroup, patchClient)
-	// 	if err != nil {
-	// 		oc.ReqLogger.Error(err, "error updating the MarkLogic Operator Internal status")
-	// 	}
-	// }
+	patchClient := client.MergeFrom(oc.MarklogicGroup.DeepCopy())
+	updated := false
+	if currentSts.Status.ReadyReplicas == 0 || currentSts.Status.ReadyReplicas != currentSts.Status.Replicas {
+		logger.Info("MarkLogic statefulSet is not ready, setting condition and requeue")
+		condition := metav1.Condition{
+			Type:    "Ready",
+			Status:  metav1.ConditionFalse,
+			Reason:  "MarkLogicGroupStatefulSetNotReady",
+			Message: "MarkLogicGroup statefulSet is not ready",
+		}
+		updated = oc.setCondition(&condition)
+		if updated {
+			err := oc.Client.Status().Patch(oc.Ctx, oc.MarklogicGroup, patchClient)
+			if err != nil {
+				oc.ReqLogger.Error(err, "error updating the MarkLogic Operator Internal status")
+			}
+		}
+		return result.Done().Output()
+	} else {
+		logger.Info("MarkLogic statefulSet is ready, setting condition")
+		condition := metav1.Condition{
+			Type:    "Ready",
+			Status:  metav1.ConditionTrue,
+			Reason:  "MarkLogicGroupStatefulSetReady",
+			Message: "MarkLogicGroup statefulSet is ready",
+		}
+		updated = oc.setCondition(&condition)
+	}
+	if updated {
+		err := oc.Client.Status().Patch(oc.Ctx, oc.MarklogicGroup, patchClient)
+		if err != nil {
+			oc.ReqLogger.Error(err, "error updating the MarkLogic Operator Internal status")
+		}
+	}
 
 	patchDiff, err := patch.DefaultPatchMaker.Calculate(currentSts, statefulSetDef,
 		patch.IgnoreStatusFields(),
@@ -145,15 +145,15 @@ func (oc *OperatorContext) ReconcileStatefulset() (reconcile.Result, error) {
 	} else {
 		logger.Info("MarkLogic statefulSet spec is the same as the current spec, no update needed")
 	}
-	// logger.Info("Operator Status:", "Stage", cr.Status.Stage)
-	// if cr.Status.Stage == "STS_CREATED" {
-	// 	logger.Info("MarkLogic statefulSet created successfully, waiting for pods to be ready")
-	// 	pods, err := GetPodsForStatefulSet(cr.Namespace, cr.Spec.Name)
-	// 	if err != nil {
-	// 		logger.Error(err, "Error getting pods for statefulset")
-	// 	}
-	// 	logger.Info("Pods in statefulSet: ", "Pods", pods)
-	// }
+	logger.Info("Operator Status:", "Stage", cr.Status.Stage)
+	if cr.Status.Stage == "STS_CREATED" {
+		logger.Info("MarkLogic statefulSet created successfully, waiting for pods to be ready")
+		pods, err := GetPodsForStatefulSet(cr.Namespace, cr.Spec.Name)
+		if err != nil {
+			logger.Error(err, "Error getting pods for statefulset")
+		}
+		logger.Info("Pods in statefulSet: ", "Pods", pods)
+	}
 
 	return result.Done().Output()
 }
