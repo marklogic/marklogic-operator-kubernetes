@@ -411,7 +411,7 @@ function configure_group {
         if [ "${response_code}" = "200" ]; then
             current_group=$( \
                 cat "/tmp/groups.out" | 
-                grep "group" |
+                grep "<group>" |
                 sed 's%^.*<group.*>\(.*\)</group>.*$%\1%' \
             )
 
