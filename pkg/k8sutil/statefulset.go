@@ -65,8 +65,10 @@ type containerParameters struct {
 func (oc *OperatorContext) ReconcileStatefulset() (reconcile.Result, error) {
 	cr := oc.GetMarkLogicServer()
 	logger := oc.ReqLogger
-	// labels := getCommonLabels()
-	groupLabels := cr.GetLabels()
+	groupLabels := cr.Labels
+	if groupLabels == nil {
+		groupLabels = getSelectorLabels(cr.Spec.Name)
+	}
 	groupLabels["app.kubernetes.io/instance"] = cr.Spec.Name
 	groupAnnotations := cr.GetAnnotations()
 	delete(groupAnnotations, "banzaicloud.com/last-applied")
