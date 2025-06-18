@@ -104,27 +104,26 @@ func markLogicGroupCreateUpdateDeletePredicate() predicate.Predicate {
 		UpdateFunc: func(e event.UpdateEvent) bool {
 			switch e.ObjectNew.(type) {
 			case *marklogicv1.MarklogicGroup:
-				return true // Reconcile on update of MarklogicGroup
-				// oldAnnotations := e.ObjectOld.GetAnnotations()
-				// newAnnotations := e.ObjectNew.GetAnnotations()
-				// delete(newAnnotations, "banzaicloud.com/last-applied")
-				// delete(oldAnnotations, "banzaicloud.com/last-applied")
-				// delete(newAnnotations, "kubectl.kubernetes.io/last-applied-configuration")
-				// delete(oldAnnotations, "kubectl.kubernetes.io/last-applied-configuration")
-				// if !reflect.DeepEqual(oldAnnotations, newAnnotations) {
-				// 	return true // Reconcile if annotations have changed
-				// }
-				// oldLables := e.ObjectOld.GetLabels()
-				// newLabels := e.ObjectNew.GetLabels()
-				// if !reflect.DeepEqual(oldLables, newLabels) {
-				// 	return true // Reconcile if labels have changed
-				// }
-				// oldObj := e.ObjectOld.(*marklogicv1.MarklogicGroup)
-				// newObj := e.ObjectNew.(*marklogicv1.MarklogicGroup)
-				// if !reflect.DeepEqual(oldObj.Spec, newObj.Spec) {
-				// 	return true // Reconcile if the spec has changed
-				// }
-				// return false
+				oldAnnotations := e.ObjectOld.GetAnnotations()
+				newAnnotations := e.ObjectNew.GetAnnotations()
+				delete(newAnnotations, "banzaicloud.com/last-applied")
+				delete(oldAnnotations, "banzaicloud.com/last-applied")
+				delete(newAnnotations, "kubectl.kubernetes.io/last-applied-configuration")
+				delete(oldAnnotations, "kubectl.kubernetes.io/last-applied-configuration")
+				if !reflect.DeepEqual(oldAnnotations, newAnnotations) {
+					return true // Reconcile if annotations have changed
+				}
+				oldLables := e.ObjectOld.GetLabels()
+				newLabels := e.ObjectNew.GetLabels()
+				if !reflect.DeepEqual(oldLables, newLabels) {
+					return true // Reconcile if labels have changed
+				}
+				oldObj := e.ObjectOld.(*marklogicv1.MarklogicGroup)
+				newObj := e.ObjectNew.(*marklogicv1.MarklogicGroup)
+				if !reflect.DeepEqual(oldObj.Spec, newObj.Spec) {
+					return true // Reconcile if the spec has changed
+				}
+				return false
 			case *appsv1.StatefulSet:
 				return true // Reconcile on update of StatefulSet
 			case *corev1.Service:

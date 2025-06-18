@@ -94,10 +94,10 @@ func markLogicClusterCreateUpdateDeletePredicate() predicate.Predicate {
 			case *marklogicv1.MarklogicCluster:
 				oldAnnotations := e.ObjectOld.GetAnnotations()
 				newAnnotations := e.ObjectNew.GetAnnotations()
-				// delete(newAnnotations, "banzaicloud.com/last-applied")
-				// delete(oldAnnotations, "banzaicloud.com/last-applied")
-				// delete(newAnnotations, "kubectl.kubernetes.io/last-applied-configuration")
-				// delete(oldAnnotations, "kubectl.kubernetes.io/last-applied-configuration")
+				delete(newAnnotations, "banzaicloud.com/last-applied")
+				delete(oldAnnotations, "banzaicloud.com/last-applied")
+				delete(newAnnotations, "kubectl.kubernetes.io/last-applied-configuration")
+				delete(oldAnnotations, "kubectl.kubernetes.io/last-applied-configuration")
 				if !reflect.DeepEqual(oldAnnotations, newAnnotations) {
 					return true // Reconcile if annotations have changed
 				}
