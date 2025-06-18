@@ -41,9 +41,9 @@ func (cc *ClusterContext) ReconcileHAProxy() result.ReconcileResult {
 	if err != nil {
 		if errors.IsNotFound(err) {
 			logger.Info("HAProxy ConfigMap is not found, creating a new one")
-			// if err := patch.DefaultAnnotator.SetLastAppliedAnnotation(configMapDef); err != nil {
-			// 	logger.Error(err, "Failed to set last applied annotation for HAProxy ConfigMap")
-			// }
+			if err := patch.DefaultAnnotator.SetLastAppliedAnnotation(configMapDef); err != nil {
+				logger.Error(err, "Failed to set last applied annotation for HAProxy ConfigMap")
+			}
 			err = cc.createConfigMapForCC(configMapDef)
 			if err != nil {
 				logger.Info("HAProxy configmap creation is failed")
@@ -55,9 +55,9 @@ func (cc *ClusterContext) ReconcileHAProxy() result.ReconcileResult {
 				logger.Info("HAProxy Deployment creation is failed")
 				return result.Error(err)
 			}
-			// if err := patch.DefaultAnnotator.SetLastAppliedAnnotation(haproxyServiceDef); err != nil {
-			// 	logger.Error(err, "Failed to set last applied annotation for HAProxy Service")
-			// }
+			if err := patch.DefaultAnnotator.SetLastAppliedAnnotation(haproxyServiceDef); err != nil {
+				logger.Error(err, "Failed to set last applied annotation for HAProxy Service")
+			}
 			err = cc.createHAProxyService(haproxyServiceDef)
 			if err != nil {
 				logger.Info("HAProxy Service creation is failed")
@@ -82,9 +82,9 @@ func (cc *ClusterContext) ReconcileHAProxy() result.ReconcileResult {
 	if !patchDiff.IsEmpty() {
 		logger.Info("MarkLogic HAProxy Config spec is different from previous spec, updating the HAProxy ConfigMap")
 		configmap.Data = configMapDef.Data
-		// if err := patch.DefaultAnnotator.SetLastAppliedAnnotation(configmap); err != nil {
-		// 	logger.Error(err, "Failed to set last applied annotation for HAProxy ConfigMap")
-		// }
+		if err := patch.DefaultAnnotator.SetLastAppliedAnnotation(configmap); err != nil {
+			logger.Error(err, "Failed to set last applied annotation for HAProxy ConfigMap")
+		}
 		err := cc.Client.Update(cc.Ctx, configmap)
 		if err != nil {
 			logger.Error(err, "Error updating MarkLogic HAProxy ConfigMap")
