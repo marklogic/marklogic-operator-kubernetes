@@ -173,16 +173,13 @@ func (cc *ClusterContext) ReconsileMarklogicCluster() (reconcile.Result, error) 
 		clusterParams := generateMarkLogicClusterParams(cr)
 		params := generateMarkLogicGroupParams(cr, i, clusterParams)
 		markLogicGroupDef := GenerateMarkLogicGroupDef(operatorCR, i, params)
-		logger.Info("###MarkLogicGroupDef", "MarkLogicGroupDef Labels", markLogicGroupDef.ObjectMeta.Labels)
 		err := cc.Client.Get(cc.Ctx, namespacedName, currentMlg)
-		logger.Info("###currentMlg", "currentMlg Labels", currentMlg.ObjectMeta.Labels)
 		if err != nil {
 			if apierrors.IsNotFound(err) {
 				logger.Info("MarkLogicGroup resource not found. Creating a new one")
 				if err := patch.DefaultAnnotator.SetLastAppliedAnnotation(markLogicGroupDef); err != nil {
 					logger.Error(err, "Failed to set last applied annotation")
 				}
-				logger.Info("@@@@MarkLogicGroupDef", "MarkLogicGroupDef annotation", markLogicGroupDef.ObjectMeta.Annotations)
 				err = cc.Client.Create(ctx, markLogicGroupDef)
 				if err != nil {
 					logger.Error(err, "Failed to create markLogicCluster")
