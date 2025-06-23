@@ -195,6 +195,10 @@ spec:
   # additionalVolumeClaimTemplates: []
   markLogicGroups:
   - name: dnode
+    labels:
+      group-level-label: "group-level-label"
+    annotations: 
+      group-level-annotation: "group-level-annotation"
     replicas: 3
     groupConfig:
       name: dnode
