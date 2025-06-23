@@ -116,8 +116,6 @@ func (cc *ClusterContext) ReconcileHAProxy() result.ReconcileResult {
 		}
 	}
 
-	// Check if the HAProxy Deployment is updated
-	logger.Info("!!@@##Checking if HAProxy Deployment is updated", "labels:", labels)
 	haproxyDeployment := &appsv1.Deployment{}
 	deployName := types.NamespacedName{Name: "marklogic-haproxy", Namespace: cr.Namespace}
 	err = client.Get(cc.Ctx, deployName, haproxyDeployment)
@@ -365,7 +363,7 @@ func (cc *ClusterContext) generateHaproxyServiceDef(meta metav1.ObjectMeta) *cor
 			Port: cr.Spec.HAProxy.Stats.Port,
 		})
 	}
-	selectorLables := getHAProxyLabels(cr.GetObjectMeta().GetName())
+	selectorLabels := getHAProxyLabels(cr.GetObjectMeta().GetName())
 	serviceDef := &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:        "marklogic-haproxy",
@@ -374,7 +372,7 @@ func (cc *ClusterContext) generateHaproxyServiceDef(meta metav1.ObjectMeta) *cor
 			Annotations: meta.Annotations,
 		},
 		Spec: corev1.ServiceSpec{
-			Selector: selectorLables,
+			Selector: selectorLabels,
 			Ports:    servicePort,
 			Type:     corev1.ServiceTypeClusterIP,
 		},
