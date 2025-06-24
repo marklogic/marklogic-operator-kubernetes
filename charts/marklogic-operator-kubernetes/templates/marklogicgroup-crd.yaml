@@ -3243,6 +3243,10 @@ spec:
                         x-kubernetes-list-type: atomic
                     type: object
                 type: object
+              annotations:
+                additionalProperties:
+                  type: string
+                type: object
               auth:
                 properties:
                   adminPassword:
@@ -3310,6 +3314,10 @@ spec:
                   type: object
                   x-kubernetes-map-type: atomic
                 type: array
+              labels:
+                additionalProperties:
+                  type: string
+                type: object
               license:
                 properties:
                   key:

@@ -19,6 +19,8 @@ type MarkLogicGroupParameters struct {
 	Replicas                       *int32
 	Name                           string
 	ServiceAccountName             string
+	Labels                         map[string]string
+	Annotations                    map[string]string
 	GroupConfig                    *marklogicv1.GroupConfig
 	Image                          string
 	ImagePullPolicy                string
@@ -89,6 +91,16 @@ func GenerateMarkLogicGroupDef(cr *marklogicv1.MarklogicCluster, index int, para
 	logger.Info("ReconcileMarkLogicCluster")
 	labels := getCommonLabels(cr.ObjectMeta.Name)
 	annotations := getCommonAnnotations()
+	if params.Labels != nil {
+		for key, value := range params.Labels {
+			labels[key] = value
+		}
+	}
+	if params.Annotations != nil {
+		for key, value := range params.Annotations {
+			annotations[key] = value
+		}
+	}
 	objectMeta := generateObjectMeta(cr.Spec.MarkLogicGroups[index].Name, cr.Namespace, labels, annotations)
 	bootStrapHostName := ""
 	bootStrapName := ""
@@ -113,6 +125,8 @@ func GenerateMarkLogicGroupDef(cr *marklogicv1.MarklogicCluster, index int, para
 			Auth:                           params.Auth,
 			ServiceAccountName:             params.ServiceAccountName,
 			Image:                          params.Image,
+			Labels:                         params.Labels,
+			Annotations:                    params.Annotations,
 			ImagePullSecrets:               params.ImagePullSecrets,
 			License:                        params.License,
 			TerminationGracePeriodSeconds:  params.TerminationGracePeriodSeconds,
@@ -158,13 +172,14 @@ func (cc *ClusterContext) ReconsileMarklogicCluster() (reconcile.Result, error) 
 		namespacedName := types.NamespacedName{Name: name, Namespace: namespace}
 		clusterParams := generateMarkLogicClusterParams(cr)
 		params := generateMarkLogicGroupParams(cr, i, clusterParams)
-		logger.Info("!!! ReconcileCluster MarkLogicGroup", "MarkLogicGroupParams", params)
 		markLogicGroupDef := GenerateMarkLogicGroupDef(operatorCR, i, params)
 		err := cc.Client.Get(cc.Ctx, namespacedName, currentMlg)
 		if err != nil {
 			if apierrors.IsNotFound(err) {
 				logger.Info("MarkLogicGroup resource not found. Creating a new one")
-
+				if err := patch.DefaultAnnotator.SetLastAppliedAnnotation(markLogicGroupDef); err != nil {
+					logger.Error(err, "Failed to set last applied annotation")
+				}
 				err = cc.Client.Create(ctx, markLogicGroupDef)
 				if err != nil {
 					logger.Error(err, "Failed to create markLogicCluster")
@@ -186,18 +201,21 @@ func (cc *ClusterContext) ReconsileMarklogicCluster() (reconcile.Result, error) 
 				return result.Error(err).Output()
 			}
 			if !patchDiff.IsEmpty() {
-				logger.Info("MarkLogic statefulSet spec is different from the MarkLogicGroup spec, updating the statefulSet")
-				logger.Info(patchDiff.String())
-				currentMlg.Spec = markLogicGroupDef.Spec
-				currentMlg.ObjectMeta.Labels = markLogicGroupDef.ObjectMeta.Labels
-				currentMlg.ObjectMeta.Annotations = markLogicGroupDef.ObjectMeta.Annotations
-				err := cc.Client.Update(cc.Ctx, currentMlg)
+				logger.Info("MarkLogicGroup spec is different from the previous spec, updating the markLogicGroup")
+				// currentMlg.Spec = markLogicGroupDef.Spec
+				// currentMlg.ObjectMeta.Labels = markLogicGroupDef.ObjectMeta.Labels
+				// currentMlg.ObjectMeta.Annotations = markLogicGroupDef.ObjectMeta.Annotations
+				markLogicGroupDef.ObjectMeta.ResourceVersion = currentMlg.ObjectMeta.ResourceVersion
+				if err := patch.DefaultAnnotator.SetLastAppliedAnnotation(markLogicGroupDef); err != nil {
+					logger.Error(err, "Failed to set last applied annotation")
+				}
+				err := cc.Client.Update(cc.Ctx, markLogicGroupDef)
 				if err != nil {
-					logger.Error(err, "Error updating MakrLogicGroup")
+					logger.Error(err, "Error updating MarklogicGroup")
 					return result.Error(err).Output()
 				}
 			} else {
-				logger.Info("MarkLogic statefulSet spec is the same as the MarkLogicGroup spec")
+				logger.Info("MarkLogicGroup spec is same as the current spec, no update required")
 			}
 		}
 
@@ -246,6 +264,8 @@ func generateMarkLogicGroupParams(cr *marklogicv1.MarklogicCluster, index int, c
 	markLogicGroupParameters := &MarkLogicGroupParameters{
 		Replicas:                       cr.Spec.MarkLogicGroups[index].Replicas,
 		Name:                           cr.Spec.MarkLogicGroups[index].Name,
+		Labels:                         cr.Spec.MarkLogicGroups[index].Labels,
+		Annotations:                    cr.Spec.MarkLogicGroups[index].Annotations,
 		GroupConfig:                    cr.Spec.MarkLogicGroups[index].GroupConfig,
 		Service:                        cr.Spec.MarkLogicGroups[index].Service,
 		Image:                          clusterParams.Image,

@@ -31,6 +31,9 @@ import (
 	"github.com/go-logr/logr"
 	marklogicv1 "github.com/marklogic/marklogic-operator-kubernetes/api/v1"
 	"github.com/marklogic/marklogic-operator-kubernetes/pkg/k8sutil"
+	"reflect"
+	"sigs.k8s.io/controller-runtime/pkg/event"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
 )
 
 // MarklogicClusterReconciler reconciles a MarklogicCluster object
@@ -81,10 +84,55 @@ func (r *MarklogicClusterReconciler) Reconcile(ctx context.Context, req ctrl.Req
 	return result, nil
 }
 
+func markLogicClusterCreateUpdateDeletePredicate() predicate.Predicate {
+	return predicate.Funcs{
+		CreateFunc: func(e event.CreateEvent) bool {
+			return true // Reconcile on create
+		},
+		UpdateFunc: func(e event.UpdateEvent) bool {
+			switch e.ObjectNew.(type) {
+			case *marklogicv1.MarklogicCluster:
+				oldAnnotations := e.ObjectOld.GetAnnotations()
+				newAnnotations := e.ObjectNew.GetAnnotations()
+				delete(newAnnotations, "banzaicloud.com/last-applied")
+				delete(oldAnnotations, "banzaicloud.com/last-applied")
+				delete(newAnnotations, "kubectl.kubernetes.io/last-applied-configuration")
+				delete(oldAnnotations, "kubectl.kubernetes.io/last-applied-configuration")
+				if !reflect.DeepEqual(oldAnnotations, newAnnotations) {
+					return true // Reconcile if annotations have changed
+				}
+				oldLables := e.ObjectOld.GetLabels()
+				newLabels := e.ObjectNew.GetLabels()
+				if !reflect.DeepEqual(oldLables, newLabels) {
+					return true // Reconcile if labels have changed
+				}
+				// If annotations and labels are the same, check if the spec has changed
+				oldObj := e.ObjectOld.(*marklogicv1.MarklogicCluster)
+				// Check if the spec has changed
+				newObj := e.ObjectNew.(*marklogicv1.MarklogicCluster)
+				if !reflect.DeepEqual(oldObj.Spec, newObj.Spec) {
+					return true // Reconcile if spec has changed
+				}
+			default:
+				return false // Ignore updates for other types
+			}
+			return false // Reconcile on update of MarklogicCluster
+
+		},
+		DeleteFunc: func(e event.DeleteEvent) bool {
+			return true // Reconcile on delete
+		},
+		GenericFunc: func(e event.GenericEvent) bool {
+			return false // Ignore generic events (optional)
+		},
+	}
+}
+
 // SetupWithManager sets up the controller with the Manager.
 func (r *MarklogicClusterReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&marklogicv1.MarklogicCluster{}).
+		WithEventFilter(markLogicClusterCreateUpdateDeletePredicate()).
 		Owns(&marklogicv1.MarklogicGroup{}).
 		Complete(r)
 }

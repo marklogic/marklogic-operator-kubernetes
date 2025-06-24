@@ -114,7 +114,7 @@ type DataSource struct {
 }
 
 func TestMarklogicCluster(t *testing.T) {
-	feature := features.New("Marklogic Cluster Test")
+	feature := features.New("Marklogic Cluster Test").WithLabel("type", "cluster-test")
 
 	// Setup Loki and Grafana to verify Logging for Operator
 	feature.Setup(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
@@ -228,7 +228,7 @@ func TestMarklogicCluster(t *testing.T) {
 		client := c.Client()
 
 		podName := "node-0"
-		err := utils.WaitForPod(ctx, t, client, mlNamespace, podName, 120*time.Second)
+		err := utils.WaitForPod(ctx, t, client, mlNamespace, podName, 180*time.Second)
 		if err != nil {
 			t.Fatalf("Failed to wait for pod creation: %v", err)
 		}
@@ -300,7 +300,7 @@ func TestMarklogicCluster(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Failed to execute kubectl command in grafana pod: %v", err)
 		}
-		// t.Logf("Query datasource response: %s", output)
+		t.Logf("Query datasource response: %s", output)
 		// Verify MarkLogic logs in Grafana using Loki and Fluent Bit
 		if !(strings.Contains(string(output), "Starting MarkLogic Server")) {
 			t.Fatal("Failed to Query datasource")

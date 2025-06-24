@@ -7987,6 +7987,10 @@ spec:
                               x-kubernetes-list-type: atomic
                           type: object
                       type: object
+                    annotations:
+                      additionalProperties:
+                        type: string
+                      type: object
                     groupConfig:
                       default:
                         enableXdqpSsl: true
@@ -9356,6 +9360,10 @@ spec:
                     isBootstrap:
                       default: false
                       type: boolean
+                    labels:
+                      additionalProperties:
+                        type: string
+                      type: object
                     logCollection:
                       properties:
                         enabled:

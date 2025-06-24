@@ -65,9 +65,14 @@ type containerParameters struct {
 func (oc *OperatorContext) ReconcileStatefulset() (reconcile.Result, error) {
 	cr := oc.GetMarkLogicServer()
 	logger := oc.ReqLogger
-	labels := getCommonLabels(cr.Spec.Name)
-	annotations := getCommonAnnotations()
-	objectMeta := generateObjectMeta(cr.Spec.Name, cr.Namespace, labels, annotations)
+	groupLabels := cr.Labels
+	if groupLabels == nil {
+		groupLabels = getSelectorLabels(cr.Spec.Name)
+	}
+	groupLabels["app.kubernetes.io/instance"] = cr.Spec.Name
+	groupAnnotations := cr.GetAnnotations()
+	delete(groupAnnotations, "banzaicloud.com/last-applied")
+	objectMeta := generateObjectMeta(cr.Spec.Name, cr.Namespace, groupLabels, groupAnnotations)
 	currentSts, err := oc.GetStatefulSet(cr.Namespace, objectMeta.Name)
 	containerParams := generateContainerParams(cr)
 	statefulSetParams := generateStatefulSetsParams(cr)
@@ -118,6 +123,7 @@ func (oc *OperatorContext) ReconcileStatefulset() (reconcile.Result, error) {
 			oc.ReqLogger.Error(err, "error updating the MarkLogic Operator Internal status")
 		}
 	}
+
 	patchDiff, err := patch.DefaultPatchMaker.Calculate(currentSts, statefulSetDef,
 		patch.IgnoreStatusFields(),
 		patch.IgnoreVolumeClaimTemplateTypeMetaAndStatus(),
@@ -128,14 +134,16 @@ func (oc *OperatorContext) ReconcileStatefulset() (reconcile.Result, error) {
 	}
 	if !patchDiff.IsEmpty() {
 		logger.Info("MarkLogic statefulSet spec is different from the MarkLogicGroup spec, updating the statefulSet")
-		logger.Info(patchDiff.String())
-		err := oc.Client.Update(oc.Ctx, statefulSetDef)
+		currentSts.Spec = statefulSetDef.Spec
+		currentSts.ObjectMeta.Annotations = statefulSetDef.ObjectMeta.Annotations
+		currentSts.ObjectMeta.Labels = statefulSetDef.ObjectMeta.Labels
+		err := oc.Client.Update(oc.Ctx, currentSts)
 		if err != nil {
 			logger.Error(err, "Error updating statefulSet")
 			return result.Error(err).Output()
 		}
 	} else {
-		logger.Info("MarkLogic statefulSet spec is the same as the MarkLogicGroup spec")
+		logger.Info("MarkLogic statefulSet spec is the same as the current spec, no update needed")
 	}
 	logger.Info("Operator Status:", "Stage", cr.Status.Stage)
 	if cr.Status.Stage == "STS_CREATED" {
@@ -176,7 +184,6 @@ func (oc *OperatorContext) GetStatefulSet(namespace string, stateful string) (*a
 func (oc *OperatorContext) createStatefulSet(statefulset *appsv1.StatefulSet, cr *marklogicv1.MarklogicGroup) error {
 	logger := oc.ReqLogger
 	err := oc.Client.Create(context.TODO(), statefulset)
-	// _, err := GenerateK8sClient().AppsV1().StatefulSets(namespace).Create(context.TODO(), stateful, metav1.CreateOptions{})
 	if err != nil {
 		logger.Error(err, "MarkLogic stateful creation failed")
 		return err

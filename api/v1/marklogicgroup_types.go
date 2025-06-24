@@ -28,8 +28,10 @@ import (
 // MarklogicGroupSpec defines the desired state of MarklogicGroup
 type MarklogicGroupSpec struct {
 	// +kubebuilder:default:=1
-	Replicas *int32 `json:"replicas,omitempty"`
-	Name     string `json:"name,omitempty"`
+	Replicas    *int32            `json:"replicas,omitempty"`
+	Name        string            `json:"name,omitempty"`
+	Labels      map[string]string `json:"labels,omitempty"`
+	Annotations map[string]string `json:"annotations,omitempty"`
 	// +kubebuilder:default:="cluster.local"
 	ClusterDomain string `json:"clusterDomain,omitempty"`
 	// +kubebuilder:default:="progressofficial/marklogic-db:11.3.0-ubi-rootless"

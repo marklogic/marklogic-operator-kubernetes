@@ -54,6 +54,7 @@ func SetCommonLabels(labels map[string]string) {
 }
 
 func SetCommonAnnotations(annotations map[string]string) {
+	delete(annotations, "kubectl.kubernetes.io/last-applied-configuration")
 	CustomAnnotations = annotations
 }
 
@@ -65,6 +66,34 @@ func getSelectorLabels(name string) map[string]string {
 		"app.kubernetes.io/component":  "database",
 	}
 	return selectorLabels
+}
+
+func getHAProxySelectorLabels(name string) map[string]string {
+	selectorLabels := map[string]string{
+		"app.kubernetes.io/name":       "marklogic",
+		"app.kubernetes.io/instance":   name,
+		"app.kubernetes.io/managed-by": "marklogic-operator",
+		"app.kubernetes.io/component":  "haproxy",
+	}
+	return selectorLabels
+}
+
+func getHAProxyLabels(name string) map[string]string {
+	defaultHaproxyLabels := getHAProxySelectorLabels(name)
+	mergedLabels := map[string]string{}
+	if len(CustomLabels) > 0 {
+		for k, v := range defaultHaproxyLabels {
+			mergedLabels[k] = v
+		}
+		for k, v := range CustomLabels {
+			if _, ok := defaultHaproxyLabels[k]; !ok {
+				mergedLabels[k] = v
+			}
+		}
+	} else {
+		return defaultHaproxyLabels
+	}
+	return mergedLabels
 }
 
 func getCommonLabels(name string) map[string]string {

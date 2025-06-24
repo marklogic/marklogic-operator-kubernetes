@@ -114,7 +114,6 @@ func (cc *ClusterContext) ReconcileIngress() result.ReconcileResult {
 		}
 		if !patchDiff.IsEmpty() {
 			logger.Info("MarkLogic Ingress spec is different from the input Ingress spec, updating the Ingress")
-			logger.Info(patchDiff.String())
 			err := cc.Client.Update(cc.Ctx, ingressDef)
 			if err != nil {
 				logger.Error(err, "Error updating Ingress")
