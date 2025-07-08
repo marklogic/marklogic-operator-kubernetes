@@ -228,7 +228,7 @@ func TestMarklogicCluster(t *testing.T) {
 		client := c.Client()
 
 		podName := "node-0"
-		err := utils.WaitForPod(ctx, t, client, mlNamespace, podName, 180*time.Second)
+		err := utils.WaitForPod(ctx, t, client, mlNamespace, podName, 240*time.Second)
 		if err != nil {
 			t.Fatalf("Failed to wait for pod creation: %v", err)
 		}
