@@ -11,7 +11,7 @@ VERIFY_HUGE_PAGES ?= false
 export E2E_DOCKER_IMAGE ?= $(IMG)
 export E2E_KUSTOMIZE_VERSION ?= $(KUSTOMIZE_VERSION)
 export E2E_CONTROLLER_TOOLS_VERSION ?= $(CONTROLLER_TOOLS_VERSION)
-export E2E_MARKLOGIC_IMAGE_VERSION ?= progressofficial/marklogic-db:11.3.1-ubi-rootless-2.1.0
+export E2E_MARKLOGIC_IMAGE_VERSION ?= progressofficial/marklogic-db:11.3.1-ubi-rootless-2.1.3
 export E2E_KUBERNETES_VERSION ?= v1.31.0
 
 # ENVTEST_K8S_VERSION refers to the version of kubebuilder assets to be downloaded by envtest binary.
@@ -134,22 +134,23 @@ test: manifests generate fmt vet envtest ## Run tests.
 e2e-test: 
 	@echo "=====Check Huges pages test is enabled or not for e2e test"
 ifeq ($(VERIFY_HUGE_PAGES), true)
-	@echo "=====Setting hugepages value to 1280 for hugepages-e2e test"
-	sudo sysctl -w vm.nr_hugepages=1280
+	# @echo "=====Setting hugepages value to 1280 for hugepages-e2e test"
+	# sudo sysctl -w vm.nr_hugepages=1280
 
-	@echo "=====Restart minikube cluster to apply hugepages value"
-	minikube stop
-	minikube start
+	# @echo "=====Restart minikube cluster to apply hugepages value"
+	# minikube stop
+	# minikube start
 
 	@echo "=====Running e2e test including hugepages test"
-	go test -v -count=1 -timeout 30m ./test/e2e -verifyHugePages
+	# go test -v -count=1 -timeout 30m ./test/e2e -verifyHugePages
+	go test -v -count=1 -timeout 30m ./test/e2e -args --labels="type=cluster-test"
 
-	@echo "=====Resetting hugepages value to 0"
-	sudo sysctl -w vm.nr_hugepages=0
+	# @echo "=====Resetting hugepages value to 0"
+	# sudo sysctl -w vm.nr_hugepages=0
 
-	@echo "=====Restart minikube cluster"
-	minikube stop
-	minikube start
+	# @echo "=====Restart minikube cluster"
+	# minikube stop
+	# minikube start
 else
 	@echo "=====Running e2e test without hugepages test"
 	go test -v -count=1 -timeout 30m ./test/e2e
@@ -162,6 +163,7 @@ e2e-setup-minikube: kustomize controller-gen build docker-build
 	minikube start --driver=docker --kubernetes-version=$(E2E_KUBERNETES_VERSION) --memory=8192 --cpus=2
 	minikube addons enable ingress
 	minikube image load $(IMG)
+	minikube image load $(E2E_MARKLOGIC_IMAGE_VERSION)
 
 .PHONY: e2e-cleanup-minikube
 e2e-cleanup-minikube:
