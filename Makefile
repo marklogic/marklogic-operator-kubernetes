@@ -163,7 +163,6 @@ e2e-setup-minikube: kustomize controller-gen build docker-build
 	minikube start --driver=docker --kubernetes-version=$(E2E_KUBERNETES_VERSION) --memory=8192 --cpus=2
 	minikube addons enable ingress
 	minikube image load $(IMG)
-	minikube image load $(E2E_MARKLOGIC_IMAGE_VERSION)
 
 .PHONY: e2e-cleanup-minikube
 e2e-cleanup-minikube:
