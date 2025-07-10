@@ -164,6 +164,8 @@ e2e-setup-minikube: kustomize controller-gen build docker-build
 	minikube addons enable ingress
 	minikube image load $(IMG)
 	minikube image load $(E2E_MARKLOGIC_IMAGE_VERSION)
+	minikube image load "docker.io/haproxytech/haproxy-alpine:3.2"
+	minikube image ls
 
 .PHONY: e2e-cleanup-minikube
 e2e-cleanup-minikube:
