@@ -164,7 +164,7 @@ pipeline {
     // }
 
     parameters {
-        string(name: 'dockerImage', defaultValue: 'ml-docker-db-dev-tierpoint.bed-artifactory.bedford.progress.com/marklogic/marklogic-server-ubi:latest-11', description: 'Docker image to use for tests.', trim: true)
+        string(name: 'E2E_MARKLOGIC_IMAGE_VERSION', defaultValue: 'ml-docker-db-dev-tierpoint.bed-artifactory.bedford.progress.com/marklogic/marklogic-server-ubi-rootless:latest-12', description: 'Docker image to use for tests.', trim: true)
         string(name: 'emailList', defaultValue: emailList, description: 'List of email for build notification', trim: true)
     }
 
