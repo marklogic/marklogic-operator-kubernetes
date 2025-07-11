@@ -94,8 +94,8 @@ func TestMain(m *testing.M) {
 			log.Println("Deploying controller-manager resources...")
 			p := utils.RunCommand(`kubectl version`)
 			log.Printf("Output of kubectl: %s", p.Result())
-			p = utils.RunCommand(`bash -c "kustomize build config/default | kubectl apply --server-side -f -"`)
-			log.Printf("Output: %s", p.Result())
+			p = utils.RunCommand(`make deploy`)
+			log.Printf("Output of make deploy: %s", p.Result())
 			if p.Err() != nil {
 				log.Printf("Failed to deploy resource configurations: %s: %s", p.Err(), p.Result())
 				return ctx, p.Err()
