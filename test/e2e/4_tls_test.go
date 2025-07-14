@@ -240,6 +240,9 @@ func TestTlsWithNamedCert(t *testing.T) {
 		}
 		certURIs := gjson.Get(certs, `certificate-default-list.list-items.list-item.#.uriref`).Array()
 		t.Log("Certificates URL list", certURIs)
+		if len(certURIs) < 2 {
+			t.Fatalf("Expected at least 2 certificates, found %d", len(certURIs))
+		}
 		cert0Url := fmt.Sprintf("https://localhost:8002%s?format=json", certURIs[0])
 		cert1Url := fmt.Sprintf("https://localhost:8002%s?format=json", certURIs[1])
 		command = fmt.Sprintf("curl -k --anyauth -u %s:%s %s", adminUsername, adminPassword, cert0Url)
@@ -406,6 +409,9 @@ func TestTlsWithMultiNode(t *testing.T) {
 		}
 		certURIs := gjson.Get(certs, `certificate-default-list.list-items.list-item.#.uriref`).Array()
 		t.Log("Dnode Cert Url", certURIs)
+		if len(certURIs) < 2 {
+			t.Fatalf("Expected at least 2 certificates, found %d", len(certURIs))
+		}
 		cert0Url := fmt.Sprintf("https://localhost:8002%s?format=json", certURIs[0])
 		cert1Url := fmt.Sprintf("https://localhost:8002%s?format=json", certURIs[1])
 		command = fmt.Sprintf("curl -k --anyauth -u %s:%s %s", adminUsername, adminPassword, cert0Url)
