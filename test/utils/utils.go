@@ -154,6 +154,9 @@ func WaitForPod(ctx context.Context, t *testing.T, client klient.Client, namespa
 	pod := &corev1.Pod{}
 	p := utils.RunCommand(`kubectl get ns`)
 	t.Logf("Kubernetes namespace: %s", p.Result())
+	p = utils.RunCommand("kubectl get pods --namespace " + "marklogic-operator-system" + " -o wide")
+	t.Logf("Kubernetes Operator Running Status: %s", p.Result())
+
 	for {
 		t.Logf("Waiting for pod %s in namespace %s ", podName, namespace)
 		p := utils.RunCommand("kubectl get pods --namespace " + namespace)

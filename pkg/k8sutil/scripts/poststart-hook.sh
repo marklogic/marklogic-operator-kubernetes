@@ -53,6 +53,25 @@ log () {
     echo $message >> /tmp/script.log
 }
 
+# Function to retry a command based on the return code
+# $1: The number of retries
+# $2: The command to run
+retry() {
+    local retries=$1
+    shift
+    local count=0
+    until "$@"; do
+        exit_code=$?
+        count=$((count + 1))
+        if [ $count -ge $retries ]; then
+        echo "Command failed after $retries attempts."
+        return $exit_code
+        fi
+        echo "Attempt $count failed. Retrying..."
+        sleep 5
+    done
+}
+
 ###############################################################
 # Function to get the current host protocol
 # $1: The host name
@@ -699,10 +718,10 @@ if [[ "$IS_BOOTSTRAP_HOST" == "true" ]]; then
     if [[ "${MARKLOGIC_CLUSTER_TYPE}" == "bootstrap" ]]; then
         log "Info:  bootstrap host is ready"
         init_security_db
-        configure_group
+        retry 5 configure_group
     else 
         log "Info:  bootstrap host is ready"
-        configure_group
+        retry 5 configure_group
         join_cluster $HOST_FQDN
     fi
     configure_path_based_routing

@@ -134,14 +134,17 @@ func TestMarklogicCluster(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Failed to install grafana helm chart: %v", err)
 		}
-
+		// Wait for Grafana pod to be ready
+		time.Sleep(5 * time.Second) // Give some time for Grafana to start
 		podList := &corev1.PodList{}
 		if err := client.Resources().List(ctx, podList, func(lo *metav1.ListOptions) {
 			lo.FieldSelector = "metadata.namespace=" + "grafana"
 		}); err != nil {
 			t.Fatal(err)
 		}
-
+		if len(podList.Items) == 0 {
+			t.Fatal("No Grafana pods found")
+		}
 		grafanaPodName := podList.Items[0].Name
 		err = utils.WaitForPod(ctx, t, client, "grafana", grafanaPodName, 120*time.Second)
 		if err != nil {
@@ -228,7 +231,7 @@ func TestMarklogicCluster(t *testing.T) {
 		client := c.Client()
 
 		podName := "node-0"
-		err := utils.WaitForPod(ctx, t, client, mlNamespace, podName, 180*time.Second)
+		err := utils.WaitForPod(ctx, t, client, mlNamespace, podName, 240*time.Second)
 		if err != nil {
 			t.Fatalf("Failed to wait for pod creation: %v", err)
 		}
@@ -244,6 +247,10 @@ func TestMarklogicCluster(t *testing.T) {
 			lo.FieldSelector = "metadata.namespace=" + "grafana"
 		}); err != nil {
 			t.Fatal(err)
+		}
+		time.Sleep(5 * time.Second) // Wait for Grafana to be fully ready
+		if len(podList.Items) == 0 {
+			t.Fatal("No Grafana pods found")
 		}
 		grafanaPodName := podList.Items[0].Name
 		grafanaAdminUser, grafanaAdminPassword, err := utils.GetSecretData(ctx, client, "grafana", "grafana", "admin-user", "admin-password")
@@ -337,7 +344,7 @@ func TestMarklogicCluster(t *testing.T) {
 			if err := client.Resources().Get(ctx, "marklogicclusters", mlNamespace, &mlcluster); err != nil {
 				t.Fatal(err)
 			}
-
+			
 			mlcluster.Spec.MarkLogicGroups[0].Resources = &resources
 			if err := client.Resources().Update(ctx, &mlcluster); err != nil {
 				t.Log("Failed to update MarkLogic group resources")

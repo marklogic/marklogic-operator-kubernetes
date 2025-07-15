@@ -11,7 +11,7 @@ VERIFY_HUGE_PAGES ?= false
 export E2E_DOCKER_IMAGE ?= $(IMG)
 export E2E_KUSTOMIZE_VERSION ?= $(KUSTOMIZE_VERSION)
 export E2E_CONTROLLER_TOOLS_VERSION ?= $(CONTROLLER_TOOLS_VERSION)
-export E2E_MARKLOGIC_IMAGE_VERSION ?= progressofficial/marklogic-db:11.3.1-ubi-rootless-2.1.0
+export E2E_MARKLOGIC_IMAGE_VERSION ?= progressofficial/marklogic-db:11.3.1-ubi-rootless-2.1.3
 export E2E_KUBERNETES_VERSION ?= v1.31.0
 
 # ENVTEST_K8S_VERSION refers to the version of kubebuilder assets to be downloaded by envtest binary.
@@ -65,7 +65,8 @@ OPERATOR_SDK_VERSION ?= v1.34.2
 
 # Image URL to use all building/pushing image targets
 # Image for dev: ml-marklogic-operator-dev.bed-artifactory.bedford.progress.com/marklogic-operator-kubernetes
-IMG ?= progressofficial/marklogic-operator-kubernetes:$(VERSION)
+# IMG ?= progressofficial/marklogic-operator-kubernetes:$(VERSION)
+IMG = "testrepo/marklogic-operator-image-dev:1.0.0"
 
 
 # Get the currently used golang install path (in GOPATH/bin, unless GOBIN is set)
@@ -162,6 +163,9 @@ e2e-setup-minikube: kustomize controller-gen build docker-build
 	minikube start --driver=docker --kubernetes-version=$(E2E_KUBERNETES_VERSION) --memory=8192 --cpus=2
 	minikube addons enable ingress
 	minikube image load $(IMG)
+	minikube image load $(E2E_MARKLOGIC_IMAGE_VERSION)
+	minikube image load "docker.io/haproxytech/haproxy-alpine:3.2"
+	minikube image ls
 
 .PHONY: e2e-cleanup-minikube
 e2e-cleanup-minikube:

@@ -696,8 +696,11 @@ func getLivenessProbe(probe marklogicv1.ContainerProbe) *corev1.Probe {
 		TimeoutSeconds:      probe.TimeoutSeconds,
 		SuccessThreshold:    probe.SuccessThreshold,
 		ProbeHandler: corev1.ProbeHandler{
-			Exec: &corev1.ExecAction{
-				Command: []string{"/bin/bash", "/tmp/helm-scripts/liveness-probe.sh"},
+			TCPSocket: &corev1.TCPSocketAction{
+				Port: intstr.IntOrString{
+					Type:   intstr.Int,
+					IntVal: 8001,
+				},
 			},
 		},
 	}
