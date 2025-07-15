@@ -145,10 +145,10 @@ ifeq ($(VERIFY_HUGE_PAGES), true)
 	@echo "=====Running e2e test including hugepages test"
 	go test -v -count=1 -timeout 30m ./test/e2e -verifyHugePages
 
-	# @echo "=====Resetting hugepages value to 0"
+	@echo "=====Resetting hugepages value to 0"
 	sudo sysctl -w vm.nr_hugepages=0
 
-	# @echo "=====Restart minikube cluster"
+	@echo "=====Restart minikube cluster"
 	minikube stop
 	minikube start
 else
