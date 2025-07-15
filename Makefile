@@ -135,23 +135,22 @@ test: manifests generate fmt vet envtest ## Run tests.
 e2e-test: 
 	@echo "=====Check Huges pages test is enabled or not for e2e test"
 ifeq ($(VERIFY_HUGE_PAGES), true)
-	# @echo "=====Setting hugepages value to 1280 for hugepages-e2e test"
-	# sudo sysctl -w vm.nr_hugepages=1280
+	@echo "=====Setting hugepages value to 1280 for hugepages-e2e test"
+	sudo sysctl -w vm.nr_hugepages=1280
 
-	# @echo "=====Restart minikube cluster to apply hugepages value"
-	# minikube stop
-	# minikube start
+	@echo "=====Restart minikube cluster to apply hugepages value"
+	minikube stop
+	minikube start
 
 	@echo "=====Running e2e test including hugepages test"
-	# go test -v -count=1 -timeout 30m ./test/e2e -verifyHugePages
-	go test -v -count=1 -timeout 30m ./test/e2e -args --labels="type=cluster-test"
+	go test -v -count=1 -timeout 30m ./test/e2e -verifyHugePages
 
 	# @echo "=====Resetting hugepages value to 0"
-	# sudo sysctl -w vm.nr_hugepages=0
+	sudo sysctl -w vm.nr_hugepages=0
 
 	# @echo "=====Restart minikube cluster"
-	# minikube stop
-	# minikube start
+	minikube stop
+	minikube start
 else
 	@echo "=====Running e2e test without hugepages test"
 	go test -v -count=1 -timeout 30m ./test/e2e
@@ -205,7 +204,7 @@ run: manifests generate fmt vet ## Run a controller from your host.
 # More info: https://docs.docker.com/develop/develop-images/build_enhancements/
 .PHONY: docker-build
 docker-build: ## Build docker image with the manager. to build for linux, add --platform="linux/amd64"
-	$(CONTAINER_TOOL) buildx build --no-cache -t ${IMG} .
+	$(CONTAINER_TOOL) buildx build -t ${IMG} .
 
 .PHONY: docker-push
 docker-push: ## Push docker image with the manager.
