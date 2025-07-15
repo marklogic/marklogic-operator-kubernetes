@@ -407,6 +407,7 @@ func TestTlsWithMultiNode(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Failed to get certificates list: %v", err)
 		}
+		t.Log("Certificates list", certs)
 		certURIs := gjson.Get(certs, `certificate-default-list.list-items.list-item.#.uriref`).Array()
 		t.Log("Dnode Cert Url", certURIs)
 		if len(certURIs) < 2 {
