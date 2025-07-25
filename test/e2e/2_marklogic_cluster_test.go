@@ -344,7 +344,7 @@ func TestMarklogicCluster(t *testing.T) {
 			if err := client.Resources().Get(ctx, "marklogicclusters", mlNamespace, &mlcluster); err != nil {
 				t.Fatal(err)
 			}
-			
+
 			mlcluster.Spec.MarkLogicGroups[0].Resources = &resources
 			if err := client.Resources().Update(ctx, &mlcluster); err != nil {
 				t.Log("Failed to update MarkLogic group resources")

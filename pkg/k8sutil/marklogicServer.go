@@ -86,11 +86,11 @@ func MarkLogicGroupLogger(namespace string, name string) logr.Logger {
 	return reqLogger
 }
 
-func GenerateMarkLogicGroupDef(cr *marklogicv1.MarklogicCluster, index int, params *MarkLogicGroupParameters) *marklogicv1.MarklogicGroup {
+func (cc *ClusterContext) GenerateMarkLogicGroupDef(cr *marklogicv1.MarklogicCluster, index int, params *MarkLogicGroupParameters) *marklogicv1.MarklogicGroup {
 	logger := MarkLogicGroupLogger(cr.Namespace, cr.ObjectMeta.Name)
 	logger.Info("ReconcileMarkLogicCluster")
-	labels := getCommonLabels(cr.ObjectMeta.Name)
-	annotations := getCommonAnnotations()
+	labels := cc.GetClusterLabels(cr.ObjectMeta.Name)
+	annotations := cc.GetClusterAnnotations()
 	if params.Labels != nil {
 		for key, value := range params.Labels {
 			labels[key] = value
@@ -172,7 +172,7 @@ func (cc *ClusterContext) ReconsileMarklogicCluster() (reconcile.Result, error) 
 		namespacedName := types.NamespacedName{Name: name, Namespace: namespace}
 		clusterParams := generateMarkLogicClusterParams(cr)
 		params := generateMarkLogicGroupParams(cr, i, clusterParams)
-		markLogicGroupDef := GenerateMarkLogicGroupDef(operatorCR, i, params)
+		markLogicGroupDef := cc.GenerateMarkLogicGroupDef(operatorCR, i, params)
 		err := cc.Client.Get(cc.Ctx, namespacedName, currentMlg)
 		if err != nil {
 			if apierrors.IsNotFound(err) {

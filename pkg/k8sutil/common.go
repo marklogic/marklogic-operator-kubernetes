@@ -9,9 +9,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
-var CustomLabels = map[string]string{}
-var CustomAnnotations = map[string]string{}
-
 // generateTypeMeta generates the TyeMeta
 func generateTypeMeta(resourceKind string, apiVersion string) metav1.TypeMeta {
 	return metav1.TypeMeta{
@@ -49,15 +46,6 @@ func LabelSelectors(labels map[string]string) *metav1.LabelSelector {
 	return &metav1.LabelSelector{MatchLabels: labels}
 }
 
-func SetCommonLabels(labels map[string]string) {
-	CustomLabels = labels
-}
-
-func SetCommonAnnotations(annotations map[string]string) {
-	delete(annotations, "kubectl.kubernetes.io/last-applied-configuration")
-	CustomAnnotations = annotations
-}
-
 func getSelectorLabels(name string) map[string]string {
 	selectorLabels := map[string]string{
 		"app.kubernetes.io/name":       "marklogic",
@@ -76,46 +64,6 @@ func getHAProxySelectorLabels(name string) map[string]string {
 		"app.kubernetes.io/component":  "haproxy",
 	}
 	return selectorLabels
-}
-
-func getHAProxyLabels(name string) map[string]string {
-	defaultHaproxyLabels := getHAProxySelectorLabels(name)
-	mergedLabels := map[string]string{}
-	if len(CustomLabels) > 0 {
-		for k, v := range defaultHaproxyLabels {
-			mergedLabels[k] = v
-		}
-		for k, v := range CustomLabels {
-			if _, ok := defaultHaproxyLabels[k]; !ok {
-				mergedLabels[k] = v
-			}
-		}
-	} else {
-		return defaultHaproxyLabels
-	}
-	return mergedLabels
-}
-
-func getCommonLabels(name string) map[string]string {
-	defaultLabels := getSelectorLabels(name)
-	mergedLabels := map[string]string{}
-	if len(CustomLabels) > 0 {
-		for k, v := range defaultLabels {
-			mergedLabels[k] = v
-		}
-		for k, v := range CustomLabels {
-			if _, ok := defaultLabels[k]; !ok {
-				mergedLabels[k] = v
-			}
-		}
-	} else {
-		return defaultLabels
-	}
-	return mergedLabels
-}
-
-func getCommonAnnotations() map[string]string {
-	return CustomAnnotations
 }
 
 func getFluentBitLabels(name string) map[string]string {

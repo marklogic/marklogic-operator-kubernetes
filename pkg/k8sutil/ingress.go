@@ -72,8 +72,8 @@ func (cc *ClusterContext) getIngress(namespace string, ingressName string) (*net
 	return ingress, nil
 }
 
-func generateIngress(ingressName string, cr *marklogicv1.MarklogicCluster) *networkingv1.Ingress {
-	labels := getCommonLabels(cr.GetObjectMeta().GetName())
+func (cc *ClusterContext) generateIngress(ingressName string, cr *marklogicv1.MarklogicCluster) *networkingv1.Ingress {
+	labels := cc.GetClusterLabels(cr.GetObjectMeta().GetName())
 	annotations := cr.Spec.HAProxy.Ingress.Annotations
 	ingressObjectMeta := generateObjectMeta(ingressName, cr.Namespace, labels, annotations)
 	ingress := generateIngressDef(ingressObjectMeta, marklogicClusterAsOwner(cr), cr)
@@ -87,7 +87,7 @@ func (cc *ClusterContext) ReconcileIngress() result.ReconcileResult {
 	cr := cc.MarklogicCluster
 	ingressName := cr.ObjectMeta.Name
 	currentIngress, err := cc.getIngress(cr.Namespace, ingressName)
-	ingressDef := generateIngress(ingressName, cr)
+	ingressDef := cc.generateIngress(ingressName, cr)
 	if err != nil {
 		if errors.IsNotFound(err) {
 			logger.Info("MarkLogic Ingress not found, creating a new one")
@@ -133,7 +133,7 @@ func (cc *ClusterContext) createIngress(namespace string) error {
 	client := cc.Client
 	cr := cc.MarklogicCluster
 	ingressName := cr.ObjectMeta.Name + "-ingress"
-	ingress := generateIngress(ingressName, cr)
+	ingress := cc.generateIngress(ingressName, cr)
 	err := client.Create(cc.Ctx, ingress)
 	if err != nil {
 		logger.Error(err, "MarkLogic ingress creation has failed")

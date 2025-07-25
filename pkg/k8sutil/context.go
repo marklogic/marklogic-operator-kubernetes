@@ -15,22 +15,23 @@ import (
 )
 
 type OperatorContext struct {
-	Ctx context.Context
-
+	Ctx            context.Context
+	Labels         map[string]string
+	Annotations    map[string]string
 	Request        *reconcile.Request
 	Client         controllerClient.Client
 	Scheme         *runtime.Scheme
 	MarklogicGroup *marklogicv1.MarklogicGroup
 	ReqLogger      logr.Logger
 	Recorder       record.EventRecorder
-
-	Services     []*corev1.Service
-	StatefulSets []*appsv1.StatefulSet
+	Services       []*corev1.Service
+	StatefulSets   []*appsv1.StatefulSet
 }
 
 type ClusterContext struct {
-	Ctx context.Context
-
+	Ctx              context.Context
+	Labels           map[string]string
+	Annotations      map[string]string
 	Request          *reconcile.Request
 	Client           controllerClient.Client
 	Scheme           *runtime.Scheme
@@ -57,17 +58,16 @@ func CreateOperatorContext(
 	oc.Scheme = scheme
 	oc.ReqLogger = reqLogger
 	oc.Recorder = rec
+	oc.Labels = map[string]string{}
+	oc.Annotations = map[string]string{}
 	mlg := &marklogicv1.MarklogicGroup{}
 	if err := retrieveMarkLogicGroup(oc, request, mlg); err != nil {
 		oc.ReqLogger.Error(err, "Failed to retrieve MarkLogicServer")
 		return nil, err
 	}
-	// if err := retrieveMarklogicCluster(oc, request, mlc); err != nil {
-	// 	oc.ReqLogger.Error(err, "Failed to retrieve MarkLogicCluster")
-	// 	return nil, err
-	// }
 	oc.MarklogicGroup = mlg
-	// oc.MarklogicCluster = mlc
+	oc.SetOperatorLabels(oc.MarklogicGroup.GetLabels())
+	oc.SetOperatorAnnotations(oc.MarklogicGroup.GetAnnotations())
 
 	oc.ReqLogger.Info("==== CreateOperatorContext")
 
@@ -92,14 +92,16 @@ func CreateClusterContext(
 	cc.Scheme = scheme
 	cc.ReqLogger = reqLogger
 	cc.Recorder = rec
+	cc.Labels = map[string]string{}
+	cc.Annotations = map[string]string{}
 	mlc := &marklogicv1.MarklogicCluster{}
-
 	if err := retrieveMarklogicCluster(cc, request, mlc); err != nil {
 		cc.ReqLogger.Error(err, "Failed to retrieve MarkLogicCluster")
 		return nil, err
 	}
 	cc.MarklogicCluster = mlc
-
+	cc.SetClusterLabels(cc.MarklogicCluster.GetLabels())
+	cc.SetClusterAnnotations(cc.MarklogicCluster.GetAnnotations())
 	cc.ReqLogger.Info("==== CreateOperatorContext")
 
 	// cc.ReqLogger = cc.ReqLogger.WithValues("ML server name")
@@ -136,4 +138,84 @@ func (oc *OperatorContext) GetClient() controllerClient.Client {
 
 func (oc *OperatorContext) GetContext() context.Context {
 	return oc.Ctx
+}
+
+func (cc *ClusterContext) GetClusterLabels(name string) map[string]string {
+	defaultLabels := getSelectorLabels(name)
+	mergedLabels := map[string]string{}
+	if len(cc.Labels) > 0 {
+		for k, v := range defaultLabels {
+			mergedLabels[k] = v
+		}
+		for k, v := range cc.Labels {
+			if _, ok := defaultLabels[k]; !ok {
+				mergedLabels[k] = v
+			}
+		}
+	} else {
+		return defaultLabels
+	}
+	return mergedLabels
+}
+
+func (cc *ClusterContext) GetHAProxyLabels(name string) map[string]string {
+	defaultHaproxyLabels := getHAProxySelectorLabels(name)
+	mergedLabels := map[string]string{}
+	if len(cc.Labels) > 0 {
+		for k, v := range defaultHaproxyLabels {
+			mergedLabels[k] = v
+		}
+		for k, v := range cc.Labels {
+			if _, ok := defaultHaproxyLabels[k]; !ok {
+				mergedLabels[k] = v
+			}
+		}
+	} else {
+		return defaultHaproxyLabels
+	}
+	return mergedLabels
+}
+
+func (cc *ClusterContext) GetClusterAnnotations() map[string]string {
+	return cc.Annotations
+}
+
+func (cc *ClusterContext) SetClusterLabels(labels map[string]string) {
+	cc.Labels = labels
+}
+
+func (cc *ClusterContext) SetClusterAnnotations(annotations map[string]string) {
+	delete(annotations, "kubectl.kubernetes.io/last-applied-configuration")
+	cc.Annotations = annotations
+}
+
+func (oc *OperatorContext) GetOperatorLabels(name string) map[string]string {
+	defaultLabels := getSelectorLabels(name)
+	mergedLabels := map[string]string{}
+	if len(oc.Labels) > 0 {
+		for k, v := range defaultLabels {
+			mergedLabels[k] = v
+		}
+		for k, v := range oc.Labels {
+			if _, ok := defaultLabels[k]; !ok {
+				mergedLabels[k] = v
+			}
+		}
+	} else {
+		return defaultLabels
+	}
+	return mergedLabels
+}
+
+func (oc *OperatorContext) GetOperatorAnnotations() map[string]string {
+	return oc.Annotations
+}
+
+func (oc *OperatorContext) SetOperatorLabels(labels map[string]string) {
+	oc.Labels = labels
+}
+
+func (oc *OperatorContext) SetOperatorAnnotations(annotations map[string]string) {
+	delete(annotations, "kubectl.kubernetes.io/last-applied-configuration")
+	oc.Annotations = annotations
 }

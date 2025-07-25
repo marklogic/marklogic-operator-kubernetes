@@ -24,8 +24,8 @@ func (cc *ClusterContext) ReconcileHAProxy() result.ReconcileResult {
 
 	logger.Info("Reconciling HAProxy Config")
 
-	labels := getHAProxyLabels(cr.GetObjectMeta().GetName())
-	annotations := getCommonAnnotations()
+	labels := cc.GetHAProxyLabels(cr.GetObjectMeta().GetName())
+	annotations := cc.GetClusterAnnotations()
 	configMapName := "marklogic-haproxy"
 	objectMeta := generateObjectMeta(configMapName, cr.Namespace, labels, annotations)
 	nsName := types.NamespacedName{Name: objectMeta.Name, Namespace: objectMeta.Namespace}
@@ -363,7 +363,7 @@ func (cc *ClusterContext) generateHaproxyServiceDef(meta metav1.ObjectMeta) *cor
 			Port: cr.Spec.HAProxy.Stats.Port,
 		})
 	}
-	selectorLabels := getHAProxyLabels(cr.GetObjectMeta().GetName())
+	selectorLabels := getHAProxySelectorLabels(cr.GetObjectMeta().GetName())
 	serviceDef := &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:        "marklogic-haproxy",

@@ -28,8 +28,6 @@ func (oc *OperatorContext) ReconsileMarklogicGroupHandler() (reconcile.Result, e
 }
 
 func (cc *ClusterContext) ReconsileMarklogicClusterHandler() (reconcile.Result, error) {
-	SetCommonAnnotations(cc.MarklogicCluster.GetAnnotations())
-	SetCommonLabels(cc.MarklogicCluster.GetLabels())
 	if result := cc.ReconcileServiceAccount(); result.Completed() {
 		return result.Output()
 	}
