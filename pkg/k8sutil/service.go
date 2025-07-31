@@ -98,6 +98,9 @@ func generateServiceDef(serviceMeta metav1.ObjectMeta, ownerRef metav1.OwnerRefe
 func (oc *OperatorContext) generateService(svcName string, cr *marklogicv1.MarklogicGroup) *corev1.Service {
 	labels := oc.GetOperatorLabels(cr.Spec.Name)
 	groupLabels := cr.Spec.Labels
+	if groupLabels == nil {
+		groupLabels = make(map[string]string)
+	}
 	for key, value := range groupLabels {
 		labels[key] = value
 	}
