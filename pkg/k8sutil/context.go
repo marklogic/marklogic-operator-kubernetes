@@ -219,6 +219,9 @@ func (oc *OperatorContext) SetOperatorLabels(labels map[string]string) {
 }
 
 func (oc *OperatorContext) SetOperatorAnnotations(annotations map[string]string) {
+	if annotations == nil {
+		annotations = make(map[string]string)
+	}
 	delete(annotations, "kubectl.kubernetes.io/last-applied-configuration")
 	oc.Annotations = annotations
 }
