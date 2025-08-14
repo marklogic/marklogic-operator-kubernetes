@@ -57,12 +57,17 @@ type AdminAuth struct {
 }
 
 type LogCollection struct {
-	Enabled          bool                          `json:"enabled,omitempty"`
+	// +kubebuilder:default:=false
+	Enabled bool `json:"enabled,omitempty"`
+	// +kubebuilder:default:="fluent/fluent-bit:3.2.5"
 	Image            string                        `json:"image,omitempty"`
 	ImagePullSecrets []corev1.LocalObjectReference `json:"imagePullSecrets,omitempty"`
-	Resources        *corev1.ResourceRequirements  `json:"resources,omitempty"`
-	Files            LogFilesConfig                `json:"files,omitempty"`
-	Outputs          string                        `json:"outputs,omitempty"`
+	// +kubebuilder:default:={"requests":{"cpu":"100m","memory":"200Mi"},"limits":{"cpu":"200m","memory":"500Mi"}}
+	Resources *corev1.ResourceRequirements `json:"resources,omitempty"`
+	// +kubebuilder:default:={errorLogs: true, accessLogs: true, requestLogs: true}
+	Files LogFilesConfig `json:"files,omitempty"`
+	// +kubebuilder:default:="[OUTPUT]\n  name loki\n  match *\n  host loki.default.svc.cluster.local\n  port 3100\n  labels job=fluent-bit\n  http_user admin\n  http_passwd admin"
+	Outputs string `json:"outputs,omitempty"`
 }
 
 type LogFilesConfig struct {
