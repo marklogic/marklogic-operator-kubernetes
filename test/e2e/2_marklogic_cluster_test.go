@@ -308,14 +308,28 @@ func TestMarklogicCluster(t *testing.T) {
 		}
 		queryUrl := fmt.Sprintf("%s/api/ds/query?ds_type=loki", grafanaURL)
 		curlCommand = fmt.Sprintf(`curl -X POST %s -u %s:%s -H "Content-Type: application/json" -d '%s'`, queryUrl, grafanaAdminUser, grafanaAdminPassword, payloadBytes)
-		output, err = utils.ExecCmdInPod(grafanaPodName, "grafana", "grafana", curlCommand)
-		if err != nil {
-			t.Fatalf("Failed to execute kubectl command in grafana pod: %v", err)
-		}
-		t.Logf("Query datasource response: %s", output)
-		// Verify MarkLogic logs in Grafana using Loki and Fluent Bit
-		if !(strings.Contains(string(output), "Starting MarkLogic Server")) {
-			t.Fatal("Failed to Query datasource")
+		maxRetries := 5
+		for attempt := 1; attempt <= maxRetries; attempt++ {
+			t.Logf("Attempt %d to query datasource", attempt)
+			output, err = utils.ExecCmdInPod(grafanaPodName, "grafana", "grafana", curlCommand)
+			if err != nil {
+				t.Logf("Attempt  %d/%d Failed to execute kubectl command in grafana pod: %v", attempt, 5, err)
+				if attempt == maxRetries {
+					t.Fatalf("failed to execute kubectl command after %d attempts: %v", maxRetries, err)
+				}
+				// Exponential backoff: 1s, 2s, 4s, 8s, 16s
+				time.Sleep(time.Duration(1<<(attempt-1)) * time.Second)
+            }
+			t.Logf("Query datasource response: %s", output)
+			// Verify MarkLogic logs in Grafana using Loki and Fluent Bit
+			if strings.Contains(string(output), "Starting MarkLogic Server") {
+				t.Logf("Successfully found MarkLogic logs on attempt %d", attempt)
+			} else if attempt == maxRetries {
+				t.Fatalf("Failed to find MarkLogic logs in Grafana after %d attempts", maxRetries)
+			} else {
+				t.Logf("MarkLogic logs not found, retrying...")
+				time.Sleep(time.Duration(1<<(attempt-1)) * time.Second) // Exponential backoff
+			}
 		}
 
 		curlCommand = fmt.Sprintf(`curl -u %s:%s %s/api/dashboards/uid/%s`, grafanaAdminUser, grafanaAdminPassword, grafanaURL, dashboardUID)
