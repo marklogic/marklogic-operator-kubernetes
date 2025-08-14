@@ -186,12 +186,15 @@ func TestMarklogicCluster(t *testing.T) {
 		}
 		if !(strings.Contains(string(output), "Datasource added") && strings.Contains(string(output), "Loki")) {
 			t.Fatal("Failed to create datasource for Grafana")
+		} else {
+			t.Logf("Datasource created successfully: %s", output)
 		}
 		var dataSourceResponse DataSourceResponse
 		if err := json.Unmarshal([]byte(output), &dataSourceResponse); err != nil {
 			t.Fatalf("Failed to unmarshal JSON response: %v", err)
 		}
 		dataSourceUID = dataSourceResponse.DataSource.UID
+		t.Logf("Datasource UID: %s", dataSourceUID)
 		return ctx
 	})
 
@@ -272,6 +275,8 @@ func TestMarklogicCluster(t *testing.T) {
 		dashboardUID = dashboardResponse.UID
 		if dashboardResponse.Status != "success" {
 			t.Fatal("Failed to create dashboard with loki and fluent-bit")
+		} else {
+			t.Logf("Dashboard created successfully with UID: %s", dashboardResponse.UID)
 		}
 
 		// Create query to verify MarkLogic logs in Grafana
@@ -279,7 +284,7 @@ func TestMarklogicCluster(t *testing.T) {
 			"queries": []map[string]interface{}{
 				{
 					"refId":     "A",
-					"expr":      "{job=\"fluent-bit\"} |= ``",
+					"expr":      "{job=\"fluent-bit\"} |= `Starting MarkLogic Server`",
 					"queryType": "range",
 					"datasource": map[string]string{
 						"type": "loki",
@@ -293,7 +298,7 @@ func TestMarklogicCluster(t *testing.T) {
 					"maxDataPoints": 1073,
 				},
 			},
-			"from": "now-5m",
+			"from": "now-1h",
 			"to":   "now",
 		}
 
