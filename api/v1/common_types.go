@@ -64,7 +64,7 @@ type LogCollection struct {
 	ImagePullSecrets []corev1.LocalObjectReference `json:"imagePullSecrets,omitempty"`
 	// +kubebuilder:default:={"requests":{"cpu":"100m","memory":"200Mi"},"limits":{"cpu":"200m","memory":"500Mi"}}
 	Resources *corev1.ResourceRequirements `json:"resources,omitempty"`
-	// +kubebuilder:default:={errorLogs: true, accessLogs: true, requestLogs: true}
+	// +kubebuilder:default:={errorLogs: true, accessLogs: true, requestLogs: true, crashLogs: true, auditLogs: true}
 	Files LogFilesConfig `json:"files,omitempty"`
 	// +kubebuilder:default:="[OUTPUT]\n  name loki\n  match *\n  host loki.default.svc.cluster.local\n  port 3100\n  labels job=fluent-bit\n  http_user admin\n  http_passwd admin"
 	Outputs string `json:"outputs,omitempty"`
