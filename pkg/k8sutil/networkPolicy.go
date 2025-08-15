@@ -44,9 +44,9 @@ func (cc *ClusterContext) getNetworkPolicy(namespace string, networkPolicyName s
 	return networkPolicy, nil
 }
 
-func generateNetworkPolicy(networkPolicyName string, cr *marklogicv1.MarklogicCluster) *networkingv1.NetworkPolicy {
-	labels := getCommonLabels(cr.GetObjectMeta().GetName())
-	annotations := getCommonAnnotations()
+func (cc *ClusterContext) generateNetworkPolicy(networkPolicyName string, cr *marklogicv1.MarklogicCluster) *networkingv1.NetworkPolicy {
+	labels := cc.GetClusterLabels(cr.GetObjectMeta().GetName())
+	annotations := cc.GetClusterAnnotations()
 	netObjectMeta := generateObjectMeta(networkPolicyName, cr.Namespace, labels, annotations)
 	networkPolicy := generateNetworkPolicyDef(netObjectMeta, marklogicClusterAsOwner(cr), cr)
 	return networkPolicy
@@ -59,7 +59,7 @@ func (cc *ClusterContext) ReconcileNetworkPolicy() result.ReconcileResult {
 	cr := cc.MarklogicCluster
 	networkPolicyName := cr.ObjectMeta.Name
 	currentNetworkPolicy, err := cc.getNetworkPolicy(cr.Namespace, networkPolicyName)
-	networkPolicyDef := generateNetworkPolicy(networkPolicyName, cr)
+	networkPolicyDef := cc.generateNetworkPolicy(networkPolicyName, cr)
 	if err != nil {
 		if errors.IsNotFound(err) {
 			logger.Info("MarkLogic NetworkPolicy not found, creating a new one")

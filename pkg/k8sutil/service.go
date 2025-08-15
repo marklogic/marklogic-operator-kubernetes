@@ -95,13 +95,11 @@ func generateServiceDef(serviceMeta metav1.ObjectMeta, ownerRef metav1.OwnerRefe
 	return service
 }
 
-func generateService(svcName string, cr *marklogicv1.MarklogicGroup) *corev1.Service {
-	labels := getCommonLabels(cr.Spec.Name)
+func (oc *OperatorContext) generateService(svcName string, cr *marklogicv1.MarklogicGroup) *corev1.Service {
+	labels := oc.GetOperatorLabels(cr.Spec.Name)
 	groupLabels := cr.Spec.Labels
-	if groupLabels != nil {
-		for key, value := range groupLabels {
-			labels[key] = value
-		}
+	for key, value := range groupLabels {
+		labels[key] = value
 	}
 	var svcParams serviceParameters = serviceParameters{}
 	svcParams = generateServiceParams(cr)
@@ -122,7 +120,7 @@ func (oc *OperatorContext) ReconcileServices() result.ReconcileResult {
 	for _, service := range services {
 		svcNsName := types.NamespacedName{Name: service, Namespace: cr.Namespace}
 		err := client.Get(oc.Ctx, svcNsName, currentSvc)
-		svcDef := generateService(service, cr)
+		svcDef := oc.generateService(service, cr)
 		if err != nil {
 			if errors.IsNotFound(err) {
 				logger.Info("MarkLogic service not found, creating a new one")

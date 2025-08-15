@@ -19,8 +19,8 @@ func (oc *OperatorContext) ReconcileConfigMap() result.ReconcileResult {
 	cr := oc.MarklogicGroup
 
 	logger.Info("Reconciling MarkLogic ConfigMap")
-	labels := getCommonLabels(cr.Spec.Name)
-	annotations := getCommonAnnotations()
+	labels := oc.GetOperatorLabels(cr.Spec.Name)
+	annotations := oc.GetOperatorAnnotations()
 	configMapName := cr.Spec.Name + "-scripts"
 	objectMeta := generateObjectMeta(configMapName, cr.Namespace, labels, annotations)
 	nsName := types.NamespacedName{Name: objectMeta.Name, Namespace: objectMeta.Namespace}
