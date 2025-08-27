@@ -32,6 +32,7 @@ func generateFrontendConfig(cr *marklogicv1.MarklogicCluster) string {
 	pathBasedRouting := cr.Spec.HAProxy.PathBasedRouting
 	appServers := cr.Spec.HAProxy.AppServers
 	if *pathBasedRouting {
+		// front end configuration for path based routing
 		frontEndDef = `
 frontend marklogic-pathbased-frontend
   mode http
@@ -53,6 +54,7 @@ frontend marklogic-pathbased-frontend
 			result += getFrontendForPathbased(data)
 		}
 	} else {
+		// front end configuration for non-path based routing
 		frontEndDef = `
 frontend marklogic-{{ .PortNumber}}
   mode http
@@ -247,20 +249,3 @@ func parseTemplateToString(templateStr string, data interface{}) string {
 
 type Servers []marklogicv1.AppServers
 
-func getPathList(servers Servers) []string {
-	var paths []string
-	for _, server := range servers {
-		paths = append(paths, server.Path)
-	}
-	return paths
-}
-
-// returns a array of replica numbers from 0 to replicas-1
-// used for looping over replicas in haproxy config
-func generateReplicaArray(replicas int) []int {
-	Replicas := []int{}
-	for i := 0; i < replicas; i++ {
-		Replicas = append(Replicas, i)
-	}
-	return Replicas
-}
