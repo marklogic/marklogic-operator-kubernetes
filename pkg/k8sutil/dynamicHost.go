@@ -18,9 +18,7 @@ func (cc *ClusterContext) ReconcileDynamicHost() result.ReconcileResult {
 	if cc.MarklogicCluster.Spec.DynamicHost != nil && cc.MarklogicCluster.Spec.DynamicHost.Enabled {
 		cc.ReconcileStatefulsetForDynamicHost()
 		cc.ReqLogger.Info("Dynamic Host is enabled; reconciling related resources")
-
 	}
-	cc.ReqLogger.Info("Dynamic Host is disabled; ensured related resources are deleted and status cleared")
 	return result.Continue()
 }
 
@@ -29,7 +27,7 @@ func (cc *ClusterContext) ReconcileStatefulsetForDynamicHost() (result.Reconcile
 	logger := cc.ReqLogger
 	logger.Info("Reconciling StatefulSet for Dynamic Host")
 	groupLabels := cr.Labels
-	dynamicHostName := cr.GetObjectMeta().GetName() + "-dynamic-host"
+	dynamicHostName := cr.GetObjectMeta().GetName() + "-dynamic"
 	if groupLabels == nil {
 		groupLabels = getSelectorLabels(dynamicHostName)
 	}
@@ -72,6 +70,7 @@ func generateStatefulSetsDefForDynamicHost(stsMeta metav1.ObjectMeta, params sta
 					Annotations: stsMeta.GetAnnotations(),
 				},
 				Spec: corev1.PodSpec{
+					InitContainers:                generateInitContainersForDynamicHost(containerParams),
 					Containers:                    generateContainerDefForDynamicHost(containerParams),
 					TerminationGracePeriodSeconds: params.TerminationGracePeriodSeconds,
 					SecurityContext:               containerParams.PodSecurityContext,
@@ -101,61 +100,36 @@ func generateStatefulSetsDefForDynamicHost(stsMeta metav1.ObjectMeta, params sta
 	if params.ServiceAccountName != "" {
 		statefulSet.Spec.Template.Spec.ServiceAccountName = params.ServiceAccountName
 	}
-	if containerParams.Tls != nil && containerParams.Tls.EnableOnDefaultAppServers {
-		copyCertsVM := []corev1.VolumeMount{
+
+	AddOwnerRefToObject(statefulSet, ownerDef)
+	return statefulSet
+}
+
+func generateInitContainersForDynamicHost(containerParams containerParameters) []corev1.Container {
+	initContainers := []corev1.Container{}
+	init := corev1.Container{
+		Name:            "dynamic-host-init",
+		Image:           containerParams.Image,
+		ImagePullPolicy: containerParams.ImagePullPolicy,
+		Command:         []string{"/bin/sh", "/tmp/helm-scripts/dynamic-host-init.sh"},
+		Env:             getEnvironmentVariablesForDynamicHost(containerParams),
+		VolumeMounts: []corev1.VolumeMount{
 			{
-				Name:      "certs",
-				MountPath: "/run/secrets/marklogic-certs/",
+				Name:      "helm-scripts",
+				MountPath: "/tmp/helm-scripts/",
 			},
 			{
 				Name:      "mladmin-secrets",
 				MountPath: "/run/secrets/ml-secrets/",
 			},
 			{
-				Name:      "helm-scripts",
-				MountPath: "/tmp/helm-scripts/",
+				Name:      "shared-data",
+				MountPath: "/var/tokens",
 			},
-		}
-		if containerParams.Tls.CertSecretNames != nil {
-			copyCertsVM = append(copyCertsVM, corev1.VolumeMount{
-				Name:      "ca-cert-secret",
-				MountPath: "/tmp/ca-cert-secret/",
-			}, corev1.VolumeMount{
-				Name:      "server-cert-secrets",
-				MountPath: "/tmp/server-cert-secrets/",
-			})
-		}
-		statefulSet.Spec.Template.Spec.InitContainers = []corev1.Container{
-			{
-				Name:            "copy-certs",
-				Image:           "redhat/ubi9:9.4",
-				ImagePullPolicy: "IfNotPresent",
-				Command:         []string{"/bin/sh", "/tmp/helm-scripts/copy-certs.sh"},
-				VolumeMounts:    copyCertsVM,
-				Env: []corev1.EnvVar{
-					{
-						Name:      "POD_NAME",
-						ValueFrom: &corev1.EnvVarSource{FieldRef: &corev1.ObjectFieldSelector{FieldPath: "metadata.name"}},
-					},
-					{
-						Name:  "MARKLOGIC_ADMIN_USERNAME_FILE",
-						Value: "ml-secrets/username",
-					},
-					{
-						Name:  "MARKLOGIC_ADMIN_PASSWORD_FILE",
-						Value: "ml-secrets/password",
-					},
-					{
-						Name:  "MARKLOGIC_FQDN_SUFFIX",
-						Value: fmt.Sprintf("%s.%s.svc.%s", containerParams.Name, containerParams.Namespace, containerParams.ClusterDomain),
-					},
-				},
-			},
-		}
+		},
 	}
-
-	AddOwnerRefToObject(statefulSet, ownerDef)
-	return statefulSet
+	initContainers = append(initContainers, init)
+	return initContainers
 }
 
 func (cc *ClusterContext) GetStatefulSet(namespace string, statefulSetName string) (*appsv1.StatefulSet, error) {
@@ -175,7 +149,7 @@ func generateContainerParamsForDynamicHost(cr *marklogicv1.MarklogicCluster) con
 	containerParams := containerParameters{
 		Image:                  cr.Spec.Image,
 		Resources:              cr.Spec.Resources,
-		Name:                   cr.GetObjectMeta().GetName() + "-dynamic-host",
+		Name:                   cr.GetObjectMeta().GetName() + "-dynamic",
 		Namespace:              cr.Namespace,
 		DynamicHost:            cr.Spec.DynamicHost,
 		ClusterDomain:          cr.Spec.ClusterDomain,
@@ -193,6 +167,16 @@ func generateContainerParamsForDynamicHost(cr *marklogicv1.MarklogicCluster) con
 	} else {
 		containerParams.SecretName = fmt.Sprintf("%s-admin", cr.ObjectMeta.Name)
 	}
+	bootStrapName := ""
+	for _, group := range cr.Spec.MarkLogicGroups {
+		if group.IsBootstrap {
+			bootStrapName = group.Name
+		}
+	}
+	nsName := cr.ObjectMeta.Namespace
+	clusterName := cr.Spec.ClusterDomain
+	bootStrapHostName := fmt.Sprintf("%s-0.%s.%s.svc.%s", bootStrapName, bootStrapName, nsName, clusterName)
+	containerParams.BootstrapHost = bootStrapHostName
 	return containerParams
 }
 
@@ -210,7 +194,7 @@ func (cc *ClusterContext) createStatefulSet(statefulset *appsv1.StatefulSet) err
 func generateStatefulSetsParamsForDynamicHost(cr *marklogicv1.MarklogicCluster) statefulSetParameters {
 	params := statefulSetParameters{
 		Replicas:                       &cr.Spec.DynamicHost.Size,
-		Name:                           cr.GetObjectMeta().GetName() + "-dynamic-host",
+		Name:                           cr.GetObjectMeta().GetName() + "-dynamic",
 		ServiceAccountName:             cr.Spec.ServiceAccountName,
 		TerminationGracePeriodSeconds:  cr.Spec.TerminationGracePeriodSeconds,
 		UpdateStrategy:                 cr.Spec.UpdateStrategy,
@@ -234,9 +218,9 @@ func generateContainerDefForDynamicHost(containerParams containerParameters) []c
 			Image:           containerParams.Image,
 			ImagePullPolicy: containerParams.ImagePullPolicy,
 			Env:             getEnvironmentVariablesForDynamicHost(containerParams),
-			Lifecycle:       getLifeCycle(),
+			Lifecycle:       getLifeCycleForDynamicHost(),
 			SecurityContext: containerParams.SecurityContext,
-			VolumeMounts:    getVolumeMount(containerParams),
+			VolumeMounts:    getVolumeMountForDynamicHost(containerParams),
 		},
 	}
 	if containerParams.Resources != nil {
@@ -252,6 +236,64 @@ func generateContainerDefForDynamicHost(containerParams containerParameters) []c
 	}
 
 	return containerDef
+}
+
+func getVolumeMountForDynamicHost(containerParams containerParameters) []corev1.VolumeMount {
+	var VolumeMounts []corev1.VolumeMount
+
+	VolumeMounts = append(VolumeMounts,
+		corev1.VolumeMount{
+			Name:      "datadir",
+			MountPath: "/var/opt/MarkLogic",
+		},
+		corev1.VolumeMount{
+			Name:      "helm-scripts",
+			MountPath: "/tmp/helm-scripts",
+		},
+		corev1.VolumeMount{
+			Name:      "mladmin-secrets",
+			MountPath: "/run/secrets/ml-secrets",
+			ReadOnly:  true,
+		},
+		corev1.VolumeMount{
+			Name:      "shared-data",
+			MountPath: "/var/tokens",
+		},
+	)
+	if containerParams.HugePages != nil && containerParams.HugePages.Enabled {
+		VolumeMounts = append(VolumeMounts,
+			corev1.VolumeMount{
+				Name:      "huge-pages",
+				MountPath: containerParams.HugePages.MountPath,
+			},
+		)
+	}
+	if containerParams.Tls != nil && containerParams.Tls.EnableOnDefaultAppServers {
+		VolumeMounts = append(VolumeMounts,
+			corev1.VolumeMount{
+				Name:      "certs",
+				MountPath: "/run/secrets/marklogic-certs/",
+			})
+	}
+	if containerParams.AdditionalVolumeMounts != nil {
+		VolumeMounts = append(VolumeMounts, *containerParams.AdditionalVolumeMounts...)
+	}
+	return VolumeMounts
+}
+
+func getLifeCycleForDynamicHost() *corev1.Lifecycle {
+	return &corev1.Lifecycle{
+		PostStart: &corev1.LifecycleHandler{
+			Exec: &corev1.ExecAction{
+				Command: []string{"/bin/bash", "/tmp/helm-scripts/dynamic-host-poststart.sh"},
+			},
+		},
+		PreStop: &corev1.LifecycleHandler{
+			Exec: &corev1.ExecAction{
+				Command: []string{"/bin/bash", "/tmp/helm-scripts/prestop-hook.sh"},
+			},
+		},
+	}
 }
 
 func getEnvironmentVariablesForDynamicHost(containerParams containerParameters) []corev1.EnvVar {
@@ -359,6 +401,9 @@ func generateVolumesForDynamicHost(cr *marklogicv1.MarklogicCluster, containerPa
 				SecretName: containerParams.SecretName,
 			},
 		},
+	}, corev1.Volume{
+		Name:         "shared-data",
+		VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}},
 	})
 	if containerParams.HugePages != nil && containerParams.HugePages.Enabled {
 		volumes = append(volumes, corev1.Volume{
