@@ -50,6 +50,10 @@ func (cc *ClusterContext) ReconcileStatefulsetForDynamicHost() (result.Reconcile
 			return result.RequeueSoon(10), nil
 		}
 		result.Error(err).Output()
+	} else {
+		// Update existing StatefulSet if there are changes
+		logger.Info("StatefulSet for Dynamic Host already exists, checking for updates", "StatefulSet.Name", currentSts.Name)
+		err = cc.Client.Update(context.TODO(), statefulSetDef)
 	}
 	return result.Continue(), nil
 }
