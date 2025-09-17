@@ -3263,6 +3263,14 @@ spec:
               clusterDomain:
                 default: cluster.local
                 type: string
+              dynamicHost:
+                properties:
+                  enabled:
+                    type: boolean
+                  size:
+                    format: int32
+                    type: integer
+                type: object
               enableConverters:
                 type: boolean
               haproxy:

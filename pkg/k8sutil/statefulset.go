@@ -38,6 +38,7 @@ type containerParameters struct {
 	Name                   string
 	Namespace              string
 	ClusterDomain          string
+	DynamicHost            *marklogicv1.DynamicHost
 	Image                  string
 	ImagePullPolicy        corev1.PullPolicy
 	Resources              *corev1.ResourceRequirements
@@ -374,6 +375,7 @@ func generateContainerParams(cr *marklogicv1.MarklogicGroup) containerParameters
 		Resources:              cr.Spec.Resources,
 		Name:                   cr.Spec.Name,
 		Namespace:              cr.Namespace,
+		DynamicHost:            cr.Spec.DynamicHost,
 		ClusterDomain:          cr.Spec.ClusterDomain,
 		BootstrapHost:          cr.Spec.BootstrapHost,
 		LivenessProbe:          cr.Spec.LivenessProbe,
@@ -537,6 +539,7 @@ func getEnvironmentVariables(containerParams containerParameters) []corev1.EnvVa
 	if containerParams.GroupConfig != nil && containerParams.GroupConfig.Name != "" {
 		groupName = containerParams.GroupConfig.Name
 	}
+	groupName = "Default"
 	envVars = append(envVars, corev1.EnvVar{
 		Name:  "MARKLOGIC_ADMIN_USERNAME_FILE",
 		Value: "ml-secrets/username",
@@ -577,6 +580,13 @@ func getEnvironmentVariables(containerParams containerParameters) []corev1.EnvVa
 		}, corev1.EnvVar{
 			Name:  "LICENSEE",
 			Value: containerParams.Licensee,
+		})
+	}
+
+	if containerParams.DynamicHost != nil && containerParams.DynamicHost.Enabled {
+		envVars = append(envVars, corev1.EnvVar{
+			Name:  "MARKLOGIC_DYNAMIC_HOST",
+			Value: "true",
 		})
 	}
 

@@ -33,7 +33,8 @@ type MarklogicGroupSpec struct {
 	Labels      map[string]string `json:"labels,omitempty"`
 	Annotations map[string]string `json:"annotations,omitempty"`
 	// +kubebuilder:default:="cluster.local"
-	ClusterDomain string `json:"clusterDomain,omitempty"`
+	ClusterDomain string       `json:"clusterDomain,omitempty"`
+	DynamicHost   *DynamicHost `json:"dynamicHost,omitempty"`
 	// +kubebuilder:default:="progressofficial/marklogic-db:11.3.0-ubi-rootless"
 	Image string `json:"image"`
 	// +kubebuilder:default:="IfNotPresent"

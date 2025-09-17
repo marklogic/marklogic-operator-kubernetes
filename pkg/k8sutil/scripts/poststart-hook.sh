@@ -712,6 +712,11 @@ info "Start configuring MarkLogic for $HOST_FQDN"
 info "Bootstrap host: $MARKLOGIC_BOOTSTRAP_HOST"
 
 # Only do this if the bootstrap host is in the statefulset we are configuring
+if [[ "$MARKLOGIC_DYNAMIC_HOST" == "true" ]]; then
+    info "Dynamic host is set to true. Skip host configuration for debugging purpose"
+    exit 0
+fi
+
 if [[ "$IS_BOOTSTRAP_HOST" == "true" ]]; then
     check_status_file_for_boostrap
     init_marklogic $HOST_FQDN

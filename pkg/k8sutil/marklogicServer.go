@@ -16,12 +16,13 @@ import (
 )
 
 type MarkLogicGroupParameters struct {
-	Replicas                       *int32
-	Name                           string
-	ServiceAccountName             string
-	Labels                         map[string]string
-	Annotations                    map[string]string
-	GroupConfig                    *marklogicv1.GroupConfig
+	Replicas           *int32
+	Name               string
+	ServiceAccountName string
+	Labels             map[string]string
+	Annotations        map[string]string
+	GroupConfig        *marklogicv1.GroupConfig
+	// DynamicHost                    *marklogicv1.DynamicHost
 	Image                          string
 	ImagePullPolicy                string
 	ImagePullSecrets               []corev1.LocalObjectReference
@@ -119,9 +120,10 @@ func (cc *ClusterContext) GenerateMarkLogicGroupDef(cr *marklogicv1.MarklogicClu
 		TypeMeta:   generateTypeMeta("MarklogicGroup", "marklogic.progress.com/v1"),
 		ObjectMeta: objectMeta,
 		Spec: marklogicv1.MarklogicGroupSpec{
-			Replicas:                       params.Replicas,
-			Name:                           params.Name,
-			GroupConfig:                    params.GroupConfig,
+			Replicas:    params.Replicas,
+			Name:        params.Name,
+			GroupConfig: params.GroupConfig,
+			// DynamicHost:                    params.DynamicHost,
 			Auth:                           params.Auth,
 			ServiceAccountName:             params.ServiceAccountName,
 			Image:                          params.Image,
@@ -262,11 +264,12 @@ func generateMarkLogicClusterParams(cr *marklogicv1.MarklogicCluster) *MarkLogic
 
 func generateMarkLogicGroupParams(cr *marklogicv1.MarklogicCluster, index int, clusterParams *MarkLogicClusterParameters) *MarkLogicGroupParameters {
 	markLogicGroupParameters := &MarkLogicGroupParameters{
-		Replicas:                       cr.Spec.MarkLogicGroups[index].Replicas,
-		Name:                           cr.Spec.MarkLogicGroups[index].Name,
-		Labels:                         cr.Spec.MarkLogicGroups[index].Labels,
-		Annotations:                    cr.Spec.MarkLogicGroups[index].Annotations,
-		GroupConfig:                    cr.Spec.MarkLogicGroups[index].GroupConfig,
+		Replicas:    cr.Spec.MarkLogicGroups[index].Replicas,
+		Name:        cr.Spec.MarkLogicGroups[index].Name,
+		Labels:      cr.Spec.MarkLogicGroups[index].Labels,
+		Annotations: cr.Spec.MarkLogicGroups[index].Annotations,
+		GroupConfig: cr.Spec.MarkLogicGroups[index].GroupConfig,
+		// DynamicHost:                    cr.Spec.MarkLogicGroups[index].DynamicHost,
 		Service:                        cr.Spec.MarkLogicGroups[index].Service,
 		Image:                          clusterParams.Image,
 		ImagePullPolicy:                clusterParams.ImagePullPolicy,

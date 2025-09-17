@@ -71,7 +71,7 @@ type MarklogicClusterSpec struct {
 	AdditionalVolumes              *[]corev1.Volume                `json:"additionalVolumes,omitempty"`
 	AdditionalVolumeMounts         *[]corev1.VolumeMount           `json:"additionalVolumeMounts,omitempty"`
 	AdditionalVolumeClaimTemplates *[]corev1.PersistentVolumeClaim `json:"additionalVolumeClaimTemplates,omitempty"`
-
+	DynamicHost                    *DynamicHost                    `json:"dynamicHost,omitempty"`
 	// +kubebuilder:validation:MaxItems=100
 	// +kubebuilder:validation:MinItems=1
 	// +kubebuilder:validation:Required

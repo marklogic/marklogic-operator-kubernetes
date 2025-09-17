@@ -165,3 +165,8 @@ type Ingress struct {
 	TLS              []networkingv1.IngressTLS  `json:"tls,omitempty"`
 	AdditionalHosts  []networkingv1.IngressRule `json:"additionalHosts,omitempty"`
 }
+
+type DynamicHost struct {
+	Enabled bool  `json:"enabled,omitempty"`
+	Size    int32 `json:"size,omitempty"`
+}

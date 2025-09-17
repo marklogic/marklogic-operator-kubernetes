@@ -50,5 +50,9 @@ func (cc *ClusterContext) ReconsileMarklogicClusterHandler() (reconcile.Result, 
 			}
 		}
 	}
+	// Handle Dynamic Host Reconcile
+	if result := cc.ReconcileDynamicHost(); result.Completed() {
+		return result.Output()
+	}
 	return result, err
 }
