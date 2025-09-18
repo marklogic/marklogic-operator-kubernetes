@@ -37,13 +37,15 @@ type MarklogicGroupSpec struct {
 	// +kubebuilder:default:="progressofficial/marklogic-db:11.3.0-ubi-rootless"
 	Image string `json:"image"`
 	// +kubebuilder:default:="IfNotPresent"
-	ImagePullPolicy               string                        `json:"imagePullPolicy,omitempty"`
-	ImagePullSecrets              []corev1.LocalObjectReference `json:"imagePullSecrets,omitempty"`
-	Auth                          *AdminAuth                    `json:"auth,omitempty"`
-	ServiceAccountName            string                        `json:"serviceAccountName,omitempty"`
-	Persistence                   *Persistence                  `json:"persistence,omitempty"`
-	Resources                     *corev1.ResourceRequirements  `json:"resources,omitempty"`
-	TerminationGracePeriodSeconds *int64                        `json:"terminationGracePeriodSeconds,omitempty"`
+	ImagePullPolicy    string                        `json:"imagePullPolicy,omitempty"`
+	ImagePullSecrets   []corev1.LocalObjectReference `json:"imagePullSecrets,omitempty"`
+	Auth               *AdminAuth                    `json:"auth,omitempty"`
+	ServiceAccountName string                        `json:"serviceAccountName,omitempty"`
+	// +kubebuilder:default:=false
+	AutomountServiceAccountToken  *bool                        `json:"automountServiceAccountToken,omitempty"`
+	Persistence                   *Persistence                 `json:"persistence,omitempty"`
+	Resources                     *corev1.ResourceRequirements `json:"resources,omitempty"`
+	TerminationGracePeriodSeconds *int64                       `json:"terminationGracePeriodSeconds,omitempty"`
 	// +kubebuilder:validation:Enum=OnDelete;RollingUpdate
 	// +kubebuilder:default:="OnDelete"
 	UpdateStrategy appsv1.StatefulSetUpdateStrategyType `json:"updateStrategy,omitempty"`

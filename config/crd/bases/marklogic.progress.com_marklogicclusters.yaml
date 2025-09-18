@@ -3260,6 +3260,9 @@ spec:
                   walletPassword:
                     type: string
                 type: object
+              automountServiceAccountToken:
+                default: false
+                type: boolean
               clusterDomain:
                 default: cluster.local
                 type: string

@@ -3265,6 +3265,9 @@ spec:
                   walletPassword:
                     type: string
                 type: object
+              automountServiceAccountToken:
+                default: false
+                type: boolean
               bootstrapHost:
                 type: string
               clusterDomain:

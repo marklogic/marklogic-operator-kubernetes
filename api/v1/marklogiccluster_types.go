@@ -46,6 +46,8 @@ type MarklogicClusterSpec struct {
 	// +kubebuilder:validation:XValidation:rule="self == oldSelf", message="ServiceAccountName can not be changed"
 	// The name of the service account to assigned to the MarkLogic pods
 	ServiceAccountName string `json:"serviceAccountName,omitempty"`
+	// +kubebuilder:default:=false
+	AutomountServiceAccountToken *bool `json:"automountServiceAccountToken,omitempty"`
 	// +kubebuilder:default:={enabled: true, size: "10Gi"}
 	Persistence                   *Persistence                 `json:"persistence,omitempty"`
 	Resources                     *corev1.ResourceRequirements `json:"resources,omitempty"`

@@ -5,7 +5,7 @@ metadata:
   namespace: prod
   annotations: {}
 spec:
-  image: "progressofficial/marklogic-db:11.3.1-ubi-rootless-2.1.1"
+  image: "progressofficial/marklogic-db:11.3.1-ubi-rootless-2.2.1"
   imagePullPolicy: IfNotPresent
   imagePullSecrets: 
     - name: regcred
