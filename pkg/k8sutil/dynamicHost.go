@@ -294,7 +294,7 @@ func getLifeCycleForDynamicHost() *corev1.Lifecycle {
 		},
 		PreStop: &corev1.LifecycleHandler{
 			Exec: &corev1.ExecAction{
-				Command: []string{"/bin/bash", "/tmp/helm-scripts/prestop-hook.sh"},
+				Command: []string{"/bin/bash", "/tmp/helm-scripts/dynamic-host-prestop.sh"},
 			},
 		},
 	}
