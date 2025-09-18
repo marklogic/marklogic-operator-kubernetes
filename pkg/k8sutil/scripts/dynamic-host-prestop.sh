@@ -107,7 +107,7 @@ function delete_dynamic_host {
     -w "%{http_code}" \
     -s \
     -d "<dynamic-hosts><dynamic-host>$MARKLOGIC_HOST_ID</dynamic-host></dynamic-hosts>" \
-    "http://localhost:8002/manage/v2/clusters/Default/dynamic-hosts")
+    "http://$MARKLOGIC_BOOTSTRAP_HOST:8002/manage/v2/clusters/Default/dynamic-hosts")
 
     response_code=$(echo "$response" | tail -n1)
     response_body=$(echo "$response" | sed '$ d')
