@@ -32,6 +32,7 @@ type statefulSetParameters struct {
 	ImagePullSecrets               []corev1.LocalObjectReference
 	AdditionalVolumeClaimTemplates *[]corev1.PersistentVolumeClaim
 	ServiceAccountName             string
+	AutomountServiceAccountToken   *bool
 }
 
 type containerParameters struct {
@@ -238,6 +239,9 @@ func generateStatefulSetsDef(stsMeta metav1.ObjectMeta, params statefulSetParame
 	if params.ServiceAccountName != "" {
 		statefulSet.Spec.Template.Spec.ServiceAccountName = params.ServiceAccountName
 	}
+	if params.AutomountServiceAccountToken != nil {
+		statefulSet.Spec.Template.Spec.AutomountServiceAccountToken = params.AutomountServiceAccountToken
+	}
 	if containerParams.Tls != nil && containerParams.Tls.EnableOnDefaultAppServers {
 		copyCertsVM := []corev1.VolumeMount{
 			{
@@ -349,10 +353,14 @@ func generateContainerDef(name string, containerParams containerParameters) []co
 }
 
 func generateStatefulSetsParams(cr *marklogicv1.MarklogicGroup) statefulSetParameters {
+	// Always enforce automountServiceAccountToken to false for security
+	falseValue := false
+
 	params := statefulSetParameters{
 		Replicas:                       cr.Spec.Replicas,
 		Name:                           cr.Spec.Name,
 		ServiceAccountName:             cr.Spec.ServiceAccountName,
+		AutomountServiceAccountToken:   &falseValue, // Always false for security
 		TerminationGracePeriodSeconds:  cr.Spec.TerminationGracePeriodSeconds,
 		UpdateStrategy:                 cr.Spec.UpdateStrategy,
 		NodeSelector:                   cr.Spec.NodeSelector,

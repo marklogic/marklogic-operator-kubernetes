@@ -350,6 +350,11 @@ func (in *MarklogicClusterSpec) DeepCopyInto(out *MarklogicClusterSpec) {
 		*out = new(AdminAuth)
 		(*in).DeepCopyInto(*out)
 	}
+	if in.AutomountServiceAccountToken != nil {
+		in, out := &in.AutomountServiceAccountToken, &out.AutomountServiceAccountToken
+		*out = new(bool)
+		**out = **in
+	}
 	if in.Persistence != nil {
 		in, out := &in.Persistence, &out.Persistence
 		*out = new(Persistence)
@@ -588,6 +593,11 @@ func (in *MarklogicGroupSpec) DeepCopyInto(out *MarklogicGroupSpec) {
 		in, out := &in.Auth, &out.Auth
 		*out = new(AdminAuth)
 		(*in).DeepCopyInto(*out)
+	}
+	if in.AutomountServiceAccountToken != nil {
+		in, out := &in.AutomountServiceAccountToken, &out.AutomountServiceAccountToken
+		*out = new(bool)
+		**out = **in
 	}
 	if in.Persistence != nil {
 		in, out := &in.Persistence, &out.Persistence

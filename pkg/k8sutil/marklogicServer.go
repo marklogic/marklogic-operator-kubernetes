@@ -19,6 +19,7 @@ type MarkLogicGroupParameters struct {
 	Replicas                       *int32
 	Name                           string
 	ServiceAccountName             string
+	AutomountServiceAccountToken   *bool
 	Labels                         map[string]string
 	Annotations                    map[string]string
 	GroupConfig                    *marklogicv1.GroupConfig
@@ -124,6 +125,7 @@ func (cc *ClusterContext) GenerateMarkLogicGroupDef(cr *marklogicv1.MarklogicClu
 			GroupConfig:                    params.GroupConfig,
 			Auth:                           params.Auth,
 			ServiceAccountName:             params.ServiceAccountName,
+			AutomountServiceAccountToken:   params.AutomountServiceAccountToken,
 			Image:                          params.Image,
 			Labels:                         params.Labels,
 			Annotations:                    params.Annotations,
@@ -261,6 +263,9 @@ func generateMarkLogicClusterParams(cr *marklogicv1.MarklogicCluster) *MarkLogic
 }
 
 func generateMarkLogicGroupParams(cr *marklogicv1.MarklogicCluster, index int, clusterParams *MarkLogicClusterParameters) *MarkLogicGroupParameters {
+	// Always enforce automountServiceAccountToken to false for security
+	falseValue := false
+
 	markLogicGroupParameters := &MarkLogicGroupParameters{
 		Replicas:                       cr.Spec.MarkLogicGroups[index].Replicas,
 		Name:                           cr.Spec.MarkLogicGroups[index].Name,
@@ -273,6 +278,7 @@ func generateMarkLogicGroupParams(cr *marklogicv1.MarklogicCluster, index int, c
 		ImagePullSecrets:               clusterParams.ImagePullSecrets,
 		Auth:                           clusterParams.Auth,
 		ServiceAccountName:             clusterParams.ServiceAccountName,
+		AutomountServiceAccountToken:   &falseValue, // Always false for security
 		License:                        clusterParams.License,
 		Persistence:                    clusterParams.Persistence,
 		TerminationGracePeriodSeconds:  clusterParams.TerminationGracePeriodSeconds,

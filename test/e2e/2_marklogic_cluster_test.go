@@ -319,7 +319,7 @@ func TestMarklogicCluster(t *testing.T) {
 				}
 				// Exponential backoff: 1s, 2s, 4s, 8s, 16s
 				time.Sleep(time.Duration(1<<(attempt-1)) * time.Second)
-            }
+			}
 			t.Logf("Query datasource response: %s", output)
 			// Verify MarkLogic logs in Grafana using Loki and Fluent Bit
 			if strings.Contains(string(output), "Starting MarkLogic Server") {
