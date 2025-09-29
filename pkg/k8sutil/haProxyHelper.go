@@ -23,6 +23,7 @@ type HAProxyTemplate struct {
 	ClusterName      string
 	SslCert          string
 	sslEnabledServer bool
+	IsPathBased      bool
 }
 
 type HAProxyConfig struct {
@@ -32,17 +33,17 @@ type HAProxyConfig struct {
 }
 
 type FrontEndConfig struct {
-	FrontendName     string
-	PathBasedRouting bool
-	Port             int
-	TargetPort       int
-	Path             string
-	BackendName      string
+	FrontendName string
+	IsPathBased  bool
+	Port         int
+	TargetPort   int
+	Path         string
+	BackendName  string
 }
 
 type BackendConfig struct {
-	IsPathBased bool
 	BackendName string
+	IsPathBased bool
 	GroupName   string
 	Port        int
 	TargetPort  int
@@ -67,11 +68,9 @@ func generateHAProxyConfig(cr *marklogicv1.MarklogicCluster) *HAProxyConfig {
 			}
 		}
 		appServers := group.HAProxy.AppServers
-		var groupPathBased bool
+		groupPathBased := *cr.Spec.HAProxy.PathBasedRouting
 		if group.HAProxy.PathBasedRouting != nil {
 			groupPathBased = *group.HAProxy.PathBasedRouting
-		} else {
-			groupPathBased = *cr.Spec.HAProxy.PathBasedRouting
 		}
 		if len(appServers) == 0 {
 			appServers = defaultAppServer
@@ -82,7 +81,7 @@ func generateHAProxyConfig(cr *marklogicv1.MarklogicCluster) *HAProxyConfig {
 				targetPort = int(appServer.Port)
 			}
 			var key string
-			if groupPathBased {
+			if !groupPathBased {
 				if int(appServer.Port) == targetPort {
 					key = fmt.Sprintf("%d", appServer.Port)
 				} else {
@@ -90,7 +89,7 @@ func generateHAProxyConfig(cr *marklogicv1.MarklogicCluster) *HAProxyConfig {
 				}
 			} else {
 				pathWithoutSlashes := strings.ReplaceAll(appServer.Path, "/", "")
-				key = fmt.Sprintf("%d-%s-path", appServer.Port, pathWithoutSlashes)
+				key = fmt.Sprintf("%d-%s-path", appServer.TargetPort, pathWithoutSlashes)
 			}
 
 			backendName := "marklogic-" + key + "-backend"
@@ -99,11 +98,11 @@ func generateHAProxyConfig(cr *marklogicv1.MarklogicCluster) *HAProxyConfig {
 				frontendName := "marklogic-" + key + "-frontend"
 				if _, exists := frontendMap[key]; !exists {
 					frontend := FrontEndConfig{
-						FrontendName:     frontendName,
-						PathBasedRouting: *cr.Spec.HAProxy.PathBasedRouting,
-						Port:             int(appServer.Port),
-						TargetPort:       targetPort,
-						BackendName:      backendName,
+						FrontendName: frontendName,
+						IsPathBased:  groupPathBased,
+						Port:         int(appServer.Port),
+						TargetPort:   targetPort,
+						BackendName:  backendName,
 					}
 					frontendMap[key] = frontend
 				}
@@ -148,13 +147,20 @@ frontend marklogic-pathbased-frontend
 		}
 		result = parseTemplateToString(frontEndDef, data)
 		for _, backends := range config.BackendConfigMap {
-			data = &HAProxyTemplate{
-				PortNumber:       int(backends[0].Port),
-				TargetPortNumber: int(backends[0].TargetPort),
-				Path:             backends[0].Path,
-				BackendName:      backends[0].BackendName,
+			for _, babackend := range backends {
+				if !babackend.IsPathBased {
+					continue
+				}
+				data = &HAProxyTemplate{
+					PortNumber:       int(babackend.Port),
+					TargetPortNumber: int(babackend.TargetPort),
+					Path:             babackend.Path,
+					IsPathBased:      babackend.IsPathBased,
+					BackendName:      babackend.BackendName,
+				}
+				result += getFrontendForPathbased(data)
+
 			}
-			result += getFrontendForPathbased(data)
 		}
 	}
 	// front end configuration for non-path based routing
@@ -180,7 +186,6 @@ frontend {{ .FrontendName }}
 // generates backend config for HAProxy depending on pathBasedRouting flag and appServers
 func generateBackendConfig(cr *marklogicv1.MarklogicCluster, config *HAProxyConfig) string {
 	backendConfigs := config.BackendConfigMap
-	pathBasedRouting := cr.Spec.HAProxy.PathBasedRouting
 	var result string
 
 	backendTemplate := `
@@ -195,11 +200,6 @@ backend {{ .BackendName }}
   stick match req.cook(HostId)
   stick match req.cook(SessionId)
   default-server check`
-
-	if *pathBasedRouting {
-		backendTemplate += `
-  http-request replace-path {{.Path}}(/)?(.*) /\2`
-	}
 	for _, backends := range backendConfigs {
 		data := &HAProxyTemplate{
 			BackendName: backends[0].BackendName,
@@ -210,6 +210,10 @@ backend {{ .BackendName }}
 		for _, backend := range backends {
 			name := backend.GroupName
 			groupReplicas := backend.Replicas
+			if backend.IsPathBased {
+				backendTemplate += `
+  http-request replace-path {{.Path}}(/)?(.*) /\2`
+			}
 			for i := 0; i < groupReplicas; i++ {
 				data := &HAProxyTemplate{
 					PortNumber:       backend.TargetPort,
