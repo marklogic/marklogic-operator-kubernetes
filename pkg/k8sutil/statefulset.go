@@ -686,7 +686,7 @@ func getFluentBitVolumeMount() []corev1.VolumeMount {
 	VolumeMountsFluentBit = append(VolumeMountsFluentBit,
 		corev1.VolumeMount{
 			Name:      "datadir",
-			MountPath: "/var/opt/MarkLogic",
+			MountPath: "/var/opt/MarkLogic/Logs",
 		},
 		corev1.VolumeMount{
 			Name:      "fluent-bit",
