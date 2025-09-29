@@ -1,8 +1,8 @@
 package k8sutil
 
 import (
-	"math/rand"
-	"time"
+	"crypto/rand"
+	"math/big"
 
 	marklogicv1 "github.com/marklogic/marklogic-operator-kubernetes/api/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -108,10 +108,15 @@ func generateRandomAlphaNumeric(length int) string {
 	const charset = "abcdefghijklmnopqrstuvwxyz" +
 		"ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
 
-	seededRand := rand.New(rand.NewSource(time.Now().UnixNano()))
 	result := make([]byte, length)
 	for i := range result {
-		result[i] = charset[seededRand.Intn(len(charset))]
+		num, err := rand.Int(rand.Reader, big.NewInt(int64(len(charset))))
+		if err != nil {
+			// Fallback to a deterministic character if crypto/rand fails
+			result[i] = charset[i%len(charset)]
+		} else {
+			result[i] = charset[num.Int64()]
+		}
 	}
 	return string(result)
 }

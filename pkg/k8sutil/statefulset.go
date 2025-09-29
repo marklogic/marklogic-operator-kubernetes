@@ -80,11 +80,18 @@ func (oc *OperatorContext) ReconcileStatefulset() (reconcile.Result, error) {
 	statefulSetDef := generateStatefulSetsDef(objectMeta, statefulSetParams, marklogicServerAsOwner(cr), containerParams)
 	if err != nil {
 		if apierrors.IsNotFound(err) {
-			oc.createStatefulSet(statefulSetDef, cr)
+			err := oc.createStatefulSet(statefulSetDef, cr)
+			if err != nil {
+				logger.Error(err, "Failed to create statefulSet")
+				return result.Error(err).Output()
+			}
 			oc.Recorder.Event(oc.MarklogicGroup, "Normal", "StatefulSetCreated", "MarkLogic statefulSet created successfully")
 			return result.Done().Output()
 		}
-		result.Error(err).Output()
+		_, resultErr := result.Error(err).Output()
+		if resultErr != nil {
+			logger.Error(resultErr, "Failed to process result error")
+		}
 	}
 	if err != nil {
 		logger.Error(err, "Cannot create standalone statefulSet for MarkLogic")
