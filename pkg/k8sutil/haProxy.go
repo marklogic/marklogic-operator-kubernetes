@@ -233,7 +233,7 @@ func (cc *ClusterContext) createHAProxyDeploymentDef(meta metav1.ObjectMeta) *ap
 				ObjectMeta: metav1.ObjectMeta{
 					Labels: meta.Labels,
 					Annotations: map[string]string{
-						"comfigmap-hash": calculateHash(generateHAProxyConfigMapData(cr)),
+						"configmap-hash": calculateHash(generateHAProxyConfigMapData(cr)),
 					},
 				},
 				Spec: corev1.PodSpec{
