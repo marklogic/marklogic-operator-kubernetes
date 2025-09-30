@@ -130,7 +130,11 @@ func (in *HAProxy) DeepCopyInto(out *HAProxy) {
 		*out = new(corev1.ServiceType)
 		**out = **in
 	}
-	in.TcpPorts.DeepCopyInto(&out.TcpPorts)
+	if in.TcpPorts != nil {
+		in, out := &in.TcpPorts, &out.TcpPorts
+		*out = new(Tcpports)
+		(*in).DeepCopyInto(*out)
+	}
 	out.Timeout = in.Timeout
 	if in.Tls != nil {
 		in, out := &in.Tls, &out.Tls

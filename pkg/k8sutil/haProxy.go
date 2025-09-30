@@ -205,9 +205,7 @@ resolvers dns
 		haProxyData["haproxy.cfg"] += generateStatsConfig(cr)
 	}
 
-	if cr.Spec.HAProxy.TcpPorts.Enabled {
-		haProxyData["haproxy.cfg"] += generateTcpConfig(cr) + "\n"
-	}
+	haProxyData["haproxy.cfg"] += generateTcpConfig(cr, haproxyConfig) + "\n"
 
 	return haProxyData
 }
