@@ -340,6 +340,8 @@ func generateContainerDef(name string, containerParams containerParameters) []co
 			Name:            "fluent-bit",
 			Image:           containerParams.LogCollection.Image,
 			ImagePullPolicy: "IfNotPresent",
+			Command:         []string{"/fluent-bit/bin/fluent-bit"},
+			Args:            []string{"--config=/fluent-bit/etc/fluent-bit.yaml"},
 			Env:             getFluentBitEnvironmentVariables(),
 			VolumeMounts:    getFluentBitVolumeMount(),
 		}
