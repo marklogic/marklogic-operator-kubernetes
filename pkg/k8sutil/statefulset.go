@@ -88,9 +88,9 @@ func (oc *OperatorContext) ReconcileStatefulset() (reconcile.Result, error) {
 			oc.Recorder.Event(oc.MarklogicGroup, "Normal", "StatefulSetCreated", "MarkLogic statefulSet created successfully")
 			return result.Done().Output()
 		}
-		_, resultErr := result.Error(err).Output()
-		if resultErr != nil {
-			logger.Error(resultErr, "Failed to process result error")
+		_, outputErr := result.Error(err).Output()
+		if outputErr != nil {
+			logger.Error(outputErr, "Failed to process result error")
 		}
 	}
 	if err != nil {
