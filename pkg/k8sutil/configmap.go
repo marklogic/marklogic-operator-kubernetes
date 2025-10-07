@@ -20,8 +20,8 @@ func (oc *OperatorContext) ReconcileConfigMap() result.ReconcileResult {
 	cr := oc.MarklogicGroup
 
 	logger.Info("Reconciling MarkLogic ConfigMap")
-	labels := getCommonLabels(cr.Spec.Name)
-	annotations := getCommonAnnotations()
+	labels := oc.GetOperatorLabels(cr.Spec.Name)
+	annotations := oc.GetOperatorAnnotations()
 	configMapName := cr.Spec.Name + "-scripts"
 	objectMeta := generateObjectMeta(configMapName, cr.Namespace, labels, annotations)
 	nsName := types.NamespacedName{Name: objectMeta.Name, Namespace: objectMeta.Namespace}
@@ -265,14 +265,17 @@ pipeline:
 				// For YAML list items starting with "-", use 4 spaces base indentation
 				// For properties under list items, use 6 spaces base indentation
 				var newIndent int
+				const yamlListItemIndent = 4
+				const yamlPropertyIndent = 6
 				if strings.HasPrefix(content, "- ") {
-					newIndent = 4 // List items at pipeline outputs level
+					newIndent = yamlListItemIndent // List items at pipeline outputs level
 				} else {
-					newIndent = 6 // Properties under list items
+					newIndent = yamlPropertyIndent // Properties under list items
 				}
 				// Add any additional relative indentation beyond the first level
-				if leadingSpaces > 2 {
-					newIndent += leadingSpaces - 2
+				const baseIndentOffset = 2
+				if leadingSpaces > baseIndentOffset {
+					newIndent += leadingSpaces - baseIndentOffset
 				}
 				processedLines = append(processedLines, strings.Repeat(" ", newIndent)+content)
 			}
