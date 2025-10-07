@@ -81,5 +81,5 @@ func GenerateCACertificate(caPath string) error {
 			return fmt.Errorf("failed to execute command %v: %w", cmdArgs, err)
 		}
 	}
-	return err
+	return nil
 }
