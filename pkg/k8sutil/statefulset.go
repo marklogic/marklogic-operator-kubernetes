@@ -495,7 +495,7 @@ func generateVolumes(stsName string, containerParams containerParameters) []core
 				},
 			})
 		}
-		if containerParams.Tls.CertSecretNames != nil && len(containerParams.Tls.CertSecretNames) > 0 {
+		if len(containerParams.Tls.CertSecretNames) > 0 {
 			projectionSources := []corev1.VolumeProjection{}
 			for i, secretName := range containerParams.Tls.CertSecretNames {
 				projectionSource := corev1.VolumeProjection{
