@@ -114,27 +114,16 @@ func generateHAProxyConfig(ctx context.Context, cr *marklogicv1.MarklogicCluster
 				} else {
 					key = fmt.Sprintf("%d-%d", tcpPort.Port, targetPort)
 				}
-				if _, exists := tcpMap[key]; exists {
-					tcpMap[key] = append(tcpMap[key], TCPConfig{
-						TcpName:    key,
-						Port:       int(tcpPort.Port),
-						TargetPort: targetPort,
-						PortName:   tcpPort.Name,
-						PodName:    group.Name,
-						Replicas:   int(*group.Replicas),
-						GroupName:  group.Name,
-					})
-				} else {
-					tcpMap[key] = []TCPConfig{{
-						TcpName:    key,
-						Port:       int(tcpPort.Port),
-						TargetPort: targetPort,
-						PortName:   tcpPort.Name,
-						PodName:    group.Name,
-						Replicas:   int(*group.Replicas),
-						GroupName:  group.Name,
-					}}
+				tcpConfig := TCPConfig{
+					TcpName:    key,
+					Port:       int(tcpPort.Port),
+					TargetPort: targetPort,
+					PortName:   tcpPort.Name,
+					PodName:    group.Name,
+					Replicas:   int(*group.Replicas),
+					GroupName:  group.Name,
 				}
+				tcpMap[key] = append(tcpMap[key], tcpConfig)
 			}
 		}
 
@@ -385,9 +374,8 @@ listen marklogic-TCP-{{.TcpName }}
 		}
 		result += parseTemplateToString(t, data)
 		name := tcpConfigSlice[0].GroupName
-		groupReplicas := int(tcpConfigSlice[0].Replicas)
 		for _, tcpConfig := range tcpConfigSlice {
-			for i := 0; i < groupReplicas; i++ {
+			for i := 0; i < tcpConfig.Replicas; i++ {
 				data := &HAProxyTemplate{
 					PortNumber:  int(tcpConfig.TargetPort),
 					PodName:     tcpConfig.PodName,
