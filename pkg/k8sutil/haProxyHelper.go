@@ -4,10 +4,11 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	marklogicv1 "github.com/marklogic/marklogic-operator-kubernetes/api/v1"
-	"sigs.k8s.io/controller-runtime/pkg/log"
 	"strings"
 	"text/template"
+
+	marklogicv1 "github.com/marklogic/marklogic-operator-kubernetes/api/v1"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 )
 
 type HAProxyTemplate struct {
@@ -77,11 +78,10 @@ func generateHAProxyConfig(ctx context.Context, cr *marklogicv1.MarklogicCluster
 	for _, group := range groups {
 		if group.HAProxy != nil && !group.HAProxy.Enabled {
 			continue
-		} else {
-			// setting is path-based
-			if !config.IsPathBased && *group.HAProxy.PathBasedRouting == true {
-				config.IsPathBased = true
-			}
+		}
+
+		if !config.IsPathBased && group.HAProxy != nil && group.HAProxy.PathBasedRouting != nil && *group.HAProxy.PathBasedRouting == true {
+			config.IsPathBased = true
 		}
 
 		groupHAConfig := group.HAProxy
