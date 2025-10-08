@@ -363,7 +363,7 @@ func generateTcpConfig(cr *marklogicv1.MarklogicCluster, config *HAProxyConfig) 
 	}
 	for _, tcpConfigSlice := range tcpConfigs {
 		t := `
-listen marklogic-TCP-{{.TcpName }}
+listen marklogic-TCP-{{.TcpName}}
   bind :{{ .PortNumber }} {{ .SslCert }}
   mode tcp
   balance leastconn`
