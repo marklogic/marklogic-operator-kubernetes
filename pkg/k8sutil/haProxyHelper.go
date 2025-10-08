@@ -11,6 +11,13 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 )
 
+// effectiveHAProxyConfig represents the resolved configuration after merging cluster and group settings
+type effectiveHAProxyConfig struct {
+	AppServers       []marklogicv1.AppServers
+	PathBasedRouting *bool
+	TcpPorts         *marklogicv1.Tcpports
+}
+
 type HAProxyTemplate struct {
 	FrontendName     string
 	BackendName      string
@@ -84,20 +91,17 @@ func generateHAProxyConfig(ctx context.Context, cr *marklogicv1.MarklogicCluster
 			config.IsPathBased = true
 		}
 
-		groupHAConfig := group.HAProxy
-
-		if groupHAConfig == nil {
-			groupHAConfig = cr.Spec.HAProxy
-		}
+		// Create effective configuration by merging cluster and group settings
+		effectiveConfig := createEffectiveHAProxyConfig(cr.Spec.HAProxy, group.HAProxy)
 
 		// process tcp ports
-		if groupHAConfig.TcpPorts != nil && groupHAConfig.TcpPorts.Enabled {
+		if effectiveConfig.TcpPorts != nil && effectiveConfig.TcpPorts.Enabled {
 			tcpPorts := []marklogicv1.TcpPort{}
 			if cr.Spec.HAProxy.TcpPorts != nil {
 				tcpPorts = cr.Spec.HAProxy.TcpPorts.Ports
 			}
-			if groupHAConfig.TcpPorts != nil {
-				tcpPorts = groupHAConfig.TcpPorts.Ports
+			if effectiveConfig.TcpPorts != nil {
+				tcpPorts = effectiveConfig.TcpPorts.Ports
 			}
 			for _, tcpPort := range tcpPorts {
 				targetPort := int(tcpPort.TargetPort)
@@ -135,10 +139,10 @@ func generateHAProxyConfig(ctx context.Context, cr *marklogicv1.MarklogicCluster
 		}
 
 		// process http ports with appServers
-		appServers := groupHAConfig.AppServers
+		appServers := effectiveConfig.AppServers
 		groupPathBased := *cr.Spec.HAProxy.PathBasedRouting
-		if groupHAConfig.PathBasedRouting != nil {
-			groupPathBased = *groupHAConfig.PathBasedRouting
+		if effectiveConfig.PathBasedRouting != nil {
+			groupPathBased = *effectiveConfig.PathBasedRouting
 		}
 		if len(appServers) == 0 {
 			appServers = defaultAppServer
@@ -418,4 +422,26 @@ func parseTemplateToString(templateStr string, data interface{}) string {
 	return buf.String()
 }
 
-type Servers []marklogicv1.AppServers
+// createEffectiveHAProxyConfig merges cluster-level HAProxy config with group-level overrides
+func createEffectiveHAProxyConfig(clusterConfig *marklogicv1.HAProxy, groupConfig *marklogicv1.HAProxyGroup) *effectiveHAProxyConfig {
+	effective := &effectiveHAProxyConfig{
+		AppServers:       clusterConfig.AppServers,
+		PathBasedRouting: clusterConfig.PathBasedRouting,
+		TcpPorts:         clusterConfig.TcpPorts,
+	}
+
+	if groupConfig != nil {
+		// Override with group-specific settings if provided
+		if len(groupConfig.AppServers) > 0 {
+			effective.AppServers = groupConfig.AppServers
+		}
+		if groupConfig.PathBasedRouting != nil {
+			effective.PathBasedRouting = groupConfig.PathBasedRouting
+		}
+		if groupConfig.TcpPorts != nil {
+			effective.TcpPorts = groupConfig.TcpPorts
+		}
+	}
+
+	return effective
+}

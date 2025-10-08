@@ -108,7 +108,7 @@ type MarklogicGroups struct {
 	PriorityClassName         string                            `json:"priorityClassName,omitempty"`
 	HugePages                 *HugePages                        `json:"hugePages,omitempty"`
 	LogCollection             *LogCollection                    `json:"logCollection,omitempty"`
-	HAProxy                   *HAProxy                          `json:"haproxy,omitempty"`
+	HAProxy                   *HAProxyGroup                     `json:"haproxy,omitempty"`
 	// +kubebuilder:default:=false
 	IsBootstrap                    bool                            `json:"isBootstrap,omitempty"`
 	Tls                            *Tls                            `json:"tls,omitempty"`

@@ -111,6 +111,14 @@ type HAProxy struct {
 	Ingress      Ingress                     `json:"ingress,omitempty"`
 }
 
+// HAProxyGroup represents group-level HAProxy configuration that can override cluster settings
+type HAProxyGroup struct {
+	Enabled          bool         `json:"enabled,omitempty"`
+	AppServers       []AppServers `json:"appServers,omitempty"`
+	PathBasedRouting *bool        `json:"pathBasedRouting,omitempty"`
+	TcpPorts         *Tcpports    `json:"tcpPorts,omitempty"`
+}
+
 type AppServers struct {
 	Name       string `json:"name,omitempty"`
 	Type       string `json:"type,omitempty"`
