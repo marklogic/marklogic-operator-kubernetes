@@ -2,6 +2,7 @@ package k8sutil
 
 import (
 	"embed"
+	"strings"
 
 	"github.com/marklogic/marklogic-operator-kubernetes/pkg/result"
 	corev1 "k8s.io/api/core/v1"
@@ -156,144 +157,156 @@ func (oc *OperatorContext) getScriptsForConfigMap() map[string]string {
 func (oc *OperatorContext) getFluentBitData() map[string]string {
 	fluentBitData := make(map[string]string)
 
-	fluentBitData["fluent-bit.conf"] = `
-[SERVICE]
-	Flush 5
-	Log_Level info
-	Daemon off
-	Parsers_File parsers.conf
+	// Main YAML configuration file
+	fluentBitData["fluent-bit.yaml"] = `service:
+  flush: 5
+  log_level: info
+  daemon: off
+  parsers_file: parsers.yaml
 
-@INCLUDE inputs.conf
-@INCLUDE filters.conf
-@INCLUDE outputs.conf
-`
+pipeline:
+  inputs:`
 
-	fluentBitData["inputs.conf"] = ""
-
+	// Add INPUT sections based on enabled log types
 	if oc.MarklogicGroup.Spec.LogCollection.Files.ErrorLogs {
-		errorLog := `
-[INPUT]
-	Name tail
-	Path /var/opt/MarkLogic/Logs/*ErrorLog.txt
-	Read_from_head true
-	Tag kube.marklogic.logs.error
-	Path_Key path
-	Parser error_parser
-	Mem_Buf_Limit 4MB
-`
-		fluentBitData["inputs.conf"] += errorLog
+		fluentBitData["fluent-bit.yaml"] += `
+    - name: tail
+      path: /var/opt/MarkLogic/Logs/*ErrorLog.txt
+      read_from_head: true
+      tag: kube.marklogic.logs.error
+      path_key: path
+      parser: error_parser
+      mem_buf_limit: 4MB`
 	}
 
 	if oc.MarklogicGroup.Spec.LogCollection.Files.AccessLogs {
-		accessLog := `
-[INPUT]
-	Name tail
-	Path /var/opt/MarkLogic/Logs/*AccessLog.txt
-	Read_from_head true
-	tag kube.marklogic.logs.access
-	Path_Key path
-	Parser access_parser
-	Mem_Buf_Limit 4MB
-`
-		fluentBitData["inputs.conf"] += accessLog
+		fluentBitData["fluent-bit.yaml"] += `
+    - name: tail
+      path: /var/opt/MarkLogic/Logs/*AccessLog.txt
+      read_from_head: true
+      tag: kube.marklogic.logs.access
+      path_key: path
+      parser: access_parser
+      mem_buf_limit: 4MB`
 	}
 
 	if oc.MarklogicGroup.Spec.LogCollection.Files.RequestLogs {
-		requestLog := `
-[INPUT]
-	Name tail
-	Path /var/opt/MarkLogic/Logs/*RequestLog.txt
-	Read_from_head true
-	tag kube.marklogic.logs.request
-	Path_Key path
-	Parser json_parser
-	Mem_Buf_Limit 4MB
-`
-		fluentBitData["inputs.conf"] += requestLog
+		fluentBitData["fluent-bit.yaml"] += `
+    - name: tail
+      path: /var/opt/MarkLogic/Logs/*RequestLog.txt
+      read_from_head: true
+      tag: kube.marklogic.logs.request
+      path_key: path
+      parser: json_parser
+      mem_buf_limit: 4MB`
 	}
 
 	if oc.MarklogicGroup.Spec.LogCollection.Files.CrashLogs {
-		crashLog := `
-[INPUT]
-	Name tail
-	Path /var/opt/MarkLogic/Logs/CrashLog.txt
-	Read_from_head true
-	tag kube.marklogic.logs.crash
-	Path_Key path
-	Mem_Buf_Limit 4MB
-`
-		fluentBitData["inputs.conf"] += crashLog
+		fluentBitData["fluent-bit.yaml"] += `
+    - name: tail
+      path: /var/opt/MarkLogic/Logs/CrashLog.txt
+      read_from_head: true
+      tag: kube.marklogic.logs.crash
+      path_key: path
+      mem_buf_limit: 4MB`
 	}
 
 	if oc.MarklogicGroup.Spec.LogCollection.Files.AuditLogs {
-		auditLog := `
-[INPUT]
-	Name tail
-	Path /var/opt/MarkLogic/Logs/AuditLog.txt
-	Read_from_head true
-	tag kube.marklogic.logs.audit
-	Path_Key path
-	Mem_Buf_Limit 4MB
-`
-		fluentBitData["inputs.conf"] += auditLog
+		fluentBitData["fluent-bit.yaml"] += `
+    - name: tail
+      path: /var/opt/MarkLogic/Logs/AuditLog.txt
+      read_from_head: true
+      tag: kube.marklogic.logs.audit
+      path_key: path
+      mem_buf_limit: 4MB`
 	}
 
-	fluentBitData["outputs.conf"] = oc.MarklogicGroup.Spec.LogCollection.Outputs
+	// Add FILTER sections
+	fluentBitData["fluent-bit.yaml"] += `
 
-	fluentBitData["filters.conf"] = `
-[FILTER]
-	Name modify
-	Match *
-	Add pod ${POD_NAME}
-	Add namespace ${NAMESPACE}
+  filters:
+    - name: modify
+      match: "*"
+      add: pod ${POD_NAME}
+      add: namespace ${NAMESPACE}
+    - name: modify
+      match: kube.marklogic.logs.error
+      add: tag kube.marklogic.logs.error
+    - name: modify
+      match: kube.marklogic.logs.access
+      add: tag kube.marklogic.logs.access
+    - name: modify
+      match: kube.marklogic.logs.request
+      add: tag kube.marklogic.logs.request
+    - name: modify
+      match: kube.marklogic.logs.audit
+      add: tag kube.marklogic.logs.audit
+    - name: modify
+      match: kube.marklogic.logs.crash
+      add: tag kube.marklogic.logs.crash
 
-[FILTER]
-	Name modify
-	Match kube.marklogic.logs.error
-	Add tag kube.marklogic.logs.error
+  outputs:`
 
-[FILTER]
-	Name modify
-	Match kube.marklogic.logs.access
-	Add tag kube.marklogic.logs.access
+	// Handle user-defined outputs from LogCollection.Outputs
+	if oc.MarklogicGroup.Spec.LogCollection.Outputs != "" {
+		// Process user-defined outputs, adjusting indentation to match pipeline level
+		outputs := oc.MarklogicGroup.Spec.LogCollection.Outputs
+		// Split into lines and process indentation
+		lines := strings.Split(outputs, "\n")
+		processedLines := make([]string, 0, len(lines))
+		for _, line := range lines {
+			if strings.TrimSpace(line) == "" {
+				continue // Skip empty lines
+			}
+			// Count leading spaces in original line
+			leadingSpaces := len(line) - len(strings.TrimLeft(line, " "))
+			content := strings.TrimLeft(line, " ")
+			if content != "" {
+				// For YAML list items starting with "-", use 4 spaces base indentation
+				// For properties under list items, use 6 spaces base indentation
+				var newIndent int
+				const yamlListItemIndent = 4
+				const yamlPropertyIndent = 6
+				if strings.HasPrefix(content, "- ") {
+					newIndent = yamlListItemIndent // List items at pipeline outputs level
+				} else {
+					newIndent = yamlPropertyIndent // Properties under list items
+				}
+				// Add any additional relative indentation beyond the first level
+				const baseIndentOffset = 2
+				if leadingSpaces > baseIndentOffset {
+					newIndent += leadingSpaces - baseIndentOffset
+				}
+				processedLines = append(processedLines, strings.Repeat(" ", newIndent)+content)
+			}
+		}
+		fluentBitData["fluent-bit.yaml"] += "\n" + strings.Join(processedLines, "\n")
+	} else {
+		// Default stdout output if none specified
+		fluentBitData["fluent-bit.yaml"] += `
+    - name: stdout
+      match: "*"
+      format: json_lines`
+	}
 
-[FILTER]
-	Name modify
-	Match kube.marklogic.logs.request
-	Add tag kube.marklogic.logs.request
+	// Parsers in YAML format
+	fluentBitData["parsers.yaml"] = `parsers:
+  - name: error_parser
+    format: regex
+    regex: ^(?<time>(.+?)(?=[a-zA-Z]))(?<log_level>(.+?)(?=:))(.+?)(?=[a-zA-Z])(?<log>.*)
+    time_key: time
+    time_format: "%Y-%m-%d %H:%M:%S.%L"
 
-[FILTER]
-	Name modify
-	Match kube.marklogic.logs.audit
-	Add tag kube.marklogic.logs.audit
+  - name: access_parser
+    format: regex
+    regex: ^(?<host>[^ ]*)(.+?)(?<=\- )(?<user>(.+?)(?=\[))(.+?)(?<=\[)(?<time>(.+?)(?=\]))(.+?)(?<=")(?<request>[^\ ]+[^\"]+)(.+?)(?=\d)(?<response_code>[^\ ]*)(.+?)(?=\d|-)(?<response_obj_size>[^\ ]*)(.+?)(?=")(?<request_info>.*)
+    time_key: time
+    time_format: "%d/%b/%Y:%H:%M:%S %z"
 
-[FILTER]
-	Name modify
-	Match kube.marklogic.logs.crash
-	Add tag kube.marklogic.logs.crash
-`
-
-	fluentBitData["parsers.conf"] = `
-[PARSER]
-	Name error_parser
-	Format regex
-	Regex ^(?<time>(.+?)(?=[a-zA-Z]))(?<log_level>(.+?)(?=:))(.+?)(?=[a-zA-Z])(?<log>.*)
-	Time_Key time 
-	Time_Format %Y-%m-%d %H:%M:%S.%L
-
-[PARSER]
-	Name access_parser
-	Format regex
-	Regex ^(?<host>[^ ]*)(.+?)(?<=\- )(?<user>(.+?)(?=\[))(.+?)(?<=\[)(?<time>(.+?)(?=\]))(.+?)(?<=")(?<request>[^\ ]+[^\"]+)(.+?)(?=\d)(?<response_code>[^\ ]*)(.+?)(?=\d|-)(?<response_obj_size>[^\ ]*)(.+?)(?=")(?<request_info>.*)
-	Time_Key time 
-	Time_Format %d/%b/%Y:%H:%M:%S %z
-
-[PARSER]
-	Name json_parser
-	Format json
-	Time_Key time
-	Time_Format %Y-%m-%dT%H:%M:%S%z
-`
+  - name: json_parser
+    format: json
+    time_key: time
+    time_format: "%Y-%m-%dT%H:%M:%S%z"`
 
 	return fluentBitData
 }
