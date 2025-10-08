@@ -2,11 +2,12 @@ package k8sutil
 
 import (
 	"bytes"
+	"context"
 	"fmt"
+	marklogicv1 "github.com/marklogic/marklogic-operator-kubernetes/api/v1"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 	"strings"
 	"text/template"
-
-	marklogicv1 "github.com/marklogic/marklogic-operator-kubernetes/api/v1"
 )
 
 type HAProxyTemplate struct {
@@ -63,7 +64,9 @@ type TCPConfig struct {
 	GroupName  string
 }
 
-func generateHAProxyConfig(cr *marklogicv1.MarklogicCluster) *HAProxyConfig {
+func generateHAProxyConfig(ctx context.Context, cr *marklogicv1.MarklogicCluster) *HAProxyConfig {
+	logger := log.FromContext(ctx)
+	logger.Info("Generating HAProxy configuration")
 	config := &HAProxyConfig{}
 	frontendMap := make(map[string]FrontEndConfig)
 	backendMap := make(map[string][]BackendConfig)
@@ -80,14 +83,21 @@ func generateHAProxyConfig(cr *marklogicv1.MarklogicCluster) *HAProxyConfig {
 				config.IsPathBased = true
 			}
 		}
+
+		groupHAConfig := group.HAProxy
+
+		if groupHAConfig == nil {
+			groupHAConfig = cr.Spec.HAProxy
+		}
+
 		// process tcp ports
-		if cr.Spec.HAProxy.TcpPorts != nil && group.HAProxy.TcpPorts != nil && group.HAProxy.TcpPorts.Enabled {
-			tcpPorts := cr.Spec.HAProxy.TcpPorts.Ports
-			if group.HAProxy != nil && group.HAProxy.TcpPorts != nil {
-				tcpPorts = group.HAProxy.TcpPorts.Ports
+		if groupHAConfig.TcpPorts != nil && groupHAConfig.TcpPorts.Enabled {
+			tcpPorts := []marklogicv1.TcpPort{}
+			if cr.Spec.HAProxy.TcpPorts != nil {
+				tcpPorts = cr.Spec.HAProxy.TcpPorts.Ports
 			}
-			if len(tcpPorts) == 0 {
-				tcpPorts = []marklogicv1.TcpPort{}
+			if groupHAConfig.TcpPorts != nil {
+				tcpPorts = groupHAConfig.TcpPorts.Ports
 			}
 			for _, tcpPort := range tcpPorts {
 				targetPort := int(tcpPort.TargetPort)
@@ -125,10 +135,10 @@ func generateHAProxyConfig(cr *marklogicv1.MarklogicCluster) *HAProxyConfig {
 		}
 
 		// process http ports with appServers
-		appServers := group.HAProxy.AppServers
+		appServers := groupHAConfig.AppServers
 		groupPathBased := *cr.Spec.HAProxy.PathBasedRouting
-		if group.HAProxy.PathBasedRouting != nil {
-			groupPathBased = *group.HAProxy.PathBasedRouting
+		if groupHAConfig.PathBasedRouting != nil {
+			groupPathBased = *groupHAConfig.PathBasedRouting
 		}
 		if len(appServers) == 0 {
 			appServers = defaultAppServer

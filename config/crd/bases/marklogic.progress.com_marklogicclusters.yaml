@@ -4531,8 +4531,6 @@ spec:
                         type: integer
                     type: object
                   tcpPorts:
-                    default:
-                      enabled: false
                     properties:
                       enabled:
                         type: boolean
@@ -9306,8 +9304,6 @@ spec:
                               type: integer
                           type: object
                         tcpPorts:
-                          default:
-                            enabled: false
                           properties:
                             enabled:
                               type: boolean

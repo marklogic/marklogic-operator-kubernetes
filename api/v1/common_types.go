@@ -98,8 +98,7 @@ type HAProxy struct {
 	// +kubebuilder:default:=false
 	PathBasedRouting *bool               `json:"pathBasedRouting,omitempty"`
 	Service          *corev1.ServiceType `json:"service,omitempty"`
-	// +kubebuilder:default:={enabled: false}
-	TcpPorts *Tcpports `json:"tcpPorts,omitempty"`
+	TcpPorts         *Tcpports           `json:"tcpPorts,omitempty"`
 	// +kubebuilder:default:={client: 600, connect: 600, server: 600}
 	Timeout Timeout `json:"timeout,omitempty"`
 	// +kubebuilder:default:={enabled: false, secretName: "", certFileName: ""}
