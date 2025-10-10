@@ -268,14 +268,15 @@ backend {{ .BackendName }}
 			PortNumber:  backends[0].Port,
 			Path:        backends[0].Path,
 		}
+		if backends[0].IsPathBased {
+			backendTemplate += `
+  http-request replace-path {{.Path}}(/)?(.*) /\2`
+		}
 		result += parseTemplateToString(backendTemplate, data)
 		for _, backend := range backends {
 			name := backend.GroupName
 			groupReplicas := backend.Replicas
-			if backend.IsPathBased {
-				backendTemplate += `
-  http-request replace-path {{.Path}}(/)?(.*) /\2`
-			}
+
 			for i := 0; i < groupReplicas; i++ {
 				data := &HAProxyTemplate{
 					PortNumber:       backend.TargetPort,
