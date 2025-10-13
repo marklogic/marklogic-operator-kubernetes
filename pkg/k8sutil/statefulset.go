@@ -80,11 +80,18 @@ func (oc *OperatorContext) ReconcileStatefulset() (reconcile.Result, error) {
 	statefulSetDef := generateStatefulSetsDef(objectMeta, statefulSetParams, marklogicServerAsOwner(cr), containerParams)
 	if err != nil {
 		if apierrors.IsNotFound(err) {
-			oc.createStatefulSet(statefulSetDef, cr)
+			err := oc.createStatefulSet(statefulSetDef, cr)
+			if err != nil {
+				logger.Error(err, "Failed to create statefulSet")
+				return result.Error(err).Output()
+			}
 			oc.Recorder.Event(oc.MarklogicGroup, "Normal", "StatefulSetCreated", "MarkLogic statefulSet created successfully")
 			return result.Done().Output()
 		}
-		result.Error(err).Output()
+		_, outputErr := result.Error(err).Output()
+		if outputErr != nil {
+			logger.Error(outputErr, "Failed to process result error")
+		}
 	}
 	if err != nil {
 		logger.Error(err, "Cannot create standalone statefulSet for MarkLogic")
@@ -490,7 +497,7 @@ func generateVolumes(stsName string, containerParams containerParameters) []core
 				},
 			})
 		}
-		if containerParams.Tls.CertSecretNames != nil && len(containerParams.Tls.CertSecretNames) > 0 {
+		if len(containerParams.Tls.CertSecretNames) > 0 {
 			projectionSources := []corev1.VolumeProjection{}
 			for i, secretName := range containerParams.Tls.CertSecretNames {
 				projectionSource := corev1.VolumeProjection{

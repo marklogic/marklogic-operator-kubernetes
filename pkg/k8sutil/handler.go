@@ -10,7 +10,10 @@ func (oc *OperatorContext) ReconsileMarklogicGroupHandler() (reconcile.Result, e
 	if result := oc.ReconcileServices(); result.Completed() {
 		return result.Output()
 	}
-	setOperatorInternalStatus(oc, "Created")
+	err := setOperatorInternalStatus(oc, "Created")
+	if err != nil {
+		oc.ReqLogger.Error(err, "Failed to set operator internal status")
+	}
 
 	if result := oc.ReconcileConfigMap(); result.Completed() {
 		return result.Output()

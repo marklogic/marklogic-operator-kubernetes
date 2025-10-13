@@ -23,6 +23,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -48,9 +49,43 @@ func warnError(err error) {
 	fmt.Fprintf(GinkgoWriter, "warning: %v\n", err)
 }
 
+// validateURL performs basic validation on URLs to prevent command injection
+func validateURL(url string) error {
+	if !strings.HasPrefix(url, "https://") {
+		return fmt.Errorf("URL must use HTTPS: %s", url)
+	}
+	// Basic validation to ensure URL doesn't contain shell metacharacters
+	if strings.ContainsAny(url, ";|&$`(){}[]<>") {
+		return fmt.Errorf("URL contains invalid characters: %s", url)
+	}
+	return nil
+}
+
+// validateKindClusterName validates cluster names for kind
+func validateKindClusterName(name string) error {
+	// Kind cluster names should only contain alphanumeric characters and hyphens
+	if !regexp.MustCompile(`^[a-zA-Z0-9-]+$`).MatchString(name) {
+		return fmt.Errorf("invalid cluster name: %s", name)
+	}
+	return nil
+}
+
+// validateImageName validates Docker image names
+func validateImageName(name string) error {
+	// Basic validation for Docker image names
+	if strings.ContainsAny(name, ";|&$`(){}[]<>") {
+		return fmt.Errorf("image name contains invalid characters: %s", name)
+	}
+	return nil
+}
+
 // InstallPrometheusOperator installs the prometheus Operator to be used to export the enabled metrics.
 func InstallPrometheusOperator() error {
 	url := fmt.Sprintf(prometheusOperatorURL, prometheusOperatorVersion)
+	if err := validateURL(url); err != nil {
+		return fmt.Errorf("invalid prometheus operator URL: %w", err)
+	}
+	// #nosec G204 - URL is validated and constructed from trusted constants
 	cmd := exec.Command("kubectl", "create", "-f", url)
 	_, err := Run(cmd)
 	return err
@@ -79,6 +114,11 @@ func Run(cmd *exec.Cmd) ([]byte, error) {
 // UninstallPrometheusOperator uninstalls the prometheus
 func UninstallPrometheusOperator() {
 	url := fmt.Sprintf(prometheusOperatorURL, prometheusOperatorVersion)
+	if err := validateURL(url); err != nil {
+		warnError(fmt.Errorf("invalid prometheus operator URL: %w", err))
+		return
+	}
+	// #nosec G204 - URL is validated and constructed from trusted constants
 	cmd := exec.Command("kubectl", "delete", "-f", url)
 	if _, err := Run(cmd); err != nil {
 		warnError(err)
@@ -88,6 +128,11 @@ func UninstallPrometheusOperator() {
 // UninstallCertManager uninstalls the cert manager
 func UninstallCertManager() {
 	url := fmt.Sprintf(certmanagerURLTmpl, certmanagerVersion)
+	if err := validateURL(url); err != nil {
+		warnError(fmt.Errorf("invalid cert manager URL: %w", err))
+		return
+	}
+	// #nosec G204 - URL is validated and constructed from trusted constants
 	cmd := exec.Command("kubectl", "delete", "-f", url)
 	if _, err := Run(cmd); err != nil {
 		warnError(err)
@@ -97,6 +142,10 @@ func UninstallCertManager() {
 // InstallCertManager installs the cert manager bundle.
 func InstallCertManager() error {
 	url := fmt.Sprintf(certmanagerURLTmpl, certmanagerVersion)
+	if err := validateURL(url); err != nil {
+		return fmt.Errorf("invalid cert manager URL: %w", err)
+	}
+	// #nosec G204 - URL is validated and constructed from trusted constants
 	cmd := exec.Command("kubectl", "apply", "-f", url)
 	if _, err := Run(cmd); err != nil {
 		return err
@@ -119,6 +168,16 @@ func LoadImageToKindClusterWithName(name string) error {
 	if v, ok := os.LookupEnv("KIND_CLUSTER"); ok {
 		cluster = v
 	}
+
+	// Validate inputs to prevent command injection
+	if err := validateImageName(name); err != nil {
+		return fmt.Errorf("invalid image name: %w", err)
+	}
+	if err := validateKindClusterName(cluster); err != nil {
+		return fmt.Errorf("invalid cluster name: %w", err)
+	}
+
+	// #nosec G204 - Inputs are validated for safety
 	kindOptions := []string{"load", "docker-image", name, "--name", cluster}
 	cmd := exec.Command("kind", kindOptions...)
 	_, err := Run(cmd)
