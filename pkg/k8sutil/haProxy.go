@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"sort"
 
+	"context"
 	"github.com/cisco-open/k8s-objectmatcher/patch"
 	marklogicv1 "github.com/marklogic/marklogic-operator-kubernetes/api/v1"
 	"github.com/marklogic/marklogic-operator-kubernetes/pkg/result"
@@ -33,7 +34,7 @@ func (cc *ClusterContext) ReconcileHAProxy() result.ReconcileResult {
 	configmap := &corev1.ConfigMap{}
 	haproxyService := &corev1.Service{}
 	err := client.Get(cc.Ctx, nsName, configmap)
-	data := generateHAProxyConfigMapData(cc.MarklogicCluster)
+	data := generateHAProxyConfigMapData(cc.Ctx, cc.MarklogicCluster)
 	configMapDef := generateHAProxyConfigMap(objectMeta, marklogicClusterAsOwner(cr), data)
 	haproxyDeploymentDef := cc.createHAProxyDeploymentDef(objectMeta)
 	haproxyServiceDef := cc.generateHaproxyServiceDef(objectMeta)
@@ -143,7 +144,7 @@ func (cc *ClusterContext) ReconcileHAProxy() result.ReconcileResult {
 }
 
 // generateHAProxyData generates the HAProxy Config Data
-func generateHAProxyConfigMapData(cr *marklogicv1.MarklogicCluster) map[string]string {
+func generateHAProxyConfigMapData(ctx context.Context, cr *marklogicv1.MarklogicCluster) map[string]string {
 	var result string
 	// HAProxy Config Data
 	haProxyData := make(map[string]string)
@@ -196,16 +197,16 @@ resolvers dns
 	result += parseTemplateToString(baseConfig, data) + "\n"
 	haProxyData["haproxy.cfg"] += result + "\n"
 
-	haProxyData["haproxy.cfg"] += generateFrontendConfig(cr) + "\n"
-	haProxyData["haproxy.cfg"] += generateBackendConfig(cr)
+	haproxyConfig := generateHAProxyConfig(ctx, cr)
+
+	haProxyData["haproxy.cfg"] += generateFrontendConfig(cr, haproxyConfig) + "\n"
+	haProxyData["haproxy.cfg"] += generateBackendConfig(cr, haproxyConfig) + "\n"
 
 	if cr.Spec.HAProxy.Stats.Enabled {
 		haProxyData["haproxy.cfg"] += generateStatsConfig(cr)
 	}
 
-	if cr.Spec.HAProxy.TcpPorts.Enabled {
-		haProxyData["haproxy.cfg"] += generateTcpConfig(cr) + "\n"
-	}
+	haProxyData["haproxy.cfg"] += generateTcpConfig(cr, haproxyConfig) + "\n"
 
 	return haProxyData
 }
@@ -231,7 +232,7 @@ func (cc *ClusterContext) createHAProxyDeploymentDef(meta metav1.ObjectMeta) *ap
 				ObjectMeta: metav1.ObjectMeta{
 					Labels: meta.Labels,
 					Annotations: map[string]string{
-						"comfigmap-hash": calculateHash(generateHAProxyConfigMapData(cr)),
+						"configmap-hash": calculateHash(generateHAProxyConfigMapData(cc.Ctx, cr)),
 					},
 				},
 				Spec: corev1.PodSpec{

@@ -98,8 +98,7 @@ type HAProxy struct {
 	// +kubebuilder:default:=false
 	PathBasedRouting *bool               `json:"pathBasedRouting,omitempty"`
 	Service          *corev1.ServiceType `json:"service,omitempty"`
-	// +kubebuilder:default:={enabled: false}
-	TcpPorts Tcpports `json:"tcpPorts,omitempty"`
+	TcpPorts         *Tcpports           `json:"tcpPorts,omitempty"`
 	// +kubebuilder:default:={client: 600, connect: 600, server: 600}
 	Timeout Timeout `json:"timeout,omitempty"`
 	// +kubebuilder:default:={enabled: false, secretName: "", certFileName: ""}
@@ -110,6 +109,14 @@ type HAProxy struct {
 	Affinity     *corev1.Affinity            `json:"affinity,omitempty"`
 	NodeSelector map[string]string           `json:"nodeSelector,omitempty"`
 	Ingress      Ingress                     `json:"ingress,omitempty"`
+}
+
+// HAProxyGroup represents group-level HAProxy configuration that can override cluster settings
+type HAProxyGroup struct {
+	Enabled          bool         `json:"enabled,omitempty"`
+	AppServers       []AppServers `json:"appServers,omitempty"`
+	PathBasedRouting *bool        `json:"pathBasedRouting,omitempty"`
+	TcpPorts         *Tcpports    `json:"tcpPorts,omitempty"`
 }
 
 type AppServers struct {
@@ -138,9 +145,10 @@ type Tcpports struct {
 }
 
 type TcpPort struct {
-	Port int32  `json:"port,omitempty"`
-	Name string `json:"name,omitempty"`
-	Type string `json:"type,omitempty"`
+	Port       int32  `json:"port,omitempty"`
+	TargetPort int32  `json:"targetPort,omitempty"`
+	Name       string `json:"name,omitempty"`
+	Type       string `json:"type,omitempty"`
 }
 
 type Timeout struct {
