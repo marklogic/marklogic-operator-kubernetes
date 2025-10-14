@@ -35,6 +35,7 @@ void preBuildCheck() {
     }
 
     // our VMs sometimes disable bridge traffic. this should help to restore it.
+    sh 'sudo modprobe br_netfilter'
     sh 'sudo sh -c "echo 1 > /proc/sys/net/bridge/bridge-nf-call-iptables"'
 }
 
