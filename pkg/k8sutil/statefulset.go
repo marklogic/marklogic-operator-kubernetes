@@ -63,6 +63,113 @@ type containerParameters struct {
 	SecretName             string
 }
 
+// getDefaultPodSecurityContext returns the default pod-level security context for MarkLogic StatefulSets
+func getDefaultPodSecurityContext() *corev1.PodSecurityContext {
+	fsGroup := int64(2)
+	fsGroupChangePolicy := corev1.FSGroupChangeOnRootMismatch
+	return &corev1.PodSecurityContext{
+		FSGroup:             &fsGroup,
+		FSGroupChangePolicy: &fsGroupChangePolicy,
+	}
+}
+
+// getDefaultContainerSecurityContext returns the default container-level security context for MarkLogic containers
+// This enforces:
+// - runAsUser: 1000 (non-root user)
+// - runAsNonRoot: true (prevents running as root)
+// - allowPrivilegeEscalation: false (prevents privilege escalation)
+// - readOnlyRootFilesystem: true (makes root filesystem read-only)
+// - capabilities drop ALL (removes all Linux capabilities)
+func getDefaultContainerSecurityContext() *corev1.SecurityContext {
+	runAsUser := int64(1000)
+	runAsNonRoot := true
+	allowPrivilegeEscalation := false
+	readOnlyRootFilesystem := true
+	return &corev1.SecurityContext{
+		RunAsUser:                &runAsUser,
+		RunAsNonRoot:             &runAsNonRoot,
+		AllowPrivilegeEscalation: &allowPrivilegeEscalation,
+		ReadOnlyRootFilesystem:   &readOnlyRootFilesystem,
+		Capabilities: &corev1.Capabilities{
+			Drop: []corev1.Capability{"ALL"},
+		},
+	}
+}
+
+// mergeSecurityContext merges user-provided SecurityContext with defaults
+// User-provided values take precedence over defaults
+func mergeSecurityContext(userContext, defaultContext *corev1.SecurityContext) *corev1.SecurityContext {
+	if userContext == nil {
+		return defaultContext
+	}
+
+	merged := defaultContext.DeepCopy()
+
+	if userContext.RunAsUser != nil {
+		merged.RunAsUser = userContext.RunAsUser
+	}
+	if userContext.RunAsNonRoot != nil {
+		merged.RunAsNonRoot = userContext.RunAsNonRoot
+	}
+	if userContext.AllowPrivilegeEscalation != nil {
+		merged.AllowPrivilegeEscalation = userContext.AllowPrivilegeEscalation
+	}
+	if userContext.ReadOnlyRootFilesystem != nil {
+		merged.ReadOnlyRootFilesystem = userContext.ReadOnlyRootFilesystem
+	}
+	if userContext.Capabilities != nil {
+		merged.Capabilities = userContext.Capabilities
+	}
+	if userContext.Privileged != nil {
+		merged.Privileged = userContext.Privileged
+	}
+	if userContext.SELinuxOptions != nil {
+		merged.SELinuxOptions = userContext.SELinuxOptions
+	}
+	if userContext.SeccompProfile != nil {
+		merged.SeccompProfile = userContext.SeccompProfile
+	}
+
+	return merged
+}
+
+// mergePodSecurityContext merges user-provided PodSecurityContext with defaults
+// User-provided values take precedence over defaults
+func mergePodSecurityContext(userContext, defaultContext *corev1.PodSecurityContext) *corev1.PodSecurityContext {
+	if userContext == nil {
+		return defaultContext
+	}
+
+	merged := defaultContext.DeepCopy()
+
+	if userContext.FSGroup != nil {
+		merged.FSGroup = userContext.FSGroup
+	}
+	if userContext.FSGroupChangePolicy != nil {
+		merged.FSGroupChangePolicy = userContext.FSGroupChangePolicy
+	}
+	if userContext.RunAsUser != nil {
+		merged.RunAsUser = userContext.RunAsUser
+	}
+	if userContext.RunAsNonRoot != nil {
+		merged.RunAsNonRoot = userContext.RunAsNonRoot
+	}
+	if userContext.SELinuxOptions != nil {
+		merged.SELinuxOptions = userContext.SELinuxOptions
+	}
+	if userContext.SeccompProfile != nil {
+		merged.SeccompProfile = userContext.SeccompProfile
+	}
+	if userContext.SupplementalGroups != nil {
+		merged.SupplementalGroups = userContext.SupplementalGroups
+	}
+	if userContext.Sysctls != nil {
+		merged.Sysctls = userContext.Sysctls
+	}
+
+	return merged
+}
+
 func (oc *OperatorContext) ReconcileStatefulset() (reconcile.Result, error) {
 	cr := oc.GetMarkLogicServer()
 	logger := oc.ReqLogger
@@ -202,6 +309,10 @@ func (oc *OperatorContext) createStatefulSet(statefulset *appsv1.StatefulSet, cr
 }
 
 func generateStatefulSetsDef(stsMeta metav1.ObjectMeta, params statefulSetParameters, ownerDef metav1.OwnerReference, containerParams containerParameters) *appsv1.StatefulSet {
+	// Enforce default security contexts, merging with user-provided values
+	// User values take precedence, but defaults ensure minimum security standards
+	podSecurityContext := mergePodSecurityContext(containerParams.PodSecurityContext, getDefaultPodSecurityContext())
+
 	statefulSet := &appsv1.StatefulSet{
 		TypeMeta:   generateTypeMeta("StatefulSet", "apps/v1"),
 		ObjectMeta: stsMeta,
@@ -219,7 +330,7 @@ func generateStatefulSetsDef(stsMeta metav1.ObjectMeta, params statefulSetParame
 				Spec: corev1.PodSpec{
 					Containers:                    generateContainerDef("marklogic-server", containerParams),
 					TerminationGracePeriodSeconds: params.TerminationGracePeriodSeconds,
-					SecurityContext:               containerParams.PodSecurityContext,
+					SecurityContext:               podSecurityContext,
 					Volumes:                       generateVolumes(stsMeta.Name, containerParams),
 					NodeSelector:                  params.NodeSelector,
 					Affinity:                      params.Affinity,
@@ -319,6 +430,10 @@ func GetPodsForStatefulSet(namespace, name string) ([]corev1.Pod, error) {
 }
 
 func generateContainerDef(name string, containerParams containerParameters) []corev1.Container {
+	// Enforce default container security context, merging with user-provided values
+	// This ensures minimum security standards are always applied
+	securityContext := mergeSecurityContext(containerParams.SecurityContext, getDefaultContainerSecurityContext())
+
 	containerDef := []corev1.Container{
 		{
 			Name:            name,
@@ -326,7 +441,7 @@ func generateContainerDef(name string, containerParams containerParameters) []co
 			ImagePullPolicy: containerParams.ImagePullPolicy,
 			Env:             getEnvironmentVariables(containerParams),
 			Lifecycle:       getLifeCycle(),
-			SecurityContext: containerParams.SecurityContext,
+			SecurityContext: securityContext,
 			VolumeMounts:    getVolumeMount(containerParams),
 		},
 	}
