@@ -88,15 +88,44 @@ func (oc *OperatorContext) ReconcileStatefulset() (reconcile.Result, error) {
 			oc.Recorder.Event(oc.MarklogicGroup, "Normal", "StatefulSetCreated", "MarkLogic statefulSet created successfully")
 			return result.Done().Output()
 		}
-		_, outputErr := result.Error(err).Output()
-		if outputErr != nil {
-			logger.Error(outputErr, "Failed to process result error")
-		}
-	}
-	if err != nil {
-		logger.Error(err, "Cannot create standalone statefulSet for MarkLogic")
+		logger.Error(err, "Cannot get statefulSet for MarkLogic")
 		return result.Error(err).Output()
 	}
+
+	patchDiff, err := patch.DefaultPatchMaker.Calculate(currentSts, statefulSetDef,
+		patch.IgnoreStatusFields(),
+		patch.IgnoreVolumeClaimTemplateTypeMetaAndStatus(),
+		patch.IgnoreField("kind"))
+	logger.Info("Patch Diff:", "Diff", patchDiff.String())
+	logger.Info("statefulSetDef Spec:", "Spec", statefulSetDef.Spec.Replicas)
+	if err != nil {
+		logger.Error(err, "Error calculating patch")
+		return result.Error(err).Output()
+	}
+
+	if !patchDiff.IsEmpty() {
+		logger.Info("MarkLogic statefulSet spec is different from the MarkLogicGroup spec, updating the statefulSet")
+		currentSts.Spec = statefulSetDef.Spec
+		currentSts.ObjectMeta.Annotations = statefulSetDef.ObjectMeta.Annotations
+		currentSts.ObjectMeta.Labels = statefulSetDef.ObjectMeta.Labels
+		err := oc.Client.Update(oc.Ctx, currentSts)
+		if err != nil {
+			logger.Error(err, "Error updating statefulSet")
+			return result.Error(err).Output()
+		}
+	} else {
+		logger.Info("MarkLogic statefulSet spec is the same as the current spec, no update needed")
+	}
+	logger.Info("Operator Status:", "Stage", cr.Status.Stage)
+	if cr.Status.Stage == "STS_CREATED" {
+		logger.Info("MarkLogic statefulSet created successfully, waiting for pods to be ready")
+		pods, err := GetPodsForStatefulSet(cr.Namespace, cr.Spec.Name)
+		if err != nil {
+			logger.Error(err, "Error getting pods for statefulset")
+		}
+		logger.Info("Pods in statefulSet: ", "Pods", pods)
+	}
+
 	patchClient := client.MergeFrom(oc.MarklogicGroup.DeepCopy())
 	updated := false
 	if currentSts.Status.ReadyReplicas == 0 || currentSts.Status.ReadyReplicas != currentSts.Status.Replicas {
@@ -130,37 +159,6 @@ func (oc *OperatorContext) ReconcileStatefulset() (reconcile.Result, error) {
 		if err != nil {
 			oc.ReqLogger.Error(err, "error updating the MarkLogic Operator Internal status")
 		}
-	}
-
-	patchDiff, err := patch.DefaultPatchMaker.Calculate(currentSts, statefulSetDef,
-		patch.IgnoreStatusFields(),
-		patch.IgnoreVolumeClaimTemplateTypeMetaAndStatus(),
-		patch.IgnoreField("kind"))
-	if err != nil {
-		logger.Error(err, "Error calculating patch")
-		return result.Error(err).Output()
-	}
-	if !patchDiff.IsEmpty() {
-		logger.Info("MarkLogic statefulSet spec is different from the MarkLogicGroup spec, updating the statefulSet")
-		currentSts.Spec = statefulSetDef.Spec
-		currentSts.ObjectMeta.Annotations = statefulSetDef.ObjectMeta.Annotations
-		currentSts.ObjectMeta.Labels = statefulSetDef.ObjectMeta.Labels
-		err := oc.Client.Update(oc.Ctx, currentSts)
-		if err != nil {
-			logger.Error(err, "Error updating statefulSet")
-			return result.Error(err).Output()
-		}
-	} else {
-		logger.Info("MarkLogic statefulSet spec is the same as the current spec, no update needed")
-	}
-	logger.Info("Operator Status:", "Stage", cr.Status.Stage)
-	if cr.Status.Stage == "STS_CREATED" {
-		logger.Info("MarkLogic statefulSet created successfully, waiting for pods to be ready")
-		pods, err := GetPodsForStatefulSet(cr.Namespace, cr.Spec.Name)
-		if err != nil {
-			logger.Error(err, "Error getting pods for statefulset")
-		}
-		logger.Info("Pods in statefulSet: ", "Pods", pods)
 	}
 
 	return result.Done().Output()
