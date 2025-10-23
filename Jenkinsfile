@@ -145,8 +145,8 @@ void runMinikubeCleanup() {
     '''
 }
 
-void runSecurityScan() {
-    build job: 'securityscans/Blackduck/KubeNinjas/kubernetes-operator', wait: false, parameters: [ string(name: 'branch', value: "${env.BRANCH_NAME}") ]
+void runBlackDuckScan() {
+    build job: 'securityscans/Blackduck/KubeNinjas/kubernetes-operator', wait: false, parameters: [ string(name: 'branch', value: "${env.BRANCH_NAME}"), string(name: 'CONTAINER_IMAGES', value: "${operatorRepo}:${VERSION}-${branchNameTag}") ]
 }
 
 /**
@@ -210,12 +210,6 @@ pipeline {
             }
         }
 
-        stage('Run-Security-Scan') {
-            steps {
-                runSecurityScan()
-            }
-        }
-
         stage('Run-tests') {
             steps {
                 runTests()
@@ -250,6 +244,17 @@ pipeline {
             }
             steps {
                 publishToInternalRegistry()
+            }
+        }
+
+        stage('Run-BlackDuck-Scan') {
+            when {
+                    anyOf {
+                        expression { return params.PUBLISH_IMAGE }
+                    }
+            }
+            steps {
+                runBlackDuckScan()
             }
         }
         
