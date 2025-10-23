@@ -12,6 +12,8 @@ operatorRegistry = 'ml-marklogic-operator-dev.bed-artifactory.bedford.progress.c
 JIRA_ID = ''
 JIRA_ID_PATTERN = /(?i)(MLE)-\d{3,6}/
 operatorRepo = 'marklogic-kubernetes-operator'
+timeStamp = new Date().format('yyyyMMdd')
+branchNameTag = env.BRANCH_NAME.replaceAll('/', '-')
 
 // Define local funtions
 void preBuildCheck() {
@@ -146,7 +148,12 @@ void runMinikubeCleanup() {
 }
 
 void runBlackDuckScan() {
-    build job: 'securityscans/Blackduck/KubeNinjas/kubernetes-operator', wait: false, parameters: [ string(name: 'branch', value: "${env.BRANCH_NAME}"), string(name: 'CONTAINER_IMAGES', value: "${operatorRepo}:${VERSION}-${branchNameTag}") ]
+    // Trigger BlackDuck scan job with CONTAINER_IMAGES parameter when params.PUBLISH_IMAGE is true
+    if (params.PUBLISH_IMAGE) {
+        build job: 'securityscans/Blackduck/KubeNinjas/kubernetes-operator', wait: false, parameters: [ string(name: 'branch', value: "${env.BRANCH_NAME}"), string(name: 'CONTAINER_IMAGES', value: "${operatorRepo}:${VERSION}-${branchNameTag}") ]
+    } else {
+        build job: 'securityscans/Blackduck/KubeNinjas/kubernetes-operator', wait: false, parameters: [ string(name: 'branch', value: "${env.BRANCH_NAME}") ]
+    }
 }
 
 /**
@@ -156,8 +163,7 @@ void runBlackDuckScan() {
  */
 void publishToInternalRegistry() {
     withCredentials([usernamePassword(credentialsId: 'builder-credentials-artifactory', passwordVariable: 'docker_password', usernameVariable: 'docker_user')]) {
-        timeStamp = new Date().format('yyyyMMdd')
-        branchNameTag = env.BRANCH_NAME.replaceAll('/', '-')
+        
         sh """
             # make sure to logout first to avoid issues with cached credentials
             docker logout ${operatorRegistry}
@@ -248,11 +254,7 @@ pipeline {
         }
 
         stage('Run-BlackDuck-Scan') {
-            when {
-                    anyOf {
-                        expression { return params.PUBLISH_IMAGE }
-                    }
-            }
+
             steps {
                 runBlackDuckScan()
             }
