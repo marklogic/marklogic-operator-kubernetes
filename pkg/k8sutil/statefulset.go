@@ -119,7 +119,7 @@ func (oc *OperatorContext) ReconcileStatefulset() (reconcile.Result, error) {
 	logger.Info("Operator Status:", "Stage", cr.Status.Stage)
 	if cr.Status.Stage == "STS_CREATED" {
 		logger.Info("MarkLogic statefulSet created successfully, waiting for pods to be ready")
-		pods, err := GetPodsForStatefulSet(cr.Namespace, cr.Spec.Name)
+		pods, err := GetPodsForStatefulSet(oc.Ctx, cr.Namespace, cr.Spec.Name)
 		if err != nil {
 			logger.Error(err, "Error getting pods for statefulset")
 		}
@@ -178,7 +178,7 @@ func (oc *OperatorContext) setCondition(condition *metav1.Condition) bool {
 func (oc *OperatorContext) GetStatefulSet(namespace string, stateful string) (*appsv1.StatefulSet, error) {
 	logger := oc.ReqLogger
 	statefulInfo := &appsv1.StatefulSet{}
-	err := oc.Client.Get(context.TODO(), client.ObjectKey{Namespace: namespace, Name: stateful}, statefulInfo)
+	err := oc.Client.Get(oc.Ctx, client.ObjectKey{Namespace: namespace, Name: stateful}, statefulInfo)
 	if err != nil {
 		logger.Info("MarkLogic statefulSet get action failed")
 		return nil, err
@@ -189,7 +189,7 @@ func (oc *OperatorContext) GetStatefulSet(namespace string, stateful string) (*a
 
 func (oc *OperatorContext) createStatefulSet(statefulset *appsv1.StatefulSet, cr *marklogicv1.MarklogicGroup) error {
 	logger := oc.ReqLogger
-	err := oc.Client.Create(context.TODO(), statefulset)
+	err := oc.Client.Create(oc.Ctx, statefulset)
 	if err != nil {
 		logger.Error(err, "MarkLogic stateful creation failed")
 		return err
@@ -304,11 +304,11 @@ func generateStatefulSetsDef(stsMeta metav1.ObjectMeta, params statefulSetParame
 	return statefulSet
 }
 
-func GetPodsForStatefulSet(namespace, name string) ([]corev1.Pod, error) {
+func GetPodsForStatefulSet(ctx context.Context, namespace, name string) ([]corev1.Pod, error) {
 	selector := fmt.Sprintf("app.kubernetes.io/name=marklogic,app.kubernetes.io/instance=%s", name)
 	// List Pods with the label selector
 	listOptions := metav1.ListOptions{LabelSelector: selector}
-	pods, err := GenerateK8sClient().CoreV1().Pods(namespace).List(context.TODO(), listOptions)
+	pods, err := GenerateK8sClient().CoreV1().Pods(namespace).List(ctx, listOptions)
 	if err != nil {
 		return nil, err
 	}
