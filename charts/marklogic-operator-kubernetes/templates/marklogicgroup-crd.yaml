@@ -3258,6 +3258,9 @@ spec:
                   walletPassword:
                     type: string
                 type: object
+              automountServiceAccountToken:
+                default: false
+                type: boolean
               bootstrapHost:
                 type: string
               clusterDomain:
@@ -3375,8 +3378,15 @@ spec:
                       memory: 200Mi
                 properties:
                   enabled:
+                    default: false
                     type: boolean
                   files:
+                    default:
+                      accessLogs: true
+                      auditLogs: true
+                      crashLogs: true
+                      errorLogs: true
+                      requestLogs: true
                     properties:
                       accessLogs:
                         type: boolean
@@ -3390,6 +3400,7 @@ spec:
                         type: boolean
                     type: object
                   image:
+                    default: fluent/fluent-bit:3.2.5
                     type: string
                   imagePullSecrets:
                     items:
@@ -3410,8 +3421,24 @@ spec:
                       x-kubernetes-map-type: atomic
                     type: array
                   outputs:
+                    default: |-
+                      [OUTPUT]
+                        name loki
+                        match *
+                        host loki.default.svc.cluster.local
+                        port 3100
+                        labels job=fluent-bit
+                        http_user admin
+                        http_passwd admin
                     type: string
                   resources:
+                    default:
+                      limits:
+                        cpu: 200m
+                        memory: 500Mi
+                      requests:
+                        cpu: 100m
+                        memory: 200Mi
                     description: ResourceRequirements describes the compute resource
                       requirements.
                     properties:
@@ -4553,6 +4580,8 @@ spec:
                       service
                     type: string
                 type: object
+              serviceAccountName:
+                type: string
               terminationGracePeriodSeconds:
                 format: int64
                 type: integer
