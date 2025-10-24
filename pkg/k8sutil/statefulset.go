@@ -88,15 +88,44 @@ func (oc *OperatorContext) ReconcileStatefulset() (reconcile.Result, error) {
 			oc.Recorder.Event(oc.MarklogicGroup, "Normal", "StatefulSetCreated", "MarkLogic statefulSet created successfully")
 			return result.Done().Output()
 		}
-		_, outputErr := result.Error(err).Output()
-		if outputErr != nil {
-			logger.Error(outputErr, "Failed to process result error")
-		}
-	}
-	if err != nil {
-		logger.Error(err, "Cannot create standalone statefulSet for MarkLogic")
+		logger.Error(err, "Cannot get statefulSet for MarkLogic")
 		return result.Error(err).Output()
 	}
+
+	patchDiff, err := patch.DefaultPatchMaker.Calculate(currentSts, statefulSetDef,
+		patch.IgnoreStatusFields(),
+		patch.IgnoreVolumeClaimTemplateTypeMetaAndStatus(),
+		patch.IgnoreField("kind"))
+	logger.Info("Patch Diff:", "Diff", patchDiff.String())
+	logger.Info("statefulSetDef Spec:", "Spec", statefulSetDef.Spec.Replicas)
+	if err != nil {
+		logger.Error(err, "Error calculating patch")
+		return result.Error(err).Output()
+	}
+
+	if !patchDiff.IsEmpty() {
+		logger.Info("MarkLogic statefulSet spec is different from the MarkLogicGroup spec, updating the statefulSet")
+		currentSts.Spec = statefulSetDef.Spec
+		currentSts.ObjectMeta.Annotations = statefulSetDef.ObjectMeta.Annotations
+		currentSts.ObjectMeta.Labels = statefulSetDef.ObjectMeta.Labels
+		err := oc.Client.Update(oc.Ctx, currentSts)
+		if err != nil {
+			logger.Error(err, "Error updating statefulSet")
+			return result.Error(err).Output()
+		}
+	} else {
+		logger.Info("MarkLogic statefulSet spec is the same as the current spec, no update needed")
+	}
+	logger.Info("Operator Status:", "Stage", cr.Status.Stage)
+	if cr.Status.Stage == "STS_CREATED" {
+		logger.Info("MarkLogic statefulSet created successfully, waiting for pods to be ready")
+		pods, err := GetPodsForStatefulSet(oc.Ctx, cr.Namespace, cr.Spec.Name)
+		if err != nil {
+			logger.Error(err, "Error getting pods for statefulset")
+		}
+		logger.Info("Pods in statefulSet: ", "Pods", pods)
+	}
+
 	patchClient := client.MergeFrom(oc.MarklogicGroup.DeepCopy())
 	updated := false
 	if currentSts.Status.ReadyReplicas == 0 || currentSts.Status.ReadyReplicas != currentSts.Status.Replicas {
@@ -132,37 +161,6 @@ func (oc *OperatorContext) ReconcileStatefulset() (reconcile.Result, error) {
 		}
 	}
 
-	patchDiff, err := patch.DefaultPatchMaker.Calculate(currentSts, statefulSetDef,
-		patch.IgnoreStatusFields(),
-		patch.IgnoreVolumeClaimTemplateTypeMetaAndStatus(),
-		patch.IgnoreField("kind"))
-	if err != nil {
-		logger.Error(err, "Error calculating patch")
-		return result.Error(err).Output()
-	}
-	if !patchDiff.IsEmpty() {
-		logger.Info("MarkLogic statefulSet spec is different from the MarkLogicGroup spec, updating the statefulSet")
-		currentSts.Spec = statefulSetDef.Spec
-		currentSts.ObjectMeta.Annotations = statefulSetDef.ObjectMeta.Annotations
-		currentSts.ObjectMeta.Labels = statefulSetDef.ObjectMeta.Labels
-		err := oc.Client.Update(oc.Ctx, currentSts)
-		if err != nil {
-			logger.Error(err, "Error updating statefulSet")
-			return result.Error(err).Output()
-		}
-	} else {
-		logger.Info("MarkLogic statefulSet spec is the same as the current spec, no update needed")
-	}
-	logger.Info("Operator Status:", "Stage", cr.Status.Stage)
-	if cr.Status.Stage == "STS_CREATED" {
-		logger.Info("MarkLogic statefulSet created successfully, waiting for pods to be ready")
-		pods, err := GetPodsForStatefulSet(cr.Namespace, cr.Spec.Name)
-		if err != nil {
-			logger.Error(err, "Error getting pods for statefulset")
-		}
-		logger.Info("Pods in statefulSet: ", "Pods", pods)
-	}
-
 	return result.Done().Output()
 }
 
@@ -180,7 +178,7 @@ func (oc *OperatorContext) setCondition(condition *metav1.Condition) bool {
 func (oc *OperatorContext) GetStatefulSet(namespace string, stateful string) (*appsv1.StatefulSet, error) {
 	logger := oc.ReqLogger
 	statefulInfo := &appsv1.StatefulSet{}
-	err := oc.Client.Get(context.TODO(), client.ObjectKey{Namespace: namespace, Name: stateful}, statefulInfo)
+	err := oc.Client.Get(oc.Ctx, client.ObjectKey{Namespace: namespace, Name: stateful}, statefulInfo)
 	if err != nil {
 		logger.Info("MarkLogic statefulSet get action failed")
 		return nil, err
@@ -191,7 +189,7 @@ func (oc *OperatorContext) GetStatefulSet(namespace string, stateful string) (*a
 
 func (oc *OperatorContext) createStatefulSet(statefulset *appsv1.StatefulSet, cr *marklogicv1.MarklogicGroup) error {
 	logger := oc.ReqLogger
-	err := oc.Client.Create(context.TODO(), statefulset)
+	err := oc.Client.Create(oc.Ctx, statefulset)
 	if err != nil {
 		logger.Error(err, "MarkLogic stateful creation failed")
 		return err
@@ -306,11 +304,11 @@ func generateStatefulSetsDef(stsMeta metav1.ObjectMeta, params statefulSetParame
 	return statefulSet
 }
 
-func GetPodsForStatefulSet(namespace, name string) ([]corev1.Pod, error) {
+func GetPodsForStatefulSet(ctx context.Context, namespace, name string) ([]corev1.Pod, error) {
 	selector := fmt.Sprintf("app.kubernetes.io/name=marklogic,app.kubernetes.io/instance=%s", name)
 	// List Pods with the label selector
 	listOptions := metav1.ListOptions{LabelSelector: selector}
-	pods, err := GenerateK8sClient().CoreV1().Pods(namespace).List(context.TODO(), listOptions)
+	pods, err := GenerateK8sClient().CoreV1().Pods(namespace).List(ctx, listOptions)
 	if err != nil {
 		return nil, err
 	}
