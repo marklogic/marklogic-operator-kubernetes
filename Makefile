@@ -66,7 +66,7 @@ OPERATOR_SDK_VERSION ?= v1.34.2
 # Image URL to use all building/pushing image targets
 # Image for dev: ml-marklogic-operator-dev.bed-artifactory.bedford.progress.com/marklogic-operator-kubernetes
 # IMG ?= progressofficial/marklogic-operator-kubernetes:$(VERSION)
-IMG = "testrepo/marklogic-operator-image-dev:1.0.0"
+IMG ?= "testrepo/marklogic-operator-image-dev:1.0.0"
 
 
 # Get the currently used golang install path (in GOPATH/bin, unless GOBIN is set)
