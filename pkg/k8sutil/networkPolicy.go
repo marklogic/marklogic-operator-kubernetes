@@ -33,8 +33,7 @@ func generateNetworkPolicyDef(networkPolicyMeta metav1.ObjectMeta, ownerRef meta
 func (cc *ClusterContext) getNetworkPolicy(namespace string, networkPolicyName string) (*networkingv1.NetworkPolicy, error) {
 	logger := cc.ReqLogger
 
-	var networkPolicy *networkingv1.NetworkPolicy
-	networkPolicy = &networkingv1.NetworkPolicy{}
+	networkPolicy := &networkingv1.NetworkPolicy{}
 	err := cc.Client.Get(cc.Ctx, types.NamespacedName{Name: networkPolicyName, Namespace: namespace}, networkPolicy)
 	if err != nil {
 		logger.Info("MarkLogic NetworkPolicy get action failed")
@@ -99,6 +98,8 @@ func (cc *ClusterContext) ReconcileNetworkPolicy() result.ReconcileResult {
 	return result.Continue()
 }
 
+// Deprecated: createNetworkPolicy is currently unused but kept for future use
+// nolint:unused
 func (oc *OperatorContext) createNetworkPolicy(namespace string, networkPolicy *networkingv1.NetworkPolicy) error {
 	logger := oc.ReqLogger
 	client := oc.Client

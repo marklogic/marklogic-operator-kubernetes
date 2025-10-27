@@ -36,9 +36,7 @@ func generateIngressDef(ingressMeta metav1.ObjectMeta, ownerRef metav1.OwnerRefe
 			},
 		})
 	}
-	for _, additionalHost := range cr.Spec.HAProxy.Ingress.AdditionalHosts {
-		ingressRules = append(ingressRules, additionalHost)
-	}
+	ingressRules = append(ingressRules, cr.Spec.HAProxy.Ingress.AdditionalHosts...)
 
 	ingressSpec := networkingv1.IngressSpec{
 		IngressClassName: &cr.Spec.HAProxy.Ingress.IngressClassName,
@@ -128,6 +126,8 @@ func (cc *ClusterContext) ReconcileIngress() result.ReconcileResult {
 	return result.Continue()
 }
 
+// Deprecated: createIngress is currently unused but kept for future use
+// nolint:unused
 func (cc *ClusterContext) createIngress(namespace string) error {
 	logger := cc.ReqLogger
 	client := cc.Client

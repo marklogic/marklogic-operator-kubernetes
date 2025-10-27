@@ -72,8 +72,7 @@ func generateServicePorts() []corev1.ServicePort {
 }
 
 func generateServiceDef(serviceMeta metav1.ObjectMeta, ownerRef metav1.OwnerReference, params serviceParameters) *corev1.Service {
-	var svcSpec corev1.ServiceSpec
-	svcSpec = corev1.ServiceSpec{
+	svcSpec := corev1.ServiceSpec{
 		Selector: getSelectorLabels(params.StsName),
 		Ports:    append(params.Ports, generateServicePorts()...),
 	}
@@ -101,8 +100,7 @@ func (oc *OperatorContext) generateService(svcName string, cr *marklogicv1.Markl
 	for key, value := range groupLabels {
 		labels[key] = value
 	}
-	var svcParams serviceParameters = serviceParameters{}
-	svcParams = generateServiceParams(cr)
+	svcParams := generateServiceParams(cr)
 	svcObjectMeta := generateObjectMeta(svcName, cr.Namespace, labels, svcParams.Annotations)
 	service := generateServiceDef(svcObjectMeta, marklogicServerAsOwner(cr), svcParams)
 	return service
