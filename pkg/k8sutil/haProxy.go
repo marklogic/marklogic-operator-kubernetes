@@ -6,7 +6,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"sort"
-
 	"context"
 
 	"github.com/cisco-open/k8s-objectmatcher/patch"
