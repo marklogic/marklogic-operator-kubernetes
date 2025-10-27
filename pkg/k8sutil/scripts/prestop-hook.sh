@@ -1,4 +1,5 @@
 #!/bin/bash
+# Copyright (c) 2024-2025 Progress Software Corporation and/or its subsidiaries or affiliates. All Rights Reserved.
 
 MARKLOGIC_ADMIN_USERNAME="$(< /run/secrets/ml-secrets/username)"
 MARKLOGIC_ADMIN_PASSWORD="$(< /run/secrets/ml-secrets/password)"

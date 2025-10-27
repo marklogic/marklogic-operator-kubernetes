@@ -1,3 +1,5 @@
+# Copyright (c) 2024-2025 Progress Software Corporation and/or its subsidiaries or affiliates. All Rights Reserved.
+
 # Build the manager binary
 FROM golang:1.23.6 AS builder
 ARG TARGETOS

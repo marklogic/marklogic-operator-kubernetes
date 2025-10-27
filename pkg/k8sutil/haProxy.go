@@ -1,3 +1,5 @@
+// Copyright (c) 2024-2025 Progress Software Corporation and/or its subsidiaries or affiliates. All Rights Reserved.
+
 package k8sutil
 
 import (
@@ -6,6 +8,7 @@ import (
 	"sort"
 
 	"context"
+
 	"github.com/cisco-open/k8s-objectmatcher/patch"
 	marklogicv1 "github.com/marklogic/marklogic-operator-kubernetes/api/v1"
 	"github.com/marklogic/marklogic-operator-kubernetes/pkg/result"
