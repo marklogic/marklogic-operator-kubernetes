@@ -10,6 +10,7 @@ controllerManager:
       capabilities:
         drop:
         - ALL
+      runAsNonRoot: true
     image:
       repository: gcr.io/kubebuilder/kube-rbac-proxy
       tag: v0.15.0
@@ -30,6 +31,7 @@ controllerManager:
       capabilities:
         drop:
         - ALL
+      runAsNonRoot: true
     image:
       repository: progressofficial/marklogic-operator-kubernetes
       tag: 1.1.0

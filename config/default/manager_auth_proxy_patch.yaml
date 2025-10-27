@@ -15,6 +15,7 @@ spec:
           capabilities:
             drop:
             - "ALL"
+          runAsNonRoot: true
         image: gcr.io/kubebuilder/kube-rbac-proxy:v0.15.0
         args:
         - "--secure-listen-address=0.0.0.0:8443"
