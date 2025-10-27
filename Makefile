@@ -15,7 +15,7 @@ export E2E_MARKLOGIC_IMAGE_VERSION ?= progressofficial/marklogic-db:11.3.1-ubi-r
 export E2E_KUBERNETES_VERSION ?= v1.34.0
 
 # ENVTEST_K8S_VERSION refers to the version of kubebuilder assets to be downloaded by envtest binary.
-ENVTEST_K8S_VERSION = 1.34.0
+ENVTEST_K8S_VERSION = 1.31.13
 
 
 # CHANNELS define the bundle channels used in the bundle.
