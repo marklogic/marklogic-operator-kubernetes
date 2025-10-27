@@ -3,7 +3,7 @@
 # To re-generate a bundle for another specific version without changing the standard setup, you can:
 # - use the VERSION as arg of the bundle target (e.g make bundle VERSION=0.0.2)
 # - use environment variables to overwrite this value (e.g export VERSION=0.0.2)
-VERSION ?= 1.0.0
+VERSION ?= 1.1.0
 
 # VERIFY_HUGE_PAGES defines if hugepages test is enabled or not for e2e test
 VERIFY_HUGE_PAGES ?= false
@@ -12,10 +12,10 @@ export E2E_DOCKER_IMAGE ?= $(IMG)
 export E2E_KUSTOMIZE_VERSION ?= $(KUSTOMIZE_VERSION)
 export E2E_CONTROLLER_TOOLS_VERSION ?= $(CONTROLLER_TOOLS_VERSION)
 export E2E_MARKLOGIC_IMAGE_VERSION ?= progressofficial/marklogic-db:11.3.1-ubi-rootless-2.1.3
-export E2E_KUBERNETES_VERSION ?= v1.31.0
+export E2E_KUBERNETES_VERSION ?= v1.34.0
 
 # ENVTEST_K8S_VERSION refers to the version of kubebuilder assets to be downloaded by envtest binary.
-ENVTEST_K8S_VERSION = 1.31.0
+ENVTEST_K8S_VERSION = 1.34.0
 
 
 # CHANNELS define the bundle channels used in the bundle.
@@ -65,8 +65,8 @@ OPERATOR_SDK_VERSION ?= v1.34.2
 
 # Image URL to use all building/pushing image targets
 # Image for dev: ml-marklogic-operator-dev.bed-artifactory.bedford.progress.com/marklogic-operator-kubernetes
-# IMG ?= progressofficial/marklogic-operator-kubernetes:$(VERSION)
-IMG ?= "testrepo/marklogic-operator-image-dev:1.0.0"
+IMG ?= progressofficial/marklogic-operator-kubernetes:$(VERSION)
+# IMG ?= "testrepo/marklogic-operator-image-dev:$(VERSION)"
 
 
 # Get the currently used golang install path (in GOPATH/bin, unless GOBIN is set)
@@ -173,7 +173,7 @@ e2e-cleanup-minikube:
 	minikube delete
 	
 GOLANGCI_LINT = $(shell pwd)/bin/golangci-lint
-GOLANGCI_LINT_VERSION ?= v1.54.2
+GOLANGCI_LINT_VERSION ?= v1.62.2
 golangci-lint:
 	@[ -f $(GOLANGCI_LINT) ] || { \
 	set -e ;\
@@ -265,7 +265,7 @@ ENVTEST ?= $(LOCALBIN)/setup-envtest
 
 ## Tool Versions
 KUSTOMIZE_VERSION ?= v5.5.0
-CONTROLLER_TOOLS_VERSION ?= v0.17.1
+CONTROLLER_TOOLS_VERSION ?= v0.19.0
 
 .PHONY: kustomize
 kustomize: $(KUSTOMIZE) ## Download kustomize locally if necessary. If wrong version is installed, it will be removed before downloading.
@@ -368,6 +368,7 @@ $(HELMIFY): $(LOCALBIN)
 	test -s $(LOCALBIN)/helmify || GOBIN=$(LOCALBIN) go install github.com/arttor/helmify/cmd/helmify@latest
     
 helm: manifests kustomize helmify
+	cd config/manager && $(KUSTOMIZE) edit set image controller=$(IMG)
 	$(KUSTOMIZE) build config/default | $(HELMIFY) -image-pull-secrets -original-name charts/marklogic-operator-kubernetes 
 
 .PHONY: image-scan

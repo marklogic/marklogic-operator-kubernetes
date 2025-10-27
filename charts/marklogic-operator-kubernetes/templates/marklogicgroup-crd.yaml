@@ -3,7 +3,7 @@ kind: CustomResourceDefinition
 metadata:
   name: marklogicgroups.marklogic.progress.com
   annotations:
-    controller-gen.kubebuilder.io/version: v0.17.1
+    controller-gen.kubebuilder.io/version: v0.19.0
   labels:
   {{- include "marklogic-operator-kubernetes.labels" . | nindent 4 }}
 spec:
