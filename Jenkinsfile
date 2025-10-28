@@ -157,12 +157,19 @@ pipeline {
         buildDiscarder logRotator(artifactDaysToKeepStr: '20', artifactNumToKeepStr: '', daysToKeepStr: '30', numToKeepStr: '')
         skipStagesAfterUnstable()
     }
-    // triggers {
-    //     //TODO: add scheduled runs
-    // }
-    // environment {
-    //     //TODO
-    // }
+    
+    triggers {
+        // Trigger nightly builds on the develop branch
+        parameterizedCron( env.BRANCH_NAME == 'develop' ? '''00 05 * * * % E2E_MARKLOGIC_IMAGE_VERSION=ml-docker-db-dev-tierpoint.bed-artifactory.bedford.progress.com/marklogic/marklogic-server-ubi-rootless:latest-12
+                                                             00 05 * * * % E2E_MARKLOGIC_IMAGE_VERSION=ml-docker-db-dev-tierpoint.bed-artifactory.bedford.progress.com/marklogic/marklogic-server-ubi-rootless:latest-11; PUBLISH_IMAGE=false''' : '')
+    }
+
+    environment {
+        PATH = "/space/go/bin:${env.PATH}"
+        MINIKUBE_HOME = "/space/minikube/"
+        KUBECONFIG = "/space/.kube-config"
+        GOPATH = "/space/go"
+    }
 
     parameters {
         string(name: 'E2E_MARKLOGIC_IMAGE_VERSION', defaultValue: 'ml-docker-db-dev-tierpoint.bed-artifactory.bedford.progress.com/marklogic/marklogic-server-ubi-rootless:latest-12', description: 'Docker image to use for tests.', trim: true)
