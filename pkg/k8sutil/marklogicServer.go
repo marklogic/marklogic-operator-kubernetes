@@ -188,7 +188,7 @@ func (cc *ClusterContext) ReconsileMarklogicCluster() (reconcile.Result, error) 
 				}
 
 				logger.Info("Created new MarkLogic Server resource")
-				result.Done().Output()
+				_, _ = result.Done().Output()
 			} else {
 				logger.Error(err, "Failed to get MarkLogicGroup resource")
 			}

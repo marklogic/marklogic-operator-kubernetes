@@ -402,8 +402,14 @@ func generateContainerParams(cr *marklogicv1.MarklogicGroup) containerParameters
 		Tls:                    cr.Spec.Tls,
 		AdditionalVolumes:      cr.Spec.AdditionalVolumes,
 		AdditionalVolumeMounts: cr.Spec.AdditionalVolumeMounts,
-		SecretName:             cr.Spec.SecretName,
 		Persistence:            cr.Spec.Persistence,
+	}
+
+	// Set SecretName with fallback to default if not specified
+	if cr.Spec.SecretName != "" {
+		containerParams.SecretName = cr.Spec.SecretName
+	} else {
+		containerParams.SecretName = cr.ObjectMeta.Name + "-admin"
 	}
 
 	if cr.Spec.License != nil {

@@ -5,4 +5,4 @@ kind: Kustomization
 images:
 - name: controller
   newName: progressofficial/marklogic-operator-kubernetes
-  newTag: 1.0.0
+  newTag: 1.1.0

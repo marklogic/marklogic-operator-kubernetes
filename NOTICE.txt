@@ -15,12 +15,12 @@ This document provides notice information for the third-party components used by
 Third Party Components
 
 
-api v0.32.1 (Apache-2.0)
-apimachinery v0.32.1 (Apache-2.0)
-client-go v0.32.1 (Apache-2.0)
-controller-runtime v0.20.1 (Apache-2.0)
+api v0.34.1 (Apache-2.0)
+apimachinery v0.34.1 (Apache-2.0)
+client-go v0.34.1 (Apache-2.0)
+controller-runtime v0.22.3 (Apache-2.0)
 k8s-objectmatcher v1.10.0 (Apache-2.0)
-logr v1.4.2 (Apache-2.0
+logr v1.4.3 (Apache-2.0)
 
 
  Common Licenses
@@ -31,27 +31,27 @@ logr v1.4.2 (Apache-2.0
 
 The following software may be included in this project (last updated February 11, 2025):
 
-Api v0.32.1 (Apache-2.0)
+Api v0.34.1 (Apache-2.0)
 
-    https://github.com/kubernetes/api/tree/v0.32.1
-
-    For the full text of the Apache-2.0 license, see Apache License 2.0 (Apache-2.0)
-
-Apimachinery v0.32.1 (Apache-2.0)
-
-    https://github.com/kubernetes/apimachinery/tree/v0.32.1
+    https://github.com/kubernetes/api/tree/v0.34.1
 
     For the full text of the Apache-2.0 license, see Apache License 2.0 (Apache-2.0)
 
-client-go v0.32.1 (Apache-2.0)
+Apimachinery v0.34.1 (Apache-2.0)
 
-    https://github.com/kubernetes/client-go/tree/v0.32.1
+    https://github.com/kubernetes/apimachinery/tree/v0.34.1
 
     For the full text of the Apache-2.0 license, see Apache License 2.0 (Apache-2.0)
 
-Controller-runtime v0.20.1 (Apache-2.0)
+client-go v0.34.1 (Apache-2.0)
 
-    https://github.com/kubernetes-sigs/controller-runtime/tree/v0.20.1
+    https://github.com/kubernetes/client-go/tree/v0.34.1
+
+    For the full text of the Apache-2.0 license, see Apache License 2.0 (Apache-2.0)
+
+Controller-runtime v0.22.3 (Apache-2.0)
+
+    https://github.com/kubernetes-sigs/controller-runtime/tree/v0.22.3
 
     For the full text of the Apache-2.0 license, see Apache License 2.0 (Apache-2.0)
 
@@ -70,9 +70,9 @@ The source file patch/deletenull.go is based on https://github.com/kubernetes/ku
 
     For the full text of the Apache-2.0 license, see Apache License 2.0 (Apache-2.0)
 
-Logr v1.4.2 (Apache-2.0)
+Logr v1.4.3 (Apache-2.0)
 
-    https://github.com/go-logr/logr/tree/v1.4.2
+    https://github.com/go-logr/logr/tree/v1.4.3
 
     For the full text of the Apache-2.0 license, see Apache License 2.0 (Apache-2.0)
 
