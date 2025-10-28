@@ -150,7 +150,7 @@ void runMinikubeCleanup() {
 void runBlackDuckScan() {
     // Trigger BlackDuck scan job with CONTAINER_IMAGES parameter when params.PUBLISH_IMAGE is true
     if (params.PUBLISH_IMAGE) {
-        build job: 'securityscans/Blackduck/KubeNinjas/kubernetes-operator', wait: false, parameters: [ string(name: 'branch', value: "${env.BRANCH_NAME}"), string(name: 'CONTAINER_IMAGES', value: "${operatorRepo}:${VERSION}-${branchNameTag}") ]
+        build job: 'securityscans/Blackduck/KubeNinjas/kubernetes-operator', wait: false, parameters: [ string(name: 'branch', value: "${env.BRANCH_NAME}"), string(name: 'CONTAINER_IMAGES', value: "${operatorRegistry}/${operatorRepo}:${VERSION}-${branchNameTag}-${timeStamp}") ]
     } else {
         build job: 'securityscans/Blackduck/KubeNinjas/kubernetes-operator', wait: false, parameters: [ string(name: 'branch', value: "${env.BRANCH_NAME}") ]
     }
