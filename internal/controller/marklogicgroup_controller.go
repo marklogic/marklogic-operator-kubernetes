@@ -20,8 +20,6 @@ import (
 	"context"
 	"reflect"
 
-	"reflect"
-
 	"github.com/go-logr/logr"
 	marklogicv1 "github.com/marklogic/marklogic-operator-kubernetes/api/v1"
 	"github.com/marklogic/marklogic-operator-kubernetes/pkg/k8sutil"
