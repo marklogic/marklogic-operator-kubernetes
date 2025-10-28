@@ -202,6 +202,14 @@ pipeline {
                                                              00 05 * * * % E2E_MARKLOGIC_IMAGE_VERSION=ml-docker-db-dev-tierpoint.bed-artifactory.bedford.progress.com/marklogic/marklogic-server-ubi-rootless:latest-11; PUBLISH_IMAGE=false''' : '')
     }
 
+    environment {
+        PATH = "/space/go/bin:${env.PATH}"
+        MINIKUBE_HOME = "/space/minikube/"
+        KUBECONFIG = "/space/.kube-config"
+        GOPATH = "/space/go"
+    }
+
+
     parameters {
         string(name: 'E2E_MARKLOGIC_IMAGE_VERSION', defaultValue: 'ml-docker-db-dev-tierpoint.bed-artifactory.bedford.progress.com/marklogic/marklogic-server-ubi-rootless:latest-12', description: 'Docker image to use for tests.', trim: true)
         string(name: 'VERSION', defaultValue: '1.1.0', description: 'Version to tag the image with.', trim: true)
