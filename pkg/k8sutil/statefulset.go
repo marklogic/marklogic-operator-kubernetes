@@ -18,6 +18,114 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
 
+// getDefaultPodSecurityContext returns the default pod-level security context for MarkLogic StatefulSets
+// MarkLogic runs as user 1000 and group 2 (mlusers) - Must not be changed
+func getDefaultPodSecurityContext() *corev1.PodSecurityContext {
+	fsGroup := int64(2)
+	fsGroupChangePolicy := corev1.FSGroupChangeOnRootMismatch
+	return &corev1.PodSecurityContext{
+		FSGroup:             &fsGroup,
+		FSGroupChangePolicy: &fsGroupChangePolicy,
+	}
+}
+
+// getDefaultContainerSecurityContext returns the default container-level security context for MarkLogic containers
+// This enforces strict security requirements:
+// - runAsUser: 1000 - MarkLogic runs as user 1000 and group 2 (mlusers) - Must not be changed
+// - runAsNonRoot: true (prevents running as root)
+// - allowPrivilegeEscalation: false (prevents privilege escalation)
+// - readOnlyRootFilesystem: true (makes root filesystem read-only)
+// - capabilities drop ALL (removes all Linux capabilities)
+func getDefaultContainerSecurityContext() *corev1.SecurityContext {
+	runAsUser := int64(1000)
+	runAsNonRoot := true
+	allowPrivilegeEscalation := false
+	readOnlyRootFilesystem := true
+	return &corev1.SecurityContext{
+		RunAsUser:                &runAsUser,
+		RunAsNonRoot:             &runAsNonRoot,
+		AllowPrivilegeEscalation: &allowPrivilegeEscalation,
+		ReadOnlyRootFilesystem:   &readOnlyRootFilesystem,
+		Capabilities: &corev1.Capabilities{
+			Drop: []corev1.Capability{"ALL"},
+		},
+	}
+}
+
+// mergeSecurityContext merges user-provided SecurityContext with defaults
+// User-provided values take precedence over defaults for flexibility
+func mergeSecurityContext(userContext, defaultContext *corev1.SecurityContext) *corev1.SecurityContext {
+	if userContext == nil {
+		return defaultContext
+	}
+
+	merged := defaultContext.DeepCopy()
+
+	if userContext.RunAsUser != nil {
+		merged.RunAsUser = userContext.RunAsUser
+	}
+	if userContext.RunAsNonRoot != nil {
+		merged.RunAsNonRoot = userContext.RunAsNonRoot
+	}
+	if userContext.AllowPrivilegeEscalation != nil {
+		merged.AllowPrivilegeEscalation = userContext.AllowPrivilegeEscalation
+	}
+	if userContext.ReadOnlyRootFilesystem != nil {
+		merged.ReadOnlyRootFilesystem = userContext.ReadOnlyRootFilesystem
+	}
+	if userContext.Capabilities != nil {
+		merged.Capabilities = userContext.Capabilities
+	}
+	if userContext.Privileged != nil {
+		merged.Privileged = userContext.Privileged
+	}
+	if userContext.SELinuxOptions != nil {
+		merged.SELinuxOptions = userContext.SELinuxOptions
+	}
+	if userContext.SeccompProfile != nil {
+		merged.SeccompProfile = userContext.SeccompProfile
+	}
+
+	return merged
+}
+
+// mergePodSecurityContext merges user-provided PodSecurityContext with defaults
+// User-provided values take precedence over defaults for flexibility
+func mergePodSecurityContext(userContext, defaultContext *corev1.PodSecurityContext) *corev1.PodSecurityContext {
+	if userContext == nil {
+		return defaultContext
+	}
+
+	merged := defaultContext.DeepCopy()
+
+	if userContext.FSGroup != nil {
+		merged.FSGroup = userContext.FSGroup
+	}
+	if userContext.FSGroupChangePolicy != nil {
+		merged.FSGroupChangePolicy = userContext.FSGroupChangePolicy
+	}
+	if userContext.RunAsUser != nil {
+		merged.RunAsUser = userContext.RunAsUser
+	}
+	if userContext.RunAsNonRoot != nil {
+		merged.RunAsNonRoot = userContext.RunAsNonRoot
+	}
+	if userContext.SELinuxOptions != nil {
+		merged.SELinuxOptions = userContext.SELinuxOptions
+	}
+	if userContext.SeccompProfile != nil {
+		merged.SeccompProfile = userContext.SeccompProfile
+	}
+	if userContext.SupplementalGroups != nil {
+		merged.SupplementalGroups = userContext.SupplementalGroups
+	}
+	if userContext.Sysctls != nil {
+		merged.Sysctls = userContext.Sysctls
+	}
+
+	return merged
+}
+
 type statefulSetParameters struct {
 	Replicas                       *int32
 	Name                           string
@@ -63,113 +171,6 @@ type containerParameters struct {
 	SecretName             string
 }
 
-// getDefaultPodSecurityContext returns the default pod-level security context for MarkLogic StatefulSets
-func getDefaultPodSecurityContext() *corev1.PodSecurityContext {
-	fsGroup := int64(2)
-	fsGroupChangePolicy := corev1.FSGroupChangeOnRootMismatch
-	return &corev1.PodSecurityContext{
-		FSGroup:             &fsGroup,
-		FSGroupChangePolicy: &fsGroupChangePolicy,
-	}
-}
-
-// getDefaultContainerSecurityContext returns the default container-level security context for MarkLogic containers
-// This enforces:
-// - runAsUser: 1000 (non-root user)
-// - runAsNonRoot: true (prevents running as root)
-// - allowPrivilegeEscalation: false (prevents privilege escalation)
-// - readOnlyRootFilesystem: true (makes root filesystem read-only)
-// - capabilities drop ALL (removes all Linux capabilities)
-func getDefaultContainerSecurityContext() *corev1.SecurityContext {
-	runAsUser := int64(1000)
-	runAsNonRoot := true
-	allowPrivilegeEscalation := false
-	readOnlyRootFilesystem := true
-	return &corev1.SecurityContext{
-		RunAsUser:                &runAsUser,
-		RunAsNonRoot:             &runAsNonRoot,
-		AllowPrivilegeEscalation: &allowPrivilegeEscalation,
-		ReadOnlyRootFilesystem:   &readOnlyRootFilesystem,
-		Capabilities: &corev1.Capabilities{
-			Drop: []corev1.Capability{"ALL"},
-		},
-	}
-}
-
-// mergeSecurityContext merges user-provided SecurityContext with defaults
-// User-provided values take precedence over defaults
-func mergeSecurityContext(userContext, defaultContext *corev1.SecurityContext) *corev1.SecurityContext {
-	if userContext == nil {
-		return defaultContext
-	}
-
-	merged := defaultContext.DeepCopy()
-
-	if userContext.RunAsUser != nil {
-		merged.RunAsUser = userContext.RunAsUser
-	}
-	if userContext.RunAsNonRoot != nil {
-		merged.RunAsNonRoot = userContext.RunAsNonRoot
-	}
-	if userContext.AllowPrivilegeEscalation != nil {
-		merged.AllowPrivilegeEscalation = userContext.AllowPrivilegeEscalation
-	}
-	if userContext.ReadOnlyRootFilesystem != nil {
-		merged.ReadOnlyRootFilesystem = userContext.ReadOnlyRootFilesystem
-	}
-	if userContext.Capabilities != nil {
-		merged.Capabilities = userContext.Capabilities
-	}
-	if userContext.Privileged != nil {
-		merged.Privileged = userContext.Privileged
-	}
-	if userContext.SELinuxOptions != nil {
-		merged.SELinuxOptions = userContext.SELinuxOptions
-	}
-	if userContext.SeccompProfile != nil {
-		merged.SeccompProfile = userContext.SeccompProfile
-	}
-
-	return merged
-}
-
-// mergePodSecurityContext merges user-provided PodSecurityContext with defaults
-// User-provided values take precedence over defaults
-func mergePodSecurityContext(userContext, defaultContext *corev1.PodSecurityContext) *corev1.PodSecurityContext {
-	if userContext == nil {
-		return defaultContext
-	}
-
-	merged := defaultContext.DeepCopy()
-
-	if userContext.FSGroup != nil {
-		merged.FSGroup = userContext.FSGroup
-	}
-	if userContext.FSGroupChangePolicy != nil {
-		merged.FSGroupChangePolicy = userContext.FSGroupChangePolicy
-	}
-	if userContext.RunAsUser != nil {
-		merged.RunAsUser = userContext.RunAsUser
-	}
-	if userContext.RunAsNonRoot != nil {
-		merged.RunAsNonRoot = userContext.RunAsNonRoot
-	}
-	if userContext.SELinuxOptions != nil {
-		merged.SELinuxOptions = userContext.SELinuxOptions
-	}
-	if userContext.SeccompProfile != nil {
-		merged.SeccompProfile = userContext.SeccompProfile
-	}
-	if userContext.SupplementalGroups != nil {
-		merged.SupplementalGroups = userContext.SupplementalGroups
-	}
-	if userContext.Sysctls != nil {
-		merged.Sysctls = userContext.Sysctls
-	}
-
-	return merged
-}
-
 func (oc *OperatorContext) ReconcileStatefulset() (reconcile.Result, error) {
 	cr := oc.GetMarkLogicServer()
 	logger := oc.ReqLogger
@@ -195,15 +196,44 @@ func (oc *OperatorContext) ReconcileStatefulset() (reconcile.Result, error) {
 			oc.Recorder.Event(oc.MarklogicGroup, "Normal", "StatefulSetCreated", "MarkLogic statefulSet created successfully")
 			return result.Done().Output()
 		}
-		_, outputErr := result.Error(err).Output()
-		if outputErr != nil {
-			logger.Error(outputErr, "Failed to process result error")
-		}
-	}
-	if err != nil {
-		logger.Error(err, "Cannot create standalone statefulSet for MarkLogic")
+		logger.Error(err, "Cannot get statefulSet for MarkLogic")
 		return result.Error(err).Output()
 	}
+
+	patchDiff, err := patch.DefaultPatchMaker.Calculate(currentSts, statefulSetDef,
+		patch.IgnoreStatusFields(),
+		patch.IgnoreVolumeClaimTemplateTypeMetaAndStatus(),
+		patch.IgnoreField("kind"))
+	logger.Info("Patch Diff:", "Diff", patchDiff.String())
+	logger.Info("statefulSetDef Spec:", "Spec", statefulSetDef.Spec.Replicas)
+	if err != nil {
+		logger.Error(err, "Error calculating patch")
+		return result.Error(err).Output()
+	}
+
+	if !patchDiff.IsEmpty() {
+		logger.Info("MarkLogic statefulSet spec is different from the MarkLogicGroup spec, updating the statefulSet")
+		currentSts.Spec = statefulSetDef.Spec
+		currentSts.ObjectMeta.Annotations = statefulSetDef.ObjectMeta.Annotations
+		currentSts.ObjectMeta.Labels = statefulSetDef.ObjectMeta.Labels
+		err := oc.Client.Update(oc.Ctx, currentSts)
+		if err != nil {
+			logger.Error(err, "Error updating statefulSet")
+			return result.Error(err).Output()
+		}
+	} else {
+		logger.Info("MarkLogic statefulSet spec is the same as the current spec, no update needed")
+	}
+	logger.Info("Operator Status:", "Stage", cr.Status.Stage)
+	if cr.Status.Stage == "STS_CREATED" {
+		logger.Info("MarkLogic statefulSet created successfully, waiting for pods to be ready")
+		pods, err := GetPodsForStatefulSet(oc.Ctx, cr.Namespace, cr.Spec.Name)
+		if err != nil {
+			logger.Error(err, "Error getting pods for statefulset")
+		}
+		logger.Info("Pods in statefulSet: ", "Pods", pods)
+	}
+
 	patchClient := client.MergeFrom(oc.MarklogicGroup.DeepCopy())
 	updated := false
 	if currentSts.Status.ReadyReplicas == 0 || currentSts.Status.ReadyReplicas != currentSts.Status.Replicas {
@@ -239,37 +269,6 @@ func (oc *OperatorContext) ReconcileStatefulset() (reconcile.Result, error) {
 		}
 	}
 
-	patchDiff, err := patch.DefaultPatchMaker.Calculate(currentSts, statefulSetDef,
-		patch.IgnoreStatusFields(),
-		patch.IgnoreVolumeClaimTemplateTypeMetaAndStatus(),
-		patch.IgnoreField("kind"))
-	if err != nil {
-		logger.Error(err, "Error calculating patch")
-		return result.Error(err).Output()
-	}
-	if !patchDiff.IsEmpty() {
-		logger.Info("MarkLogic statefulSet spec is different from the MarkLogicGroup spec, updating the statefulSet")
-		currentSts.Spec = statefulSetDef.Spec
-		currentSts.ObjectMeta.Annotations = statefulSetDef.ObjectMeta.Annotations
-		currentSts.ObjectMeta.Labels = statefulSetDef.ObjectMeta.Labels
-		err := oc.Client.Update(oc.Ctx, currentSts)
-		if err != nil {
-			logger.Error(err, "Error updating statefulSet")
-			return result.Error(err).Output()
-		}
-	} else {
-		logger.Info("MarkLogic statefulSet spec is the same as the current spec, no update needed")
-	}
-	logger.Info("Operator Status:", "Stage", cr.Status.Stage)
-	if cr.Status.Stage == "STS_CREATED" {
-		logger.Info("MarkLogic statefulSet created successfully, waiting for pods to be ready")
-		pods, err := GetPodsForStatefulSet(cr.Namespace, cr.Spec.Name)
-		if err != nil {
-			logger.Error(err, "Error getting pods for statefulset")
-		}
-		logger.Info("Pods in statefulSet: ", "Pods", pods)
-	}
-
 	return result.Done().Output()
 }
 
@@ -287,7 +286,7 @@ func (oc *OperatorContext) setCondition(condition *metav1.Condition) bool {
 func (oc *OperatorContext) GetStatefulSet(namespace string, stateful string) (*appsv1.StatefulSet, error) {
 	logger := oc.ReqLogger
 	statefulInfo := &appsv1.StatefulSet{}
-	err := oc.Client.Get(context.TODO(), client.ObjectKey{Namespace: namespace, Name: stateful}, statefulInfo)
+	err := oc.Client.Get(oc.Ctx, client.ObjectKey{Namespace: namespace, Name: stateful}, statefulInfo)
 	if err != nil {
 		logger.Info("MarkLogic statefulSet get action failed")
 		return nil, err
@@ -298,7 +297,7 @@ func (oc *OperatorContext) GetStatefulSet(namespace string, stateful string) (*a
 
 func (oc *OperatorContext) createStatefulSet(statefulset *appsv1.StatefulSet, cr *marklogicv1.MarklogicGroup) error {
 	logger := oc.ReqLogger
-	err := oc.Client.Create(context.TODO(), statefulset)
+	err := oc.Client.Create(oc.Ctx, statefulset)
 	if err != nil {
 		logger.Error(err, "MarkLogic stateful creation failed")
 		return err
@@ -309,8 +308,8 @@ func (oc *OperatorContext) createStatefulSet(statefulset *appsv1.StatefulSet, cr
 }
 
 func generateStatefulSetsDef(stsMeta metav1.ObjectMeta, params statefulSetParameters, ownerDef metav1.OwnerReference, containerParams containerParameters) *appsv1.StatefulSet {
-	// Enforce default security contexts, merging with user-provided values
-	// User values take precedence, but defaults ensure minimum security standards
+	// Enforce default pod security context, merging with user-provided values
+	// This ensures all MarkLogic pods run with secure defaults
 	podSecurityContext := mergePodSecurityContext(containerParams.PodSecurityContext, getDefaultPodSecurityContext())
 
 	statefulSet := &appsv1.StatefulSet{
@@ -417,11 +416,11 @@ func generateStatefulSetsDef(stsMeta metav1.ObjectMeta, params statefulSetParame
 	return statefulSet
 }
 
-func GetPodsForStatefulSet(namespace, name string) ([]corev1.Pod, error) {
+func GetPodsForStatefulSet(ctx context.Context, namespace, name string) ([]corev1.Pod, error) {
 	selector := fmt.Sprintf("app.kubernetes.io/name=marklogic,app.kubernetes.io/instance=%s", name)
 	// List Pods with the label selector
 	listOptions := metav1.ListOptions{LabelSelector: selector}
-	pods, err := GenerateK8sClient().CoreV1().Pods(namespace).List(context.TODO(), listOptions)
+	pods, err := GenerateK8sClient().CoreV1().Pods(namespace).List(ctx, listOptions)
 	if err != nil {
 		return nil, err
 	}
@@ -431,7 +430,7 @@ func GetPodsForStatefulSet(namespace, name string) ([]corev1.Pod, error) {
 
 func generateContainerDef(name string, containerParams containerParameters) []corev1.Container {
 	// Enforce default container security context, merging with user-provided values
-	// This ensures minimum security standards are always applied
+	// This ensures all MarkLogic containers run with strict security settings
 	securityContext := mergeSecurityContext(containerParams.SecurityContext, getDefaultContainerSecurityContext())
 
 	containerDef := []corev1.Container{
