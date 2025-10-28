@@ -1,3 +1,5 @@
+// Copyright (c) 2024-2025 Progress Software Corporation and/or its subsidiaries or affiliates. All Rights Reserved.
+
 package v1
 
 import (

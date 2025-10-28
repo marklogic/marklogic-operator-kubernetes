@@ -1,4 +1,6 @@
-#! /bin/bash    
+#! /bin/bash   
+# Copyright (c) 2024-2025 Progress Software Corporation and/or its subsidiaries or affiliates. All Rights Reserved. 
+
 # Refer to https://docs.marklogic.com/guide/admin-api/cluster#id_10889 for cluster joining process
 
 N_RETRY=10

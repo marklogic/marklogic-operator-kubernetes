@@ -1,3 +1,5 @@
+// Copyright (c) 2024-2025 Progress Software Corporation and/or its subsidiaries or affiliates. All Rights Reserved.
+
 /* groovylint-disable CompileStatic, LineLength, VariableTypeRequired */
 // This Jenkinsfile defines internal MarkLogic build pipeline.
 

@@ -1,10 +1,11 @@
+// Copyright (c) 2024-2025 Progress Software Corporation and/or its subsidiaries or affiliates. All Rights Reserved.
+
 package k8sutil
 
 import (
 	"crypto/sha256"
 	"encoding/hex"
 	"sort"
-
 	"context"
 
 	"github.com/cisco-open/k8s-objectmatcher/patch"
