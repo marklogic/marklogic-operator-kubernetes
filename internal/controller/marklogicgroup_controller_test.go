@@ -40,7 +40,7 @@ const (
 	duration = time.Second * 10
 	interval = time.Millisecond * 250
 
-	imageName = "progressofficial/marklogic-db:11.3.0-ubi-rootless"
+	imageName = "progressofficial/marklogic-db:12.0.0-ubi9-rootless-2.2.2"
 )
 
 var replicas = int32(2)

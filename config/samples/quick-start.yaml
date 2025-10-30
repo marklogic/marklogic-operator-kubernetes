@@ -6,7 +6,7 @@ metadata:
   name: single-node
   annotations: {}
 spec:
-  image: "progressofficial/marklogic-db:11.3.1-ubi-rootless-2.2.1"
+  image: "progressofficial/marklogic-db:12.0.0-ubi9-rootless-2.2.2"
   ## It is recommended to use Kubernetes secrets to store the admin credentials
   ## To create a secret, run the following command in the same namespace as the CR:
   ## kubectl create secret generic admincreds --from-literal=username=admin --from-literal=password=admin

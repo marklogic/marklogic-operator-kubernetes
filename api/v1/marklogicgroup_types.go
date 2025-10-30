@@ -34,7 +34,7 @@ type MarklogicGroupSpec struct {
 	Annotations map[string]string `json:"annotations,omitempty"`
 	// +kubebuilder:default:="cluster.local"
 	ClusterDomain string `json:"clusterDomain,omitempty"`
-	// +kubebuilder:default:="progressofficial/marklogic-db:11.3.0-ubi-rootless"
+	// +kubebuilder:default:="progressofficial/marklogic-db:12.0.0-ubi9-rootless-2.2.2"
 	Image string `json:"image"`
 	// +kubebuilder:default:="IfNotPresent"
 	ImagePullPolicy    string                        `json:"imagePullPolicy,omitempty"`
