@@ -17,6 +17,7 @@ spec:
           capabilities:
             drop:
             - "ALL"
+          readOnlyRootFilesystem: true
           runAsNonRoot: true
         image: gcr.io/kubebuilder/kube-rbac-proxy:v0.15.0
         args:

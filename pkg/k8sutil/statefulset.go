@@ -543,7 +543,12 @@ func generatePVCTemplate(persistence *marklogicv1.Persistence) corev1.Persistent
 	pvcTemplate := corev1.PersistentVolumeClaim{}
 	pvcTemplate.CreationTimestamp = metav1.Time{}
 	pvcTemplate.ObjectMeta.Name = "datadir"
-	if persistence != nil && persistence.StorageClassName != "" {
+
+	if persistence == nil {
+		return pvcTemplate
+	}
+
+	if persistence.StorageClassName != "" {
 		pvcTemplate.Spec.StorageClassName = &persistence.StorageClassName
 	}
 	pvcTemplate.Spec.AccessModes = persistence.AccessModes
@@ -557,8 +562,12 @@ func generatePVCTemplate(persistence *marklogicv1.Persistence) corev1.Persistent
 func getEnvironmentVariables(containerParams containerParameters) []corev1.EnvVar {
 	envVars := []corev1.EnvVar{}
 	groupName := "Default"
-	if containerParams.GroupConfig != nil && containerParams.GroupConfig.Name != "" {
-		groupName = containerParams.GroupConfig.Name
+	enableXdqpSsl := false
+	if containerParams.GroupConfig != nil {
+		if containerParams.GroupConfig.Name != "" {
+			groupName = containerParams.GroupConfig.Name
+		}
+		enableXdqpSsl = containerParams.GroupConfig.EnableXdqpSsl
 	}
 	envVars = append(envVars, corev1.EnvVar{
 		Name:  "MARKLOGIC_ADMIN_USERNAME_FILE",
@@ -580,7 +589,7 @@ func getEnvironmentVariables(containerParams containerParameters) []corev1.EnvVa
 		Value: groupName,
 	}, corev1.EnvVar{
 		Name:  "XDQP_SSL_ENABLED",
-		Value: strconv.FormatBool(containerParams.GroupConfig.EnableXdqpSsl),
+		Value: strconv.FormatBool(enableXdqpSsl),
 	}, corev1.EnvVar{
 		Name:  "MARKLOGIC_CLUSTER_TYPE",
 		Value: "bootstrap",
