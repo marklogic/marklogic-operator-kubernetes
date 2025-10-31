@@ -187,12 +187,13 @@ func (cc *ClusterContext) ReconsileMarklogicCluster() (reconcile.Result, error) 
 				err = cc.Client.Create(ctx, markLogicGroupDef)
 				if err != nil {
 					logger.Error(err, "Failed to create markLogicCluster")
+					return result.Error(err).Output()
 				}
 
 				logger.Info("Created new MarkLogic Server resource")
-				_, _ = result.Done().Output()
 			} else {
 				logger.Error(err, "Failed to get MarkLogicGroup resource")
+				return result.Error(err).Output()
 			}
 		} else {
 			patchDiff, err := patch.DefaultPatchMaker.Calculate(currentMlg, markLogicGroupDef,

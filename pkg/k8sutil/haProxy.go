@@ -434,8 +434,8 @@ func calculateHash(data map[string]string) string {
 
 	// Iterate over the sorted keys and write key-value pairs to the hash
 	for _, k := range keys {
-		hash.Write([]byte(k))
-		hash.Write([]byte(data[k]))
+		_, _ = hash.Write([]byte(k))
+		_, _ = hash.Write([]byte(data[k]))
 	}
 
 	// Get the final hash and convert to hexadecimal string
