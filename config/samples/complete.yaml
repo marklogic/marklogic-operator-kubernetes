@@ -7,7 +7,7 @@ metadata:
   namespace: prod
   annotations: {}
 spec:
-  image: "progressofficial/marklogic-db:11.3.1-ubi-rootless-2.2.1"
+  image: "progressofficial/marklogic-db:12.0.0-ubi9-rootless-2.2.2"
   imagePullPolicy: IfNotPresent
   imagePullSecrets: 
     - name: regcred
@@ -206,7 +206,7 @@ spec:
       name: dnode
       enableXdqpSsl: true
     isBootstrap: true
-    image: "progressofficial/marklogic-db:11.3.0-ubi-rootless"
+    image: "progressofficial/marklogic-db:12.0.0-ubi9-rootless-2.2.2"
     imagePullPolicy: IfNotPresent
     imagePullSecrets: 
       - name: regcred # secret name to pull the image from private repository
