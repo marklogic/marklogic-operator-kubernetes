@@ -168,21 +168,23 @@ func (oc *OperatorContext) getFluentBitData() map[string]string {
 
 pipeline:
   inputs:`
-
 	// Add INPUT sections based on enabled log types
-	if oc.MarklogicGroup.Spec.LogCollection.Files.ErrorLogs {
-		fluentBitData["fluent-bit.yaml"] += `
-    - name: tail
+	if strings.TrimSpace(oc.MarklogicGroup.Spec.LogCollection.Inputs) != "" {
+		fluentBitData["fluent-bit.yaml"] += "\n" + normalizeYAMLIndentation(oc.MarklogicGroup.Spec.LogCollection.Inputs, 4, 6)
+	} else {
+		if oc.MarklogicGroup.Spec.LogCollection.Files.ErrorLogs {
+			fluentBitData["fluent-bit.yaml"] += `
+	- name: tail
       path: /var/opt/MarkLogic/Logs/*ErrorLog.txt
       read_from_head: true
       tag: kube.marklogic.logs.error
       path_key: path
       parser: error_parser
       mem_buf_limit: 4MB`
-	}
+		}
 
-	if oc.MarklogicGroup.Spec.LogCollection.Files.AccessLogs {
-		fluentBitData["fluent-bit.yaml"] += `
+		if oc.MarklogicGroup.Spec.LogCollection.Files.AccessLogs {
+			fluentBitData["fluent-bit.yaml"] += `
     - name: tail
       path: /var/opt/MarkLogic/Logs/*AccessLog.txt
       read_from_head: true
@@ -190,10 +192,10 @@ pipeline:
       path_key: path
       parser: access_parser
       mem_buf_limit: 4MB`
-	}
+		}
 
-	if oc.MarklogicGroup.Spec.LogCollection.Files.RequestLogs {
-		fluentBitData["fluent-bit.yaml"] += `
+		if oc.MarklogicGroup.Spec.LogCollection.Files.RequestLogs {
+			fluentBitData["fluent-bit.yaml"] += `
     - name: tail
       path: /var/opt/MarkLogic/Logs/*RequestLog.txt
       read_from_head: true
@@ -201,32 +203,37 @@ pipeline:
       path_key: path
       parser: json_parser
       mem_buf_limit: 4MB`
-	}
+		}
 
-	if oc.MarklogicGroup.Spec.LogCollection.Files.CrashLogs {
-		fluentBitData["fluent-bit.yaml"] += `
+		if oc.MarklogicGroup.Spec.LogCollection.Files.CrashLogs {
+			fluentBitData["fluent-bit.yaml"] += `
     - name: tail
       path: /var/opt/MarkLogic/Logs/CrashLog.txt
       read_from_head: true
       tag: kube.marklogic.logs.crash
       path_key: path
       mem_buf_limit: 4MB`
-	}
+		}
 
-	if oc.MarklogicGroup.Spec.LogCollection.Files.AuditLogs {
-		fluentBitData["fluent-bit.yaml"] += `
+		if oc.MarklogicGroup.Spec.LogCollection.Files.AuditLogs {
+			fluentBitData["fluent-bit.yaml"] += `
     - name: tail
       path: /var/opt/MarkLogic/Logs/AuditLog.txt
       read_from_head: true
       tag: kube.marklogic.logs.audit
       path_key: path
       mem_buf_limit: 4MB`
+		}
 	}
 
 	// Add FILTER sections
 	fluentBitData["fluent-bit.yaml"] += `
 
-  filters:
+  filters:`
+	if strings.TrimSpace(oc.MarklogicGroup.Spec.LogCollection.Filters) != "" {
+		fluentBitData["fluent-bit.yaml"] += "\n" + normalizeYAMLIndentation(oc.MarklogicGroup.Spec.LogCollection.Filters, 4, 6)
+	} else {
+		fluentBitData["fluent-bit.yaml"] += `
     - name: modify
       match: "*"
       add: pod ${POD_NAME}
@@ -246,43 +253,16 @@ pipeline:
     - name: modify
       match: kube.marklogic.logs.crash
       add: tag kube.marklogic.logs.crash
+	`
+	}
+
+	// Add OUTPUT sections
+	fluentBitData["fluent-bit.yaml"] += `
 
   outputs:`
-
 	// Handle user-defined outputs from LogCollection.Outputs
-	if oc.MarklogicGroup.Spec.LogCollection.Outputs != "" {
-		// Process user-defined outputs, adjusting indentation to match pipeline level
-		outputs := oc.MarklogicGroup.Spec.LogCollection.Outputs
-		// Split into lines and process indentation
-		lines := strings.Split(outputs, "\n")
-		processedLines := make([]string, 0, len(lines))
-		for _, line := range lines {
-			if strings.TrimSpace(line) == "" {
-				continue // Skip empty lines
-			}
-			// Count leading spaces in original line
-			leadingSpaces := len(line) - len(strings.TrimLeft(line, " "))
-			content := strings.TrimLeft(line, " ")
-			if content != "" {
-				// For YAML list items starting with "-", use 4 spaces base indentation
-				// For properties under list items, use 6 spaces base indentation
-				var newIndent int
-				const yamlListItemIndent = 4
-				const yamlPropertyIndent = 6
-				if strings.HasPrefix(content, "- ") {
-					newIndent = yamlListItemIndent // List items at pipeline outputs level
-				} else {
-					newIndent = yamlPropertyIndent // Properties under list items
-				}
-				// Add any additional relative indentation beyond the first level
-				const baseIndentOffset = 2
-				if leadingSpaces > baseIndentOffset {
-					newIndent += leadingSpaces - baseIndentOffset
-				}
-				processedLines = append(processedLines, strings.Repeat(" ", newIndent)+content)
-			}
-		}
-		fluentBitData["fluent-bit.yaml"] += "\n" + strings.Join(processedLines, "\n")
+	if strings.TrimSpace(oc.MarklogicGroup.Spec.LogCollection.Outputs) != "" {
+		fluentBitData["fluent-bit.yaml"] += "\n" + normalizeYAMLIndentation(oc.MarklogicGroup.Spec.LogCollection.Outputs, 4, 6)
 	} else {
 		// Default stdout output if none specified
 		fluentBitData["fluent-bit.yaml"] += `
@@ -292,7 +272,11 @@ pipeline:
 	}
 
 	// Parsers in YAML format
-	fluentBitData["parsers.yaml"] = `parsers:
+	fluentBitData["parsers.yaml"] = `parsers:`
+	if strings.TrimSpace(oc.MarklogicGroup.Spec.LogCollection.Parsers) != "" {
+		fluentBitData["parsers.yaml"] += "\n" + normalizeYAMLIndentation(oc.MarklogicGroup.Spec.LogCollection.Parsers, 2, 4)
+	} else {
+		fluentBitData["parsers.yaml"] += `
   - name: error_parser
     format: regex
     regex: ^(?<time>(.+?)(?=[a-zA-Z]))(?<log_level>(.+?)(?=:))(.+?)(?=[a-zA-Z])(?<log>.*)
@@ -309,6 +293,62 @@ pipeline:
     format: json
     time_key: time
     time_format: "%Y-%m-%dT%H:%M:%S%z"`
+	}
 
 	return fluentBitData
+}
+
+// normalizeYAMLIndentation processes user-provided YAML content and adjusts indentation
+// to match the target YAML structure. This is useful when embedding user YAML into templates.
+//
+// Parameters:
+//   - yamlContent: The raw YAML content string to process
+//   - listItemIndent: Number of spaces for YAML list items (lines starting with "- ")
+//   - propertyIndent: Number of spaces for properties under list items
+//
+// Returns: A string with normalized indentation, ready to embed in a larger YAML structure
+//
+// Example:
+//
+//	input := "- name: loki\n  host: loki.svc\n  port: 3100"
+//	output := normalizeYAMLIndentation(input, 4, 6)
+func normalizeYAMLIndentation(yamlContent string, listItemIndent, propertyIndent int) string {
+	if yamlContent == "" {
+		return ""
+	}
+
+	lines := strings.Split(yamlContent, "\n")
+	processedLines := make([]string, 0, len(lines))
+
+	for _, line := range lines {
+		if strings.TrimSpace(line) == "" {
+			continue // Skip empty lines
+		}
+
+		// Count leading spaces in original line
+		leadingSpaces := len(line) - len(strings.TrimLeft(line, " "))
+		content := strings.TrimLeft(line, " ")
+
+		if content != "" {
+			// Determine base indentation level
+			var newIndent int
+			if strings.HasPrefix(content, "- ") {
+				// YAML list items (e.g., "- name: loki")
+				newIndent = listItemIndent
+			} else {
+				// Properties under list items (e.g., "host: loki.svc")
+				newIndent = propertyIndent
+			}
+
+			// Preserve relative indentation for nested structures
+			const baseIndentOffset = 2
+			if leadingSpaces > baseIndentOffset {
+				newIndent += leadingSpaces - baseIndentOffset
+			}
+
+			processedLines = append(processedLines, strings.Repeat(" ", newIndent)+content)
+		}
+	}
+
+	return strings.Join(processedLines, "\n")
 }
