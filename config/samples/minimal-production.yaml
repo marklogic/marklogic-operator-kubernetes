@@ -119,14 +119,13 @@ spec:
   #     crashLogs: true
   #     auditLogs: true
   #   outputs: |-
-  #       [OUTPUT]
-  #         name loki
-  #         match *
-  #         host loki.loki.svc.cluster.local
-  #         port 3100
-  #         labels job=fluent-bit
-  #         http_user admin
-  #         http_passwd admin
+  #     - name: loki
+  #       match: "*"
+  #       host: loki.loki.svc.cluster.local
+  #       port: 3100
+  #       labels: job=fluent-bit
+  #       http_user: admin
+  #       http_passwd: admin
   # additionalVolumes:
   # - name: "logsdir"
   #   emptyDir: {}
