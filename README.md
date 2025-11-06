@@ -94,6 +94,6 @@ kubectl delete namespace marklogic-operator-system
 
 ## Known Issues and Limitations
 
-1. The latest released version of fluent/fluent-bit:3.2.5 has high and critical security vulnerabilities. If you decide to enable the log collection feature, choose and deploy the fluent-bit or an alternate image with no vulnerabilities as per your requirements.
+1. The latest released version of fluent/fluent-bit:4.1.1 has high security vulnerabilities. If you decide to enable the log collection feature, choose and deploy the fluent-bit or an alternate image with no vulnerabilities as per your requirements.
 2. Known Issues and Limitations for the MarkLogic Server Docker image can be viewed using the link: https://github.com/marklogic/marklogic-docker?tab=readme-ov-file#Known-Issues-and-Limitations.
 3. If you're updating the group name configuration, ensure that you delete the pod to apply the changes, as we are using the OnDelete upgrade strategy.
