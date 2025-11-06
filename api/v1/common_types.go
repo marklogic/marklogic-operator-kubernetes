@@ -61,7 +61,7 @@ type AdminAuth struct {
 type LogCollection struct {
 	// +kubebuilder:default:=false
 	Enabled bool `json:"enabled,omitempty"`
-	// +kubebuilder:default:="fluent/fluent-bit:3.2.5"
+	// +kubebuilder:default:="fluent/fluent-bit:4.1.1"
 	Image            string                        `json:"image,omitempty"`
 	ImagePullSecrets []corev1.LocalObjectReference `json:"imagePullSecrets,omitempty"`
 	// +kubebuilder:default:={"requests":{"cpu":"100m","memory":"200Mi"},"limits":{"cpu":"200m","memory":"500Mi"}}
