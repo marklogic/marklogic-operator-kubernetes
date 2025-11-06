@@ -68,7 +68,6 @@ OPERATOR_SDK_VERSION ?= v1.34.2
 # Image URL to use all building/pushing image targets
 # Image for dev: ml-marklogic-operator-dev.bed-artifactory.bedford.progress.com/marklogic-operator-kubernetes
 IMG ?= progressofficial/marklogic-operator-kubernetes:$(VERSION)
-# IMG ?= "testrepo/marklogic-operator-image-dev:$(VERSION)"
 
 
 # Get the currently used golang install path (in GOPATH/bin, unless GOBIN is set)
@@ -206,7 +205,7 @@ run: manifests generate fmt vet ## Run a controller from your host.
 # More info: https://docs.docker.com/develop/develop-images/build_enhancements/
 .PHONY: docker-build
 docker-build: ## Build docker image with the manager. to build for linux, add --platform="linux/amd64"
-	$(CONTAINER_TOOL) buildx build -t ${IMG} .
+	$(CONTAINER_TOOL) buildx build --platform="linux/amd64" -t ${IMG} .
 
 .PHONY: docker-push
 docker-push: ## Push docker image with the manager.
