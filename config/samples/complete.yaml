@@ -267,7 +267,7 @@ spec:
     ## And export them to a logging backend specified in the outputs section below
     # logCollection:
     #   enabled: true
-    #   image: fluent/fluent-bit:3.1.1
+    #   image: fluent/fluent-bit:4.1.1
     #   files:
     #     errorLogs: true
     #     accessLogs: true
