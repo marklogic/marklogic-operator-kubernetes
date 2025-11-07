@@ -350,7 +350,7 @@ func generateContainerDef(name string, containerParams containerParameters) []co
 			Command:         []string{"/fluent-bit/bin/fluent-bit"},
 			Args:            []string{"--config=/fluent-bit/etc/fluent-bit.yaml"},
 			Env:             getFluentBitEnvironmentVariables(),
-			VolumeMounts:    getFluentBitVolumeMount(),
+			VolumeMounts:    getFluentBitVolumeMount(containerParams),
 		}
 		if containerParams.LogCollection.Resources != nil {
 			fulentBitContainerDef.Resources = *containerParams.LogCollection.Resources
@@ -704,14 +704,25 @@ func getVolumeMount(containerParams containerParameters) []corev1.VolumeMount {
 	return VolumeMounts
 }
 
-func getFluentBitVolumeMount() []corev1.VolumeMount {
+func getFluentBitVolumeMount(containerParams containerParameters) []corev1.VolumeMount {
 	var VolumeMountsFluentBit []corev1.VolumeMount
+	markLogicLogsPath := "/var/opt/MarkLogic/Logs"
+	logsMount := corev1.VolumeMount{
+		Name:      "datadir",
+		MountPath: markLogicLogsPath,
+	}
+
+	if containerParams.AdditionalVolumeMounts != nil {
+		for _, mount := range *containerParams.AdditionalVolumeMounts {
+			if mount.MountPath == markLogicLogsPath {
+				logsMount = mount
+				break
+			}
+		}
+	}
 
 	VolumeMountsFluentBit = append(VolumeMountsFluentBit,
-		corev1.VolumeMount{
-			Name:      "datadir",
-			MountPath: "/var/opt/MarkLogic/Logs",
-		},
+		logsMount,
 		corev1.VolumeMount{
 			Name:      "fluent-bit",
 			MountPath: "/fluent-bit/etc/",
