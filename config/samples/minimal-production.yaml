@@ -111,7 +111,7 @@ spec:
 ## And export them to a logging backend specified in the outputs section below
   # logCollection:
   #   enabled: true
-  #   image: fluent/fluent-bit:3.1.1
+  #   image: fluent/fluent-bit:4.1.1
   #   files:
   #     errorLogs: true
   #     accessLogs: true
@@ -119,14 +119,13 @@ spec:
   #     crashLogs: true
   #     auditLogs: true
   #   outputs: |-
-  #       [OUTPUT]
-  #         name loki
-  #         match *
-  #         host loki.loki.svc.cluster.local
-  #         port 3100
-  #         labels job=fluent-bit
-  #         http_user admin
-  #         http_passwd admin
+  #     - name: loki
+  #       match: "*"
+  #       host: loki.loki.svc.cluster.local
+  #       port: 3100
+  #       labels: job=fluent-bit
+  #       http_user: admin
+  #       http_passwd: admin
   # additionalVolumes:
   # - name: "logsdir"
   #   emptyDir: {}

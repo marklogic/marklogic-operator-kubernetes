@@ -3462,7 +3462,7 @@ spec:
                     accessLogs: true
                     errorLogs: true
                     requestLogs: true
-                  image: fluent/fluent-bit:3.2.5
+                  image: fluent/fluent-bit:4.1.1
                   outputs: stdout
                   resources:
                     limits:
@@ -3495,7 +3495,7 @@ spec:
                         type: boolean
                     type: object
                   image:
-                    default: fluent/fluent-bit:3.2.5
+                    default: fluent/fluent-bit:4.1.1
                     type: string
                   imagePullSecrets:
                     items:

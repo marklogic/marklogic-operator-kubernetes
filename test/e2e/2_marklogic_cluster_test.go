@@ -62,7 +62,7 @@ var (
 			},
 			LogCollection: &marklogicv1.LogCollection{
 				Enabled: true,
-				Image:   "fluent/fluent-bit:3.2.5",
+				Image:   "fluent/fluent-bit:4.1.1",
 				Files: marklogicv1.LogFilesConfig{
 					ErrorLogs:   true,
 					AccessLogs:  true,
