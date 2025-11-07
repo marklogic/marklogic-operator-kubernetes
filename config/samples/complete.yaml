@@ -232,9 +232,11 @@ spec:
       requests:
         memory: "64Gi"
         cpu: "8"
+        hugespages2Mi: "24Gi"
       limits:
         memory: "64Gi"
         cpu: "8"
+        hugespages2Mi: "24Gi"
     ## Configure Affinity property for scheduling pods to nodes
     ## ref: https://kubernetes.io/docs/concepts/configuration/assign-pod-node/#affinity-and-anti-affinity
     affinity: {}
