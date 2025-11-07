@@ -174,7 +174,7 @@ pipeline:
 	} else {
 		if oc.MarklogicGroup.Spec.LogCollection.Files.ErrorLogs {
 			fluentBitData["fluent-bit.yaml"] += `
-	- name: tail
+    - name: tail
       path: /var/opt/MarkLogic/Logs/*ErrorLog.txt
       read_from_head: true
       tag: kube.marklogic.logs.error
@@ -234,26 +234,32 @@ pipeline:
 		fluentBitData["fluent-bit.yaml"] += "\n" + normalizeYAMLIndentation(oc.MarklogicGroup.Spec.LogCollection.Filters, 4, 6)
 	} else {
 		fluentBitData["fluent-bit.yaml"] += `
-    - name: modify
-      match: "*"
-      add: pod ${POD_NAME}
-      add: namespace ${NAMESPACE}
-    - name: modify
-      match: kube.marklogic.logs.error
-      add: tag kube.marklogic.logs.error
-    - name: modify
-      match: kube.marklogic.logs.access
-      add: tag kube.marklogic.logs.access
-    - name: modify
-      match: kube.marklogic.logs.request
-      add: tag kube.marklogic.logs.request
-    - name: modify
-      match: kube.marklogic.logs.audit
-      add: tag kube.marklogic.logs.audit
-    - name: modify
-      match: kube.marklogic.logs.crash
-      add: tag kube.marklogic.logs.crash
-	`
+	    - name: modify
+	      match: "*"
+	      add:
+	        - pod ${POD_NAME}
+	        - namespace ${NAMESPACE}
+	    - name: modify
+	      match: kube.marklogic.logs.error
+	      add:
+	        - tag kube.marklogic.logs.error
+	    - name: modify
+	      match: kube.marklogic.logs.access
+	      add:
+	        - tag kube.marklogic.logs.access
+	    - name: modify
+	      match: kube.marklogic.logs.request
+	      add:
+	        - tag kube.marklogic.logs.request
+	    - name: modify
+	      match: kube.marklogic.logs.audit
+	      add:
+	        - tag kube.marklogic.logs.audit
+	    - name: modify
+	      match: kube.marklogic.logs.crash
+	      add:
+	        - tag kube.marklogic.logs.crash
+		`
 	}
 
 	// Add OUTPUT sections
@@ -313,42 +319,64 @@ pipeline:
 //	input := "- name: loki\n  host: loki.svc\n  port: 3100"
 //	output := normalizeYAMLIndentation(input, 4, 6)
 func normalizeYAMLIndentation(yamlContent string, listItemIndent, propertyIndent int) string {
+	// Purpose: Re-indent user supplied YAML fragments representing top-level lists of items
+	// (filters, outputs, inputs, parsers) while supporting nested lists under a property key.
+	// Rules:
+	//   Top-level list items: listItemIndent spaces (e.g. 4)
+	//   Properties under a list item: propertyIndent spaces (e.g. 6)
+	//   Nested list items under a property that ends with ':' (e.g. add:, set:, rename:): propertyIndent + 2
+	//   We ignore original indentation entirely for consistency.
 	if yamlContent == "" {
 		return ""
 	}
 
 	lines := strings.Split(yamlContent, "\n")
-	processedLines := make([]string, 0, len(lines))
+	processed := make([]string, 0, len(lines))
+	var lastNonEmpty string
+	inNestedList := false
 
-	for _, line := range lines {
-		if strings.TrimSpace(line) == "" {
-			continue // Skip empty lines
+	for _, raw := range lines {
+		// Replace any tab with 4 spaces to avoid invalid YAML tokens
+		raw = strings.ReplaceAll(raw, "\t", "    ")
+		trimmed := strings.TrimSpace(raw)
+		if trimmed == "" { // skip blank lines
+			continue
 		}
 
-		// Count leading spaces in original line
-		leadingSpaces := len(line) - len(strings.TrimLeft(line, " "))
-		content := strings.TrimLeft(line, " ")
+		indent := 0
+		isListItem := strings.HasPrefix(trimmed, "- ")
 
-		if content != "" {
-			// Determine base indentation level
-			var newIndent int
-			if strings.HasPrefix(content, "- ") {
-				// YAML list items (e.g., "- name: loki")
-				newIndent = listItemIndent
-			} else {
-				// Properties under list items (e.g., "host: loki.svc")
-				newIndent = propertyIndent
-			}
-
-			// Preserve relative indentation for nested structures
-			const baseIndentOffset = 2
-			if leadingSpaces > baseIndentOffset {
-				newIndent += leadingSpaces - baseIndentOffset
-			}
-
-			processedLines = append(processedLines, strings.Repeat(" ", newIndent)+content)
+		// Detect transition into nested list context: previous line is a property ending with ':'
+		// and current line is a list item
+		if isListItem && strings.HasSuffix(lastNonEmpty, ":") && !strings.HasPrefix(lastNonEmpty, "- ") {
+			inNestedList = true
 		}
+
+		// Exit nested list context when we encounter a property line (not a list item)
+		// unless it's the parent property that started the list
+		if !isListItem && !strings.HasSuffix(trimmed, ":") {
+			inNestedList = false
+		}
+
+		// Also exit nested list when we hit a top-level list item (starts with '- name:')
+		if isListItem && strings.HasPrefix(trimmed, "- name:") {
+			inNestedList = false
+		}
+
+		switch {
+		case isListItem && inNestedList:
+			// nested list item (e.g. under add:, set:, rename:)
+			indent = propertyIndent + 2
+		case isListItem:
+			// top-level list item
+			indent = listItemIndent
+		default:
+			// property line (key: value or key:)
+			indent = propertyIndent
+		}
+
+		processed = append(processed, strings.Repeat(" ", indent)+trimmed)
+		lastNonEmpty = trimmed
 	}
-
-	return strings.Join(processedLines, "\n")
+	return strings.Join(processed, "\n")
 }
