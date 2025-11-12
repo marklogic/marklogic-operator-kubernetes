@@ -3494,6 +3494,8 @@ spec:
                       requestLogs:
                         type: boolean
                     type: object
+                  filters:
+                    type: string
                   image:
                     default: fluent/fluent-bit:4.1.1
                     type: string
@@ -3515,16 +3517,11 @@ spec:
                       type: object
                       x-kubernetes-map-type: atomic
                     type: array
+                  inputs:
+                    type: string
                   outputs:
-                    default: |-
-                      [OUTPUT]
-                        name loki
-                        match *
-                        host loki.default.svc.cluster.local
-                        port 3100
-                        labels job=fluent-bit
-                        http_user admin
-                        http_passwd admin
+                    type: string
+                  parsers:
                     type: string
                   resources:
                     default:
