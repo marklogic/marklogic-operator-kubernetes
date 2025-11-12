@@ -1,5 +1,5 @@
 /*
-Copyright 2024.
+Copyright (c) 2024-2025 Progress Software Corporation and/or its subsidiaries or affiliates. All Rights Reserved.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -27,7 +27,7 @@ import (
 
 // MarklogicClusterSpec defines the desired state of MarklogicCluster
 
-// +kubebuilder:validation:XValidation:rule="!(self.haproxy.enabled == true && self.haproxy.pathBasedRouting == true) || int(self.image.split(':')[1].split('.')[0] + self.image.split(':')[1].split('.')[1]) >= 111", message="HAProxy and Pathbased Routing is enabled. PathBasedRouting is only supported for MarkLogic 11.1 and above"
+// +kubebuilder:validation:XValidation:rule="!(self.haproxy.enabled == true && self.haproxy.pathBasedRouting == true) || self.image.split(':')[1].matches('.*latest.*') || int(self.image.split(':')[1].split('.')[0] + self.image.split(':')[1].split('.')[1]) >= 111", message="HAProxy and Pathbased Routing is enabled. PathBasedRouting is only supported for MarkLogic 11.1 and above"
 type MarklogicClusterSpec struct {
 	// INSERT ADDITIONAL SPEC FIELDS - desired state of cluster
 	// Important: Run "make" to regenerate code after modifying this file
@@ -35,13 +35,19 @@ type MarklogicClusterSpec struct {
 	// +kubebuilder:default:="cluster.local"
 	ClusterDomain string `json:"clusterDomain,omitempty"`
 
-	// +kubebuilder:default:="progressofficial/marklogic-db:11.3.0-ubi-rootless"
+	// +kubebuilder:default:="progressofficial/marklogic-db:12.0.0-ubi9-rootless-2.2.2"
 	Image string `json:"image"`
 	// +kubebuilder:default:="IfNotPresent"
 	ImagePullPolicy  string                        `json:"imagePullPolicy,omitempty"`
 	ImagePullSecrets []corev1.LocalObjectReference `json:"imagePullSecrets,omitempty"`
 
 	Auth *AdminAuth `json:"auth,omitempty"`
+	// +kubebuilder:default:="marklogic-workload"
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf", message="ServiceAccountName can not be changed"
+	// The name of the service account to assigned to the MarkLogic pods
+	ServiceAccountName string `json:"serviceAccountName,omitempty"`
+	// +kubebuilder:default:=false
+	AutomountServiceAccountToken *bool `json:"automountServiceAccountToken,omitempty"`
 	// +kubebuilder:default:={enabled: true, size: "10Gi"}
 	Persistence                   *Persistence                 `json:"persistence,omitempty"`
 	Resources                     *corev1.ResourceRequirements `json:"resources,omitempty"`
@@ -60,7 +66,7 @@ type MarklogicClusterSpec struct {
 	EnableConverters          bool                                 `json:"enableConverters,omitempty"`
 	// +kubebuilder:default:={enabled: false, mountPath: "/dev/hugepages"}
 	HugePages *HugePages `json:"hugePages,omitempty"`
-	// +kubebuilder:default:={enabled: false, image: "fluent/fluent-bit:3.2.5", resources: {requests: {cpu: "100m", memory: "200Mi"}, limits: {cpu: "200m", memory: "500Mi"}}, files: {errorLogs: true, accessLogs: true, requestLogs: true}, outputs: "stdout"}
+	// +kubebuilder:default:={enabled: false, image: "fluent/fluent-bit:4.1.1", resources: {requests: {cpu: "100m", memory: "200Mi"}, limits: {cpu: "200m", memory: "500Mi"}}, files: {errorLogs: true, accessLogs: true, requestLogs: true}, outputs: "stdout"}
 	LogCollection                  *LogCollection                  `json:"logCollection,omitempty"`
 	HAProxy                        *HAProxy                        `json:"haproxy,omitempty"`
 	Tls                            *Tls                            `json:"tls,omitempty"`
@@ -87,7 +93,9 @@ type MarklogicGroups struct {
 	// +kubebuilder:default:=1
 	Replicas *int32 `json:"replicas,omitempty"`
 	// +kubebuilder:validation:Required
-	Name string `json:"name,omitempty"`
+	Name        string            `json:"name,omitempty"`
+	Labels      map[string]string `json:"labels,omitempty"`
+	Annotations map[string]string `json:"annotations,omitempty"`
 	// +kubebuilder:default:={name: "Default", enableXdqpSsl: true}
 	GroupConfig               *GroupConfig                      `json:"groupConfig,omitempty"`
 	Image                     string                            `json:"image,omitempty"`
@@ -102,7 +110,7 @@ type MarklogicGroups struct {
 	PriorityClassName         string                            `json:"priorityClassName,omitempty"`
 	HugePages                 *HugePages                        `json:"hugePages,omitempty"`
 	LogCollection             *LogCollection                    `json:"logCollection,omitempty"`
-	HAProxy                   *HAProxy                          `json:"haproxy,omitempty"`
+	HAProxy                   *HAProxyGroup                     `json:"haproxy,omitempty"`
 	// +kubebuilder:default:=false
 	IsBootstrap                    bool                            `json:"isBootstrap,omitempty"`
 	Tls                            *Tls                            `json:"tls,omitempty"`

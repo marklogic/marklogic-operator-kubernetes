@@ -36,5 +36,5 @@ roleRef:
   name: marklogic-operator-proxy-role
 subjects:
 - kind: ServiceAccount
-  name: marklogic-operator-controller-manager
+  name: '{{ include "marklogic-operator-kubernetes.serviceAccountName" . }}'
   namespace: '{{ .Release.Namespace }}'

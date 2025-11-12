@@ -1,3 +1,5 @@
+// Copyright (c) 2024-2025 Progress Software Corporation and/or its subsidiaries or affiliates. All Rights Reserved.
+
 package e2e
 
 import (
@@ -240,6 +242,9 @@ func TestTlsWithNamedCert(t *testing.T) {
 		}
 		certURIs := gjson.Get(certs, `certificate-default-list.list-items.list-item.#.uriref`).Array()
 		t.Log("Certificates URL list", certURIs)
+		if len(certURIs) < 2 {
+			t.Fatalf("Expected at least 2 certificates, found %d", len(certURIs))
+		}
 		cert0Url := fmt.Sprintf("https://localhost:8002%s?format=json", certURIs[0])
 		cert1Url := fmt.Sprintf("https://localhost:8002%s?format=json", certURIs[1])
 		command = fmt.Sprintf("curl -k --anyauth -u %s:%s %s", adminUsername, adminPassword, cert0Url)
@@ -404,8 +409,12 @@ func TestTlsWithMultiNode(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Failed to get certificates list: %v", err)
 		}
+		t.Log("Certificates list", certs)
 		certURIs := gjson.Get(certs, `certificate-default-list.list-items.list-item.#.uriref`).Array()
 		t.Log("Dnode Cert Url", certURIs)
+		if len(certURIs) < 2 {
+			t.Fatalf("Expected at least 2 certificates, found %d", len(certURIs))
+		}
 		cert0Url := fmt.Sprintf("https://localhost:8002%s?format=json", certURIs[0])
 		cert1Url := fmt.Sprintf("https://localhost:8002%s?format=json", certURIs[1])
 		command = fmt.Sprintf("curl -k --anyauth -u %s:%s %s", adminUsername, adminPassword, cert0Url)

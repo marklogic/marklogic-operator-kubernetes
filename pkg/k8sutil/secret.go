@@ -1,3 +1,5 @@
+// Copyright (c) 2024-2025 Progress Software Corporation and/or its subsidiaries or affiliates. All Rights Reserved.
+
 package k8sutil
 
 import (
@@ -19,8 +21,8 @@ func (cc *ClusterContext) ReconcileSecret() result.ReconcileResult {
 	}
 
 	logger.Info("Reconciling MarkLogic Secret")
-	labels := getCommonLabels(mlc.ObjectMeta.Name)
-	annotations := getCommonAnnotations()
+	labels := cc.GetClusterLabels(mlc.ObjectMeta.Name)
+	annotations := cc.GetClusterAnnotations()
 	secretName := mlc.ObjectMeta.Name + "-admin"
 	objectMeta := generateObjectMeta(secretName, mlc.Namespace, labels, annotations)
 	nsName := types.NamespacedName{Name: objectMeta.Name, Namespace: objectMeta.Namespace}

@@ -10,6 +10,8 @@ controllerManager:
       capabilities:
         drop:
         - ALL
+      readOnlyRootFilesystem: true
+      runAsNonRoot: true
     image:
       repository: gcr.io/kubebuilder/kube-rbac-proxy
       tag: v0.15.0
@@ -30,9 +32,11 @@ controllerManager:
       capabilities:
         drop:
         - ALL
+      readOnlyRootFilesystem: true
+      runAsNonRoot: true
     image:
       repository: progressofficial/marklogic-operator-kubernetes
-      tag: 1.0.0
+      tag: 1.1.0
     resources:
       limits:
         cpu: 500m
@@ -40,11 +44,12 @@ controllerManager:
       requests:
         cpu: 10m
         memory: 64Mi
+  nodeSelector: {}
   podSecurityContext:
     runAsNonRoot: true
   replicas: 1
-  serviceAccount:
-    annotations: {}
+  tolerations: []
+  topologySpreadConstraints: []
 imagePullSecrets: []
 kubernetesClusterDomain: cluster.local
 metricsService:
@@ -54,3 +59,8 @@ metricsService:
     protocol: TCP
     targetPort: https
   type: ClusterIP
+serviceAccount:
+  annotations: {}
+  automount: true
+  create: true
+  name: ""

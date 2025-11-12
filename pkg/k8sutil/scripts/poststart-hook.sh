@@ -1,4 +1,6 @@
-#! /bin/bash    
+#! /bin/bash   
+# Copyright (c) 2024-2025 Progress Software Corporation and/or its subsidiaries or affiliates. All Rights Reserved. 
+
 # Refer to https://docs.marklogic.com/guide/admin-api/cluster#id_10889 for cluster joining process
 
 N_RETRY=10
@@ -51,6 +53,25 @@ log () {
     fi
     
     echo $message >> /tmp/script.log
+}
+
+# Function to retry a command based on the return code
+# $1: The number of retries
+# $2: The command to run
+retry() {
+    local retries=$1
+    shift
+    local count=0
+    until "$@"; do
+        exit_code=$?
+        count=$((count + 1))
+        if [ $count -ge $retries ]; then
+        echo "Command failed after $retries attempts."
+        return $exit_code
+        fi
+        echo "Attempt $count failed. Retrying..."
+        sleep 5
+    done
 }
 
 ###############################################################
@@ -411,7 +432,7 @@ function configure_group {
         if [ "${response_code}" = "200" ]; then
             current_group=$( \
                 cat "/tmp/groups.out" | 
-                grep "group" |
+                grep "<group>" |
                 sed 's%^.*<group.*>\(.*\)</group>.*$%\1%' \
             )
 
@@ -699,10 +720,10 @@ if [[ "$IS_BOOTSTRAP_HOST" == "true" ]]; then
     if [[ "${MARKLOGIC_CLUSTER_TYPE}" == "bootstrap" ]]; then
         log "Info:  bootstrap host is ready"
         init_security_db
-        configure_group
+        retry 5 configure_group
     else 
         log "Info:  bootstrap host is ready"
-        configure_group
+        retry 5 configure_group
         join_cluster $HOST_FQDN
     fi
     configure_path_based_routing

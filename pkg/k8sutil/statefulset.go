@@ -1,3 +1,5 @@
+// Copyright (c) 2024-2025 Progress Software Corporation and/or its subsidiaries or affiliates. All Rights Reserved.
+
 package k8sutil
 
 import (
@@ -31,6 +33,8 @@ type statefulSetParameters struct {
 	PriorityClassName              string
 	ImagePullSecrets               []corev1.LocalObjectReference
 	AdditionalVolumeClaimTemplates *[]corev1.PersistentVolumeClaim
+	ServiceAccountName             string
+	AutomountServiceAccountToken   *bool
 }
 
 type containerParameters struct {
@@ -64,25 +68,66 @@ type containerParameters struct {
 func (oc *OperatorContext) ReconcileStatefulset() (reconcile.Result, error) {
 	cr := oc.GetMarkLogicServer()
 	logger := oc.ReqLogger
-	labels := getCommonLabels(cr.Spec.Name)
-	annotations := getCommonAnnotations()
-	objectMeta := generateObjectMeta(cr.Spec.Name, cr.Namespace, labels, annotations)
+	groupLabels := cr.Labels
+	if groupLabels == nil {
+		groupLabels = getSelectorLabels(cr.Spec.Name)
+	}
+	groupLabels["app.kubernetes.io/instance"] = cr.Spec.Name
+	groupAnnotations := cr.GetAnnotations()
+	delete(groupAnnotations, "banzaicloud.com/last-applied")
+	objectMeta := generateObjectMeta(cr.Spec.Name, cr.Namespace, groupLabels, groupAnnotations)
 	currentSts, err := oc.GetStatefulSet(cr.Namespace, objectMeta.Name)
 	containerParams := generateContainerParams(cr)
 	statefulSetParams := generateStatefulSetsParams(cr)
 	statefulSetDef := generateStatefulSetsDef(objectMeta, statefulSetParams, marklogicServerAsOwner(cr), containerParams)
 	if err != nil {
 		if apierrors.IsNotFound(err) {
-			oc.createStatefulSet(statefulSetDef, cr)
+			err := oc.createStatefulSet(statefulSetDef, cr)
+			if err != nil {
+				logger.Error(err, "Failed to create statefulSet")
+				return result.Error(err).Output()
+			}
 			oc.Recorder.Event(oc.MarklogicGroup, "Normal", "StatefulSetCreated", "MarkLogic statefulSet created successfully")
 			return result.Done().Output()
 		}
-		result.Error(err).Output()
-	}
-	if err != nil {
-		logger.Error(err, "Cannot create standalone statefulSet for MarkLogic")
+		logger.Error(err, "Cannot get statefulSet for MarkLogic")
 		return result.Error(err).Output()
 	}
+
+	patchDiff, err := patch.DefaultPatchMaker.Calculate(currentSts, statefulSetDef,
+		patch.IgnoreStatusFields(),
+		patch.IgnoreVolumeClaimTemplateTypeMetaAndStatus(),
+		patch.IgnoreField("kind"))
+	logger.Info("Patch Diff:", "Diff", patchDiff.String())
+	logger.Info("statefulSetDef Spec:", "Spec", statefulSetDef.Spec.Replicas)
+	if err != nil {
+		logger.Error(err, "Error calculating patch")
+		return result.Error(err).Output()
+	}
+
+	if !patchDiff.IsEmpty() {
+		logger.Info("MarkLogic statefulSet spec is different from the MarkLogicGroup spec, updating the statefulSet")
+		currentSts.Spec = statefulSetDef.Spec
+		currentSts.ObjectMeta.Annotations = statefulSetDef.ObjectMeta.Annotations
+		currentSts.ObjectMeta.Labels = statefulSetDef.ObjectMeta.Labels
+		err := oc.Client.Update(oc.Ctx, currentSts)
+		if err != nil {
+			logger.Error(err, "Error updating statefulSet")
+			return result.Error(err).Output()
+		}
+	} else {
+		logger.Info("MarkLogic statefulSet spec is the same as the current spec, no update needed")
+	}
+	logger.Info("Operator Status:", "Stage", cr.Status.Stage)
+	if cr.Status.Stage == "STS_CREATED" {
+		logger.Info("MarkLogic statefulSet created successfully, waiting for pods to be ready")
+		pods, err := GetPodsForStatefulSet(oc.Ctx, cr.Namespace, cr.Spec.Name)
+		if err != nil {
+			logger.Error(err, "Error getting pods for statefulset")
+		}
+		logger.Info("Pods in statefulSet: ", "Pods", pods)
+	}
+
 	patchClient := client.MergeFrom(oc.MarklogicGroup.DeepCopy())
 	updated := false
 	if currentSts.Status.ReadyReplicas == 0 || currentSts.Status.ReadyReplicas != currentSts.Status.Replicas {
@@ -117,35 +162,6 @@ func (oc *OperatorContext) ReconcileStatefulset() (reconcile.Result, error) {
 			oc.ReqLogger.Error(err, "error updating the MarkLogic Operator Internal status")
 		}
 	}
-	patchDiff, err := patch.DefaultPatchMaker.Calculate(currentSts, statefulSetDef,
-		patch.IgnoreStatusFields(),
-		patch.IgnoreVolumeClaimTemplateTypeMetaAndStatus(),
-		patch.IgnoreField("kind"))
-	if err != nil {
-		logger.Error(err, "Error calculating patch")
-		return result.Error(err).Output()
-	}
-	if !patchDiff.IsEmpty() {
-		logger.Info("MarkLogic statefulSet spec is different from the MarkLogicGroup spec, updating the statefulSet")
-		logger.Info(patchDiff.String())
-		err := oc.Client.Update(oc.Ctx, statefulSetDef)
-		if err != nil {
-			logger.Error(err, "Error updating statefulSet")
-			return result.Error(err).Output()
-		}
-	} else {
-		logger.Info("MarkLogic statefulSet spec is the same as the MarkLogicGroup spec")
-	}
-	logger.Info("MarkLogic statefulSet is updated to " + strconv.Itoa(int(*cr.Spec.Replicas)))
-	logger.Info("Operator Status:", "Stage", cr.Status.Stage)
-	if cr.Status.Stage == "STS_CREATED" {
-		logger.Info("MarkLogic statefulSet created successfully, waiting for pods to be ready")
-		pods, err := GetPodsForStatefulSet(cr.Namespace, cr.Spec.Name)
-		if err != nil {
-			logger.Error(err, "Error getting pods for statefulset")
-		}
-		logger.Info("Pods in statefulSet: ", "Pods", pods)
-	}
 
 	return result.Done().Output()
 }
@@ -164,7 +180,7 @@ func (oc *OperatorContext) setCondition(condition *metav1.Condition) bool {
 func (oc *OperatorContext) GetStatefulSet(namespace string, stateful string) (*appsv1.StatefulSet, error) {
 	logger := oc.ReqLogger
 	statefulInfo := &appsv1.StatefulSet{}
-	err := oc.Client.Get(context.TODO(), client.ObjectKey{Namespace: namespace, Name: stateful}, statefulInfo)
+	err := oc.Client.Get(oc.Ctx, client.ObjectKey{Namespace: namespace, Name: stateful}, statefulInfo)
 	if err != nil {
 		logger.Info("MarkLogic statefulSet get action failed")
 		return nil, err
@@ -175,8 +191,7 @@ func (oc *OperatorContext) GetStatefulSet(namespace string, stateful string) (*a
 
 func (oc *OperatorContext) createStatefulSet(statefulset *appsv1.StatefulSet, cr *marklogicv1.MarklogicGroup) error {
 	logger := oc.ReqLogger
-	err := oc.Client.Create(context.TODO(), statefulset)
-	// _, err := GenerateK8sClient().AppsV1().StatefulSets(namespace).Create(context.TODO(), stateful, metav1.CreateOptions{})
+	err := oc.Client.Create(oc.Ctx, statefulset)
 	if err != nil {
 		logger.Error(err, "MarkLogic stateful creation failed")
 		return err
@@ -191,7 +206,7 @@ func generateStatefulSetsDef(stsMeta metav1.ObjectMeta, params statefulSetParame
 		TypeMeta:   generateTypeMeta("StatefulSet", "apps/v1"),
 		ObjectMeta: stsMeta,
 		Spec: appsv1.StatefulSetSpec{
-			Selector:            LabelSelectors(stsMeta.GetLabels()),
+			Selector:            LabelSelectors(getSelectorLabels(params.Name)),
 			ServiceName:         stsMeta.Name,
 			Replicas:            params.Replicas,
 			PodManagementPolicy: appsv1.ParallelPodManagement,
@@ -227,6 +242,12 @@ func generateStatefulSetsDef(stsMeta metav1.ObjectMeta, params statefulSetParame
 	}
 	if params.AdditionalVolumeClaimTemplates != nil {
 		statefulSet.Spec.VolumeClaimTemplates = append(statefulSet.Spec.VolumeClaimTemplates, *params.AdditionalVolumeClaimTemplates...)
+	}
+	if params.ServiceAccountName != "" {
+		statefulSet.Spec.Template.Spec.ServiceAccountName = params.ServiceAccountName
+	}
+	if params.AutomountServiceAccountToken != nil {
+		statefulSet.Spec.Template.Spec.AutomountServiceAccountToken = params.AutomountServiceAccountToken
 	}
 	if containerParams.Tls != nil && containerParams.Tls.EnableOnDefaultAppServers {
 		copyCertsVM := []corev1.VolumeMount{
@@ -285,11 +306,11 @@ func generateStatefulSetsDef(stsMeta metav1.ObjectMeta, params statefulSetParame
 	return statefulSet
 }
 
-func GetPodsForStatefulSet(namespace, name string) ([]corev1.Pod, error) {
+func GetPodsForStatefulSet(ctx context.Context, namespace, name string) ([]corev1.Pod, error) {
 	selector := fmt.Sprintf("app.kubernetes.io/name=marklogic,app.kubernetes.io/instance=%s", name)
 	// List Pods with the label selector
 	listOptions := metav1.ListOptions{LabelSelector: selector}
-	pods, err := GenerateK8sClient().CoreV1().Pods(namespace).List(context.TODO(), listOptions)
+	pods, err := GenerateK8sClient().CoreV1().Pods(namespace).List(ctx, listOptions)
 	if err != nil {
 		return nil, err
 	}
@@ -326,8 +347,10 @@ func generateContainerDef(name string, containerParams containerParameters) []co
 			Name:            "fluent-bit",
 			Image:           containerParams.LogCollection.Image,
 			ImagePullPolicy: "IfNotPresent",
+			Command:         []string{"/fluent-bit/bin/fluent-bit"},
+			Args:            []string{"--config=/fluent-bit/etc/fluent-bit.yaml"},
 			Env:             getFluentBitEnvironmentVariables(),
-			VolumeMounts:    getFluentBitVolumeMount(),
+			VolumeMounts:    getFluentBitVolumeMount(containerParams),
 		}
 		if containerParams.LogCollection.Resources != nil {
 			fulentBitContainerDef.Resources = *containerParams.LogCollection.Resources
@@ -339,9 +362,14 @@ func generateContainerDef(name string, containerParams containerParameters) []co
 }
 
 func generateStatefulSetsParams(cr *marklogicv1.MarklogicGroup) statefulSetParameters {
+	// Always enforce automountServiceAccountToken to false for security
+	falseValue := false
+
 	params := statefulSetParameters{
 		Replicas:                       cr.Spec.Replicas,
 		Name:                           cr.Spec.Name,
+		ServiceAccountName:             cr.Spec.ServiceAccountName,
+		AutomountServiceAccountToken:   &falseValue, // Always false for security
 		TerminationGracePeriodSeconds:  cr.Spec.TerminationGracePeriodSeconds,
 		UpdateStrategy:                 cr.Spec.UpdateStrategy,
 		NodeSelector:                   cr.Spec.NodeSelector,
@@ -376,8 +404,14 @@ func generateContainerParams(cr *marklogicv1.MarklogicGroup) containerParameters
 		Tls:                    cr.Spec.Tls,
 		AdditionalVolumes:      cr.Spec.AdditionalVolumes,
 		AdditionalVolumeMounts: cr.Spec.AdditionalVolumeMounts,
-		SecretName:             cr.Spec.SecretName,
 		Persistence:            cr.Spec.Persistence,
+	}
+
+	// Set SecretName with fallback to default if not specified
+	if cr.Spec.SecretName != "" {
+		containerParams.SecretName = cr.Spec.SecretName
+	} else {
+		containerParams.SecretName = cr.ObjectMeta.Name + "-admin"
 	}
 
 	if cr.Spec.License != nil {
@@ -469,7 +503,7 @@ func generateVolumes(stsName string, containerParams containerParameters) []core
 				},
 			})
 		}
-		if containerParams.Tls.CertSecretNames != nil && len(containerParams.Tls.CertSecretNames) > 0 {
+		if len(containerParams.Tls.CertSecretNames) > 0 {
 			projectionSources := []corev1.VolumeProjection{}
 			for i, secretName := range containerParams.Tls.CertSecretNames {
 				projectionSource := corev1.VolumeProjection{
@@ -509,7 +543,12 @@ func generatePVCTemplate(persistence *marklogicv1.Persistence) corev1.Persistent
 	pvcTemplate := corev1.PersistentVolumeClaim{}
 	pvcTemplate.CreationTimestamp = metav1.Time{}
 	pvcTemplate.ObjectMeta.Name = "datadir"
-	if persistence != nil && persistence.StorageClassName != "" {
+
+	if persistence == nil {
+		return pvcTemplate
+	}
+
+	if persistence.StorageClassName != "" {
 		pvcTemplate.Spec.StorageClassName = &persistence.StorageClassName
 	}
 	pvcTemplate.Spec.AccessModes = persistence.AccessModes
@@ -523,8 +562,12 @@ func generatePVCTemplate(persistence *marklogicv1.Persistence) corev1.Persistent
 func getEnvironmentVariables(containerParams containerParameters) []corev1.EnvVar {
 	envVars := []corev1.EnvVar{}
 	groupName := "Default"
-	if containerParams.GroupConfig != nil && containerParams.GroupConfig.Name != "" {
-		groupName = containerParams.GroupConfig.Name
+	enableXdqpSsl := false
+	if containerParams.GroupConfig != nil {
+		if containerParams.GroupConfig.Name != "" {
+			groupName = containerParams.GroupConfig.Name
+		}
+		enableXdqpSsl = containerParams.GroupConfig.EnableXdqpSsl
 	}
 	envVars = append(envVars, corev1.EnvVar{
 		Name:  "MARKLOGIC_ADMIN_USERNAME_FILE",
@@ -546,7 +589,7 @@ func getEnvironmentVariables(containerParams containerParameters) []corev1.EnvVa
 		Value: groupName,
 	}, corev1.EnvVar{
 		Name:  "XDQP_SSL_ENABLED",
-		Value: strconv.FormatBool(containerParams.GroupConfig.EnableXdqpSsl),
+		Value: strconv.FormatBool(enableXdqpSsl),
 	}, corev1.EnvVar{
 		Name:  "MARKLOGIC_CLUSTER_TYPE",
 		Value: "bootstrap",
@@ -661,14 +704,25 @@ func getVolumeMount(containerParams containerParameters) []corev1.VolumeMount {
 	return VolumeMounts
 }
 
-func getFluentBitVolumeMount() []corev1.VolumeMount {
+func getFluentBitVolumeMount(containerParams containerParameters) []corev1.VolumeMount {
 	var VolumeMountsFluentBit []corev1.VolumeMount
+	markLogicLogsPath := "/var/opt/MarkLogic/Logs"
+	logsMount := corev1.VolumeMount{
+		Name:      "datadir",
+		MountPath: markLogicLogsPath,
+	}
+
+	if containerParams.AdditionalVolumeMounts != nil {
+		for _, mount := range *containerParams.AdditionalVolumeMounts {
+			if mount.MountPath == markLogicLogsPath {
+				logsMount = mount
+				break
+			}
+		}
+	}
 
 	VolumeMountsFluentBit = append(VolumeMountsFluentBit,
-		corev1.VolumeMount{
-			Name:      "datadir",
-			MountPath: "/var/opt/MarkLogic",
-		},
+		logsMount,
 		corev1.VolumeMount{
 			Name:      "fluent-bit",
 			MountPath: "/fluent-bit/etc/",
@@ -685,8 +739,11 @@ func getLivenessProbe(probe marklogicv1.ContainerProbe) *corev1.Probe {
 		TimeoutSeconds:      probe.TimeoutSeconds,
 		SuccessThreshold:    probe.SuccessThreshold,
 		ProbeHandler: corev1.ProbeHandler{
-			Exec: &corev1.ExecAction{
-				Command: []string{"/bin/bash", "/tmp/helm-scripts/liveness-probe.sh"},
+			TCPSocket: &corev1.TCPSocketAction{
+				Port: intstr.IntOrString{
+					Type:   intstr.Int,
+					IntVal: 8001,
+				},
 			},
 		},
 	}

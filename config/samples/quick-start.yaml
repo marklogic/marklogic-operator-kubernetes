@@ -1,10 +1,12 @@
+# Copyright (c) 2024-2025 Progress Software Corporation and/or its subsidiaries or affiliates. All Rights Reserved.
+
 apiVersion: marklogic.progress.com/v1
 kind: MarklogicCluster
 metadata:
   name: single-node
   annotations: {}
 spec:
-  image: "progressofficial/marklogic-db:11.3.0-ubi-rootless"
+  image: "progressofficial/marklogic-db:12.0.0-ubi9-rootless-2.2.2"
   ## It is recommended to use Kubernetes secrets to store the admin credentials
   ## To create a secret, run the following command in the same namespace as the CR:
   ## kubectl create secret generic admincreds --from-literal=username=admin --from-literal=password=admin
@@ -17,11 +19,4 @@ spec:
     name: node
     groupConfig:
       name: node
-    resources:
-      requests:
-        memory: "4Gi"
-        cpu: 2000m
-      limits:
-        memory: "4Gi"
-        cpu: 2000m
     isBootstrap: true

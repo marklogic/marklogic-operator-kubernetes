@@ -1,16 +1,15 @@
+// Copyright (c) 2024-2025 Progress Software Corporation and/or its subsidiaries or affiliates. All Rights Reserved.
+
 package k8sutil
 
 import (
-	"math/rand"
-	"time"
+	"crypto/rand"
+	"math/big"
 
 	marklogicv1 "github.com/marklogic/marklogic-operator-kubernetes/api/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
-
-var CustomLabels = map[string]string{}
-var CustomAnnotations = map[string]string{}
 
 // generateTypeMeta generates the TyeMeta
 func generateTypeMeta(resourceKind string, apiVersion string) metav1.TypeMeta {
@@ -49,39 +48,24 @@ func LabelSelectors(labels map[string]string) *metav1.LabelSelector {
 	return &metav1.LabelSelector{MatchLabels: labels}
 }
 
-func SetCommonLabels(labels map[string]string) {
-	CustomLabels = labels
-}
-
-func SetCommonAnnotations(annotations map[string]string) {
-	CustomAnnotations = annotations
-}
-
-func getCommonLabels(name string) map[string]string {
-	defaultLabels := map[string]string{
+func getSelectorLabels(name string) map[string]string {
+	selectorLabels := map[string]string{
 		"app.kubernetes.io/name":       "marklogic",
 		"app.kubernetes.io/instance":   name,
 		"app.kubernetes.io/managed-by": "marklogic-operator",
 		"app.kubernetes.io/component":  "database",
 	}
-	mergedLabels := map[string]string{}
-	if len(CustomLabels) > 0 {
-		for k, v := range defaultLabels {
-			mergedLabels[k] = v
-		}
-		for k, v := range CustomLabels {
-			if _, ok := defaultLabels[k]; !ok {
-				mergedLabels[k] = v
-			}
-		}
-	} else {
-		return defaultLabels
-	}
-	return mergedLabels
+	return selectorLabels
 }
 
-func getCommonAnnotations() map[string]string {
-	return CustomAnnotations
+func getHAProxySelectorLabels(name string) map[string]string {
+	selectorLabels := map[string]string{
+		"app.kubernetes.io/name":       "marklogic",
+		"app.kubernetes.io/instance":   name,
+		"app.kubernetes.io/managed-by": "marklogic-operator",
+		"app.kubernetes.io/component":  "haproxy",
+	}
+	return selectorLabels
 }
 
 func getFluentBitLabels(name string) map[string]string {
@@ -126,10 +110,15 @@ func generateRandomAlphaNumeric(length int) string {
 	const charset = "abcdefghijklmnopqrstuvwxyz" +
 		"ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
 
-	seededRand := rand.New(rand.NewSource(time.Now().UnixNano()))
 	result := make([]byte, length)
 	for i := range result {
-		result[i] = charset[seededRand.Intn(len(charset))]
+		num, err := rand.Int(rand.Reader, big.NewInt(int64(len(charset))))
+		if err != nil {
+			// Fallback to a deterministic character if crypto/rand fails
+			result[i] = charset[i%len(charset)]
+		} else {
+			result[i] = charset[num.Int64()]
+		}
 	}
 	return string(result)
 }

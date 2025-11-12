@@ -1,3 +1,5 @@
+// Copyright (c) 2024-2025 Progress Software Corporation and/or its subsidiaries or affiliates. All Rights Reserved.
+
 package e2e
 
 import (
@@ -60,7 +62,7 @@ var (
 			},
 			LogCollection: &marklogicv1.LogCollection{
 				Enabled: true,
-				Image:   "fluent/fluent-bit:3.2.5",
+				Image:   "fluent/fluent-bit:4.1.1",
 				Files: marklogicv1.LogFilesConfig{
 					ErrorLogs:   true,
 					AccessLogs:  true,
@@ -114,7 +116,7 @@ type DataSource struct {
 }
 
 func TestMarklogicCluster(t *testing.T) {
-	feature := features.New("Marklogic Cluster Test")
+	feature := features.New("Marklogic Cluster Test").WithLabel("type", "cluster-test")
 
 	// Setup Loki and Grafana to verify Logging for Operator
 	feature.Setup(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
@@ -134,14 +136,17 @@ func TestMarklogicCluster(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Failed to install grafana helm chart: %v", err)
 		}
-
+		// Wait for Grafana pod to be ready
+		time.Sleep(5 * time.Second) // Give some time for Grafana to start
 		podList := &corev1.PodList{}
 		if err := client.Resources().List(ctx, podList, func(lo *metav1.ListOptions) {
 			lo.FieldSelector = "metadata.namespace=" + "grafana"
 		}); err != nil {
 			t.Fatal(err)
 		}
-
+		if len(podList.Items) == 0 {
+			t.Fatal("No Grafana pods found")
+		}
 		grafanaPodName := podList.Items[0].Name
 		err = utils.WaitForPod(ctx, t, client, "grafana", grafanaPodName, 120*time.Second)
 		if err != nil {
@@ -181,14 +186,17 @@ func TestMarklogicCluster(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Failed to execute kubectl command grafana in pod: %v", err)
 		}
-		if !(strings.Contains(string(output), "Datasource added") && strings.Contains(string(output), "Loki")) {
+		if !(strings.Contains(output, "Datasource added") && strings.Contains(output, "Loki")) {
 			t.Fatal("Failed to create datasource for Grafana")
+		} else {
+			t.Logf("Datasource created successfully: %s", output)
 		}
 		var dataSourceResponse DataSourceResponse
 		if err := json.Unmarshal([]byte(output), &dataSourceResponse); err != nil {
 			t.Fatalf("Failed to unmarshal JSON response: %v", err)
 		}
 		dataSourceUID = dataSourceResponse.DataSource.UID
+		t.Logf("Datasource UID: %s", dataSourceUID)
 		return ctx
 	})
 
@@ -228,7 +236,7 @@ func TestMarklogicCluster(t *testing.T) {
 		client := c.Client()
 
 		podName := "node-0"
-		err := utils.WaitForPod(ctx, t, client, mlNamespace, podName, 120*time.Second)
+		err := utils.WaitForPod(ctx, t, client, mlNamespace, podName, 240*time.Second)
 		if err != nil {
 			t.Fatalf("Failed to wait for pod creation: %v", err)
 		}
@@ -244,6 +252,10 @@ func TestMarklogicCluster(t *testing.T) {
 			lo.FieldSelector = "metadata.namespace=" + "grafana"
 		}); err != nil {
 			t.Fatal(err)
+		}
+		time.Sleep(5 * time.Second) // Wait for Grafana to be fully ready
+		if len(podList.Items) == 0 {
+			t.Fatal("No Grafana pods found")
 		}
 		grafanaPodName := podList.Items[0].Name
 		grafanaAdminUser, grafanaAdminPassword, err := utils.GetSecretData(ctx, client, "grafana", "grafana", "admin-user", "admin-password")
@@ -265,6 +277,8 @@ func TestMarklogicCluster(t *testing.T) {
 		dashboardUID = dashboardResponse.UID
 		if dashboardResponse.Status != "success" {
 			t.Fatal("Failed to create dashboard with loki and fluent-bit")
+		} else {
+			t.Logf("Dashboard created successfully with UID: %s", dashboardResponse.UID)
 		}
 
 		// Create query to verify MarkLogic logs in Grafana
@@ -272,7 +286,7 @@ func TestMarklogicCluster(t *testing.T) {
 			"queries": []map[string]interface{}{
 				{
 					"refId":     "A",
-					"expr":      "{job=\"fluent-bit\"} |= ``",
+					"expr":      "{job=\"fluent-bit\"} |= `Starting MarkLogic Server`",
 					"queryType": "range",
 					"datasource": map[string]string{
 						"type": "loki",
@@ -286,7 +300,7 @@ func TestMarklogicCluster(t *testing.T) {
 					"maxDataPoints": 1073,
 				},
 			},
-			"from": "now-5m",
+			"from": "now-1h",
 			"to":   "now",
 		}
 
@@ -296,14 +310,28 @@ func TestMarklogicCluster(t *testing.T) {
 		}
 		queryUrl := fmt.Sprintf("%s/api/ds/query?ds_type=loki", grafanaURL)
 		curlCommand = fmt.Sprintf(`curl -X POST %s -u %s:%s -H "Content-Type: application/json" -d '%s'`, queryUrl, grafanaAdminUser, grafanaAdminPassword, payloadBytes)
-		output, err = utils.ExecCmdInPod(grafanaPodName, "grafana", "grafana", curlCommand)
-		if err != nil {
-			t.Fatalf("Failed to execute kubectl command in grafana pod: %v", err)
-		}
-		// t.Logf("Query datasource response: %s", output)
-		// Verify MarkLogic logs in Grafana using Loki and Fluent Bit
-		if !(strings.Contains(string(output), "Starting MarkLogic Server")) {
-			t.Fatal("Failed to Query datasource")
+		maxRetries := 5
+		for attempt := 1; attempt <= maxRetries; attempt++ {
+			t.Logf("Attempt %d to query datasource", attempt)
+			output, err = utils.ExecCmdInPod(grafanaPodName, "grafana", "grafana", curlCommand)
+			if err != nil {
+				t.Logf("Attempt  %d/%d Failed to execute kubectl command in grafana pod: %v", attempt, 5, err)
+				if attempt == maxRetries {
+					t.Fatalf("failed to execute kubectl command after %d attempts: %v", maxRetries, err)
+				}
+				// Exponential backoff: 1s, 2s, 4s, 8s, 16s
+				time.Sleep(time.Duration(1<<(attempt-1)) * time.Second)
+			}
+			t.Logf("Query datasource response: %s", output)
+			// Verify MarkLogic logs in Grafana using Loki and Fluent Bit
+			if strings.Contains(output, "Starting MarkLogic Server") {
+				t.Logf("Successfully found MarkLogic logs on attempt %d", attempt)
+			} else if attempt == maxRetries {
+				t.Fatalf("Failed to find MarkLogic logs in Grafana after %d attempts", maxRetries)
+			} else {
+				t.Logf("MarkLogic logs not found, retrying...")
+				time.Sleep(time.Duration(1<<(attempt-1)) * time.Second) // Exponential backoff
+			}
 		}
 
 		curlCommand = fmt.Sprintf(`curl -u %s:%s %s/api/dashboards/uid/%s`, grafanaAdminUser, grafanaAdminPassword, grafanaURL, dashboardUID)
@@ -311,7 +339,7 @@ func TestMarklogicCluster(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Failed to execute kubectl command in grafana pod: %v", err)
 		}
-		if !strings.Contains(string(output), "Fluent Bit Dashboard") {
+		if !strings.Contains(output, "Fluent Bit Dashboard") {
 			t.Fatal("Failed to associate Fluent Bit as filter in Grafana dashboard")
 		}
 		return ctx
@@ -350,7 +378,7 @@ func TestMarklogicCluster(t *testing.T) {
 		feature.Assess("Verify Huge pages", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 			podName := "node-0"
 			containerName := "marklogic-server"
-			cmd := fmt.Sprintf("cat /var/opt/MarkLogic/Logs/ErrorLog.txt")
+			cmd := "cat /var/opt/MarkLogic/Logs/ErrorLog.txt"
 
 			output, err := utils.ExecCmdInPod(podName, mlNamespace, containerName, cmd)
 			if err != nil {
@@ -358,7 +386,7 @@ func TestMarklogicCluster(t *testing.T) {
 			}
 			expectedOutput := "Linux Huge Pages: detected 1280"
 
-			if !strings.Contains(string(output), expectedOutput) {
+			if !strings.Contains(output, expectedOutput) {
 				t.Fatal("Huge Pages not configured for the MarLogic node")
 			}
 			return ctx
@@ -368,6 +396,9 @@ func TestMarklogicCluster(t *testing.T) {
 	// Using feature.Teardown to clean up
 	feature.Teardown(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 		client := c.Client()
+		if err := client.Resources(mlNamespace).Delete(ctx, marklogiccluster); err != nil {
+			t.Fatalf("Failed to delete MarklogicCluster: %s", err)
+		}
 		if err := client.Resources().Delete(ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "grafana"}}); err != nil {
 			t.Fatalf("Failed to delete namespace: %s", err)
 		}

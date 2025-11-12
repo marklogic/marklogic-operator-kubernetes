@@ -1,3 +1,5 @@
+// Copyright (c) 2024-2025 Progress Software Corporation and/or its subsidiaries or affiliates. All Rights Reserved.
+
 package v1
 
 import (
@@ -57,12 +59,19 @@ type AdminAuth struct {
 }
 
 type LogCollection struct {
-	Enabled          bool                          `json:"enabled,omitempty"`
+	// +kubebuilder:default:=false
+	Enabled bool `json:"enabled,omitempty"`
+	// +kubebuilder:default:="fluent/fluent-bit:4.1.1"
 	Image            string                        `json:"image,omitempty"`
 	ImagePullSecrets []corev1.LocalObjectReference `json:"imagePullSecrets,omitempty"`
-	Resources        *corev1.ResourceRequirements  `json:"resources,omitempty"`
-	Files            LogFilesConfig                `json:"files,omitempty"`
-	Outputs          string                        `json:"outputs,omitempty"`
+	// +kubebuilder:default:={"requests":{"cpu":"100m","memory":"200Mi"},"limits":{"cpu":"200m","memory":"500Mi"}}
+	Resources *corev1.ResourceRequirements `json:"resources,omitempty"`
+	// +kubebuilder:default:={errorLogs: true, accessLogs: true, requestLogs: true, crashLogs: true, auditLogs: true}
+	Files   LogFilesConfig `json:"files,omitempty"`
+	Outputs string         `json:"outputs,omitempty"`
+	Filters string         `json:"filters,omitempty"`
+	Inputs  string         `json:"inputs,omitempty"`
+	Parsers string         `json:"parsers,omitempty"`
 }
 
 type LogFilesConfig struct {
@@ -93,8 +102,7 @@ type HAProxy struct {
 	// +kubebuilder:default:=false
 	PathBasedRouting *bool               `json:"pathBasedRouting,omitempty"`
 	Service          *corev1.ServiceType `json:"service,omitempty"`
-	// +kubebuilder:default:={enabled: false}
-	TcpPorts Tcpports `json:"tcpPorts,omitempty"`
+	TcpPorts         *Tcpports           `json:"tcpPorts,omitempty"`
 	// +kubebuilder:default:={client: 600, connect: 600, server: 600}
 	Timeout Timeout `json:"timeout,omitempty"`
 	// +kubebuilder:default:={enabled: false, secretName: "", certFileName: ""}
@@ -105,6 +113,14 @@ type HAProxy struct {
 	Affinity     *corev1.Affinity            `json:"affinity,omitempty"`
 	NodeSelector map[string]string           `json:"nodeSelector,omitempty"`
 	Ingress      Ingress                     `json:"ingress,omitempty"`
+}
+
+// HAProxyGroup represents group-level HAProxy configuration that can override cluster settings
+type HAProxyGroup struct {
+	Enabled          bool         `json:"enabled,omitempty"`
+	AppServers       []AppServers `json:"appServers,omitempty"`
+	PathBasedRouting *bool        `json:"pathBasedRouting,omitempty"`
+	TcpPorts         *Tcpports    `json:"tcpPorts,omitempty"`
 }
 
 type AppServers struct {
@@ -133,9 +149,10 @@ type Tcpports struct {
 }
 
 type TcpPort struct {
-	Port int32  `json:"port,omitempty"`
-	Name string `json:"name,omitempty"`
-	Type string `json:"type,omitempty"`
+	Port       int32  `json:"port,omitempty"`
+	TargetPort int32  `json:"targetPort,omitempty"`
+	Name       string `json:"name,omitempty"`
+	Type       string `json:"type,omitempty"`
 }
 
 type Timeout struct {

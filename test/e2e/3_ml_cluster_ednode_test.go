@@ -1,3 +1,5 @@
+// Copyright (c) 2024-2025 Progress Software Corporation and/or its subsidiaries or affiliates. All Rights Reserved.
+
 package e2e
 
 import (
@@ -146,7 +148,7 @@ func TestMlClusterWithEdnode(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Failed to execute curl command in pod: %v", err)
 		}
-		if !strings.Contains(string(output), "<nameref>dnode</nameref>") && !strings.Contains(string(output), "<nameref>enode</nameref>") {
+		if !strings.Contains(output, "<nameref>dnode</nameref>") && !strings.Contains(output, "<nameref>enode</nameref>") {
 			t.Fatal("Groups does not exists on MarkLogic cluster")
 		}
 		return ctx

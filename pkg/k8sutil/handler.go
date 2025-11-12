@@ -1,3 +1,5 @@
+// Copyright (c) 2024-2025 Progress Software Corporation and/or its subsidiaries or affiliates. All Rights Reserved.
+
 package k8sutil
 
 import (
@@ -10,7 +12,10 @@ func (oc *OperatorContext) ReconsileMarklogicGroupHandler() (reconcile.Result, e
 	if result := oc.ReconcileServices(); result.Completed() {
 		return result.Output()
 	}
-	setOperatorInternalStatus(oc, "Created")
+	err := setOperatorInternalStatus(oc, "Created")
+	if err != nil {
+		oc.ReqLogger.Error(err, "Failed to set operator internal status")
+	}
 
 	if result := oc.ReconcileConfigMap(); result.Completed() {
 		return result.Output()
@@ -28,8 +33,9 @@ func (oc *OperatorContext) ReconsileMarklogicGroupHandler() (reconcile.Result, e
 }
 
 func (cc *ClusterContext) ReconsileMarklogicClusterHandler() (reconcile.Result, error) {
-	SetCommonAnnotations(cc.MarklogicCluster.GetAnnotations())
-	SetCommonLabels(cc.MarklogicCluster.GetLabels())
+	if result := cc.ReconcileServiceAccount(); result.Completed() {
+		return result.Output()
+	}
 	if result := cc.ReconcileSecret(); result.Completed() {
 		return result.Output()
 	}

@@ -1,3 +1,5 @@
+// Copyright (c) 2024-2025 Progress Software Corporation and/or its subsidiaries or affiliates. All Rights Reserved.
+
 package k8sutil
 
 import (
@@ -36,9 +38,7 @@ func generateIngressDef(ingressMeta metav1.ObjectMeta, ownerRef metav1.OwnerRefe
 			},
 		})
 	}
-	for _, additionalHost := range cr.Spec.HAProxy.Ingress.AdditionalHosts {
-		ingressRules = append(ingressRules, additionalHost)
-	}
+	ingressRules = append(ingressRules, cr.Spec.HAProxy.Ingress.AdditionalHosts...)
 
 	ingressSpec := networkingv1.IngressSpec{
 		IngressClassName: &cr.Spec.HAProxy.Ingress.IngressClassName,
@@ -72,8 +72,8 @@ func (cc *ClusterContext) getIngress(namespace string, ingressName string) (*net
 	return ingress, nil
 }
 
-func generateIngress(ingressName string, cr *marklogicv1.MarklogicCluster) *networkingv1.Ingress {
-	labels := getCommonLabels(cr.GetObjectMeta().GetName())
+func (cc *ClusterContext) generateIngress(ingressName string, cr *marklogicv1.MarklogicCluster) *networkingv1.Ingress {
+	labels := cc.GetClusterLabels(cr.GetObjectMeta().GetName())
 	annotations := cr.Spec.HAProxy.Ingress.Annotations
 	ingressObjectMeta := generateObjectMeta(ingressName, cr.Namespace, labels, annotations)
 	ingress := generateIngressDef(ingressObjectMeta, marklogicClusterAsOwner(cr), cr)
@@ -87,7 +87,7 @@ func (cc *ClusterContext) ReconcileIngress() result.ReconcileResult {
 	cr := cc.MarklogicCluster
 	ingressName := cr.ObjectMeta.Name
 	currentIngress, err := cc.getIngress(cr.Namespace, ingressName)
-	ingressDef := generateIngress(ingressName, cr)
+	ingressDef := cc.generateIngress(ingressName, cr)
 	if err != nil {
 		if errors.IsNotFound(err) {
 			logger.Info("MarkLogic Ingress not found, creating a new one")
@@ -114,7 +114,6 @@ func (cc *ClusterContext) ReconcileIngress() result.ReconcileResult {
 		}
 		if !patchDiff.IsEmpty() {
 			logger.Info("MarkLogic Ingress spec is different from the input Ingress spec, updating the Ingress")
-			logger.Info(patchDiff.String())
 			err := cc.Client.Update(cc.Ctx, ingressDef)
 			if err != nil {
 				logger.Error(err, "Error updating Ingress")
@@ -129,12 +128,14 @@ func (cc *ClusterContext) ReconcileIngress() result.ReconcileResult {
 	return result.Continue()
 }
 
+// Deprecated: createIngress is currently unused but kept for future use
+// nolint:unused
 func (cc *ClusterContext) createIngress(namespace string) error {
 	logger := cc.ReqLogger
 	client := cc.Client
 	cr := cc.MarklogicCluster
 	ingressName := cr.ObjectMeta.Name + "-ingress"
-	ingress := generateIngress(ingressName, cr)
+	ingress := cc.generateIngress(ingressName, cr)
 	err := client.Create(cc.Ctx, ingress)
 	if err != nil {
 		logger.Error(err, "MarkLogic ingress creation has failed")
