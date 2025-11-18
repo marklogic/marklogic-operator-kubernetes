@@ -234,32 +234,32 @@ pipeline:
 		fluentBitData["fluent-bit.yaml"] += "\n" + normalizeYAMLIndentation(oc.MarklogicGroup.Spec.LogCollection.Filters, 4, 6)
 	} else {
 		fluentBitData["fluent-bit.yaml"] += `
-	    - name: modify
-	      match: "*"
-	      add:
-	        - pod ${POD_NAME}
-	        - namespace ${NAMESPACE}
-	    - name: modify
-	      match: kube.marklogic.logs.error
-	      add:
-	        - tag kube.marklogic.logs.error
-	    - name: modify
-	      match: kube.marklogic.logs.access
-	      add:
-	        - tag kube.marklogic.logs.access
-	    - name: modify
-	      match: kube.marklogic.logs.request
-	      add:
-	        - tag kube.marklogic.logs.request
-	    - name: modify
-	      match: kube.marklogic.logs.audit
-	      add:
-	        - tag kube.marklogic.logs.audit
-	    - name: modify
-	      match: kube.marklogic.logs.crash
-	      add:
-	        - tag kube.marklogic.logs.crash
-		`
+        - name: modify
+          match: "*"
+          add:
+            - pod ${POD_NAME}
+            - namespace ${NAMESPACE}
+        - name: modify
+          match: kube.marklogic.logs.error
+          add:
+            - tag kube.marklogic.logs.error
+        - name: modify
+          match: kube.marklogic.logs.access
+          add:
+            - tag kube.marklogic.logs.access
+        - name: modify
+          match: kube.marklogic.logs.request
+          add:
+            - tag kube.marklogic.logs.request
+        - name: modify
+          match: kube.marklogic.logs.audit
+          add:
+            - tag kube.marklogic.logs.audit
+        - name: modify
+          match: kube.marklogic.logs.crash
+          add:
+            - tag kube.marklogic.logs.crash
+        `
 	}
 
 	// Add OUTPUT sections
