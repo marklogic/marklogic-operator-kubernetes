@@ -1,3 +1,5 @@
+// Copyright (c) 2024-2025 Progress Software Corporation and/or its subsidiaries or affiliates. All Rights Reserved.
+
 package k8sutil
 
 import (
@@ -87,7 +89,7 @@ func generateHAProxyConfig(ctx context.Context, cr *marklogicv1.MarklogicCluster
 			continue
 		}
 
-		if !config.IsPathBased && group.HAProxy != nil && group.HAProxy.PathBasedRouting != nil && *group.HAProxy.PathBasedRouting == true {
+		if !config.IsPathBased && group.HAProxy != nil && group.HAProxy.PathBasedRouting != nil && *group.HAProxy.PathBasedRouting {
 			config.IsPathBased = true
 		}
 
@@ -214,8 +216,8 @@ frontend marklogic-pathbased-frontend
 					continue
 				}
 				data = &HAProxyTemplate{
-					PortNumber:       int(babackend.Port),
-					TargetPortNumber: int(babackend.TargetPort),
+					PortNumber:       babackend.Port,
+					TargetPortNumber: babackend.TargetPort,
 					Path:             babackend.Path,
 					IsPathBased:      babackend.IsPathBased,
 					BackendName:      babackend.BackendName,
@@ -236,8 +238,8 @@ frontend {{ .FrontendName }}
 		data = &HAProxyTemplate{
 			FrontendName:     frontend.FrontendName,
 			BackendName:      frontend.BackendName,
-			PortNumber:       int(frontend.Port),
-			TargetPortNumber: int(frontend.TargetPort),
+			PortNumber:       frontend.Port,
+			TargetPortNumber: frontend.TargetPort,
 			SslCert:          getSSLConfig(cr.Spec.HAProxy.Tls),
 		}
 		result += parseTemplateToString(frontEndDef, data) + "\n"
@@ -369,7 +371,7 @@ listen marklogic-TCP-{{.TcpName}}
   mode tcp
   balance leastconn`
 		data := &HAProxyTemplate{
-			PortNumber: int(tcpConfigSlice[0].Port),
+			PortNumber: tcpConfigSlice[0].Port,
 			TcpName:    tcpConfigSlice[0].TcpName,
 			SslCert:    getSSLConfig(cr.Spec.HAProxy.Tls),
 		}
@@ -378,7 +380,7 @@ listen marklogic-TCP-{{.TcpName}}
 		for _, tcpConfig := range tcpConfigSlice {
 			for i := 0; i < tcpConfig.Replicas; i++ {
 				data := &HAProxyTemplate{
-					PortNumber:  int(tcpConfig.TargetPort),
+					PortNumber:  tcpConfig.TargetPort,
 					PodName:     tcpConfig.PodName,
 					Index:       i,
 					ServiceName: name,

@@ -1,5 +1,5 @@
 /*
-Copyright 2024.
+Copyright (c) 2024-2025 Progress Software Corporation and/or its subsidiaries or affiliates. All Rights Reserved.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -40,7 +40,7 @@ const (
 	duration = time.Second * 10
 	interval = time.Millisecond * 250
 
-	imageName = "progressofficial/marklogic-db:11.3.0-ubi-rootless"
+	imageName = "progressofficial/marklogic-db:12.0.0-ubi9-rootless-2.2.2"
 )
 
 var replicas = int32(2)
@@ -62,7 +62,7 @@ var typeNamespaceNameSvc = types.NamespacedName{Name: svcName, Namespace: Namesp
 var netPolicyName = Name
 var typeNsNameNetPolicy = types.NamespacedName{Name: netPolicyName, Namespace: Namespace}
 
-const fluentBitImage = "fluent/fluent-bit:3.2.5"
+const fluentBitImage = "fluent/fluent-bit:4.1.1"
 
 var groupConfig = &marklogicv1.GroupConfig{
 	Name:          "dnode",
@@ -116,7 +116,7 @@ var _ = Describe("MarkLogicGroup controller", func() {
 						RunAsNonRoot:             &runAsNonRoot,
 						AllowPrivilegeEscalation: &allowPrivilegeEscalation,
 					},
-					LogCollection: &marklogicv1.LogCollection{Enabled: true, Image: "fluent/fluent-bit:3.2.5", Files: marklogicv1.LogFilesConfig{ErrorLogs: true, AccessLogs: true, RequestLogs: true, CrashLogs: true, AuditLogs: true}, Outputs: "stdout"},
+					LogCollection: &marklogicv1.LogCollection{Enabled: true, Image: "fluent/fluent-bit:4.1.1", Files: marklogicv1.LogFilesConfig{ErrorLogs: true, AccessLogs: true, RequestLogs: true, CrashLogs: true, AuditLogs: true}, Outputs: "stdout"},
 				},
 			}
 			Expect(k8sClient.Create(ctx, mlGroup)).Should(Succeed())

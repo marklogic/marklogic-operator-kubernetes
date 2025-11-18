@@ -1,5 +1,5 @@
 /*
-Copyright 2024.
+Copyright (c) 2024-2025 Progress Software Corporation and/or its subsidiaries or affiliates. All Rights Reserved.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -35,7 +35,7 @@ type MarklogicClusterSpec struct {
 	// +kubebuilder:default:="cluster.local"
 	ClusterDomain string `json:"clusterDomain,omitempty"`
 
-	// +kubebuilder:default:="progressofficial/marklogic-db:11.3.0-ubi-rootless"
+	// +kubebuilder:default:="progressofficial/marklogic-db:12.0.0-ubi9-rootless-2.2.2"
 	Image string `json:"image"`
 	// +kubebuilder:default:="IfNotPresent"
 	ImagePullPolicy  string                        `json:"imagePullPolicy,omitempty"`
@@ -66,7 +66,7 @@ type MarklogicClusterSpec struct {
 	EnableConverters          bool                                 `json:"enableConverters,omitempty"`
 	// +kubebuilder:default:={enabled: false, mountPath: "/dev/hugepages"}
 	HugePages *HugePages `json:"hugePages,omitempty"`
-	// +kubebuilder:default:={enabled: false, image: "fluent/fluent-bit:3.2.5", resources: {requests: {cpu: "100m", memory: "200Mi"}, limits: {cpu: "200m", memory: "500Mi"}}, files: {errorLogs: true, accessLogs: true, requestLogs: true}, outputs: "stdout"}
+	// +kubebuilder:default:={enabled: false, image: "fluent/fluent-bit:4.1.1", resources: {requests: {cpu: "100m", memory: "200Mi"}, limits: {cpu: "200m", memory: "500Mi"}}, files: {errorLogs: true, accessLogs: true, requestLogs: true}, outputs: "stdout"}
 	LogCollection                  *LogCollection                  `json:"logCollection,omitempty"`
 	HAProxy                        *HAProxy                        `json:"haproxy,omitempty"`
 	Tls                            *Tls                            `json:"tls,omitempty"`

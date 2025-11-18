@@ -11,6 +11,7 @@ rules:
   - configmaps
   - pods
   - secrets
+  - serviceaccounts
   - services
   verbs:
   - create
@@ -92,5 +93,5 @@ roleRef:
   name: marklogic-operator-manager-role
 subjects:
 - kind: ServiceAccount
-  name: marklogic-operator-controller-manager
+  name: '{{ include "marklogic-operator-kubernetes.serviceAccountName" . }}'
   namespace: '{{ .Release.Namespace }}'

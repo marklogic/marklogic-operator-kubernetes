@@ -1,3 +1,5 @@
+// Copyright (c) 2024-2025 Progress Software Corporation and/or its subsidiaries or affiliates. All Rights Reserved.
+
 package e2e
 
 import (
@@ -60,7 +62,7 @@ var (
 			},
 			LogCollection: &marklogicv1.LogCollection{
 				Enabled: true,
-				Image:   "fluent/fluent-bit:3.2.5",
+				Image:   "fluent/fluent-bit:4.1.1",
 				Files: marklogicv1.LogFilesConfig{
 					ErrorLogs:   true,
 					AccessLogs:  true,
@@ -184,7 +186,7 @@ func TestMarklogicCluster(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Failed to execute kubectl command grafana in pod: %v", err)
 		}
-		if !(strings.Contains(string(output), "Datasource added") && strings.Contains(string(output), "Loki")) {
+		if !(strings.Contains(output, "Datasource added") && strings.Contains(output, "Loki")) {
 			t.Fatal("Failed to create datasource for Grafana")
 		} else {
 			t.Logf("Datasource created successfully: %s", output)
@@ -322,7 +324,7 @@ func TestMarklogicCluster(t *testing.T) {
 			}
 			t.Logf("Query datasource response: %s", output)
 			// Verify MarkLogic logs in Grafana using Loki and Fluent Bit
-			if strings.Contains(string(output), "Starting MarkLogic Server") {
+			if strings.Contains(output, "Starting MarkLogic Server") {
 				t.Logf("Successfully found MarkLogic logs on attempt %d", attempt)
 			} else if attempt == maxRetries {
 				t.Fatalf("Failed to find MarkLogic logs in Grafana after %d attempts", maxRetries)
@@ -337,7 +339,7 @@ func TestMarklogicCluster(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Failed to execute kubectl command in grafana pod: %v", err)
 		}
-		if !strings.Contains(string(output), "Fluent Bit Dashboard") {
+		if !strings.Contains(output, "Fluent Bit Dashboard") {
 			t.Fatal("Failed to associate Fluent Bit as filter in Grafana dashboard")
 		}
 		return ctx
@@ -376,7 +378,7 @@ func TestMarklogicCluster(t *testing.T) {
 		feature.Assess("Verify Huge pages", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 			podName := "node-0"
 			containerName := "marklogic-server"
-			cmd := fmt.Sprintf("cat /var/opt/MarkLogic/Logs/ErrorLog.txt")
+			cmd := "cat /var/opt/MarkLogic/Logs/ErrorLog.txt"
 
 			output, err := utils.ExecCmdInPod(podName, mlNamespace, containerName, cmd)
 			if err != nil {
@@ -384,7 +386,7 @@ func TestMarklogicCluster(t *testing.T) {
 			}
 			expectedOutput := "Linux Huge Pages: detected 1280"
 
-			if !strings.Contains(string(output), expectedOutput) {
+			if !strings.Contains(output, expectedOutput) {
 				t.Fatal("Huge Pages not configured for the MarLogic node")
 			}
 			return ctx

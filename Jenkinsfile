@@ -1,3 +1,5 @@
+// Copyright (c) 2024-2025 Progress Software Corporation and/or its subsidiaries or affiliates. All Rights Reserved.
+
 /* groovylint-disable CompileStatic, LineLength, VariableTypeRequired */
 // This Jenkinsfile defines internal MarkLogic build pipeline.
 
@@ -8,8 +10,12 @@ import groovy.json.JsonSlurperClassic
 emailList = 'vitaly.korolev@progress.com, sumanth.ravipati@progress.com, peng.zhou@progress.com, barkha.choithani@progress.com, romain.winieski@progress.com'
 emailSecList = 'Mahalakshmi.Srinivasan@progress.com'
 gitCredID = 'marklogic-builder-github'
+operatorRegistry = 'ml-marklogic-operator-dev.bed-artifactory.bedford.progress.com'
 JIRA_ID = ''
 JIRA_ID_PATTERN = /(?i)(MLE)-\d{3,6}/
+operatorRepo = 'marklogic-kubernetes-operator'
+timeStamp = new Date().format('yyyyMMdd')
+branchNameTag = env.BRANCH_NAME.replaceAll('/', '-')
 
 // Define local funtions
 void preBuildCheck() {
@@ -126,15 +132,15 @@ void runTests() {
 }
 
 void runMinikubeSetup() {
-    sh '''
-        make e2e-setup-minikube
-    '''
+    sh """
+        make e2e-setup-minikube IMG=${operatorRepo}:${VERSION}
+    """
 }
 
 void runE2eTests() {
-    sh '''
-        make e2e-test
-    '''
+    sh """
+        make e2e-test IMG=${operatorRepo}:${VERSION}
+    """
 }
 
 void runMinikubeCleanup() {
@@ -143,9 +149,43 @@ void runMinikubeCleanup() {
     '''
 }
 
-void runSecurityScan() {
-    build job: 'securityscans/Blackduck/KubeNinjas/kubernetes-operator', wait: false, parameters: [ string(name: 'branch', value: "${env.BRANCH_NAME}") ]
+void runBlackDuckScan() {
+    // Trigger BlackDuck scan job with CONTAINER_IMAGES parameter when params.PUBLISH_IMAGE is true
+    if (params.PUBLISH_IMAGE) {
+        build job: 'securityscans/Blackduck/KubeNinjas/kubernetes-operator', wait: false, parameters: [ string(name: 'branch', value: "${env.BRANCH_NAME}"), string(name: 'CONTAINER_IMAGES', value: "${operatorRegistry}/${operatorRepo}:${VERSION}-${branchNameTag}-${timeStamp}") ]
+    } else {
+        build job: 'securityscans/Blackduck/KubeNinjas/kubernetes-operator', wait: false, parameters: [ string(name: 'branch', value: "${env.BRANCH_NAME}") ]
+    }
 }
+
+/**
+ * Publishes the built Docker image to the internal Artifactory registry.
+ * Tags the image with multiple tags (version-specific, branch-specific, latest).
+ * Requires Artifactory credentials.
+ */
+void publishToInternalRegistry() {
+    withCredentials([usernamePassword(credentialsId: 'builder-credentials-artifactory', passwordVariable: 'docker_password', usernameVariable: 'docker_user')]) {
+        
+        sh """
+            # make sure to logout first to avoid issues with cached credentials
+            docker logout ${operatorRegistry}
+            echo "${docker_password}" | docker login --username ${docker_user} --password-stdin ${operatorRegistry}
+
+            # Create tags
+            docker tag ${operatorRepo}:${VERSION} ${operatorRegistry}/${operatorRepo}:${VERSION}
+            docker tag ${operatorRepo}:${VERSION} ${operatorRegistry}/${operatorRepo}:${VERSION}-${branchNameTag}
+            docker tag ${operatorRepo}:${VERSION} ${operatorRegistry}/${operatorRepo}:${VERSION}-${branchNameTag}-${timeStamp}
+            docker tag ${operatorRepo}:${VERSION} ${operatorRegistry}/${operatorRepo}:latest
+
+            # Push images to internal registry
+            docker push ${operatorRegistry}/${operatorRepo}:${VERSION}
+            docker push ${operatorRegistry}/${operatorRepo}:${VERSION}-${branchNameTag}
+            docker push ${operatorRegistry}/${operatorRepo}:${VERSION}-${branchNameTag}-${timeStamp}
+            docker push ${operatorRegistry}/${operatorRepo}:latest
+        """
+    }
+}
+
 pipeline {
     agent {
         label {
@@ -157,16 +197,25 @@ pipeline {
         buildDiscarder logRotator(artifactDaysToKeepStr: '20', artifactNumToKeepStr: '', daysToKeepStr: '30', numToKeepStr: '')
         skipStagesAfterUnstable()
     }
-    // triggers {
-    //     //TODO: add scheduled runs
-    // }
-    // environment {
-    //     //TODO
-    // }
+    
+    triggers {
+        // Trigger nightly builds on the develop branch
+        parameterizedCron( env.BRANCH_NAME == 'develop' ? '''00 05 * * * % E2E_MARKLOGIC_IMAGE_VERSION=ml-docker-db-dev-tierpoint.bed-artifactory.bedford.progress.com/marklogic/marklogic-server-ubi-rootless:latest-12
+                                                             00 05 * * * % E2E_MARKLOGIC_IMAGE_VERSION=ml-docker-db-dev-tierpoint.bed-artifactory.bedford.progress.com/marklogic/marklogic-server-ubi-rootless:latest-11; PUBLISH_IMAGE=false''' : '')
+    }
+
+    environment {
+        PATH = "/space/go/bin:${env.PATH}"
+        MINIKUBE_HOME = "/space/minikube/"
+        KUBECONFIG = "/space/.kube-config"
+        GOPATH = "/space/go"
+    }
+
 
     parameters {
         string(name: 'E2E_MARKLOGIC_IMAGE_VERSION', defaultValue: 'ml-docker-db-dev-tierpoint.bed-artifactory.bedford.progress.com/marklogic/marklogic-server-ubi-rootless:latest-12', description: 'Docker image to use for tests.', trim: true)
-        string(name: 'IMG', defaultValue: 'testrepo/marklogic-operator-image-dev:internal', description: 'Docker image for Running Operator Container', trim: true)
+        string(name: 'VERSION', defaultValue: '1.1.0', description: 'Version to tag the image with.', trim: true)
+        booleanParam(name: 'PUBLISH_IMAGE', defaultValue: false, description: 'Publish image to internal registry')
         string(name: 'emailList', defaultValue: emailList, description: 'List of email for build notification', trim: true)
     }
 
@@ -174,12 +223,6 @@ pipeline {
         stage('Pre-Build-Check') {
             steps {
                 preBuildCheck()
-            }
-        }
-
-        stage('Run-Security-Scan') {
-            steps {
-                runSecurityScan()
             }
         }
 
@@ -204,6 +247,26 @@ pipeline {
         stage('Cleanup Environment') {
             steps {
                 runMinikubeCleanup()
+            }
+        }
+
+        // Publish image to internal registries (conditional)
+        stage('Publish Image') {
+            when {
+                    anyOf {
+                        branch 'develop'
+                        expression { return params.PUBLISH_IMAGE }
+                    }
+            }
+            steps {
+                publishToInternalRegistry()
+            }
+        }
+
+        stage('Run-BlackDuck-Scan') {
+
+            steps {
+                runBlackDuckScan()
             }
         }
         

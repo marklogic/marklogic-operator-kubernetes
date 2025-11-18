@@ -1,3 +1,5 @@
+// Copyright (c) 2024-2025 Progress Software Corporation and/or its subsidiaries or affiliates. All Rights Reserved.
+
 package k8sutil
 
 import (
@@ -185,12 +187,13 @@ func (cc *ClusterContext) ReconsileMarklogicCluster() (reconcile.Result, error) 
 				err = cc.Client.Create(ctx, markLogicGroupDef)
 				if err != nil {
 					logger.Error(err, "Failed to create markLogicCluster")
+					return result.Error(err).Output()
 				}
 
 				logger.Info("Created new MarkLogic Server resource")
-				result.Done().Output()
 			} else {
 				logger.Error(err, "Failed to get MarkLogicGroup resource")
+				return result.Error(err).Output()
 			}
 		} else {
 			patchDiff, err := patch.DefaultPatchMaker.Calculate(currentMlg, markLogicGroupDef,

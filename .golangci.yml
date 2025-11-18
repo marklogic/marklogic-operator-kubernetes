@@ -16,25 +16,28 @@ issues:
       linters:
         - dupl
         - lll
+    - path: "test/*"
+      linters:
+        - dupl
+        - errcheck
+        - goconst
+        - gocyclo
+        - lll
+        - unused
+    - path: "pkg/*"
+      linters:
+        - lll
+        - unparam
 linters:
   disable-all: true
   enable:
-    - dupl
     - errcheck
-    - exportloopref
-    - goconst
-    - gocyclo
     - gofmt
     - goimports
     - gosimple
     - govet
     - ineffassign
-    - lll
-    - misspell
-    - nakedret
-    - prealloc
     - staticcheck
     - typecheck
     - unconvert
-    - unparam
     - unused

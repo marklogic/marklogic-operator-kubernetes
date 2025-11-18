@@ -1,11 +1,13 @@
+// Copyright (c) 2024-2025 Progress Software Corporation and/or its subsidiaries or affiliates. All Rights Reserved.
+
 package k8sutil
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"sort"
 
-	"context"
 	"github.com/cisco-open/k8s-objectmatcher/patch"
 	marklogicv1 "github.com/marklogic/marklogic-operator-kubernetes/api/v1"
 	"github.com/marklogic/marklogic-operator-kubernetes/pkg/result"
@@ -128,6 +130,10 @@ func (cc *ClusterContext) ReconcileHAProxy() result.ReconcileResult {
 		patch.IgnoreStatusFields(),
 		patch.IgnoreVolumeClaimTemplateTypeMetaAndStatus(),
 		patch.IgnoreField("kind"))
+	if err != nil {
+		logger.Error(err, "Failed to calculate HAProxy Deployment patch")
+		return result.Error(err)
+	}
 	if haproxyDeploymentDef.Spec.Template.Annotations == nil {
 		haproxyDeploymentDef.Spec.Template.Annotations = make(map[string]string)
 	}
@@ -428,8 +434,8 @@ func calculateHash(data map[string]string) string {
 
 	// Iterate over the sorted keys and write key-value pairs to the hash
 	for _, k := range keys {
-		hash.Write([]byte(k))
-		hash.Write([]byte(data[k]))
+		_, _ = hash.Write([]byte(k))
+		_, _ = hash.Write([]byte(data[k]))
 	}
 
 	// Get the final hash and convert to hexadecimal string
