@@ -6,6 +6,7 @@ import (
 	"embed"
 	"strings"
 
+	"github.com/cisco-open/k8s-objectmatcher/patch"
 	"github.com/marklogic/marklogic-operator-kubernetes/pkg/result"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
@@ -44,6 +45,32 @@ func (oc *OperatorContext) ReconcileConfigMap() result.ReconcileResult {
 			logger.Error(err, "MarkLogic scripts configmap creation is failed")
 			return result.Error(err)
 		}
+	} else {
+		// ConfigMap exists, check if it needs to be updated
+		desiredConfigMap := oc.generateConfigMapDef(objectMeta, marklogicServerAsOwner(cr))
+
+		patchDiff, err := patch.DefaultPatchMaker.Calculate(configmap, desiredConfigMap,
+			patch.IgnoreStatusFields(),
+			patch.IgnoreVolumeClaimTemplateTypeMetaAndStatus(),
+			patch.IgnoreField("kind"))
+		if err != nil {
+			logger.Error(err, "Error calculating patch for MarkLogic ConfigMap")
+			return result.Error(err)
+		}
+
+		if !patchDiff.IsEmpty() {
+			logger.Info("MarkLogic ConfigMap data has changed, updating it")
+			configmap.Data = desiredConfigMap.Data
+			if err := patch.DefaultAnnotator.SetLastAppliedAnnotation(configmap); err != nil {
+				logger.Error(err, "Failed to set last applied annotation for MarkLogic ConfigMap")
+			}
+			err = client.Update(oc.Ctx, configmap)
+			if err != nil {
+				logger.Error(err, "MarkLogic ConfigMap update failed")
+				return result.Error(err)
+			}
+			logger.Info("MarkLogic ConfigMap update is successful")
+		}
 	}
 
 	return result.Continue()
@@ -77,6 +104,32 @@ func (oc *OperatorContext) ReconcileFluentBitConfigMap() result.ReconcileResult 
 		} else {
 			logger.Error(err, "Fluent Bit configmap creation is failed")
 			return result.Error(err)
+		}
+	} else {
+		// ConfigMap exists, check if it needs to be updated
+		desiredConfigMap := oc.generateFluentBitDef(objectMeta, marklogicServerAsOwner(cr))
+
+		patchDiff, err := patch.DefaultPatchMaker.Calculate(configmap, desiredConfigMap,
+			patch.IgnoreStatusFields(),
+			patch.IgnoreVolumeClaimTemplateTypeMetaAndStatus(),
+			patch.IgnoreField("kind"))
+		if err != nil {
+			logger.Error(err, "Error calculating patch for Fluent Bit ConfigMap")
+			return result.Error(err)
+		}
+
+		if !patchDiff.IsEmpty() {
+			logger.Info("Fluent Bit ConfigMap data has changed, updating it")
+			configmap.Data = desiredConfigMap.Data
+			if err := patch.DefaultAnnotator.SetLastAppliedAnnotation(configmap); err != nil {
+				logger.Error(err, "Failed to set last applied annotation for Fluent Bit ConfigMap")
+			}
+			err = client.Update(oc.Ctx, configmap)
+			if err != nil {
+				logger.Error(err, "Fluent Bit ConfigMap update failed")
+				return result.Error(err)
+			}
+			logger.Info("Fluent Bit ConfigMap update is successful")
 		}
 	}
 
