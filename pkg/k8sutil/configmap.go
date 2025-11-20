@@ -218,6 +218,11 @@ func (oc *OperatorContext) getFluentBitData() map[string]string {
   log_level: info
   daemon: off
   parsers_file: parsers.yaml
+  http_server: on
+  http_listen: 0.0.0.0
+  http_port: 2020
+  hot_reload: on
+  storage.metrics: on
 
 pipeline:
   inputs:`
