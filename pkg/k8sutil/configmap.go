@@ -226,7 +226,6 @@ func (oc *OperatorContext) getFluentBitData() map[string]string {
 
 pipeline:
   inputs:`
-	// Add INPUT sections based on enabled log types
 	if strings.TrimSpace(oc.MarklogicGroup.Spec.LogCollection.Inputs) != "" {
 		fluentBitData["fluent-bit.yaml"] += "\n" + normalizeYAMLIndentation(oc.MarklogicGroup.Spec.LogCollection.Inputs, 4, 6)
 	} else {
