@@ -710,7 +710,7 @@ func getFluentBitVolumeMount(containerParams containerParameters) []corev1.Volum
 	logsMount := corev1.VolumeMount{
 		Name:      "datadir",
 		MountPath: markLogicLogsPath,
-		SubPath:   "Logs", 
+		SubPath:   "Logs",
 	}
 
 	if containerParams.AdditionalVolumeMounts != nil {
