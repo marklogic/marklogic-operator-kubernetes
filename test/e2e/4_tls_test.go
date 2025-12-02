@@ -91,6 +91,7 @@ func TestTlsWithSelfSigned(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Failed to wait for pod creation: %v", err)
 		}
+		time.Sleep(10 * time.Second)
 		return ctx
 	})
 
