@@ -29,7 +29,7 @@ helm repo update
 
 2. Install or upgrade the Helm Chart for MarkLogic Operator: 
 ```sh
-helm upgrade marklogic-operator marklogic-operator/marklogic-operator-kubernetes --version=1.1.0 --install --namespace marklogic-operator-system --create-namespace
+helm upgrade marklogic-operator marklogic-operator/marklogic-operator-kubernetes --version=1.1.1 --install --namespace marklogic-operator-system --create-namespace
 ```
 
 3. Make sure the Marklogic Operator pod is running:
