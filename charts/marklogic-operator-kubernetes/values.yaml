@@ -36,7 +36,7 @@ controllerManager:
       runAsNonRoot: true
     image:
       repository: progressofficial/marklogic-operator-kubernetes
-      tag: 1.1.0
+      tag: 1.1.1
     resources:
       limits:
         cpu: 500m

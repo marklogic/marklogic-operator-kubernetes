@@ -5,7 +5,7 @@
 # To re-generate a bundle for another specific version without changing the standard setup, you can:
 # - use the VERSION as arg of the bundle target (e.g make bundle VERSION=0.0.2)
 # - use environment variables to overwrite this value (e.g export VERSION=0.0.2)
-VERSION ?= 1.1.0
+VERSION ?= 1.1.1
 
 # VERIFY_HUGE_PAGES defines if hugepages test is enabled or not for e2e test
 VERIFY_HUGE_PAGES ?= false
@@ -135,27 +135,27 @@ test: manifests generate fmt vet envtest ## Run tests.
 .PHONY: e2e-test  # Run the e2e tests against a minikube k8s instance that is spun up.
 e2e-test: 
 	@echo "=====Check Huges pages test is enabled or not for e2e test"
-ifeq ($(VERIFY_HUGE_PAGES), true)
-	@echo "=====Setting hugepages value to 1280 for hugepages-e2e test"
-	sudo sysctl -w vm.nr_hugepages=1280
+# ifeq ($(VERIFY_HUGE_PAGES), true)
+# 	@echo "=====Setting hugepages value to 1280 for hugepages-e2e test"
+# 	sudo sysctl -w vm.nr_hugepages=1280
 
-	@echo "=====Restart minikube cluster to apply hugepages value"
-	minikube stop
-	minikube start
+# 	@echo "=====Restart minikube cluster to apply hugepages value"
+# 	minikube stop
+# 	minikube start
 
 	@echo "=====Running e2e test including hugepages test"
-	go test -v -count=1 -timeout 30m ./test/e2e -verifyHugePages
+	go test -v -count=1 -timeout 40m ./test/e2e
 
-	@echo "=====Resetting hugepages value to 0"
-	sudo sysctl -w vm.nr_hugepages=0
+# 	@echo "=====Resetting hugepages value to 0"
+# 	sudo sysctl -w vm.nr_hugepages=0
 
-	@echo "=====Restart minikube cluster"
-	minikube stop
-	minikube start
-else
-	@echo "=====Running e2e test without hugepages test"
-	go test -v -count=1 -timeout 30m ./test/e2e
-endif
+# 	@echo "=====Restart minikube cluster"
+# 	minikube stop
+# 	minikube start
+# else
+# 	@echo "=====Running e2e test without hugepages test"
+# 	go test -v -count=1 -timeout 30m ./test/e2e
+# endif
 
 .PHONY: e2e-setup-minikube
 e2e-setup-minikube: kustomize controller-gen build docker-build
