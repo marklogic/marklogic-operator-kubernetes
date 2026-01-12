@@ -6,14 +6,9 @@ MARKLOGIC_ADMIN_PASSWORD="$(< /run/secrets/ml-secrets/password)"
 
 log () {
     local TIMESTAMP=$(date +"%Y-%m-%d %T.%3N")
-    # Check to make sure pod doesn't terminate if PID value is empty for any reason
-    # If PID value is empty preStart hook logs are not recorded
-    if [ -n "$pid" ]; then
-        echo "${TIMESTAMP} $@" > /proc/$pid/fd/1
-    fi
+    echo "${TIMESTAMP} $@" > /proc/1/fd/1
 }
 
-pid=$(pgrep -fn start.marklogic)
 log "Info: [prestop] Prestop Hook Execution"
 
 my_host=$(hostname -f)

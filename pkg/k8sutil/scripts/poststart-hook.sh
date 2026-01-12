@@ -25,8 +25,6 @@ else
     echo "IS_BOOTSTRAP_HOST false"
 fi
 
-pid=$(pgrep start.marklogic)
-
 ###############################################################
 # Logging utility
 ###############################################################
@@ -45,13 +43,8 @@ error() {
 
 log () {
     local TIMESTAMP=$(date +"%Y-%m-%d %T.%3N")
-    # Check to make sure pod doesn't terminate if PID value is empty for any reason
-    # If PID value is empty postStart hook logs are not recorded
     message="${TIMESTAMP} [postStart] $@"
-    if [ -n "$pid" ]; then
-        echo $message  > /proc/$pid/fd/1
-    fi
-    
+    echo $message  > /proc/1/fd/1
     echo $message >> /tmp/script.log
 }
 
