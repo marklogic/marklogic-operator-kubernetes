@@ -12,11 +12,12 @@ spec:
   ## kubectl create secret generic admincreds --from-literal=username=admin --from-literal=password=admin
   ## If you do not provide the admin credentials, the operator will generate a secret for you containing admin credentials
   persistence:
-    enabled: true
+    enabled: false
     size: 10Gi
+  auth:
+    adminPassword: admin
+    adminUsername: admin
   markLogicGroups:
-  - replicas: 1
+  - replicas: 2
     name: node
-    groupConfig:
-      name: node
     isBootstrap: true
