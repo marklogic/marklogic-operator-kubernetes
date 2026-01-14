@@ -319,13 +319,80 @@ func GetPodsForStatefulSet(ctx context.Context, namespace, name string) ([]corev
 }
 
 func generateContainerDef(name string, containerParams containerParameters) []corev1.Container {
+	// Wrapper script to handle ISTIO ambient mode network initialization delays
+	wrapperScript := `
+set -e
+
+# --- Phase 1: Background Application Startup ---
+echo "[Wrapper] Starting MarkLogic vendor script in background..."
+# Start the original entrypoint in the background
+/usr/local/bin/start-marklogic.sh &
+ML_PID=$!
+echo "[Wrapper] MarkLogic started with PID $ML_PID"
+
+# --- Phase 2: Local Readiness Gate ---
+echo "[Wrapper] Waiting for local socket (localhost:8001)..."
+# Wait for the local MarkLogic process to be responsive
+until curl -s localhost:8001 > /dev/null; do 
+    sleep 2
+done
+echo "[Wrapper] Localhost is UP."
+
+# --- Phase 3: Istio Ambient Network Gatekeeper ---
+# Only run this check if a bootstrap host is defined and I am NOT that host
+if [[ -n "$MARKLOGIC_BOOTSTRAP_HOST" ]] && [[ "$HOSTNAME" != *"$MARKLOGIC_BOOTSTRAP_HOST"* ]]; then
+    echo "[Wrapper] Checking mesh connectivity to Bootstrap Host: $MARKLOGIC_BOOTSTRAP_HOST..."
+    
+    MAX_RETRIES=60
+    count=0
+    
+    # Critical Loop: Wait until ztunnel allows traffic (fixes Response 000)
+    until curl -s -o /dev/null -m 2 "http://${MARKLOGIC_BOOTSTRAP_HOST}:8001/"; do
+        count=$((count+1))
+        if [ $count -ge $MAX_RETRIES ]; then
+            echo "[Wrapper] WARNING: Network check timed out. Proceeding with risk..."
+            break
+        fi
+        echo "[Wrapper] Waiting for mesh network... ($count/$MAX_RETRIES)"
+        sleep 2
+    done
+    echo "[Wrapper] Mesh Network is Ready."
+fi
+
+# --- Phase 4: Cluster Initialization ---
+# This replaces the postStart hook
+echo "[Wrapper] Executing Cluster Init/Join Logic..."
+if [ -f "/tmp/helm-scripts/poststart-hook.sh" ]; then
+    # Execute the join script
+    /bin/bash /tmp/helm-scripts/poststart-hook.sh
+    
+    # Check if the join script failed
+    if [ $? -ne 0 ]; then
+        echo "[Wrapper] ERROR: Initialization failed!"
+        # Kill the background process so the Pod restarts and tries again
+        kill $ML_PID
+        exit 1
+    fi
+else
+    echo "[Wrapper] No init script found (/tmp/helm-scripts/poststart-hook.sh). Skipping."
+fi
+
+# --- Phase 5: Process Guardian ---
+# Wait for the main MarkLogic process. 
+# If start-marklogic.sh exits (crashes), this wait ends, causing the container to exit.
+echo "[Wrapper] Initialization complete. Monitoring main process..."
+wait $ML_PID
+`
+
 	containerDef := []corev1.Container{
 		{
 			Name:            name,
 			Image:           containerParams.Image,
 			ImagePullPolicy: containerParams.ImagePullPolicy,
+			Command:         []string{"/tini", "--", "/bin/bash", "-c"},
+			Args:            []string{wrapperScript},
 			Env:             getEnvironmentVariables(containerParams),
-			Lifecycle:       getLifeCycle(),
+			Lifecycle:       getLifeCycleWithoutPostStart(),
 			SecurityContext: containerParams.SecurityContext,
 			VolumeMounts:    getVolumeMount(containerParams),
 		},
@@ -435,6 +502,18 @@ func getLifeCycle() *corev1.Lifecycle {
 				Command: []string{"/bin/bash", "/tmp/helm-scripts/poststart-hook.sh"},
 			},
 		},
+		PreStop: &corev1.LifecycleHandler{
+			Exec: &corev1.ExecAction{
+				Command: []string{"/bin/bash", "/tmp/helm-scripts/prestop-hook.sh"},
+			},
+		},
+	}
+}
+
+// getLifeCycleWithoutPostStart returns lifecycle with only PreStop hook
+// PostStart is handled in the wrapper script for ISTIO ambient mode compatibility
+func getLifeCycleWithoutPostStart() *corev1.Lifecycle {
+	return &corev1.Lifecycle{
 		PreStop: &corev1.LifecycleHandler{
 			Exec: &corev1.ExecAction{
 				Command: []string{"/bin/bash", "/tmp/helm-scripts/prestop-hook.sh"},

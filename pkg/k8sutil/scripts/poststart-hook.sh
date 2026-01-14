@@ -25,7 +25,6 @@ else
     echo "IS_BOOTSTRAP_HOST false"
 fi
 
-pid=$(pgrep start.marklogic)
 
 ###############################################################
 # Logging utility
@@ -45,13 +44,8 @@ error() {
 
 log () {
     local TIMESTAMP=$(date +"%Y-%m-%d %T.%3N")
-    # Check to make sure pod doesn't terminate if PID value is empty for any reason
-    # If PID value is empty postStart hook logs are not recorded
     message="${TIMESTAMP} [postStart] $@"
-    if [ -n "$pid" ]; then
-        echo $message  > /proc/$pid/fd/1
-    fi
-    
+    echo $message  > /proc/1/fd/1
     echo $message >> /tmp/script.log
 }
 
@@ -359,6 +353,8 @@ function join_cluster {
     retry_count=10
     while [ $retry_count -gt 0 ]; do
         GROUP_RESP_CODE=$( curl --anyauth -m 20 -s -o /dev/null -w "%{http_code}" $HTTPS_OPTION -X GET $HTTP_PROTOCOL://${MARKLOGIC_BOOTSTRAP_HOST}:8002/manage/v2/groups/${MARKLOGIC_GROUP} --anyauth --user ${MARKLOGIC_ADMIN_USERNAME}:${MARKLOGIC_ADMIN_PASSWORD} )
+        info "MARKLOGIC_BOOTSTRAP_HOST: $MARKLOGIC_BOOTSTRAP_HOST"
+        info "MARKLOGIC_GROUP: $MARKLOGIC_GROUP"
         info "GROUP_RESP_CODE: $GROUP_RESP_CODE"
         if [[ ${GROUP_RESP_CODE} -eq 200 ]]; then
             info "Found the group, process to join the group"
