@@ -352,6 +352,8 @@ function join_cluster {
     retry_count=10
     while [ $retry_count -gt 0 ]; do
         GROUP_RESP_CODE=$( curl --anyauth -m 20 -s -o /dev/null -w "%{http_code}" $HTTPS_OPTION -X GET $HTTP_PROTOCOL://${MARKLOGIC_BOOTSTRAP_HOST}:8002/manage/v2/groups/${MARKLOGIC_GROUP} --anyauth --user ${MARKLOGIC_ADMIN_USERNAME}:${MARKLOGIC_ADMIN_PASSWORD} )
+        info "MARKLOGIC_BOOTSTRAP_HOST: $MARKLOGIC_BOOTSTRAP_HOST"
+        info "MARKLOGIC_GROUP: $MARKLOGIC_GROUP"
         info "GROUP_RESP_CODE: $GROUP_RESP_CODE"
         if [[ ${GROUP_RESP_CODE} -eq 200 ]]; then
             info "Found the group, process to join the group"
