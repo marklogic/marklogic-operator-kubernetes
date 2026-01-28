@@ -127,6 +127,32 @@ backend marklogic-{{ .PortNumber}}-backend
 		result += "\n"
 	}
 
+	if cr.Spec.DynamicHost != nil && cr.Spec.DynamicHost.Enabled {
+		dynamicHostName := cr.GetObjectMeta().GetName() + "-dynamic"
+		replicas := int(cr.Spec.DynamicHost.Size)
+		for _, appServer := range appServers {
+			data := &HAProxyTemplateData{
+				PortNumber: int(appServer.Port),
+				Path:       appServer.Path,
+			}
+			result += parseTemplateToString(backendTemplate, data)
+			for i := 0; i < replicas; i++ {
+				data := &HAProxyTemplateData{
+					PortNumber:       int(appServer.Port),
+					PodName:          dynamicHostName,
+					Path:             appServer.Path,
+					Index:            i,
+					ServiceName:      dynamicHostName,
+					NSName:           cr.ObjectMeta.Namespace,
+					ClusterName:      cr.Spec.ClusterDomain,
+					sslEnabledServer: cr.Spec.Tls != nil && cr.Spec.Tls.EnableOnDefaultAppServers,
+				}
+				result += getBackendServerConfigs(data)
+			}
+			result += "\n"
+		}
+	}
+
 	return result
 }
 

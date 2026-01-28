@@ -8,6 +8,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+
 	// "sigs.k8s.io/controller-runtime/pkg/client/patch"
 	"context"
 	"fmt"
@@ -17,6 +18,7 @@ func (cc *ClusterContext) ReconcileDynamicHost() result.ReconcileResult {
 	cc.ReqLogger.Info("handler::ReconcileDynamicHost")
 	if cc.MarklogicCluster.Spec.DynamicHost != nil && cc.MarklogicCluster.Spec.DynamicHost.Enabled {
 		cc.ReconcileStatefulsetForDynamicHost()
+		cc.ReconcileHAProxy()
 		cc.ReqLogger.Info("Dynamic Host is enabled; reconciling related resources")
 	}
 	return result.Continue()
