@@ -55,9 +55,19 @@ func TestDynamicHostWithHAProxy(t *testing.T) {
 				FrontendPort:     8080,
 				AppServers: []marklogicv1.AppServers{
 					{
-						Name: "qconsole",
+						Name: "app-service",
 						Port: 8000,
-						Path: "/qconsole",
+						Path: "/console",
+					},
+					{
+						Name: "admin",
+						Port: 8001,
+						Path: "/adminUI",
+					},
+					{
+						Name: "manage",
+						Port: 8002,
+						Path: "/manage",
 					},
 				},
 			},
