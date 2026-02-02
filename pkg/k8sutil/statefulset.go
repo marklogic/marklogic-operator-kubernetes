@@ -353,7 +353,7 @@ if [[ -n "$MARKLOGIC_BOOTSTRAP_HOST" ]] && [[ "$HOSTNAME" != *"$MARKLOGIC_BOOTST
             echo "[Wrapper] WARNING: Network check timed out. Proceeding with risk..."
             break
         fi
-        echo "[Wrapper] Waiting for mesh network... ($count/$MAX_RETRIES)"
+        echo "[Wrapper] Waiting for network... ($count/$MAX_RETRIES)"
         sleep 2
     done
     echo "[Wrapper] Mesh Network is Ready."
@@ -837,11 +837,12 @@ func getReadinessProbe(probe marklogicv1.ContainerProbe) *corev1.Probe {
 		TimeoutSeconds:      probe.TimeoutSeconds,
 		SuccessThreshold:    probe.SuccessThreshold,
 		ProbeHandler: corev1.ProbeHandler{
-			HTTPGet: &corev1.HTTPGetAction{
-				Path: "/",
-				Port: intstr.IntOrString{
-					Type:   intstr.Int,
-					IntVal: 7997,
+			Exec: &corev1.ExecAction{
+				Command: []string{
+					"curl",
+					"-s",
+					"-f", // Fail silently (exit code 22) on HTTP errors (404, 503, etc)
+					"http://localhost:7997/",
 				},
 			},
 		},

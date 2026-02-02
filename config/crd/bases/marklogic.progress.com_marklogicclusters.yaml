@@ -8279,6 +8279,38 @@ spec:
                       additionalProperties:
                         type: string
                       type: object
+                    livenessProbe:
+                      default:
+                        enabled: true
+                        failureThreshold: 3
+                        initialDelaySeconds: 30
+                        periodSeconds: 30
+                        successThreshold: 1
+                        timeoutSeconds: 5
+                      properties:
+                        enabled:
+                          type: boolean
+                        failureThreshold:
+                          format: int32
+                          minimum: 0
+                          type: integer
+                        initialDelaySeconds:
+                          format: int32
+                          minimum: 0
+                          type: integer
+                        periodSeconds:
+                          format: int32
+                          minimum: 0
+                          type: integer
+                        successThreshold:
+                          format: int32
+                          minimum: 0
+                          type: integer
+                        timeoutSeconds:
+                          format: int32
+                          minimum: 0
+                          type: integer
+                      type: object
                     logCollection:
                       properties:
                         enabled:
@@ -8432,6 +8464,38 @@ spec:
                       type: object
                     priorityClassName:
                       type: string
+                    readinessProbe:
+                      default:
+                        enabled: true
+                        failureThreshold: 3
+                        initialDelaySeconds: 10
+                        periodSeconds: 30
+                        successThreshold: 1
+                        timeoutSeconds: 5
+                      properties:
+                        enabled:
+                          type: boolean
+                        failureThreshold:
+                          format: int32
+                          minimum: 0
+                          type: integer
+                        initialDelaySeconds:
+                          format: int32
+                          minimum: 0
+                          type: integer
+                        periodSeconds:
+                          format: int32
+                          minimum: 0
+                          type: integer
+                        successThreshold:
+                          format: int32
+                          minimum: 0
+                          type: integer
+                        timeoutSeconds:
+                          format: int32
+                          minimum: 0
+                          type: integer
+                      type: object
                     replicas:
                       default: 1
                       format: int32

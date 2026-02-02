@@ -109,8 +109,12 @@ type MarklogicGroups struct {
 	NodeSelector              map[string]string                 `json:"nodeSelector,omitempty"`
 	PriorityClassName         string                            `json:"priorityClassName,omitempty"`
 	HugePages                 *HugePages                        `json:"hugePages,omitempty"`
-	LogCollection             *LogCollection                    `json:"logCollection,omitempty"`
-	HAProxy                   *HAProxyGroup                     `json:"haproxy,omitempty"`
+	// +kubebuilder:default:={enabled: true, initialDelaySeconds: 30, timeoutSeconds: 5, periodSeconds: 30, successThreshold: 1, failureThreshold: 3}
+	LivenessProbe ContainerProbe `json:"livenessProbe,omitempty"`
+	// +kubebuilder:default:={enabled: true, initialDelaySeconds: 10, timeoutSeconds: 5, periodSeconds: 30, successThreshold: 1, failureThreshold: 3}
+	ReadinessProbe ContainerProbe `json:"readinessProbe,omitempty"`
+	LogCollection  *LogCollection `json:"logCollection,omitempty"`
+	HAProxy        *HAProxyGroup  `json:"haproxy,omitempty"`
 	// +kubebuilder:default:=false
 	IsBootstrap                    bool                            `json:"isBootstrap,omitempty"`
 	Tls                            *Tls                            `json:"tls,omitempty"`

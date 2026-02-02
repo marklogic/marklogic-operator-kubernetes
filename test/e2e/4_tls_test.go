@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -403,12 +404,56 @@ func TestTlsWithMultiNode(t *testing.T) {
 	feature.Assess("Verify Named Cert on Multi Node", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 		podName := "dnode-0"
 		hostnamesSlice := []string{"enode-0.enode.marklogic-tlsednode.svc.cluster.local", "dnode-0.dnode.marklogic-tlsednode.svc.cluster.local"}
-		time.Sleep(10 * time.Second)
+
+		// Wait longer for TLS to be fully configured on management port 8002
+		t.Log("Waiting for TLS configuration to be applied to port 8002...")
+		time.Sleep(30 * time.Second)
+
+		// Verify HTTPS is actually configured (not HTTP)
+		t.Log("Verifying HTTPS is configured on port 8002...")
+		httpsCheck := "curl -k -s -o /dev/null -w '%{http_code}' https://localhost:8002/admin/v1/timestamp"
+		var httpsReady bool
+		for i := 0; i < 60; i++ {
+			output, err := utils.ExecCmdInPod(podName, namespace, mlContainerName, httpsCheck)
+			if err == nil && (strings.Contains(output, "200") || strings.Contains(output, "401")) {
+				t.Log("HTTPS is configured and responding")
+				httpsReady = true
+				break
+			}
+			// Check if still HTTP (should fail)
+			httpCheck := "curl -s -o /dev/null -w '%{http_code}' http://localhost:8002/admin/v1/timestamp"
+			output, _ = utils.ExecCmdInPod(podName, namespace, mlContainerName, httpCheck)
+			if strings.Contains(output, "200") || strings.Contains(output, "401") {
+				t.Logf("Port 8002 still using HTTP (attempt %d/60), waiting for TLS configuration...", i+1)
+			} else {
+				t.Logf("Port 8002 not ready yet (attempt %d/60)...", i+1)
+			}
+
+			if i == 59 {
+				t.Fatalf("HTTPS not configured on port 8002 after 2 minutes. TLS configuration may have failed.")
+			}
+			time.Sleep(2 * time.Second)
+		}
+
+		if !httpsReady {
+			t.Fatal("HTTPS endpoint never became ready")
+		}
+
+		// Now fetch certificates list with HTTPS
 		url := "https://localhost:8002/manage/v2/certificates?format=json"
 		command := fmt.Sprintf("curl -k --anyauth -u %s:%s %s", adminUsername, adminPassword, url)
-		certs, err := utils.ExecCmdInPod(podName, namespace, mlContainerName, command)
+		var certs string
+		var err error
+		for i := 0; i < 10; i++ {
+			certs, err = utils.ExecCmdInPod(podName, namespace, mlContainerName, command)
+			if err == nil {
+				break
+			}
+			t.Logf("Failed to get certificates (attempt %d/10): %v", i+1, err)
+			time.Sleep(2 * time.Second)
+		}
 		if err != nil {
-			t.Fatalf("Failed to get certificates list: %v", err)
+			t.Fatalf("Failed to get certificates list after HTTPS is ready: %v", err)
 		}
 		t.Log("Certificates list", certs)
 		certURIs := gjson.Get(certs, `certificate-default-list.list-items.list-item.#.uriref`).Array()

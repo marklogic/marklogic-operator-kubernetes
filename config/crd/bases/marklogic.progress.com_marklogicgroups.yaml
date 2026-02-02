@@ -4302,7 +4302,7 @@ spec:
                 type: string
               readinessProbe:
                 default:
-                  enabled: false
+                  enabled: true
                   failureThreshold: 3
                   initialDelaySeconds: 10
                   periodSeconds: 30
