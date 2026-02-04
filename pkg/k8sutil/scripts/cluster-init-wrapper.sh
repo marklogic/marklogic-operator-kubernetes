@@ -1,10 +1,9 @@
 #!/bin/bash
-# Copyright (c) 2024-2026 Progress Software Corporation and/or its subsidiaries or affiliates. All Rights Reserved.
+# Copyright (c) 2024-2025 Progress Software Corporation and/or its subsidiaries or affiliates. All Rights Reserved.
 
-# Combined Wrapper: Istio Resilience + Robust Signal Handling
+# Combined Wrapper: Istio Resilience + Robust Signal Handling + Daemon Monitor
 
 # --- Safety: Reset Readiness State ---
-# Force probe failure immediately on startup to prevent false positives
 rm -f /tmp/wrapper_ready
 
 # --- Define Graceful Shutdown Handler ---
@@ -18,45 +17,37 @@ shutdown_handler() {
         /etc/MarkLogic/MarkLogic-service.sh stop
     fi
     
-    # Wait for the actual database process to exit
+    # Wait for the process to disappear (Polling instead of wait)
     if [ -n "$REAL_ML_PID" ]; then
-        wait "$REAL_ML_PID" 2>/dev/null || true
+        echo "[Wrapper] Waiting for process $REAL_ML_PID to exit..."
+        for i in {1..30}; do
+            if ! kill -0 "$REAL_ML_PID" 2>/dev/null; then
+                echo "[Wrapper] Process exited."
+                break
+            fi
+            sleep 1
+        done
     fi
     
     echo "[Wrapper] Shutdown complete."
     exit 0
 }
 
-# Trap signals: Forward SIGTERM and SIGINT to our handler
 trap 'shutdown_handler' SIGTERM SIGINT
 
-# --- Patch Vendor Script (The "Zombie" Fix) ---
+# --- Patch Vendor Script ---
 echo "[Wrapper] Patching vendor script to remove blocking tail..."
-# Copy to writable location since /usr/local/bin may be read-only (rootless containers)
-cp /usr/local/bin/start-marklogic.sh /tmp/start-marklogic-patched.sh
-if [ $? -ne 0 ]; then
-    echo "[Wrapper] ERROR: Failed to copy vendor script."
-    exit 1
-fi
-
-# Remove 'tail -f /dev/null' with flexible whitespace matching
-sed -i 's/tail[[:space:]][[:space:]]*-f[[:space:]][[:space:]]*\/dev\/null//g' /tmp/start-marklogic-patched.sh
+sed -i 's/tail[[:space:]][[:space:]]*-f[[:space:]][[:space:]]*\/dev\/null//g' /usr/local/bin/start-marklogic.sh
 if [ $? -ne 0 ]; then
     echo "[Wrapper] ERROR: Failed to patch vendor script."
     exit 1
 fi
 
-# Make the patched script executable
-chmod +x /tmp/start-marklogic-patched.sh
-
 # --- Phase 1: Background Application Startup ---
 echo "[Wrapper] Starting MarkLogic vendor script..."
-
-# Run the patched vendor script in the background
-/tmp/start-marklogic-patched.sh &
+/usr/local/bin/start-marklogic.sh &
 SCRIPT_PID=$!
 
-# Wait for the vendor script to finish its setup
 wait $SCRIPT_PID
 VENDOR_EXIT_CODE=$?
 
@@ -129,18 +120,22 @@ fi
 # --- Phase 6: Signal Readiness ---
 touch /tmp/wrapper_ready
 
-# --- Phase 7: Process Guardian ---
-echo "[Wrapper] Initialization complete. Monitoring main process (PID $REAL_ML_PID)..."
+# --- Phase 7: Process Guardian (Daemon Monitor) ---
+echo "[Wrapper] Initialization complete. Monitoring PID $REAL_ML_PID..."
 
-wait "$REAL_ML_PID" 2>/dev/null
-EXIT_CODE=$?
-
-# Propagate any non-zero exit code from MarkLogic process
-# This triggers Kubernetes pod restart for crash recovery
-if [ $EXIT_CODE -ne 0 ]; then
-    echo "[Wrapper] MarkLogic process exited with code $EXIT_CODE"
-    exit $EXIT_CODE
-fi
-
-echo "[Wrapper] MarkLogic process terminated normally."
-exit 0
+while true; do
+    # 1. Check if PID file was deleted (Graceful stop or weird crash)
+    if [ ! -f "$PID_FILE" ]; then
+        echo "[Wrapper] ERROR: PID file disappeared. MarkLogic may have stopped."
+        exit 1
+    fi
+    
+    # 2. Check if Process is actually alive (Crash detection)
+    if ! kill -0 "$REAL_ML_PID" 2>/dev/null; then
+        echo "[Wrapper] ERROR: MarkLogic process (PID $REAL_ML_PID) is no longer running."
+        exit 1
+    fi
+    
+    # Sleep 5s (Balanced between responsiveness and CPU usage)
+    sleep 5
+done
