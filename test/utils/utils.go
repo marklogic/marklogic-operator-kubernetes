@@ -324,6 +324,22 @@ func ExecCmdInPod(podName, namespace, containerName, command string) (string, er
 	return out.String(), nil
 }
 
+// GetPodLogs retrieves logs from a specific container in a pod
+func GetPodLogs(namespace, podName, containerName string) (string, error) {
+	cmd := exec.Command("kubectl", "logs", podName, "-n", namespace, "-c", containerName, "--tail=500")
+
+	var out bytes.Buffer
+	var stderr bytes.Buffer
+	cmd.Stdout = &out
+	cmd.Stderr = &stderr
+
+	err := cmd.Run()
+	if err != nil {
+		return "", fmt.Errorf("failed to get pod logs: %v, stderr: %v", err, stderr.String())
+	}
+	return out.String(), nil
+}
+
 func AddHelmRepo(chartName, url string) error {
 	cmd := exec.Command("helm", "repo", "add", chartName, url)
 	err := cmd.Run()
