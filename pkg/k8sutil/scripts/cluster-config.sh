@@ -1,6 +1,8 @@
 #! /bin/bash   
 # Copyright (c) 2024-2025 Progress Software Corporation and/or its subsidiaries or affiliates. All Rights Reserved. 
 
+# MarkLogic Cluster Configuration Script
+# Handles cluster initialization, security setup, host joining, TLS configuration, and group management
 # Refer to https://docs.marklogic.com/guide/admin-api/cluster#id_10889 for cluster joining process
 
 N_RETRY=10
@@ -43,7 +45,7 @@ error() {
 
 log () {
     local TIMESTAMP=$(date +"%Y-%m-%d %T.%3N")
-    message="${TIMESTAMP} [postStart] $@"
+    message="${TIMESTAMP} [cluster-config] $@"
     echo $message  > /proc/1/fd/1
     echo $message >> /tmp/script.log
 }
@@ -736,4 +738,4 @@ fi
 
 set_status_file
 
-info "post-start hook script completed"
+info "cluster configuration completed"
