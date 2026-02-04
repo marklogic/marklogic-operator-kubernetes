@@ -221,18 +221,70 @@ func WaitForPod(ctx context.Context, t *testing.T, client klient.Client, namespa
 		p := utils.RunCommand("kubectl get pods --namespace " + namespace)
 		t.Logf("Kubernetes Pods: %s", p.Result())
 		err := client.Resources(namespace).Get(ctx, podName, namespace, pod)
-		t.Logf("Pod %s is in phase %s", pod.Name, pod.Status.Phase)
+
 		if err == nil {
+			t.Logf("Pod %s is in phase %s", pod.Name, pod.Status.Phase)
+
+			// Check for Running state
 			if pod.Status.Phase == "Running" {
 				return nil
 			}
+
+			// Diagnostic: Check for failed state
+			if pod.Status.Phase == "Failed" {
+				return fmt.Errorf("pod %s entered Failed state: %s", podName, pod.Status.Message)
+			}
+
+			// Diagnostic: Check init containers
+			for i, initStatus := range pod.Status.InitContainerStatuses {
+				if initStatus.State.Waiting != nil {
+					t.Logf("Init container [%d] %s is waiting: %s - %s",
+						i, initStatus.Name, initStatus.State.Waiting.Reason, initStatus.State.Waiting.Message)
+				}
+				if initStatus.State.Terminated != nil && initStatus.State.Terminated.ExitCode != 0 {
+					t.Errorf("Init container [%d] %s failed with exit code %d: %s",
+						i, initStatus.Name, initStatus.State.Terminated.ExitCode, initStatus.State.Terminated.Reason)
+					// Get logs from failed init container
+					logsCmd := fmt.Sprintf("kubectl logs %s -n %s -c %s --tail=50", podName, namespace, initStatus.Name)
+					logResult := utils.RunCommand(logsCmd)
+					t.Logf("Failed init container logs:\n%s", logResult.Result())
+					return fmt.Errorf("init container %s failed", initStatus.Name)
+				}
+			}
+
+			// Diagnostic: Check main containers
+			for _, containerStatus := range pod.Status.ContainerStatuses {
+				if containerStatus.State.Waiting != nil {
+					t.Logf("Container %s is waiting: %s - %s",
+						containerStatus.Name, containerStatus.State.Waiting.Reason, containerStatus.State.Waiting.Message)
+					if containerStatus.State.Waiting.Reason == "ImagePullBackOff" ||
+						containerStatus.State.Waiting.Reason == "ErrImagePull" {
+						return fmt.Errorf("image pull failed for container %s: %s",
+							containerStatus.Name, containerStatus.State.Waiting.Message)
+					}
+				}
+			}
+
+			// Diagnostic: Check pod conditions
+			for _, cond := range pod.Status.Conditions {
+				if cond.Status == "False" && cond.Type == "PodScheduled" {
+					return fmt.Errorf("pod scheduling failed: %s - %s", cond.Reason, cond.Message)
+				}
+			}
+
 		} else if !errors.IsNotFound(err) {
 			t.Logf("Failed to get pod %s: %v", podName, err)
 			continue
 		}
 
 		if time.Since(start) > timeout {
-			return fmt.Errorf("timed out waiting for pod %s to be created", podName)
+			// Enhanced timeout error with pod describe
+			describeCmd := fmt.Sprintf("kubectl describe pod %s -n %s", podName, namespace)
+			describeResult := utils.RunCommand(describeCmd)
+			t.Logf("Pod description:\n%s", describeResult.Result())
+
+			return fmt.Errorf("timed out after %v waiting for pod %s to be Running (current phase: %s)",
+				timeout, podName, pod.Status.Phase)
 		}
 
 		time.Sleep(5 * time.Second)
