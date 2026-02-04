@@ -1,7 +1,7 @@
 #!/bin/bash
 # Copyright (c) 2024-2025 Progress Software Corporation and/or its subsidiaries or affiliates. All Rights Reserved.
 
-# Combined Wrapper: Istio Resilience + Rootless Support + Real Crash Detection
+# Combined Wrapper: Istio Resilience + Rootless Support + Auto-Restart Handling
 
 # --- Safety: Reset Readiness State ---
 rm -f /tmp/wrapper_ready
@@ -37,6 +37,7 @@ trap 'shutdown_handler' SIGTERM SIGINT
 # --- Phase 1: Background Application Startup ---
 echo "[Wrapper] Starting MarkLogic vendor script..."
 # We run the ORIGINAL script. It will hang on 'tail -f'. That is fine.
+# This avoids permission issues in rootless containers.
 /usr/local/bin/start-marklogic.sh &
 SCRIPT_PID=$!
 echo "[Wrapper] Vendor script started with PID: $SCRIPT_PID"
@@ -110,17 +111,29 @@ else
     echo "[Wrapper] No init script found. Skipping."
 fi
 
+# --- Phase 5.5: Stabilization & PID Refresh (CRITICAL FIX) ---
+# MarkLogic often restarts itself after cluster-config updates (e.g., security DB install).
+# If we don't refresh the PID, the wrapper will think the old PID dying is a crash.
+echo "[Wrapper] Cluster configuration complete. Stabilizing..."
+sleep 5
+
+if [ -f "$PID_FILE" ]; then
+    NEW_ML_PID=$(cat "$PID_FILE")
+    if [ "$NEW_ML_PID" != "$REAL_ML_PID" ]; then
+         echo "[Wrapper] NOTICE: MarkLogic PID changed during config ($REAL_ML_PID -> $NEW_ML_PID)."
+         REAL_ML_PID=$NEW_ML_PID
+    fi
+else
+    echo "[Wrapper] ERROR: PID file missing after config!"
+    exit 1
+fi
+
 # --- Phase 6: Signal Readiness ---
 touch /tmp/wrapper_ready
-
-# Give the vendor script a moment to fully stabilize after cluster-config
-# The vendor script may still be finishing its initialization sequence
-sleep 5
 
 # --- Phase 7: The "Dual" Watchdog ---
 echo "[Wrapper] Initialization complete. Monitoring MarkLogic (PID $REAL_ML_PID)..."
 
-# We cannot use 'wait' because we want to monitor the DB, not the script.
 while true; do
     # 1. Check if the MarkLogic Database is alive
     if ! kill -0 "$REAL_ML_PID" 2>/dev/null; then
