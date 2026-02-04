@@ -1,7 +1,7 @@
 #!/bin/bash
 # Copyright (c) 2024-2025 Progress Software Corporation and/or its subsidiaries or affiliates. All Rights Reserved.
 
-# Combined Wrapper: Istio Resilience + Robust Signal Handling + Daemon Monitor
+# Combined Wrapper: Istio Resilience + Rootless Support + Real Crash Detection
 
 # --- Safety: Reset Readiness State ---
 rm -f /tmp/wrapper_ready
@@ -17,9 +17,9 @@ shutdown_handler() {
         /etc/MarkLogic/MarkLogic-service.sh stop
     fi
     
-    # Wait for the process to disappear (Polling instead of wait)
+    # Wait for the REAL database process to exit
     if [ -n "$REAL_ML_PID" ]; then
-        echo "[Wrapper] Waiting for process $REAL_ML_PID to exit..."
+        echo "[Wrapper] Waiting for MarkLogic (PID $REAL_ML_PID) to stop..."
         for i in {1..30}; do
             if ! kill -0 "$REAL_ML_PID" 2>/dev/null; then
                 echo "[Wrapper] Process exited."
@@ -29,43 +29,35 @@ shutdown_handler() {
         done
     fi
     
-    echo "[Wrapper] Shutdown complete."
     exit 0
 }
 
 trap 'shutdown_handler' SIGTERM SIGINT
 
-# --- Patch Vendor Script ---
-echo "[Wrapper] Patching vendor script to remove blocking tail..."
-sed -i 's/tail[[:space:]][[:space:]]*-f[[:space:]][[:space:]]*\/dev\/null//g' /usr/local/bin/start-marklogic.sh
-if [ $? -ne 0 ]; then
-    echo "[Wrapper] ERROR: Failed to patch vendor script."
-    exit 1
-fi
-
 # --- Phase 1: Background Application Startup ---
 echo "[Wrapper] Starting MarkLogic vendor script..."
+# We run the ORIGINAL script. It will hang on 'tail -f'. That is fine.
 /usr/local/bin/start-marklogic.sh &
 SCRIPT_PID=$!
+echo "[Wrapper] Vendor script started with PID: $SCRIPT_PID"
 
-wait $SCRIPT_PID
-VENDOR_EXIT_CODE=$?
-
-if [ $VENDOR_EXIT_CODE -ne 0 ]; then
-    echo "[Wrapper] ERROR: Vendor script failed with exit code $VENDOR_EXIT_CODE"
-    exit 1
-fi
-
-# --- Phase 2: Capture Real PID ---
+# --- Phase 2: Capture Real PID (The "Zombie" Fix) ---
+# Even though the script is monitoring 'tail', MarkLogic writes its PID to a file.
+# We MUST capture this to know if the DB actually crashes.
 PID_FILE="${MARKLOGIC_PID_FILE:-/var/run/MarkLogic.pid}"
 
 echo "[Wrapper] Waiting for MarkLogic PID file..."
 count=0
 until [ -f "$PID_FILE" ]; do
+    # Check if the vendor script crashed early
+    if ! kill -0 "$SCRIPT_PID" 2>/dev/null; then
+        echo "[Wrapper] ERROR: Vendor script died before PID file creation."
+        exit 1
+    fi
     sleep 1
     count=$((count+1))
-    if [ $count -ge 30 ]; then
-        echo "[Wrapper] ERROR: MarkLogic failed to start (No PID file found)."
+    if [ $count -ge 60 ]; then
+        echo "[Wrapper] ERROR: Timeout waiting for PID file."
         exit 1
     fi
 done
@@ -90,6 +82,7 @@ if [[ -n "$MARKLOGIC_BOOTSTRAP_HOST" ]] && [[ "$HOSTNAME" != *"$MARKLOGIC_BOOTST
     MAX_RETRIES=60
     count=0
     until curl -s -o /dev/null -m 2 "http://${MARKLOGIC_BOOTSTRAP_HOST}:8001/"; do
+        # Safety Check: Did MarkLogic die?
         if ! kill -0 "$REAL_ML_PID" 2>/dev/null; then
              echo "[Wrapper] ERROR: MarkLogic process died during network wait."
              exit 1
@@ -114,28 +107,34 @@ if [ -f "/tmp/helm-scripts/cluster-config.sh" ]; then
         exit 1
     fi
 else
-    echo "[Wrapper] No init script found (/tmp/helm-scripts/cluster-config.sh). Skipping."
+    echo "[Wrapper] No init script found. Skipping."
 fi
 
 # --- Phase 6: Signal Readiness ---
 touch /tmp/wrapper_ready
 
-# --- Phase 7: Process Guardian (Daemon Monitor) ---
-echo "[Wrapper] Initialization complete. Monitoring PID $REAL_ML_PID..."
+# Give the vendor script a moment to fully stabilize after cluster-config
+# The vendor script may still be finishing its initialization sequence
+sleep 5
 
+# --- Phase 7: The "Dual" Watchdog ---
+echo "[Wrapper] Initialization complete. Monitoring MarkLogic (PID $REAL_ML_PID)..."
+
+# We cannot use 'wait' because we want to monitor the DB, not the script.
 while true; do
-    # 1. Check if PID file was deleted (Graceful stop or weird crash)
-    if [ ! -f "$PID_FILE" ]; then
-        echo "[Wrapper] ERROR: PID file disappeared. MarkLogic may have stopped."
-        exit 1
-    fi
-    
-    # 2. Check if Process is actually alive (Crash detection)
+    # 1. Check if the MarkLogic Database is alive
     if ! kill -0 "$REAL_ML_PID" 2>/dev/null; then
-        echo "[Wrapper] ERROR: MarkLogic process (PID $REAL_ML_PID) is no longer running."
+        echo "[Wrapper] CRITICAL: MarkLogic Database (PID $REAL_ML_PID) crashed!"
+        echo "[Wrapper] Terminating vendor script to trigger Pod restart..."
+        kill -TERM "$SCRIPT_PID" 2>/dev/null
         exit 1
     fi
     
-    # Sleep 5s (Balanced between responsiveness and CPU usage)
+    # 2. Check if the Vendor Script is alive (unlikely to die, but good to check)
+    if ! kill -0 "$SCRIPT_PID" 2>/dev/null; then
+         echo "[Wrapper] ERROR: Vendor script exited unexpectedly."
+         exit 1
+    fi
+    
     sleep 5
 done
