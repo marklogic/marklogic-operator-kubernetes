@@ -11,6 +11,7 @@ import (
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/e2e-framework/klient/conf"
@@ -56,6 +57,41 @@ func TestMain(m *testing.M) {
 
 	// Use Environment.Setup to configure pre-test setup
 	testEnv.Setup(
+		// Delete namespace if it exists from previous run
+		func(ctx context.Context, cfg *envconf.Config) (context.Context, error) {
+			log.Printf("Ensuring clean namespace: %s", namespace)
+			client := cfg.Client()
+			ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: namespace}}
+
+			// Try to get the namespace first
+			err := client.Resources().Get(ctx, namespace, "", ns)
+			if err == nil {
+				// Namespace exists, delete it
+				log.Printf("Deleting existing namespace: %s", namespace)
+				if err := client.Resources().Delete(ctx, ns); err != nil {
+					log.Printf("Error deleting namespace (may already be deleting): %v", err)
+				}
+
+				// Wait for namespace to be fully deleted (up to 60 seconds)
+				log.Printf("Waiting for namespace deletion to complete...")
+				for i := 0; i < 60; i++ {
+					err := client.Resources().Get(ctx, namespace, "", ns)
+					if err != nil {
+						// Namespace is gone
+						log.Printf("Namespace deleted successfully")
+						break
+					}
+					if i == 59 {
+						return ctx, fmt.Errorf("timeout waiting for namespace %s to be deleted", namespace)
+					}
+					time.Sleep(1 * time.Second)
+				}
+			} else {
+				log.Printf("Namespace does not exist, will create fresh")
+			}
+
+			return ctx, nil
+		},
 		envfuncs.CreateNamespace(namespace),
 
 		// install tool dependencies

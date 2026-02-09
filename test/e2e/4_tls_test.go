@@ -210,7 +210,7 @@ func TestTlsWithNamedCert(t *testing.T) {
 		e2eutils.RunCommand("kubectl -n marklogic-tlsnamed delete secret ca-cert --ignore-not-found=true")
 		e2eutils.RunCommand("kubectl -n marklogic-tlsnamed delete secret marklogic-0-cert --ignore-not-found=true")
 		e2eutils.RunCommand("kubectl -n marklogic-tlsnamed delete secret marklogic-1-cert --ignore-not-found=true")
-		
+
 		p := e2eutils.RunCommand("kubectl -n marklogic-tlsnamed create secret generic ca-cert --from-file=test/test_data/ca_cert/cacert.pem")
 		if p.Err() != nil {
 			t.Fatalf("Failed to create ca-cert secret: %s. Output: %s", p.Err(), p.Result())
@@ -348,12 +348,45 @@ func TestTlsWithMultiNode(t *testing.T) {
 
 	feature.Setup(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 		client := c.Client()
+
+		// Check if namespace exists and wait if it's terminating
+		ns := &corev1.Namespace{}
+		for i := 0; i < 60; i++ {
+			err := client.Resources().Get(ctx, namespace, "", ns)
+			if err != nil {
+				// Namespace doesn't exist, we can create it
+				break
+			}
+			if ns.Status.Phase == corev1.NamespaceTerminating {
+				t.Logf("Namespace %s is terminating, waiting... (attempt %d/60)", namespace, i+1)
+				time.Sleep(2 * time.Second)
+				continue
+			}
+			// Namespace exists and is active, can proceed
+			break
+		}
+
+		// Create namespace if it doesn't exist
 		client.Resources(namespace).Create(ctx, &corev1.Namespace{
 			ObjectMeta: metav1.ObjectMeta{
 				Name: namespace,
 			},
 		})
+
+		// Give namespace time to become active
+		time.Sleep(5 * time.Second)
+
 		marklogicv1.AddToScheme(client.Resources(namespace).GetScheme())
+
+		// Delete existing MarklogicCluster if it exists (cleanup from previous failed runs)
+		existingCR := &marklogicv1.MarklogicCluster{}
+		if err := client.Resources(namespace).Get(ctx, cr.Name, namespace, existingCR); err == nil {
+			t.Log("Deleting existing MarklogicCluster from previous run")
+			if err := client.Resources(namespace).Delete(ctx, existingCR); err != nil {
+				t.Logf("Warning: Failed to delete existing MarklogicCluster: %s", err)
+			}
+			time.Sleep(10 * time.Second) // Wait for deletion
+		}
 
 		if err := client.Resources(namespace).Create(ctx, cr); err != nil {
 			t.Fatalf("Failed to create MarklogicCluster: %s", err)
@@ -384,7 +417,7 @@ func TestTlsWithMultiNode(t *testing.T) {
 		e2eutils.RunCommand("kubectl -n marklogic-tlsednode delete secret ca-cert --ignore-not-found=true")
 		e2eutils.RunCommand("kubectl -n marklogic-tlsednode delete secret dnode-0-cert --ignore-not-found=true")
 		e2eutils.RunCommand("kubectl -n marklogic-tlsednode delete secret enode-0-cert --ignore-not-found=true")
-		
+
 		p := e2eutils.RunCommand("kubectl -n marklogic-tlsednode create secret generic ca-cert --from-file=test/test_data/ca_cert/cacert.pem")
 		if p.Err() != nil {
 			t.Fatalf("Failed to create ca-cert secret: %s. Output: %s", p.Err(), p.Result())
@@ -403,11 +436,23 @@ func TestTlsWithMultiNode(t *testing.T) {
 	feature.Assess("MarklogicCluster Pod created", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 		client := c.Client()
 
-		podName := "enode-0"
-		err := utils.WaitForPod(ctx, t, client, namespace, podName, 180*time.Second)
+		// Wait for both pods to be ready
+		t.Log("Waiting for dnode-0 pod...")
+		err := utils.WaitForPod(ctx, t, client, namespace, "dnode-0", 180*time.Second)
 		if err != nil {
-			t.Fatalf("Failed to wait for pod creation: %v", err)
+			t.Fatalf("Failed to wait for dnode-0 creation: %v", err)
 		}
+
+		t.Log("Waiting for enode-0 pod...")
+		err = utils.WaitForPod(ctx, t, client, namespace, "enode-0", 180*time.Second)
+		if err != nil {
+			t.Fatalf("Failed to wait for enode-0 creation: %v", err)
+		}
+
+		// Wait additional time for enode to join cluster and configure TLS
+		t.Log("Waiting for enode to join cluster and configure TLS...")
+		time.Sleep(60 * time.Second)
+
 		return ctx
 	})
 
