@@ -27,6 +27,12 @@ func (oc *OperatorContext) ReconsileMarklogicGroupHandler() (reconcile.Result, e
 		}
 	}
 
+	// Check for volume resize before reconciling StatefulSet
+	// Volume resize must be handled first as it may involve deleting/recreating the StatefulSet
+	if result := oc.ReconcileVolumeResize(); result.Completed() {
+		return result.Output()
+	}
+
 	result, err := oc.ReconcileStatefulset()
 
 	return result, err

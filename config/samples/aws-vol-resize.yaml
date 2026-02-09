@@ -1,0 +1,21 @@
+### Sample file to test volume resize functionality in AWS EBS. This file is not intended to be used as is, but rather as a reference for how to configure volume resize in the MarkLogicCluster CRD. The actual implementation of volume resize is still in progress and may change in the future. Please refer to the documentation for the latest information on how to use this feature. ###
+apiVersion: marklogic.progress.com/v1
+kind: MarklogicCluster
+metadata:
+  name: resize-test
+  namespace: marklogic-vol
+spec:
+  image: "progressofficial/marklogic-db:12.0.0-ubi9-rootless-2.2.2"
+  persistence:
+    enabled: true
+    size: 6Gi
+    ##### to be implemented
+    # resize: 
+    #   flow: parallel, sequential
+    storageClassName: ml-expandable-gp3
+  markLogicGroups:
+    - replicas: 2
+      name: dnode
+      groupConfig:
+        name: dnode
+      isBootstrap: true

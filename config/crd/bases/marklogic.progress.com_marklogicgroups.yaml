@@ -4992,6 +4992,60 @@ spec:
                 type: string
               stage:
                 type: string
+              volumeResizeStatus:
+                description: VolumeResizeStatus holds the status of ongoing volume
+                  resize operation
+                properties:
+                  completionTime:
+                    description: CompletionTime is when the resize operation completed
+                    format: date-time
+                    type: string
+                  fileSystemResizePending:
+                    description: FileSystemResizePending indicates if pods need restart
+                      for filesystem resize
+                    type: boolean
+                  lastResizedPodIndex:
+                    description: LastResizedPodIndex tracks which pod was last restarted
+                      during filesystem resize
+                    format: int32
+                    type: integer
+                  message:
+                    description: Message provides additional information about the
+                      current status
+                    type: string
+                  originalSize:
+                    description: OriginalSize is the size before resize
+                    type: string
+                  phase:
+                    description: Phase is the current phase of the volume resize operation
+                    type: string
+                  pvcsResized:
+                    description: PVCsResized is the number of PVCs that have been
+                      resized
+                    format: int32
+                    type: integer
+                  startTime:
+                    description: StartTime is when the resize operation started
+                    format: date-time
+                    type: string
+                  statefulSetBackup:
+                    description: StatefulSetBackup stores the StatefulSet spec for
+                      recovery
+                    type: string
+                  targetSize:
+                    description: TargetSize is the desired size for the volumes
+                    type: string
+                  totalPvcs:
+                    description: TotalPVCs is the total number of PVCs to resize
+                    format: int32
+                    type: integer
+                  warnings:
+                    description: Warnings contains any warnings during the resize
+                      operation
+                    items:
+                      type: string
+                    type: array
+                type: object
             type: object
         type: object
     served: true

@@ -94,6 +94,81 @@ type MarklogicGroupStatus struct {
 
 	// +optional
 	MarklogicGroupStatus InternalState `json:"markLogicGroupStatus,omitempty"`
+
+	// VolumeResizeStatus holds the status of ongoing volume resize operation
+	// +optional
+	VolumeResizeStatus *VolumeResizeStatus `json:"volumeResizeStatus,omitempty"`
+}
+
+// VolumeResizePhase represents the current phase of volume resize operation
+type VolumeResizePhase string
+
+const (
+	// VolumeResizePhaseNone indicates no resize operation is in progress
+	VolumeResizePhaseNone VolumeResizePhase = ""
+	// VolumeResizePhaseValidating indicates resize prerequisites are being validated
+	VolumeResizePhaseValidating VolumeResizePhase = "Validating"
+	// VolumeResizePhaseResizingPVCs indicates PVCs are being resized
+	VolumeResizePhaseResizingPVCs VolumeResizePhase = "ResizingPVCs"
+	// VolumeResizePhaseWaitingForPVCResize indicates waiting for PVC resize to complete
+	VolumeResizePhaseWaitingForPVCResize VolumeResizePhase = "WaitingForPVCResize"
+	// VolumeResizePhaseBackingUpStatefulSet indicates StatefulSet spec is being backed up
+	VolumeResizePhaseBackingUpStatefulSet VolumeResizePhase = "BackingUpStatefulSet"
+	// VolumeResizePhaseDeletingStatefulSet indicates StatefulSet is being deleted with orphan policy
+	VolumeResizePhaseDeletingStatefulSet VolumeResizePhase = "DeletingStatefulSet"
+	// VolumeResizePhaseRecreatingStatefulSet indicates StatefulSet is being recreated
+	VolumeResizePhaseRecreatingStatefulSet VolumeResizePhase = "RecreatingStatefulSet"
+	// VolumeResizePhaseRestartingPods indicates pods are being restarted for filesystem resize
+	VolumeResizePhaseRestartingPods VolumeResizePhase = "RestartingPods"
+	// VolumeResizePhaseVerifying indicates pod health is being verified
+	VolumeResizePhaseVerifying VolumeResizePhase = "Verifying"
+	// VolumeResizePhaseCompleted indicates resize operation completed successfully
+	VolumeResizePhaseCompleted VolumeResizePhase = "Completed"
+	// VolumeResizePhaseFailed indicates resize operation failed
+	VolumeResizePhaseFailed VolumeResizePhase = "Failed"
+)
+
+// VolumeResizeStatus holds the status of a volume resize operation
+type VolumeResizeStatus struct {
+	// Phase is the current phase of the volume resize operation
+	Phase VolumeResizePhase `json:"phase,omitempty"`
+
+	// StartTime is when the resize operation started
+	// +optional
+	StartTime *metav1.Time `json:"startTime,omitempty"`
+
+	// CompletionTime is when the resize operation completed
+	// +optional
+	CompletionTime *metav1.Time `json:"completionTime,omitempty"`
+
+	// TargetSize is the desired size for the volumes
+	TargetSize string `json:"targetSize,omitempty"`
+
+	// OriginalSize is the size before resize
+	OriginalSize string `json:"originalSize,omitempty"`
+
+	// PVCsResized is the number of PVCs that have been resized
+	PVCsResized int32 `json:"pvcsResized,omitempty"`
+
+	// TotalPVCs is the total number of PVCs to resize
+	TotalPVCs int32 `json:"totalPvcs,omitempty"`
+
+	// Message provides additional information about the current status
+	Message string `json:"message,omitempty"`
+
+	// StatefulSetBackup stores the StatefulSet spec for recovery
+	// +optional
+	StatefulSetBackup string `json:"statefulSetBackup,omitempty"`
+
+	// FileSystemResizePending indicates if pods need restart for filesystem resize
+	FileSystemResizePending bool `json:"fileSystemResizePending,omitempty"`
+
+	// LastResizedPodIndex tracks which pod was last restarted during filesystem resize
+	LastResizedPodIndex int32 `json:"lastResizedPodIndex,omitempty"`
+
+	// Warnings contains any warnings during the resize operation
+	// +optional
+	Warnings []string `json:"warnings,omitempty"`
 }
 
 func (status *MarklogicGroupStatus) SetCondition(condition metav1.Condition) {
