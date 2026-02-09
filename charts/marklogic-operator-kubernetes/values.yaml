@@ -64,3 +64,23 @@ serviceAccount:
   automount: true
   create: true
   name: ""
+
+# Operator scope configuration
+# scope can be "cluster" (default) or "namespace"
+# When scope is "namespace", the operator will only watch resources in the specified namespace(s)
+scope:
+  # Deployment scope: "cluster" or "namespace"
+  # cluster: operator watches all namespaces (requires ClusterRole/ClusterRoleBinding)
+  # namespace: operator watches only specified namespace(s) (requires Role/RoleBinding)
+  type: cluster
+  
+  # watchNamespaces defines which namespace(s) the operator should watch
+  # Only applicable when scope.type is "namespace"
+  # Can be a single string, comma-separated string, or array of strings
+  # If empty, defaults to the release namespace
+  #
+  # Examples:
+  #   watchNamespaces: "marklogic-prod"                              # Single namespace
+  #   watchNamespaces: "marklogic-prod,marklogic-dev"                # Multiple (comma-separated)
+  #   watchNamespaces: ["marklogic-prod", "marklogic-dev"]           # Multiple (array)
+  watchNamespaces: ""

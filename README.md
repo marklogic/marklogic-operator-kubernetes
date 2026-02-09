@@ -18,6 +18,15 @@ This operator supports Kubernetes 1.30 or later.
 
 This operator supports MarkLogic 11.1 or later.
 
+### Operator Scope Options
+
+The MarkLogic Operator can be deployed in two modes:
+
+- **Cluster-Scoped (Default)**: Watches and manages MarkLogic resources across all namespaces in the cluster
+- **Namespace-Scoped**: Watches and manages MarkLogic resources only in a specific namespace
+
+For detailed information on scope configuration, see [Operator Scope Configuration](./docs/operator-scope-configuration.md).
+
 ### Run MarkLogic Operator for Kubernetes using Helm Chart
 
 1. Add MarkLogic Operator for Kubernetes Helm Repo:
@@ -28,9 +37,25 @@ helm repo update
 ```
 
 2. Install or upgrade the Helm Chart for MarkLogic Operator: 
+
+**For cluster-scoped deployment (default - watches all namespaces):**
 ```sh
 helm upgrade marklogic-operator marklogic-operator/marklogic-operator-kubernetes --version=1.1.0 --install --namespace marklogic-operator-system --create-namespace
 ```
+
+**For namespace-scoped deployment (watches only a specific namespace):**
+```sh
+# Watch the same namespace where operator is deployed
+helm upgrade marklogic-operator marklogic-operator/marklogic-operator-kubernetes --version=1.1.0 --install --namespace marklogic-prod --create-namespace --set scope.type=namespace
+
+# Or watch a different namespace
+helm upgrade marklogic-operator marklogic-operator/marklogic-operator-kubernetes --version=1.1.0 --install --namespace marklogic-operator-system --create-namespace --set scope.type=namespace --set scope.watchNamespaces=marklogic-prod
+
+# Or watch multiple namespaces
+helm upgrade marklogic-operator marklogic-operator/marklogic-operator-kubernetes --version=1.1.0 --install --namespace marklogic-operator-system --create-namespace --set scope.type=namespace --set scope.watchNamespaces="prod,staging,dev"
+```
+
+See [Operator Scope Configuration](./docs/operator-scope-configuration.md) for more deployment options and examples.
 
 3. Make sure the Marklogic Operator pod is running:
 ```sh

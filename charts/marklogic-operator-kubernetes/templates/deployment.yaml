@@ -44,6 +44,28 @@ spec:
         env:
         - name: KUBERNETES_CLUSTER_DOMAIN
           value: {{ quote .Values.kubernetesClusterDomain }}
+        {{- if eq .Values.scope.type "namespace" }}
+        {{- $namespaces := list }}
+        {{- if .Values.scope.watchNamespaces }}
+          {{- if kindIs "string" .Values.scope.watchNamespaces }}
+            {{- if contains "," .Values.scope.watchNamespaces }}
+              {{- /* Already comma-separated, use as-is */}}
+              {{- $namespaces = list .Values.scope.watchNamespaces }}
+            {{- else }}
+              {{- /* Single namespace */}}
+              {{- $namespaces = list .Values.scope.watchNamespaces }}
+            {{- end }}
+          {{- else if kindIs "slice" .Values.scope.watchNamespaces }}
+            {{- /* Convert array to comma-separated string */}}
+            {{- $namespaces = list (join "," .Values.scope.watchNamespaces) }}
+          {{- end }}
+        {{- else }}
+          {{- /* Default to release namespace */}}
+          {{- $namespaces = list .Release.Namespace }}
+        {{- end }}
+        - name: WATCH_NAMESPACE
+          value: {{ index $namespaces 0 | quote }}
+        {{- end }}
         image: {{ .Values.controllerManager.manager.image.repository }}:{{ .Values.controllerManager.manager.image.tag
           | default .Chart.AppVersion }}
         livenessProbe:
