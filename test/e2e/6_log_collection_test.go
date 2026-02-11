@@ -114,7 +114,7 @@ func TestLogCollectionDisabled(t *testing.T) {
 	feature.Assess("Pod created without fluent-bit", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 		client := c.Client()
 		podName := "lognode-0"
-		err := utils.WaitForPod(ctx, t, client, logCollectionNamespace, podName, 120*time.Second, true)
+		err := utils.WaitForPod(ctx, t, client, logCollectionNamespace, podName, 120*time.Second)
 		if err != nil {
 			t.Fatalf("Failed to wait for pod creation: %v", err)
 		}
@@ -263,7 +263,7 @@ func TestLogCollectionPartialLogs(t *testing.T) {
 	feature.Assess("Pod created with fluent-bit for partial logs", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 		client := c.Client()
 		podName := "lognode-0"
-		err := utils.WaitForPod(ctx, t, client, logCollectionNamespace, podName, 120*time.Second, true)
+		err := utils.WaitForPod(ctx, t, client, logCollectionNamespace, podName, 120*time.Second)
 		if err != nil {
 			t.Fatalf("Failed to wait for pod creation: %v", err)
 		}
@@ -439,7 +439,7 @@ func TestLogCollectionCustomResources(t *testing.T) {
 	feature.Assess("Pod created with custom resources", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 		client := c.Client()
 		podName := "lognode-0"
-		err := utils.WaitForPod(ctx, t, client, logCollectionNamespace, podName, 120*time.Second, true)
+		err := utils.WaitForPod(ctx, t, client, logCollectionNamespace, podName, 120*time.Second)
 		if err != nil {
 			t.Fatalf("Failed to wait for pod creation: %v", err)
 		}
@@ -618,7 +618,7 @@ func TestLogCollectionCustomFilters(t *testing.T) {
 	feature.Assess("Pod created with custom filters", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 		client := c.Client()
 		podName := "lognode-0"
-		err := utils.WaitForPod(ctx, t, client, logCollectionNamespace, podName, 120*time.Second, true)
+		err := utils.WaitForPod(ctx, t, client, logCollectionNamespace, podName, 120*time.Second)
 		if err != nil {
 			t.Fatalf("Failed to wait for pod creation: %v", err)
 		}

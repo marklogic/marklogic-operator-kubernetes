@@ -215,19 +215,7 @@ func TestTlsWithNamedCert(t *testing.T) {
 		})
 		marklogicv1.AddToScheme(client.Resources(namespace).GetScheme())
 
-		if err := client.Resources(namespace).Create(ctx, cr); err != nil {
-			t.Fatalf("Failed to create MarklogicCluster: %s", err)
-		}
-		// wait for resource to be created
-		if err := wait.For(
-			conditions.New(client.Resources()).ResourceMatch(cr, func(object k8s.Object) bool {
-				return true
-			}),
-			wait.WithTimeout(3*time.Minute),
-			wait.WithInterval(5*time.Second),
-		); err != nil {
-			t.Fatal(err)
-		}
+		// Generate certificates and create secrets BEFORE creating MarklogicCluster
 		err := utils.GenerateCACertificate("test/test_data/ca_cert")
 		if err != nil {
 			t.Fatalf("Failed to generate CA certificate: %s", err)
@@ -257,16 +245,38 @@ func TestTlsWithNamedCert(t *testing.T) {
 		if p.Err() != nil {
 			t.Fatalf("Failed to create marklogic-1-cert secret: %s. Output: %s", p.Err(), p.Result())
 		}
+
+		// Now create MarklogicCluster CR after secrets are ready
+		if err := client.Resources(namespace).Create(ctx, cr); err != nil {
+			t.Fatalf("Failed to create MarklogicCluster: %s", err)
+		}
+		// wait for resource to be created
+		if err := wait.For(
+			conditions.New(client.Resources()).ResourceMatch(cr, func(object k8s.Object) bool {
+				return true
+			}),
+			wait.WithTimeout(3*time.Minute),
+			wait.WithInterval(5*time.Second),
+		); err != nil {
+			t.Fatal(err)
+		}
 		return ctx
 	})
 
 	feature.Assess("MarklogicCluster Pod created", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 		client := c.Client()
 
-		podName := "marklogic-1"
-		err := utils.WaitForPod(ctx, t, client, namespace, podName, 150*time.Second, true)
+		// Wait for both pods to be ready (first pod can take longer to initialize cluster)
+		t.Log("Waiting for marklogic-0 pod...")
+		err := utils.WaitForPod(ctx, t, client, namespace, "marklogic-0", 180*time.Second, true)
 		if err != nil {
-			t.Fatalf("Failed to wait for pod creation: %v", err)
+			t.Fatalf("Failed to wait for marklogic-0 creation: %v", err)
+		}
+
+		t.Log("Waiting for marklogic-1 pod...")
+		err = utils.WaitForPod(ctx, t, client, namespace, "marklogic-1", 180*time.Second, true)
+		if err != nil {
+			t.Fatalf("Failed to wait for marklogic-1 creation: %v", err)
 		}
 		return ctx
 	})
