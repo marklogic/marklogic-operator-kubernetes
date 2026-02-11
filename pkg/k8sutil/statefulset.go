@@ -773,10 +773,11 @@ func getReadinessProbe(probe marklogicv1.ContainerProbe) *corev1.Probe {
 		ProbeHandler: corev1.ProbeHandler{
 			Exec: &corev1.ExecAction{
 				Command: []string{
-					"curl",
-					"-s",
-					"-f", // Fail silently (exit code 22) on HTTP errors (404, 503, etc)
-					"http://localhost:7997/",
+					"/bin/bash",
+					"-c",
+					// Only pass if MarkLogic is healthy AND the Wrapper finished successfully
+					// curl -f
+					"test -f /tmp/wrapper_ready && curl -s -f http://localhost:7997/",
 				},
 			},
 		},

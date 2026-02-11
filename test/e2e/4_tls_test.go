@@ -88,11 +88,45 @@ func TestTlsWithSelfSigned(t *testing.T) {
 		client := c.Client()
 
 		podName := "ml-0"
-		err := utils.WaitForPod(ctx, t, client, namespace, podName, 120*time.Second)
+		err := utils.WaitForPod(ctx, t, client, namespace, podName, 120*time.Second, true)
 		if err != nil {
 			t.Fatalf("Failed to wait for pod creation: %v", err)
 		}
-		time.Sleep(10 * time.Second)
+
+		// Wait for TLS to be fully configured on management port 8002
+		t.Log("Waiting for TLS configuration to be applied to port 8002...")
+		time.Sleep(30 * time.Second)
+
+		// Verify HTTPS is actually configured (not HTTP)
+		t.Log("Verifying HTTPS is configured on port 8002...")
+		httpsCheck := "curl -k -s -o /dev/null -w '%{http_code}' https://localhost:8002/admin/v1/timestamp"
+		var httpsReady bool
+		for i := 0; i < 60; i++ {
+			output, err := utils.ExecCmdInPod(podName, namespace, mlContainerName, httpsCheck)
+			if err == nil && (strings.Contains(output, "200") || strings.Contains(output, "401")) {
+				t.Log("HTTPS is configured and responding")
+				httpsReady = true
+				break
+			}
+			// Check if still HTTP (should fail)
+			httpCheck := "curl -s -o /dev/null -w '%{http_code}' http://localhost:8002/admin/v1/timestamp"
+			output, _ = utils.ExecCmdInPod(podName, namespace, mlContainerName, httpCheck)
+			if strings.Contains(output, "200") || strings.Contains(output, "401") {
+				t.Logf("Port 8002 still using HTTP (attempt %d/60), waiting for TLS configuration...", i+1)
+			} else {
+				t.Logf("Port 8002 not ready yet (attempt %d/60)...", i+1)
+			}
+
+			if i == 59 {
+				t.Fatalf("HTTPS not configured on port 8002 after 2 minutes. TLS configuration may have failed.")
+			}
+			time.Sleep(2 * time.Second)
+		}
+
+		if !httpsReady {
+			t.Fatal("HTTPS endpoint never became ready")
+		}
+
 		return ctx
 	})
 
@@ -230,7 +264,7 @@ func TestTlsWithNamedCert(t *testing.T) {
 		client := c.Client()
 
 		podName := "marklogic-1"
-		err := utils.WaitForPod(ctx, t, client, namespace, podName, 150*time.Second)
+		err := utils.WaitForPod(ctx, t, client, namespace, podName, 150*time.Second, true)
 		if err != nil {
 			t.Fatalf("Failed to wait for pod creation: %v", err)
 		}
@@ -438,13 +472,13 @@ func TestTlsWithMultiNode(t *testing.T) {
 
 		// Wait for both pods to be ready
 		t.Log("Waiting for dnode-0 pod...")
-		err := utils.WaitForPod(ctx, t, client, namespace, "dnode-0", 180*time.Second)
+		err := utils.WaitForPod(ctx, t, client, namespace, "dnode-0", 180*time.Second, true)
 		if err != nil {
 			t.Fatalf("Failed to wait for dnode-0 creation: %v", err)
 		}
 
 		t.Log("Waiting for enode-0 pod...")
-		err = utils.WaitForPod(ctx, t, client, namespace, "enode-0", 180*time.Second)
+		err = utils.WaitForPod(ctx, t, client, namespace, "enode-0", 180*time.Second, true)
 		if err != nil {
 			t.Fatalf("Failed to wait for enode-0 creation: %v", err)
 		}
