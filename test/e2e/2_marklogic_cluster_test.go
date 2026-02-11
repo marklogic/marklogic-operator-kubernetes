@@ -159,9 +159,7 @@ func TestMarklogicCluster(t *testing.T) {
 		t.Log("Waiting for Loki pods to be ready...")
 		time.Sleep(10 * time.Second) // Give Loki time to start creating pods
 		lokiPodList := &corev1.PodList{}
-		if err := client.Resources().List(ctx, lokiPodList, func(lo *metav1.ListOptions) {
-			lo.FieldSelector = "metadata.namespace=loki"
-		}); err != nil {
+		if err := client.Resources("loki").List(ctx, lokiPodList); err != nil {
 			t.Fatal(err)
 		}
 
@@ -182,9 +180,7 @@ func TestMarklogicCluster(t *testing.T) {
 		// Wait for Grafana pod to be ready
 		time.Sleep(5 * time.Second) // Give some time for Grafana to start
 		podList := &corev1.PodList{}
-		if err := client.Resources().List(ctx, podList, func(lo *metav1.ListOptions) {
-			lo.FieldSelector = "metadata.namespace=" + "grafana"
-		}); err != nil {
+		if err := client.Resources("grafana").List(ctx, podList); err != nil {
 			t.Fatal(err)
 		}
 		if len(podList.Items) == 0 {
@@ -291,9 +287,7 @@ func TestMarklogicCluster(t *testing.T) {
 	feature.Assess("Grafana Dashboard created", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 		client := c.Client()
 		podList := &corev1.PodList{}
-		if err := client.Resources().List(ctx, podList, func(lo *metav1.ListOptions) {
-			lo.FieldSelector = "metadata.namespace=" + "grafana"
-		}); err != nil {
+		if err := client.Resources("grafana").List(ctx, podList); err != nil {
 			t.Fatal(err)
 		}
 		time.Sleep(5 * time.Second) // Wait for Grafana to be fully ready

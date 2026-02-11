@@ -246,7 +246,7 @@ func WaitForPod(ctx context.Context, t *testing.T, client klient.Client, namespa
 				if waitForReady {
 					// Check if pod is actually Ready
 					for _, cond := range pod.Status.Conditions {
-						if cond.Type == "Ready" && cond.Status == "True" {
+						if cond.Type == corev1.PodReady && cond.Status == corev1.ConditionTrue {
 							t.Logf("Pod %s is Ready", pod.Name)
 							return nil
 						}
