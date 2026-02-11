@@ -452,7 +452,7 @@ func TestTlsWithMultiNode(t *testing.T) {
 		); err != nil {
 			t.Fatal(err)
 		}
-		err := utils.GenerateCACertificate("test/test_data/ca_cert")
+		err = utils.GenerateCACertificate("test/test_data/ca_cert")
 		if err != nil {
 			t.Fatalf("Failed to generate CA certificate: %s", err)
 		}
