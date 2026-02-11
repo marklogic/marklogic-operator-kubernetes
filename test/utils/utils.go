@@ -208,7 +208,18 @@ func GetProjectDir() (string, error) {
 	return wd, nil
 }
 
-func WaitForPod(ctx context.Context, t *testing.T, client klient.Client, namespace, podName string, timeout time.Duration) error {
+// WaitForPod waits for a pod to be in Running phase, or optionally for Running + Ready condition.
+// By default, it only checks for Running phase. Pass true for checkReady to also wait for Ready condition.
+// Usage:
+//   - WaitForPod(ctx, t, client, ns, name, timeout) // waits for Running only
+//   - WaitForPod(ctx, t, client, ns, name, timeout, true) // waits for Running + Ready
+func WaitForPod(ctx context.Context, t *testing.T, client klient.Client, namespace, podName string, timeout time.Duration, checkReady ...bool) error {
+	// Default to checking only Running phase
+	waitForReady := false
+	if len(checkReady) > 0 {
+		waitForReady = checkReady[0]
+	}
+
 	start := time.Now()
 	pod := &corev1.Pod{}
 	p := utils.RunCommand(`kubectl get ns`)
@@ -216,8 +227,13 @@ func WaitForPod(ctx context.Context, t *testing.T, client klient.Client, namespa
 	p = utils.RunCommand("kubectl get pods --namespace " + "marklogic-operator-system" + " -o wide")
 	t.Logf("Kubernetes Operator Running Status: %s", p.Result())
 
+	statusMsg := "Running"
+	if waitForReady {
+		statusMsg = "Ready"
+	}
+
 	for {
-		t.Logf("Waiting for pod %s in namespace %s ", podName, namespace)
+		t.Logf("Waiting for pod %s in namespace %s to be %s", podName, namespace, statusMsg)
 		p := utils.RunCommand("kubectl get pods --namespace " + namespace)
 		t.Logf("Kubernetes Pods: %s", p.Result())
 		err := client.Resources(namespace).Get(ctx, podName, namespace, pod)
@@ -226,12 +242,25 @@ func WaitForPod(ctx context.Context, t *testing.T, client klient.Client, namespa
 			t.Logf("Pod %s is in phase %s", pod.Name, pod.Status.Phase)
 
 			// Check for Running state
-			if pod.Status.Phase == "Running" {
-				return nil
+			if pod.Status.Phase == corev1.PodRunning {
+				if waitForReady {
+					// Check if pod is actually Ready
+					for _, cond := range pod.Status.Conditions {
+						if cond.Type == "Ready" && cond.Status == "True" {
+							t.Logf("Pod %s is Ready", pod.Name)
+							return nil
+						}
+					}
+					t.Logf("Pod %s is Running but not yet Ready", pod.Name)
+				} else {
+					// Just checking for Running is sufficient
+					t.Logf("Pod %s is Running", pod.Name)
+					return nil
+				}
 			}
 
 			// Diagnostic: Check for failed state
-			if pod.Status.Phase == "Failed" {
+			if pod.Status.Phase == corev1.PodFailed {
 				return fmt.Errorf("pod %s entered Failed state: %s", podName, pod.Status.Message)
 			}
 
@@ -262,6 +291,34 @@ func WaitForPod(ctx context.Context, t *testing.T, client klient.Client, namespa
 						return fmt.Errorf("image pull failed for container %s: %s",
 							containerStatus.Name, containerStatus.State.Waiting.Message)
 					}
+					// Fail fast on CrashLoopBackOff after multiple restarts
+					if containerStatus.State.Waiting.Reason == "CrashLoopBackOff" && containerStatus.RestartCount >= 3 {
+						// Get logs from the failing container
+						logsCmd := fmt.Sprintf("kubectl logs %s -n %s -c %s --tail=100", podName, namespace, containerStatus.Name)
+						logResult := utils.RunCommand(logsCmd)
+						t.Logf("Container %s logs:\n%s", containerStatus.Name, logResult.Result())
+
+						// Also try to get previous logs if available
+						prevLogsCmd := fmt.Sprintf("kubectl logs %s -n %s -c %s --previous --tail=100", podName, namespace, containerStatus.Name)
+						prevLogResult := utils.RunCommand(prevLogsCmd)
+						if prevLogResult.Result() != "" {
+							t.Logf("Container %s previous logs:\n%s", containerStatus.Name, prevLogResult.Result())
+						}
+
+						return fmt.Errorf("container %s is in CrashLoopBackOff with %d restarts: %s",
+							containerStatus.Name, containerStatus.RestartCount, containerStatus.State.Waiting.Message)
+					}
+				}
+				// Check for terminated state with non-zero exit code
+				if containerStatus.State.Terminated != nil && containerStatus.State.Terminated.ExitCode != 0 {
+					t.Errorf("Container %s terminated with exit code %d: %s",
+						containerStatus.Name, containerStatus.State.Terminated.ExitCode, containerStatus.State.Terminated.Reason)
+					// Get logs from terminated container
+					logsCmd := fmt.Sprintf("kubectl logs %s -n %s -c %s --tail=100", podName, namespace, containerStatus.Name)
+					logResult := utils.RunCommand(logsCmd)
+					t.Logf("Terminated container logs:\n%s", logResult.Result())
+					return fmt.Errorf("container %s terminated with exit code %d: %s",
+						containerStatus.Name, containerStatus.State.Terminated.ExitCode, containerStatus.State.Terminated.Reason)
 				}
 			}
 
@@ -283,8 +340,8 @@ func WaitForPod(ctx context.Context, t *testing.T, client klient.Client, namespa
 			describeResult := utils.RunCommand(describeCmd)
 			t.Logf("Pod description:\n%s", describeResult.Result())
 
-			return fmt.Errorf("timed out after %v waiting for pod %s to be Running (current phase: %s)",
-				timeout, podName, pod.Status.Phase)
+			return fmt.Errorf("timed out after %v waiting for pod %s to be %s (current phase: %s)",
+				timeout, podName, statusMsg, pod.Status.Phase)
 		}
 
 		time.Sleep(5 * time.Second)
@@ -319,7 +376,7 @@ func ExecCmdInPod(podName, namespace, containerName, command string) (string, er
 
 	err := cmd.Run()
 	if err != nil {
-		return "", fmt.Errorf("failed to execute command: %v, stderr: %v", err, stderr.String())
+		return "", fmt.Errorf("failed to execute command: %v, stderr: %s", err, stderr.String())
 	}
 	return out.String(), nil
 }
@@ -335,7 +392,7 @@ func GetPodLogs(namespace, podName, containerName string) (string, error) {
 
 	err := cmd.Run()
 	if err != nil {
-		return "", fmt.Errorf("failed to get pod logs: %v, stderr: %v", err, stderr.String())
+		return "", fmt.Errorf("failed to get pod logs: %v, stderr: %s", err, stderr.String())
 	}
 	return out.String(), nil
 }

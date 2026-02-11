@@ -12,6 +12,7 @@ import (
 
 	marklogicv1 "github.com/marklogic/marklogic-operator-kubernetes/api/v1"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/marklogic/marklogic-operator-kubernetes/test/utils"
@@ -398,10 +399,18 @@ func TestTlsWithMultiNode(t *testing.T) {
 		for i := 0; i < 60; i++ {
 			err := client.Resources().Get(ctx, namespace, "", ns)
 			if err != nil {
-				// Namespace doesn't exist, we can create it
-				break
+				if apierrors.IsNotFound(err) {
+					// Namespace doesn't exist, we can create it
+					break
+				}
+				// Other error - fail the test
+				t.Fatalf("Error checking namespace status: %v", err)
 			}
 			if ns.Status.Phase == corev1.NamespaceTerminating {
+				if i == 59 {
+					// Timeout waiting for namespace to finish terminating
+					t.Fatalf("Timeout waiting for namespace %s to finish terminating after 120 seconds", namespace)
+				}
 				t.Logf("Namespace %s is terminating, waiting... (attempt %d/60)", namespace, i+1)
 				time.Sleep(2 * time.Second)
 				continue
@@ -411,16 +420,14 @@ func TestTlsWithMultiNode(t *testing.T) {
 		}
 
 		// Create namespace if it doesn't exist
-		client.Resources(namespace).Create(ctx, &corev1.Namespace{
+		err := client.Resources(namespace).Create(ctx, &corev1.Namespace{
 			ObjectMeta: metav1.ObjectMeta{
 				Name: namespace,
 			},
 		})
-
-		// Give namespace time to become active
-		time.Sleep(5 * time.Second)
-
-		marklogicv1.AddToScheme(client.Resources(namespace).GetScheme())
+		if err != nil && !apierrors.IsAlreadyExists(err) {
+			t.Fatalf("Failed to create namespace %s: %v", namespace, err)
+		}
 
 		// Delete existing MarklogicCluster if it exists (cleanup from previous failed runs)
 		existingCR := &marklogicv1.MarklogicCluster{}

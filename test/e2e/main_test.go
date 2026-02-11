@@ -12,6 +12,7 @@ import (
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/e2e-framework/klient/conf"
 	"sigs.k8s.io/e2e-framework/klient/wait"
@@ -76,9 +77,13 @@ func TestMain(m *testing.M) {
 				for i := 0; i < 60; i++ {
 					err := client.Resources().Get(ctx, namespace, "", ns)
 					if err != nil {
-						// Namespace is gone
-						log.Printf("Namespace deleted successfully")
-						break
+						if apierrors.IsNotFound(err) {
+							// Namespace is gone
+							log.Printf("Namespace deleted successfully")
+							break
+						}
+						// Other error - propagate it
+						return ctx, fmt.Errorf("error checking namespace deletion status: %w", err)
 					}
 					if i == 59 {
 						return ctx, fmt.Errorf("timeout waiting for namespace %s to be deleted", namespace)
