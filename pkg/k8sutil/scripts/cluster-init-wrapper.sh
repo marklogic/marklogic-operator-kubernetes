@@ -68,7 +68,7 @@ echo "[Wrapper] MarkLogic is running with PID: $REAL_ML_PID"
 
 # --- Phase 3: Local Readiness Gate ---
 echo "[Wrapper] Waiting for local socket (localhost:8001)..."
-until curl -s localhost:8001 > /dev/null; do 
+until curl -s -m 2 localhost:8001 > /dev/null; do 
     if ! kill -0 "$REAL_ML_PID" 2>/dev/null; then
          echo "[Wrapper] ERROR: MarkLogic process died during local startup."
          exit 1
@@ -78,7 +78,8 @@ done
 echo "[Wrapper] Localhost is UP."
 
 # --- Phase 4: Istio Ambient Network Gatekeeper ---
-if [[ -n "$MARKLOGIC_BOOTSTRAP_HOST" ]] && [[ "$HOSTNAME" != *"$MARKLOGIC_BOOTSTRAP_HOST"* ]]; then
+# Skip mesh connectivity gate on the bootstrap pod
+if [[ "$MARKLOGIC_CLUSTER_TYPE" == "non-bootstrap" ]]; then
     echo "[Wrapper] Checking mesh connectivity to Bootstrap Host: $MARKLOGIC_BOOTSTRAP_HOST..."
     MAX_RETRIES=60
     count=0

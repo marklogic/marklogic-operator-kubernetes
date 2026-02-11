@@ -90,8 +90,12 @@ func TestMain(m *testing.M) {
 					}
 					time.Sleep(1 * time.Second)
 				}
-			} else {
+			} else if apierrors.IsNotFound(err) {
+				// Namespace does not exist, nothing to clean up
 				log.Printf("Namespace does not exist, will create fresh")
+			} else {
+				// Other error - propagate it
+				return ctx, fmt.Errorf("error checking if namespace exists: %w", err)
 			}
 
 			return ctx, nil
