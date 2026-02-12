@@ -214,7 +214,7 @@ pipeline {
 
     parameters {
         string(name: 'E2E_MARKLOGIC_IMAGE_VERSION', defaultValue: 'ml-docker-db-dev-tierpoint.bed-artifactory.bedford.progress.com/marklogic/marklogic-server-ubi-rootless:latest-12', description: 'Docker image to use for tests.', trim: true)
-        string(name: 'VERSION', defaultValue: '1.1.0', description: 'Version to tag the image with.', trim: true)
+        string(name: 'VERSION', defaultValue: '1.2.0', description: 'Version to tag the image with.', trim: true)
         booleanParam(name: 'PUBLISH_IMAGE', defaultValue: false, description: 'Publish image to internal registry')
         string(name: 'emailList', defaultValue: emailList, description: 'List of email for build notification', trim: true)
     }
