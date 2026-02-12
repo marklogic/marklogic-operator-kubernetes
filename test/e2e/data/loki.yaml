@@ -18,8 +18,6 @@ loki:
       schema: v13
 singleBinary:
   replicas: 1
-  persistence:
-    enabled: false
 read:
   replicas: 0
 backend:
