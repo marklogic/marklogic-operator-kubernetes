@@ -439,7 +439,7 @@ function configure_group {
             response_code=$( \
                 curl -s --anyauth \
                 --user ${MARKLOGIC_ADMIN_USERNAME}:${MARKLOGIC_ADMIN_PASSWORD} \
-                -w '%{http_code}' --retry 5 \
+                -w '%{http_code}' --retry 5  \
                 -X PUT \
                 -H "Content-type: application/json" \
                 $LOCAL_HTTPS_OPTION -d "${group_cfg}" \
@@ -454,7 +454,8 @@ function configure_group {
                 # Note: THIS SHOULD NOT HAPPEN WITH THE CURRENT GROUP CONFIG
                 info "group \"${current_group}\" updated and a restart of all hosts in the group was triggered"
             else
-                info "unexpected response when updating group \"${current_group}\": ${response_code}"
+                error "unexpected response when updating group \"${current_group}\": ${response_code}"
+                return 1
             fi
         else
             info "failed to get current group, response code: ${response_code}"

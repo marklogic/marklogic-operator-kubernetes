@@ -368,7 +368,11 @@ func generateMarkLogicGroupParams(cr *marklogicv1.MarklogicCluster, index int, c
 	if cr.Spec.MarkLogicGroups[index].AdditionalVolumeMounts != nil {
 		markLogicGroupParameters.AdditionalVolumeMounts = cr.Spec.MarkLogicGroups[index].AdditionalVolumeMounts
 	}
-	markLogicGroupParameters.LivenessProbe = cr.Spec.MarkLogicGroups[index].LivenessProbe
-	markLogicGroupParameters.ReadinessProbe = cr.Spec.MarkLogicGroups[index].ReadinessProbe
+	if cr.Spec.MarkLogicGroups[index].LivenessProbe.Enabled {
+		markLogicGroupParameters.LivenessProbe = cr.Spec.MarkLogicGroups[index].LivenessProbe
+	}
+	if cr.Spec.MarkLogicGroups[index].ReadinessProbe.Enabled {
+		markLogicGroupParameters.ReadinessProbe = cr.Spec.MarkLogicGroups[index].ReadinessProbe
+	}
 	return markLogicGroupParameters
 }
