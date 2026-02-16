@@ -325,6 +325,13 @@ func WaitForPod(ctx context.Context, t *testing.T, client klient.Client, namespa
 			// Diagnostic: Check pod conditions
 			for _, cond := range pod.Status.Conditions {
 				if cond.Status == "False" && cond.Type == "PodScheduled" {
+					// Unschedulable due to unbound PVCs is transient; the PVC provisioner
+					// may still be creating the volume. Log and continue waiting instead of
+					// failing immediately.
+					if cond.Reason == "Unschedulable" && strings.Contains(cond.Message, "PersistentVolumeClaim") {
+						t.Logf("Pod %s is Unschedulable due to unbound PVCs, waiting for PVC provisioning: %s", podName, cond.Message)
+						break
+					}
 					return fmt.Errorf("pod scheduling failed: %s - %s", cond.Reason, cond.Message)
 				}
 			}

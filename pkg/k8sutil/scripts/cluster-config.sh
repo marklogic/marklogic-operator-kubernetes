@@ -47,7 +47,6 @@ log () {
     local TIMESTAMP=$(date +"%Y-%m-%d %T.%3N")
     message="${TIMESTAMP} [cluster-config] $@"
     echo $message  > /proc/1/fd/1
-    echo $message >> /tmp/script.log
 }
 
 # Function to retry a command based on the return code

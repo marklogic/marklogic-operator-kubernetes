@@ -64,7 +64,8 @@ func TestTlsWithSelfSigned(t *testing.T) {
 		client := c.Client()
 		client.Resources(namespace).Create(ctx, &corev1.Namespace{
 			ObjectMeta: metav1.ObjectMeta{
-				Name: namespace,
+				Name:   namespace,
+				Labels: namespaceLabels(),
 			},
 		})
 		marklogicv1.AddToScheme(client.Resources(namespace).GetScheme())
@@ -211,7 +212,8 @@ func TestTlsWithNamedCert(t *testing.T) {
 		client := c.Client()
 		client.Resources(namespace).Create(ctx, &corev1.Namespace{
 			ObjectMeta: metav1.ObjectMeta{
-				Name: namespace,
+				Name:   namespace,
+				Labels: namespaceLabels(),
 			},
 		})
 		marklogicv1.AddToScheme(client.Resources(namespace).GetScheme())
@@ -422,7 +424,8 @@ func TestTlsWithMultiNode(t *testing.T) {
 		// Create namespace if it doesn't exist
 		err := client.Resources(namespace).Create(ctx, &corev1.Namespace{
 			ObjectMeta: metav1.ObjectMeta{
-				Name: namespace,
+				Name:   namespace,
+				Labels: namespaceLabels(),
 			},
 		})
 		if err != nil && !apierrors.IsAlreadyExists(err) {

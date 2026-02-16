@@ -14,6 +14,7 @@ import (
 	marklogicv1 "github.com/marklogic/marklogic-operator-kubernetes/api/v1"
 	coreV1 "k8s.io/api/core/v1"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
@@ -30,7 +31,7 @@ var verifyHugePages = flag.Bool("verifyHugePages", false, "Test hugePages config
 
 const (
 	groupName       = "node"
-	mlNamespace     = "default"
+	mlNamespace     = "ml-cluster-test"
 	mlContainerName = "marklogic-server"
 )
 
@@ -125,6 +126,25 @@ type DataSource struct {
 func TestMarklogicCluster(t *testing.T) {
 	feature := features.New("Marklogic Cluster Test").WithLabel("type", "cluster-test")
 
+	// Create dedicated test namespace
+	feature.Setup(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
+		t.Log("Creating test namespace: " + mlNamespace)
+		client := c.Client()
+		mlNs := &corev1.Namespace{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:   mlNamespace,
+				Labels: namespaceLabels(),
+			},
+		}
+		if err := client.Resources().Create(ctx, mlNs); err != nil {
+			if !apierrors.IsAlreadyExists(err) {
+				t.Fatalf("Failed to create namespace %s: %v", mlNamespace, err)
+			}
+			t.Logf("Namespace %s already exists", mlNamespace)
+		}
+		return ctx
+	})
+
 	// Setup Loki and Grafana to verify Logging for Operator
 	feature.Setup(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 		t.Log("Setting up Loki and Grafana")
@@ -146,7 +166,10 @@ func TestMarklogicCluster(t *testing.T) {
 
 		// Create loki namespace
 		if err := client.Resources().Create(ctx, lokiNs); err != nil {
-			t.Logf("Loki namespace may already exist: %v", err)
+			if !apierrors.IsAlreadyExists(err) {
+				t.Fatalf("Failed to create loki namespace: %v", err)
+			}
+			t.Logf("Loki namespace already exists")
 		}
 		time.Sleep(2 * time.Second)
 
@@ -155,18 +178,74 @@ func TestMarklogicCluster(t *testing.T) {
 			t.Fatalf("Failed to install loki helm chart: %v", err)
 		}
 
+		// Wait for Loki PVCs to be bound first
+		t.Log("Waiting for Loki PVCs to be bound...")
+		time.Sleep(5 * time.Second)
+		pvcWaitCtx, pvcWaitCancel := context.WithTimeout(ctx, 120*time.Second)
+		defer pvcWaitCancel()
+		for {
+			select {
+			case <-pvcWaitCtx.Done():
+				err = pvcWaitCtx.Err()
+				t.Logf("Warning: PVC binding timeout, continuing anyway: %v", err)
+				goto pvcWaitDone
+			default:
+			}
+			pvcList := &corev1.PersistentVolumeClaimList{}
+			if listErr := client.Resources("loki").List(pvcWaitCtx, pvcList); listErr != nil {
+				t.Logf("Warning: failed to list Loki PVCs, retrying: %v", listErr)
+				time.Sleep(5 * time.Second)
+				continue
+			}
+			if len(pvcList.Items) == 0 {
+				// PVCs may not be created yet; wait and retry.
+				time.Sleep(5 * time.Second)
+				continue
+			}
+			allBound := true
+			for _, pvc := range pvcList.Items {
+				if pvc.Status.Phase != corev1.ClaimBound {
+					allBound = false
+					break
+				}
+			}
+			if allBound {
+				t.Log("Loki PVCs are bound")
+				break
+			}
+			time.Sleep(5 * time.Second)
+		}
+	pvcWaitDone:
+
 		// Wait for Loki pods to be ready
 		t.Log("Waiting for Loki pods to be ready...")
-		time.Sleep(10 * time.Second) // Give Loki time to start creating pods
+		lokiPodWaitCtx, lokiPodCancel := context.WithTimeout(ctx, 5*time.Minute)
+		defer lokiPodCancel()
 		lokiPodList := &corev1.PodList{}
-		if err := client.Resources("loki").List(ctx, lokiPodList); err != nil {
-			t.Fatal(err)
+		for {
+			select {
+			case <-lokiPodWaitCtx.Done():
+				t.Fatalf("Timed out waiting for Loki pods to be created: %v", lokiPodWaitCtx.Err())
+			default:
+			}
+			if err := client.Resources("loki").List(lokiPodWaitCtx, lokiPodList); err != nil {
+				t.Logf("Warning: failed to list Loki pods, retrying: %v", err)
+				time.Sleep(5 * time.Second)
+				continue
+			}
+			if len(lokiPodList.Items) == 0 {
+				t.Log("Loki pods not created yet, waiting...")
+				time.Sleep(5 * time.Second)
+				continue
+			}
+			// At least one Loki pod exists; proceed to wait for them to be ready.
+			break
 		}
 
 		// Wait for all Loki pods to be ready
 		for _, pod := range lokiPodList.Items {
 			t.Logf("Waiting for Loki pod %s to be ready", pod.Name)
-			err = utils.WaitForPod(ctx, t, client, "loki", pod.Name, 180*time.Second, true)
+			err = utils.WaitForPod(ctx, t, client, "loki", pod.Name, 300*time.Second, true)
 			if err != nil {
 				t.Fatalf("Failed to wait for Loki pod %s creation: %v", pod.Name, err)
 			}
@@ -441,6 +520,9 @@ func TestMarklogicCluster(t *testing.T) {
 		}
 		if err := client.Resources().Delete(ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "loki"}}); err != nil {
 			t.Fatalf("Failed to delete namespace: %s", err)
+		}
+		if err := client.Resources().Delete(ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: mlNamespace}}); err != nil {
+			t.Fatalf("Failed to delete test namespace: %s", err)
 		}
 		return ctx
 	})

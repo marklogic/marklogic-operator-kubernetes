@@ -604,9 +604,6 @@ func getEnvironmentVariables(containerParams containerParameters) []corev1.EnvVa
 		Name:  "XDQP_SSL_ENABLED",
 		Value: strconv.FormatBool(enableXdqpSsl),
 	}, corev1.EnvVar{
-		Name:  "MARKLOGIC_CLUSTER_TYPE",
-		Value: "bootstrap",
-	}, corev1.EnvVar{
 		Name:  "INSTALL_CONVERTERS",
 		Value: strconv.FormatBool(containerParams.EnableConverters),
 	}, corev1.EnvVar{

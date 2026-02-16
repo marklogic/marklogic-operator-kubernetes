@@ -14,7 +14,9 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/e2e-framework/klient/conf"
+	"sigs.k8s.io/e2e-framework/klient/k8s"
 	"sigs.k8s.io/e2e-framework/klient/wait"
 	"sigs.k8s.io/e2e-framework/klient/wait/conditions"
 	"sigs.k8s.io/e2e-framework/pkg/env"
@@ -36,6 +38,17 @@ const (
 	namespace = "marklogic-operator-system"
 )
 
+// namespaceLabels returns the labels to apply to test namespaces.
+// When Istio ambient mode is enabled, includes the ambient dataplane label.
+func namespaceLabels() map[string]string {
+	if isIstioAmbientEnabled() {
+		return map[string]string{
+			"istio.io/dataplane-mode": "ambient",
+		}
+	}
+	return nil
+}
+
 func TestMain(m *testing.M) {
 	testEnv = env.New()
 	path := conf.ResolveKubeConfigFile()
@@ -54,6 +67,7 @@ func TestMain(m *testing.M) {
 	log.Printf("Controller-gen version: %s", ctrlgenVer)
 	log.Printf("MarkLogic image: %s", marklogicImage)
 	log.Printf("Kubernetes version: %s", kubernetesVer)
+	log.Printf("Istio ambient mode: %v", isIstioAmbientEnabled())
 
 	// Use Environment.Setup to configure pre-test setup
 	testEnv.Setup(
@@ -101,6 +115,30 @@ func TestMain(m *testing.M) {
 			return ctx, nil
 		},
 		envfuncs.CreateNamespace(namespace),
+
+		// When Istio ambient mode is enabled, label the operator namespace
+		func(ctx context.Context, cfg *envconf.Config) (context.Context, error) {
+			if !isIstioAmbientEnabled() {
+				return ctx, nil
+			}
+			log.Println("Istio ambient mode enabled: labeling operator namespace with istio.io/dataplane-mode=ambient")
+			client := cfg.Client()
+
+			// Patch the operator namespace to add the ambient label
+			operatorNs := &corev1.Namespace{}
+			if err := client.Resources().Get(ctx, namespace, "", operatorNs); err != nil {
+				return ctx, fmt.Errorf("failed to get operator namespace: %w", err)
+			}
+
+			// Use Patch to avoid resourceVersion conflicts with other controllers
+			patchData := []byte(`{"metadata":{"labels":{"istio.io/dataplane-mode":"ambient"}}}`)
+			if err := client.Resources().Patch(ctx, operatorNs, k8s.Patch{PatchType: types.StrategicMergePatchType, Data: patchData}); err != nil {
+				return ctx, fmt.Errorf("failed to label operator namespace: %w", err)
+			}
+			log.Printf("Labeled namespace %s with istio.io/dataplane-mode=ambient", namespace)
+
+			return ctx, nil
+		},
 
 		// install tool dependencies
 		func(ctx context.Context, cfg *envconf.Config) (context.Context, error) {
@@ -170,6 +208,33 @@ func TestMain(m *testing.M) {
 
 	// Use the Environment.Finish method to define clean up steps
 	testEnv.Finish(
+		// Clean up Istio ambient label from operator namespace
+		func(ctx context.Context, cfg *envconf.Config) (context.Context, error) {
+			if !isIstioAmbientEnabled() {
+				return ctx, nil
+			}
+
+			log.Println("Removing Istio ambient label from operator namespace...")
+			client := cfg.Client()
+
+			// Remove label from operator namespace using Patch to avoid conflicts
+			operatorNs := &corev1.Namespace{}
+			if err := client.Resources().Get(ctx, namespace, "", operatorNs); err == nil {
+				if operatorNs.Labels != nil && operatorNs.Labels["istio.io/dataplane-mode"] != "" {
+					// Use Patch to remove label, avoiding resourceVersion conflicts
+					patchData := []byte(`{"metadata":{"labels":{"istio.io/dataplane-mode":null}}}`)
+					if err := client.Resources().Patch(ctx, operatorNs, k8s.Patch{PatchType: types.StrategicMergePatchType, Data: patchData}); err != nil {
+						log.Printf("Warning: failed to remove label from operator namespace: %v", err)
+					} else {
+						log.Printf("Removed Istio ambient label from %s namespace", namespace)
+					}
+				}
+			} else if !apierrors.IsNotFound(err) {
+				log.Printf("Warning: failed to get operator namespace: %v", err)
+			}
+
+			return ctx, nil
+		},
 		func(ctx context.Context, cfg *envconf.Config) (context.Context, error) {
 			log.Println("Finishing tests, cleaning cluster ...")
 			utils.RunCommand(`bash -c "kustomize build config/default | kubectl delete -f -"`)

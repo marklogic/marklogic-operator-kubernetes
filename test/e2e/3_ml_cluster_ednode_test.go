@@ -81,7 +81,8 @@ func TestMlClusterWithEdnode(t *testing.T) {
 		client := c.Client()
 		namespace := &corev1.Namespace{
 			ObjectMeta: metav1.ObjectMeta{
-				Name: mlClusterNs,
+				Name:   mlClusterNs,
+				Labels: namespaceLabels(),
 			},
 		}
 		if err := client.Resources().Create(ctx, namespace); err != nil {

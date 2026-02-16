@@ -80,7 +80,8 @@ func TestHAPorxyPathBaseEnabled(t *testing.T) {
 		client := c.Client()
 		client.Resources(namespace).Create(ctx, &corev1.Namespace{
 			ObjectMeta: metav1.ObjectMeta{
-				Name: namespace,
+				Name:   namespace,
+				Labels: namespaceLabels(),
 			},
 		})
 		marklogicv1.AddToScheme(client.Resources(namespace).GetScheme())
@@ -211,7 +212,8 @@ func TestHAPorxWithNoPathBasedDisabled(t *testing.T) {
 		client := c.Client()
 		client.Resources(namespace).Create(ctx, &corev1.Namespace{
 			ObjectMeta: metav1.ObjectMeta{
-				Name: namespace,
+				Name:   namespace,
+				Labels: namespaceLabels(),
 			},
 		})
 		marklogicv1.AddToScheme(client.Resources(namespace).GetScheme())
