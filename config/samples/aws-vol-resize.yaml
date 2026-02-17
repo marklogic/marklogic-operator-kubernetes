@@ -3,16 +3,14 @@ apiVersion: marklogic.progress.com/v1
 kind: MarklogicCluster
 metadata:
   name: resize-test
-  namespace: marklogic-vol
+  namespace: ml-vol
 spec:
   image: "progressofficial/marklogic-db:12.0.0-ubi9-rootless-2.2.2"
   persistence:
     enabled: true
-    size: 6Gi
-    ##### to be implemented
-    # resize: 
-    #   flow: parallel, sequential
+    size: 1Gi
     storageClassName: ml-expandable-gp3
+    resizeStrategy: Sequential
   markLogicGroups:
     - replicas: 2
       name: dnode

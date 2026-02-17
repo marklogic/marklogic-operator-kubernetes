@@ -4053,6 +4053,14 @@ spec:
                     type: object
                   enabled:
                     type: boolean
+                  resizeStrategy:
+                    default: Parallel
+                    description: 'ResizeStrategy defines how PVC resizing should be
+                      performed: Parallel (default) or Sequential'
+                    enum:
+                    - Parallel
+                    - Sequential
+                    type: string
                   size:
                     type: string
                   storageClassName:
@@ -5000,28 +5008,99 @@ spec:
                     description: CompletionTime is when the resize operation completed
                     format: date-time
                     type: string
+                  currentPVCIndex:
+                    description: CurrentPVCIndex tracks which PVC is being processed
+                      in sequential mode
+                    format: int32
+                    type: integer
+                  currentSize:
+                    description: CurrentSize is the current/original size of the volumes
+                    type: string
+                  failedPVCs:
+                    description: FailedPVCs contains details about PVCs that failed
+                      to resize
+                    items:
+                      description: FailedPVCInfo contains details about a PVC that
+                        failed to resize
+                      properties:
+                        message:
+                          description: Message provides detailed error information
+                          type: string
+                        name:
+                          description: Name is the name of the failed PVC
+                          type: string
+                        reason:
+                          description: Reason is the reason code for the failure
+                          type: string
+                      required:
+                      - message
+                      - name
+                      - reason
+                      type: object
+                    type: array
                   fileSystemResizePending:
                     description: FileSystemResizePending indicates if pods need restart
                       for filesystem resize
                     type: boolean
+                  lastPhaseBeforeStall:
+                    description: LastPhaseBeforeStall records the phase before entering
+                      stalled state for recovery
+                    type: string
                   lastResizedPodIndex:
                     description: LastResizedPodIndex tracks which pod was last restarted
                       during filesystem resize
                     format: int32
                     type: integer
+                  markLogicHealthPassed:
+                    description: MarkLogicHealthPassed indicates if MarkLogic health
+                      checks passed
+                    type: boolean
                   message:
                     description: Message provides additional information about the
                       current status
                     type: string
-                  originalSize:
-                    description: OriginalSize is the size before resize
+                  nextRetryTime:
+                    description: NextRetryTime indicates when the next retry will
+                      be attempted (for rate-limited states)
+                    format: date-time
                     type: string
+                  originalSize:
+                    description: OriginalSize is the size before resize (alias for
+                      CurrentSize, kept for compatibility)
+                    type: string
+                  orphanedPods:
+                    description: OrphanedPods tracks pods that may be orphaned during
+                      STS delete/recreate
+                    items:
+                      type: string
+                    type: array
                   phase:
                     description: Phase is the current phase of the volume resize operation
+                    type: string
+                  podPendingStartTime:
+                    description: PodPendingStartTime tracks when a pod first entered
+                      pending state for scheduling issues
+                    format: date-time
                     type: string
                   pvcsResized:
                     description: PVCsResized is the number of PVCs that have been
                       resized
+                    format: int32
+                    type: integer
+                  reason:
+                    description: Reason provides specific reason for stalled or failed
+                      states
+                    type: string
+                  resizeInProgressAnnotation:
+                    description: ResizeInProgressAnnotation indicates the resize operation
+                      identifier for concurrent resize detection
+                    type: string
+                  resizeStrategy:
+                    description: ResizeStrategy used for this resize operation
+                    type: string
+                  retryCount:
+                    description: RetryCount tracks the number of retries for failed
+                      operations
                     format: int32
                     type: integer
                   startTime:
@@ -5031,6 +5110,11 @@ spec:
                   statefulSetBackup:
                     description: StatefulSetBackup stores the StatefulSet spec for
                       recovery
+                    type: string
+                  statefulSetDeletionTimestamp:
+                    description: StatefulSetDeletionTimestamp records when STS was
+                      deleted (for interrupted template update recovery)
+                    format: date-time
                     type: string
                   targetSize:
                     description: TargetSize is the desired size for the volumes

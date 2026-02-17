@@ -8423,6 +8423,14 @@ spec:
                           type: object
                         enabled:
                           type: boolean
+                        resizeStrategy:
+                          default: Parallel
+                          description: 'ResizeStrategy defines how PVC resizing should
+                            be performed: Parallel (default) or Sequential'
+                          enum:
+                          - Parallel
+                          - Sequential
+                          type: string
                         size:
                           type: string
                         storageClassName:
@@ -9260,6 +9268,14 @@ spec:
                     type: object
                   enabled:
                     type: boolean
+                  resizeStrategy:
+                    default: Parallel
+                    description: 'ResizeStrategy defines how PVC resizing should be
+                      performed: Parallel (default) or Sequential'
+                    enum:
+                    - Parallel
+                    - Sequential
+                    type: string
                   size:
                     type: string
                   storageClassName:

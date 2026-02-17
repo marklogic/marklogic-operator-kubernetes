@@ -107,7 +107,10 @@ func (oc *OperatorContext) ReconcileStatefulset() (reconcile.Result, error) {
 
 	if !patchDiff.IsEmpty() {
 		logger.Info("MarkLogic statefulSet spec is different from the MarkLogicGroup spec, updating the statefulSet")
+		// Preserve volumeClaimTemplates since Kubernetes forbids updates to this field
+		preservedVCTs := currentSts.Spec.VolumeClaimTemplates
 		currentSts.Spec = statefulSetDef.Spec
+		currentSts.Spec.VolumeClaimTemplates = preservedVCTs
 		currentSts.ObjectMeta.Annotations = statefulSetDef.ObjectMeta.Annotations
 		currentSts.ObjectMeta.Labels = statefulSetDef.ObjectMeta.Labels
 		err := oc.Client.Update(oc.Ctx, currentSts)

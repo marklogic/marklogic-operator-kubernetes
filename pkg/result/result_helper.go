@@ -68,6 +68,11 @@ func RequeueSoon(secs int) ReconcileResult {
 	return callBackSoon{secs: secs}
 }
 
+// RequeueAfter schedules a requeue after a specific duration
+func RequeueAfter(duration time.Duration) ReconcileResult {
+	return callBackSoon{secs: int(duration.Seconds())}
+}
+
 func Error(e error) ReconcileResult {
 	return errorOut{err: e}
 }

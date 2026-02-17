@@ -112,26 +112,94 @@ const (
 	VolumeResizePhaseResizingPVCs VolumeResizePhase = "ResizingPVCs"
 	// VolumeResizePhaseWaitingForPVCResize indicates waiting for PVC resize to complete
 	VolumeResizePhaseWaitingForPVCResize VolumeResizePhase = "WaitingForPVCResize"
+	// VolumeResizePhaseVerifyingHealth indicates pod and MarkLogic health is being verified
+	VolumeResizePhaseVerifyingHealth VolumeResizePhase = "VerifyingHealth"
 	// VolumeResizePhaseBackingUpStatefulSet indicates StatefulSet spec is being backed up
 	VolumeResizePhaseBackingUpStatefulSet VolumeResizePhase = "BackingUpStatefulSet"
 	// VolumeResizePhaseDeletingStatefulSet indicates StatefulSet is being deleted with orphan policy
 	VolumeResizePhaseDeletingStatefulSet VolumeResizePhase = "DeletingStatefulSet"
 	// VolumeResizePhaseRecreatingStatefulSet indicates StatefulSet is being recreated
 	VolumeResizePhaseRecreatingStatefulSet VolumeResizePhase = "RecreatingStatefulSet"
+	// VolumeResizePhaseVerifyingPodsRunning indicates pods are being verified as running after StatefulSet recreation
+	VolumeResizePhaseVerifyingPodsRunning VolumeResizePhase = "VerifyingPodsRunning"
 	// VolumeResizePhaseRestartingPods indicates pods are being restarted for filesystem resize
 	VolumeResizePhaseRestartingPods VolumeResizePhase = "RestartingPods"
-	// VolumeResizePhaseVerifying indicates pod health is being verified
-	VolumeResizePhaseVerifying VolumeResizePhase = "Verifying"
 	// VolumeResizePhaseCompleted indicates resize operation completed successfully
 	VolumeResizePhaseCompleted VolumeResizePhase = "Completed"
-	// VolumeResizePhaseFailed indicates resize operation failed
+	// VolumeResizePhaseStalled indicates resize operation is temporarily blocked
+	VolumeResizePhaseStalled VolumeResizePhase = "Stalled"
+	// VolumeResizePhaseFailed indicates resize operation failed permanently
 	VolumeResizePhaseFailed VolumeResizePhase = "Failed"
 )
+
+// VolumeResizeReason provides specific reasons for stalled or failed states
+type VolumeResizeReason string
+
+const (
+	// ResizeReasonNone indicates no specific reason
+	ResizeReasonNone VolumeResizeReason = ""
+	// ResizeReasonResizeFailed indicates total failure (no PVCs resized)
+	ResizeReasonResizeFailed VolumeResizeReason = "ResizeFailed"
+	// ResizeReasonPartialResizeFailure indicates some PVCs failed to resize
+	ResizeReasonPartialResizeFailure VolumeResizeReason = "PartialResizeFailure"
+	// ResizeReasonResizeRateLimited indicates API rate limiting
+	ResizeReasonResizeRateLimited VolumeResizeReason = "ResizeRateLimited"
+	// ResizeReasonStorageQuotaExceeded indicates storage quota limit hit
+	ResizeReasonStorageQuotaExceeded VolumeResizeReason = "StorageQuotaExceeded"
+	// ResizeReasonResizeForbidden indicates RBAC/permission issue
+	ResizeReasonResizeForbidden VolumeResizeReason = "ResizeForbidden"
+	// ResizeReasonInvalidResizeRequest indicates invalid size specification
+	ResizeReasonInvalidResizeRequest VolumeResizeReason = "InvalidResizeRequest"
+	// ResizeReasonStorageClassNotExpandable indicates StorageClass doesn't allow expansion
+	ResizeReasonStorageClassNotExpandable VolumeResizeReason = "StorageClassNotExpandable"
+	// ResizeReasonEBSCooldownPeriod indicates AWS EBS 6-hour modification limit
+	ResizeReasonEBSCooldownPeriod VolumeResizeReason = "EBSCooldownPeriod"
+	// ResizeReasonEBSModificationLimit indicates AWS EBS 4 modifications in 24-hour rolling window limit
+	ResizeReasonEBSModificationLimit VolumeResizeReason = "EBSModificationLimit"
+	// ResizeReasonMarkLogicHealthCheckFailed indicates MarkLogic health check failed
+	ResizeReasonMarkLogicHealthCheckFailed VolumeResizeReason = "MarkLogicHealthCheckFailed"
+	// ResizeReasonTimeout indicates operation timed out
+	ResizeReasonTimeout VolumeResizeReason = "Timeout"
+	// ResizeReasonShrinkNotSupported indicates shrinking volumes is not supported
+	ResizeReasonShrinkNotSupported VolumeResizeReason = "ShrinkNotSupported"
+	// ResizeReasonNoResizeNeeded indicates target size matches current size
+	ResizeReasonNoResizeNeeded VolumeResizeReason = "NoResizeNeeded"
+	// ResizeReasonPVCNotBound indicates PVC is not in Bound phase
+	ResizeReasonPVCNotBound VolumeResizeReason = "PVCNotBound"
+	// ResizeReasonMultipleVolumeClaimTemplates indicates STS has multiple VCTs requiring explicit PVC name
+	ResizeReasonMultipleVolumeClaimTemplates VolumeResizeReason = "MultipleVolumeClaimTemplates"
+	// ResizeReasonStatefulSetNotFound indicates StatefulSet not found for PVC
+	ResizeReasonStatefulSetNotFound VolumeResizeReason = "StatefulSetNotFound"
+	// ResizeReasonConcurrentResize indicates another resize is in progress
+	ResizeReasonConcurrentResize VolumeResizeReason = "ConcurrentResize"
+	// ResizeReasonStatefulSetDeleteFailed indicates orphan delete of StatefulSet failed
+	ResizeReasonStatefulSetDeleteFailed VolumeResizeReason = "StatefulSetDeleteFailed"
+	// ResizeReasonStatefulSetRecreateFailed indicates StatefulSet recreation failed with orphaned pods
+	ResizeReasonStatefulSetRecreateFailed VolumeResizeReason = "StatefulSetRecreateFailed"
+	// ResizeReasonPodSchedulingFailed indicates pods stuck in pending after restart
+	ResizeReasonPodSchedulingFailed VolumeResizeReason = "PodSchedulingFailed"
+	// ResizeReasonTemplateUpdateInterrupted indicates operator crashed during STS delete/recreate
+	ResizeReasonTemplateUpdateInterrupted VolumeResizeReason = "TemplateUpdateInterrupted"
+)
+
+// FailedPVCInfo contains details about a PVC that failed to resize
+type FailedPVCInfo struct {
+	// Name is the name of the failed PVC
+	Name string `json:"name"`
+	// Reason is the reason code for the failure
+	Reason VolumeResizeReason `json:"reason"`
+	// Message provides detailed error information
+	Message string `json:"message"`
+}
 
 // VolumeResizeStatus holds the status of a volume resize operation
 type VolumeResizeStatus struct {
 	// Phase is the current phase of the volume resize operation
 	Phase VolumeResizePhase `json:"phase,omitempty"`
+
+	// Reason provides specific reason for stalled or failed states
+	// +optional
+	Reason VolumeResizeReason `json:"reason,omitempty"`
 
 	// StartTime is when the resize operation started
 	// +optional
@@ -141,10 +209,13 @@ type VolumeResizeStatus struct {
 	// +optional
 	CompletionTime *metav1.Time `json:"completionTime,omitempty"`
 
+	// CurrentSize is the current/original size of the volumes
+	CurrentSize string `json:"currentSize,omitempty"`
+
 	// TargetSize is the desired size for the volumes
 	TargetSize string `json:"targetSize,omitempty"`
 
-	// OriginalSize is the size before resize
+	// OriginalSize is the size before resize (alias for CurrentSize, kept for compatibility)
 	OriginalSize string `json:"originalSize,omitempty"`
 
 	// PVCsResized is the number of PVCs that have been resized
@@ -152,6 +223,10 @@ type VolumeResizeStatus struct {
 
 	// TotalPVCs is the total number of PVCs to resize
 	TotalPVCs int32 `json:"totalPvcs,omitempty"`
+
+	// CurrentPVCIndex tracks which PVC is being processed in sequential mode
+	// +optional
+	CurrentPVCIndex int32 `json:"currentPVCIndex,omitempty"`
 
 	// Message provides additional information about the current status
 	Message string `json:"message,omitempty"`
@@ -166,9 +241,49 @@ type VolumeResizeStatus struct {
 	// LastResizedPodIndex tracks which pod was last restarted during filesystem resize
 	LastResizedPodIndex int32 `json:"lastResizedPodIndex,omitempty"`
 
+	// FailedPVCs contains details about PVCs that failed to resize
+	// +optional
+	FailedPVCs []FailedPVCInfo `json:"failedPVCs,omitempty"`
+
+	// ResizeStrategy used for this resize operation
+	// +optional
+	ResizeStrategy string `json:"resizeStrategy,omitempty"`
+
+	// NextRetryTime indicates when the next retry will be attempted (for rate-limited states)
+	// +optional
+	NextRetryTime *metav1.Time `json:"nextRetryTime,omitempty"`
+
+	// MarkLogicHealthPassed indicates if MarkLogic health checks passed
+	// +optional
+	MarkLogicHealthPassed *bool `json:"markLogicHealthPassed,omitempty"`
+
 	// Warnings contains any warnings during the resize operation
 	// +optional
 	Warnings []string `json:"warnings,omitempty"`
+
+	// RetryCount tracks the number of retries for failed operations
+	// +optional
+	RetryCount int32 `json:"retryCount,omitempty"`
+
+	// LastPhaseBeforeStall records the phase before entering stalled state for recovery
+	// +optional
+	LastPhaseBeforeStall VolumeResizePhase `json:"lastPhaseBeforeStall,omitempty"`
+
+	// OrphanedPods tracks pods that may be orphaned during STS delete/recreate
+	// +optional
+	OrphanedPods []string `json:"orphanedPods,omitempty"`
+
+	// StatefulSetDeletionTimestamp records when STS was deleted (for interrupted template update recovery)
+	// +optional
+	StatefulSetDeletionTimestamp *metav1.Time `json:"statefulSetDeletionTimestamp,omitempty"`
+
+	// ResizeInProgressAnnotation indicates the resize operation identifier for concurrent resize detection
+	// +optional
+	ResizeInProgressAnnotation string `json:"resizeInProgressAnnotation,omitempty"`
+
+	// PodPendingStartTime tracks when a pod first entered pending state for scheduling issues
+	// +optional
+	PodPendingStartTime *metav1.Time `json:"podPendingStartTime,omitempty"`
 }
 
 func (status *MarklogicGroupStatus) SetCondition(condition metav1.Condition) {
