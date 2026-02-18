@@ -32,7 +32,7 @@ inject_annotations() {
         
         # Check if already patched to avoid duplicates when this script runs multiple times
         if grep -q "helm.sh/resource-policy" "$file"; then
-             echo "  Already patched."
+        echo "  Already patched."
              return
         fi
 
