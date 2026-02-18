@@ -30,7 +30,7 @@ inject_annotations() {
     if [ -f "$file" ]; then
         echo "Processing $file..."
         
-        # Check if already patched to avoid duplicates if make helm wasn't run or this script runs directly
+        # Check if already patched to avoid duplicates when this script runs multiple times
         if grep -q "helm.sh/resource-policy" "$file"; then
              echo "  Already patched."
              return
