@@ -23,14 +23,14 @@ type ContainerProbe struct {
 }
 
 // ResizeStrategy defines how PVC resizing should be performed
-// +kubebuilder:validation:Enum=Parallel;Sequential
+// +kubebuilder:validation:Enum=parallel;sequential
 type ResizeStrategy string
 
 const (
 	// ResizeStrategyParallel resizes all PVCs concurrently (default)
-	ResizeStrategyParallel ResizeStrategy = "Parallel"
+	ResizeStrategyParallel ResizeStrategy = "parallel"
 	// ResizeStrategySequential resizes PVCs one at a time, waiting for each to complete
-	ResizeStrategySequential ResizeStrategy = "Sequential"
+	ResizeStrategySequential ResizeStrategy = "sequential"
 )
 
 // Storage is the inteface to add pvc and pv support in marklogic
@@ -42,8 +42,8 @@ type Persistence struct {
 	// +kubebuilder:default:={ReadWriteOnce}
 	AccessModes []corev1.PersistentVolumeAccessMode `json:"accessModes,omitempty"`
 	Annotations map[string]string                   `json:"annotations,omitempty"`
-	// ResizeStrategy defines how PVC resizing should be performed: Parallel (default) or Sequential
-	// +kubebuilder:default:="Parallel"
+	// ResizeStrategy defines how PVC resizing should be performed: parallel (default) or sequential
+	// +kubebuilder:default:="parallel"
 	// +optional
 	ResizeStrategy ResizeStrategy `json:"resizeStrategy,omitempty"`
 }

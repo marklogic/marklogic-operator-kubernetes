@@ -323,11 +323,15 @@ var _ = Describe("Volume Resize Tests", Ordered, func() {
 			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: group.Name, Namespace: namespace}, g)).Should(Succeed())
 			now := metav1.Now()
 			g.Status.VolumeResizeStatus = &marklogicv1.VolumeResizeStatus{
-				Phase:          marklogicv1.VolumeResizePhaseFailed,
-				Message:        "Simulated failure",
-				CompletionTime: &now,
-				TargetSize:     "15Gi",
-				OriginalSize:   "10Gi",
+				ResizeProgress: marklogicv1.ResizeProgress{
+					Phase:          marklogicv1.VolumeResizePhaseFailed,
+					TargetSize:     "15Gi",
+					OriginalSize:   "10Gi",
+					CompletionTime: &now,
+				},
+				ResizeMetaInfo: marklogicv1.ResizeMetaInfo{
+					Message: "Simulated failure",
+				},
 			}
 			Expect(k8sClient.Status().Update(ctx, g)).Should(Succeed())
 

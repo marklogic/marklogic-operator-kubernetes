@@ -68,9 +68,14 @@ func RequeueSoon(secs int) ReconcileResult {
 	return callBackSoon{secs: secs}
 }
 
-// RequeueAfter schedules a requeue after a specific duration
+// RequeueAfter schedules a requeue after a specific duration.
+// Note: Durations are rounded up to the nearest second. The minimum granularity
+// is 1 second; sub-second precision is not supported. For example, a duration of
+// 500ms will be rounded up to 1 second.
 func RequeueAfter(duration time.Duration) ReconcileResult {
-	return callBackSoon{secs: int(duration.Seconds())}
+	// Round up to nearest second to ensure we never queue with 0 seconds
+	secs := int((duration + time.Second - 1) / time.Second)
+	return callBackSoon{secs: secs}
 }
 
 func Error(e error) ReconcileResult {

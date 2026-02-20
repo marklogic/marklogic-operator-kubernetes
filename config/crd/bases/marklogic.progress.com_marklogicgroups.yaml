@@ -4054,12 +4054,12 @@ spec:
                   enabled:
                     type: boolean
                   resizeStrategy:
-                    default: Parallel
+                    default: parallel
                     description: 'ResizeStrategy defines how PVC resizing should be
-                      performed: Parallel (default) or Sequential'
+                      performed: parallel (default) or sequential'
                     enum:
-                    - Parallel
-                    - Sequential
+                    - parallel
+                    - sequential
                     type: string
                   size:
                     type: string

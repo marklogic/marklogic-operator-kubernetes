@@ -22,6 +22,7 @@ spec:
     enabled: true
     size: 100Gi
     storageClassName: "gp3"
+    resizeStrategy: parallel
     accessModes: 
       - ReadWriteOnce
     annotations: {}

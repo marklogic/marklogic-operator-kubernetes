@@ -192,14 +192,10 @@ type FailedPVCInfo struct {
 	Message string `json:"message"`
 }
 
-// VolumeResizeStatus holds the status of a volume resize operation
-type VolumeResizeStatus struct {
+// ResizeProgress tracks the overall progress of the resize operation
+type ResizeProgress struct {
 	// Phase is the current phase of the volume resize operation
 	Phase VolumeResizePhase `json:"phase,omitempty"`
-
-	// Reason provides specific reason for stalled or failed states
-	// +optional
-	Reason VolumeResizeReason `json:"reason,omitempty"`
 
 	// StartTime is when the resize operation started
 	// +optional
@@ -228,38 +224,19 @@ type VolumeResizeStatus struct {
 	// +optional
 	CurrentPVCIndex int32 `json:"currentPVCIndex,omitempty"`
 
-	// Message provides additional information about the current status
-	Message string `json:"message,omitempty"`
-
-	// StatefulSetBackup stores the StatefulSet spec for recovery
-	// +optional
-	StatefulSetBackup string `json:"statefulSetBackup,omitempty"`
-
-	// FileSystemResizePending indicates if pods need restart for filesystem resize
-	FileSystemResizePending bool `json:"fileSystemResizePending,omitempty"`
-
 	// LastResizedPodIndex tracks which pod was last restarted during filesystem resize
 	LastResizedPodIndex int32 `json:"lastResizedPodIndex,omitempty"`
+}
 
-	// FailedPVCs contains details about PVCs that failed to resize
+// ResizeRetryInfo tracks retry and error information for the resize operation
+type ResizeRetryInfo struct {
+	// Reason provides specific reason for stalled or failed states
 	// +optional
-	FailedPVCs []FailedPVCInfo `json:"failedPVCs,omitempty"`
-
-	// ResizeStrategy used for this resize operation
-	// +optional
-	ResizeStrategy string `json:"resizeStrategy,omitempty"`
+	Reason VolumeResizeReason `json:"reason,omitempty"`
 
 	// NextRetryTime indicates when the next retry will be attempted (for rate-limited states)
 	// +optional
 	NextRetryTime *metav1.Time `json:"nextRetryTime,omitempty"`
-
-	// MarkLogicHealthPassed indicates if MarkLogic health checks passed
-	// +optional
-	MarkLogicHealthPassed *bool `json:"markLogicHealthPassed,omitempty"`
-
-	// Warnings contains any warnings during the resize operation
-	// +optional
-	Warnings []string `json:"warnings,omitempty"`
 
 	// RetryCount tracks the number of retries for failed operations
 	// +optional
@@ -269,6 +246,27 @@ type VolumeResizeStatus struct {
 	// +optional
 	LastPhaseBeforeStall VolumeResizePhase `json:"lastPhaseBeforeStall,omitempty"`
 
+	// FailedPVCs contains details about PVCs that failed to resize
+	// +optional
+	FailedPVCs []FailedPVCInfo `json:"failedPVCs,omitempty"`
+}
+
+// ResizeHealthInfo tracks health and validation status
+type ResizeHealthInfo struct {
+	// MarkLogicHealthPassed indicates if MarkLogic health checks passed
+	// +optional
+	MarkLogicHealthPassed *bool `json:"markLogicHealthPassed,omitempty"`
+
+	// FileSystemResizePending indicates if pods need restart for filesystem resize
+	FileSystemResizePending bool `json:"fileSystemResizePending,omitempty"`
+}
+
+// ResizeRecoveryInfo tracks recovery and edge case handling
+type ResizeRecoveryInfo struct {
+	// StatefulSetBackup stores the StatefulSet spec for recovery
+	// +optional
+	StatefulSetBackup string `json:"statefulSetBackup,omitempty"`
+
 	// OrphanedPods tracks pods that may be orphaned during STS delete/recreate
 	// +optional
 	OrphanedPods []string `json:"orphanedPods,omitempty"`
@@ -277,13 +275,46 @@ type VolumeResizeStatus struct {
 	// +optional
 	StatefulSetDeletionTimestamp *metav1.Time `json:"statefulSetDeletionTimestamp,omitempty"`
 
-	// ResizeInProgressAnnotation indicates the resize operation identifier for concurrent resize detection
-	// +optional
-	ResizeInProgressAnnotation string `json:"resizeInProgressAnnotation,omitempty"`
-
 	// PodPendingStartTime tracks when a pod first entered pending state for scheduling issues
 	// +optional
 	PodPendingStartTime *metav1.Time `json:"podPendingStartTime,omitempty"`
+}
+
+// ResizeMetaInfo tracks metadata about the resize operation
+type ResizeMetaInfo struct {
+	// Message provides additional information about the current status
+	Message string `json:"message,omitempty"`
+
+	// Warnings contains any warnings during the resize operation
+	// +optional
+	Warnings []string `json:"warnings,omitempty"`
+
+	// ResizeStrategy used for this resize operation
+	// +optional
+	ResizeStrategy string `json:"resizeStrategy,omitempty"`
+
+	// ResizeInProgressAnnotation indicates the resize operation identifier for concurrent resize detection
+	// +optional
+	ResizeInProgressAnnotation string `json:"resizeInProgressAnnotation,omitempty"`
+}
+
+// VolumeResizeStatus holds the status of a volume resize operation
+// Fields are organized into logical sub-structs using inline embedding for backward compatibility
+type VolumeResizeStatus struct {
+	// Progress tracking (phase, sizes, PVC counts)
+	ResizeProgress `json:",inline"`
+
+	// Retry and error handling
+	ResizeRetryInfo `json:",inline"`
+
+	// Health and validation status
+	ResizeHealthInfo `json:",inline"`
+
+	// Recovery and edge case handling
+	ResizeRecoveryInfo `json:",inline"`
+
+	// Metadata about the operation
+	ResizeMetaInfo `json:",inline"`
 }
 
 func (status *MarklogicGroupStatus) SetCondition(condition metav1.Condition) {

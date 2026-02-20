@@ -8,9 +8,9 @@ spec:
   image: "progressofficial/marklogic-db:12.0.0-ubi9-rootless-2.2.2"
   persistence:
     enabled: true
-    size: 1Gi
+    size: 9Gi
     storageClassName: ml-expandable-gp3
-    resizeStrategy: Sequential
+    resizeStrategy: parallel
   markLogicGroups:
     - replicas: 2
       name: dnode

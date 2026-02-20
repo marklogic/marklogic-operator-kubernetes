@@ -98,7 +98,15 @@ func (oc *OperatorContext) ReconcileVolumeResize() result.ReconcileResult {
 				if storage, ok := vct.Spec.Resources.Requests[corev1.ResourceStorage]; ok {
 					targetQty, _ := resource.ParseQuantity(cr.Status.VolumeResizeStatus.TargetSize)
 					if storage.Cmp(targetQty) >= 0 {
-						// STS already has target size - check if PVCs also match
+						// STS already has target size - verify CR spec also matches
+						crSpecSize := cr.Spec.Persistence.Size
+						if crSpecSize != cr.Status.VolumeResizeStatus.TargetSize {
+							logger.Info("WARNING: STS template has target size but CR spec does not match, waiting for sync",
+								"stsSize", storage.String(), "crSpecSize", crSpecSize, "targetSize", cr.Status.VolumeResizeStatus.TargetSize)
+							return result.RequeueSoon(10)
+						}
+
+						// Both STS and CR spec match target - check if PVCs also match
 						pvcs, pvcErr := oc.getPVCsForStatefulSet(currentSts)
 						if pvcErr == nil && len(pvcs) > 0 {
 							allPVCsResized := true
@@ -116,10 +124,14 @@ func (oc *OperatorContext) ReconcileVolumeResize() result.ReconcileResult {
 							}
 
 							if allPVCsResized {
-								// Resize is actually complete - fix stale status
-								logger.Info("INFO: Detected completed resize with stale status, fixing status")
-								oc.Recorder.Event(cr, "Normal", "StaleStatusFixed",
-									"Detected completed volume resize, fixing stale status")
+								// Resize is actually complete but status wasn't updated
+								// Only log if we have evidence of staleness (completion time not set or very old)
+								isStale := cr.Status.VolumeResizeStatus.CompletionTime == nil ||
+									(time.Now().Sub(cr.Status.VolumeResizeStatus.CompletionTime.Time) > 5*time.Minute)
+
+								if isStale {
+									logger.Info("INFO: PVCs resized but status not updated - marking as completed")
+								}
 								return oc.completeVolumeResize()
 							}
 						}
@@ -298,13 +310,17 @@ func (oc *OperatorContext) initializeVolumeResizeStatus(currentSize, targetSize 
 
 	now := metav1.Now()
 	cr.Status.VolumeResizeStatus = &marklogicv1.VolumeResizeStatus{
-		Phase:          marklogicv1.VolumeResizePhaseValidating,
-		StartTime:      &now,
-		CurrentSize:    currentSize,
-		TargetSize:     targetSize,
-		OriginalSize:   currentSize,
-		ResizeStrategy: resizeStrategy,
-		Message:        "Starting resize validation",
+		ResizeProgress: marklogicv1.ResizeProgress{
+			Phase:        marklogicv1.VolumeResizePhaseValidating,
+			StartTime:    &now,
+			CurrentSize:  currentSize,
+			TargetSize:   targetSize,
+			OriginalSize: currentSize,
+		},
+		ResizeMetaInfo: marklogicv1.ResizeMetaInfo{
+			Message:        "Starting resize validation",
+			ResizeStrategy: resizeStrategy,
+		},
 	}
 
 	if err := oc.updateStatus(); err != nil {
@@ -490,7 +506,13 @@ func (oc *OperatorContext) validateResizePrerequisites() result.ReconcileResult 
 	}
 
 	// Detect cloud provider from StorageClass provisioner
-	cloudProvider := oc.detectCloudProvider(sts, cr)
+	cloudProvider, err := oc.detectCloudProvider(sts, cr)
+	if err != nil {
+		logger.Error(err, "PRECHECK FAILED: Could not detect cloud provider")
+		oc.Recorder.Event(cr, "Warning", "PrecheckCloudProviderDetectionFailed",
+			fmt.Sprintf("Failed to detect cloud provider: %v", err))
+		return oc.setResizeFailure(fmt.Sprintf("Failed to detect cloud provider: %v", err), marklogicv1.ResizeReasonResizeFailed)
+	}
 	logger.Info("PRECHECK: Detected cloud provider", "cloudProvider", cloudProvider)
 	oc.Recorder.Event(cr, "Normal", "CloudProviderDetected",
 		fmt.Sprintf("Detected cloud provider: %s", cloudProvider))
@@ -686,7 +708,9 @@ func (oc *OperatorContext) resizePVCsParallel() result.ReconcileResult {
 				oc.Recorder.Event(cr, "Normal", "PVCResizeQueuedVolumeOptimizing",
 					fmt.Sprintf("Volume %s is currently optimizing after a previous modification. Resize request queued and will retry automatically in %d seconds.", pvc.Name, 30))
 				cr.Status.VolumeResizeStatus.Message = fmt.Sprintf("Parallel resize - volume %s optimizing, request queued for %d/%d PVCs. Will retry automatically.", pvc.Name, resizedCount, len(pvcs))
-				oc.updateStatus()
+				if err := oc.updateStatus(); err != nil {
+					return result.Error(err)
+				}
 				return result.RequeueSoon(30)
 			}
 
@@ -706,18 +730,16 @@ func (oc *OperatorContext) resizePVCsParallel() result.ReconcileResult {
 		verifiedPVC := &corev1.PersistentVolumeClaim{}
 		if err := oc.Client.Get(oc.Ctx, client.ObjectKey{Namespace: pvc.Namespace, Name: pvc.Name}, verifiedPVC); err != nil {
 			// Failed to fetch PVC for verification, but the API call succeeded
-			// Log a warning but continue - the resize might still apply
+			// Log a warning but DON'T increment resizedCount - we couldn't verify
 			logger.Info(fmt.Sprintf("WARNING: Could not verify PVC %s after resize request (but resize was initiated): %v", pvc.Name, err))
-			resizedCount++
 			continue
 		}
 
 		verifiedStorage := verifiedPVC.Spec.Resources.Requests[corev1.ResourceStorage]
 		if verifiedStorage.Cmp(targetQty) < 0 {
-			// Spec not updated yet - log warning but continue
+			// Spec not updated yet - log warning but DON'T increment resizedCount - we couldn't verify
 			// The capacity will catch up as Kubernetes processes the resize
 			logger.Info(fmt.Sprintf("INFO: PVC %s spec not updated yet (race condition), but resize was initiated. Will verify via capacity later.", pvc.Name))
-			resizedCount++
 			continue
 		}
 
@@ -907,7 +929,7 @@ func (oc *OperatorContext) waitForPVCResizeParallel() result.ReconcileResult {
 				// Check for EBS cooldown
 				if oc.isEBSCooldownPeriod(pvc.Name) {
 					return oc.setResizeStalled(
-						fmt.Sprintf("AWS EBS cooldown period active for PVC %s. Volume modifications limited to once per 6 hours.", pvc.Name),
+						fmt.Sprintf("AWS EBS cooldown period active for PVC %s. Volume modifications limited to 4 times in a 24-hour rotating window.", pvc.Name),
 						marklogicv1.ResizeReasonEBSCooldownPeriod,
 					)
 				}
@@ -936,7 +958,19 @@ func (oc *OperatorContext) waitForPVCResizeParallel() result.ReconcileResult {
 	// Check timeout
 	if cr.Status.VolumeResizeStatus.StartTime != nil {
 		elapsed := time.Since(cr.Status.VolumeResizeStatus.StartTime.Time)
-		timeoutDuration := time.Duration(PVCResizeTimeoutMinutes*int(cr.Status.VolumeResizeStatus.TotalPVCs)) * time.Minute
+
+		// Calculate timeout based on resize strategy
+		// Parallel: all PVCs resize concurrently (fixed timeout with safety margin)
+		// Sequential: PVCs resize one-by-one (scale with total PVCs)
+		var timeoutDuration time.Duration
+		if cr.Status.VolumeResizeStatus.ResizeStrategy == string(marklogicv1.ResizeStrategySequential) {
+			// Sequential: scale timeout with number of PVCs (resized one-by-one)
+			timeoutDuration = time.Duration(PVCResizeTimeoutMinutes*int(cr.Status.VolumeResizeStatus.TotalPVCs)) * time.Minute
+		} else {
+			// Parallel: fixed timeout with 2x safety margin (all resizing concurrently)
+			timeoutDuration = time.Duration(PVCResizeTimeoutMinutes*2) * time.Minute
+		}
+
 		if elapsed > timeoutDuration {
 			return oc.setResizeFailure(
 				fmt.Sprintf("Timeout waiting for PVC resize after %v. Resizing PVCs: %v", elapsed, resizingPVCs),
@@ -1016,7 +1050,7 @@ func (oc *OperatorContext) waitForPVCResizeSequential() result.ReconcileResult {
 			if condition.Type == corev1.PersistentVolumeClaimResizing && condition.Status == corev1.ConditionTrue {
 				if oc.isEBSCooldownPeriod(pvc.Name) {
 					return oc.setResizeStalled(
-						fmt.Sprintf("AWS EBS cooldown period active for PVC %s (%d/%d). Volume modifications limited to once per 6 hours.", pvc.Name, i+1, len(pvcs)),
+						fmt.Sprintf("AWS EBS cooldown period active for PVC %s (%d/%d). Volume modifications limited to 4 times in a 24-hour rotating window.", pvc.Name, i+1, len(pvcs)),
 						marklogicv1.ResizeReasonEBSCooldownPeriod,
 					)
 				}
@@ -1027,7 +1061,19 @@ func (oc *OperatorContext) waitForPVCResizeSequential() result.ReconcileResult {
 	// Check timeout
 	if cr.Status.VolumeResizeStatus.StartTime != nil {
 		elapsed := time.Since(cr.Status.VolumeResizeStatus.StartTime.Time)
-		timeoutDuration := time.Duration(PVCResizeTimeoutMinutes*int(cr.Status.VolumeResizeStatus.TotalPVCs)) * time.Minute
+
+		// Calculate timeout based on resize strategy
+		// Parallel: all PVCs resize concurrently (fixed timeout with safety margin)
+		// Sequential: PVCs resize one-by-one (scale with total PVCs)
+		var timeoutDuration time.Duration
+		if cr.Status.VolumeResizeStatus.ResizeStrategy == string(marklogicv1.ResizeStrategySequential) {
+			// Sequential: scale timeout with number of PVCs (resized one-by-one)
+			timeoutDuration = time.Duration(PVCResizeTimeoutMinutes*int(cr.Status.VolumeResizeStatus.TotalPVCs)) * time.Minute
+		} else {
+			// Parallel: fixed timeout with 2x safety margin (all resizing concurrently)
+			timeoutDuration = time.Duration(PVCResizeTimeoutMinutes*2) * time.Minute
+		}
+
 		if elapsed > timeoutDuration {
 			return oc.setResizeFailure(
 				fmt.Sprintf("Timeout waiting for PVC resize after %v (sequential mode)", elapsed),
@@ -1586,6 +1632,20 @@ func (oc *OperatorContext) completeVolumeResize() result.ReconcileResult {
 	logger := oc.ReqLogger
 	cr := oc.MarklogicGroup
 
+	// Verify CR spec size matches target size before marking complete
+	// This ensures future pods created from the STS will use the correct size
+	if cr.Spec.Persistence.Size != cr.Status.VolumeResizeStatus.TargetSize {
+		logger.Info("WARNING: CR spec size does not match target size, delaying completion",
+			"crSpecSize", cr.Spec.Persistence.Size, "targetSize", cr.Status.VolumeResizeStatus.TargetSize)
+		cr.Status.VolumeResizeStatus.Message = fmt.Sprintf(
+			"Waiting for CR spec to match target size (current: %s, target: %s)",
+			cr.Spec.Persistence.Size, cr.Status.VolumeResizeStatus.TargetSize)
+		if err := oc.updateStatus(); err != nil {
+			return result.Error(err)
+		}
+		return result.RequeueSoon(10)
+	}
+
 	// Calculate duration
 	var duration string
 	if cr.Status.VolumeResizeStatus.StartTime != nil {
@@ -1806,12 +1866,15 @@ func (oc *OperatorContext) isEBSCooldownPeriod(pvcName string) bool {
 	}
 
 	// Check if PVC has been in Resizing condition for an extended period (> 10 mins)
+	// This itself is a strong indicator of cooldown/rate limiting even without explicit error messages
+	extendedResizingDetected := false
 	for _, condition := range pvc.Status.Conditions {
 		if condition.Type == corev1.PersistentVolumeClaimResizing && condition.Status == corev1.ConditionTrue {
 			resizingDuration := time.Since(condition.LastTransitionTime.Time)
 			if resizingDuration > 10*time.Minute {
-				logger.Info("PVC has been resizing for extended period",
+				logger.Info("PVC has been resizing for extended period - likely cooldown",
 					"pvc", pvcName, "duration", resizingDuration)
+				extendedResizingDetected = true
 			}
 		}
 	}
@@ -1819,6 +1882,10 @@ func (oc *OperatorContext) isEBSCooldownPeriod(pvcName string) bool {
 	// Get events for the PVC and PV to check for rate limit indicators
 	events := &corev1.EventList{}
 	if err := oc.Client.List(oc.Ctx, events, client.InNamespace(cr.Namespace)); err != nil {
+		// If we can't fetch events but detected extended resizing, return true
+		if extendedResizingDetected {
+			return true
+		}
 		return false
 	}
 
@@ -1855,12 +1922,18 @@ func (oc *OperatorContext) isEBSCooldownPeriod(pvcName string) bool {
 		}
 	}
 
+	// Return true if we detected extended resizing duration even without explicit error events
+	if extendedResizingDetected {
+		return true
+	}
+
 	return false
 }
 
 // detectCloudProvider identifies the cloud provider based on StorageClass provisioner
 // Returns: "AWS", "Azure", "GCP", or "Unknown"
-func (oc *OperatorContext) detectCloudProvider(sts *appsv1.StatefulSet, cr *marklogicv1.MarklogicGroup) string {
+// Returns error if StorageClass cannot be fetched (required for resize validation)
+func (oc *OperatorContext) detectCloudProvider(sts *appsv1.StatefulSet, cr *marklogicv1.MarklogicGroup) (string, error) {
 	logger := oc.ReqLogger
 
 	// Get storage class name from StatefulSet volumeClaimTemplates
@@ -1878,17 +1951,16 @@ func (oc *OperatorContext) detectCloudProvider(sts *appsv1.StatefulSet, cr *mark
 	}
 
 	if storageClassName == "" {
-		logger.Info("Could not determine storage class, assuming AWS as default")
-		return "AWS"
+		logger.Info("Could not determine storage class, returning Unknown")
+		return "Unknown", nil
 	}
 
 	// Fetch the StorageClass
 	sc := &storagev1.StorageClass{}
 	err := oc.Client.Get(oc.Ctx, client.ObjectKey{Name: storageClassName}, sc)
 	if err != nil {
-		logger.Info("Could not fetch StorageClass, assuming AWS as default",
-			"storageClass", storageClassName, "error", err)
-		return "AWS"
+		logger.Error(err, "Failed to fetch StorageClass - cannot determine cloud provider")
+		return "", fmt.Errorf("failed to fetch StorageClass %s: %w", storageClassName, err)
 	}
 
 	// Detect provider based on provisioner field
@@ -1897,20 +1969,20 @@ func (oc *OperatorContext) detectCloudProvider(sts *appsv1.StatefulSet, cr *mark
 
 	switch {
 	case provisioner == "ebs.csi.aws.com":
-		return "AWS"
+		return "AWS", nil
 	case provisioner == "disk.csi.azure.com":
-		return "Azure"
+		return "Azure", nil
 	case provisioner == "pd.csi.storage.gke.io":
-		return "GCP"
+		return "GCP", nil
 	case provisioner == "kubernetes.io/aws-ebs":
-		return "AWS" // Legacy AWS provisioner
+		return "AWS", nil // Legacy AWS provisioner
 	case provisioner == "kubernetes.io/azure-disk":
-		return "Azure" // Legacy Azure provisioner
+		return "Azure", nil // Legacy Azure provisioner
 	case provisioner == "kubernetes.io/gce-pd":
-		return "GCP" // Legacy GCP provisioner
+		return "GCP", nil // Legacy GCP provisioner
 	default:
-		logger.Info("Unknown provisioner, assuming AWS as default", "provisioner", provisioner)
-		return "AWS"
+		logger.Info("Unknown provisioner, returning Unknown", "provisioner", provisioner)
+		return "Unknown", nil
 	}
 }
 
