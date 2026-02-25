@@ -5076,6 +5076,19 @@ spec:
                     type: array
                   phase:
                     description: Phase is the current phase of the volume resize operation
+                    enum:
+                    - Validating
+                    - ResizingPVCs
+                    - WaitingForPVCResize
+                    - VerifyingHealth
+                    - BackingUpStatefulSet
+                    - DeletingStatefulSet
+                    - RecreatingStatefulSet
+                    - VerifyingPodsRunning
+                    - RestartingPods
+                    - Completed
+                    - Stalled
+                    - Failed
                     type: string
                   podPendingStartTime:
                     description: PodPendingStartTime tracks when a pod first entered
@@ -5090,10 +5103,6 @@ spec:
                   reason:
                     description: Reason provides specific reason for stalled or failed
                       states
-                    type: string
-                  resizeInProgressAnnotation:
-                    description: ResizeInProgressAnnotation indicates the resize operation
-                      identifier for concurrent resize detection
                     type: string
                   resizeStrategy:
                     description: ResizeStrategy used for this resize operation

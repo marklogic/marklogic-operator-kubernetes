@@ -96,7 +96,13 @@ func (oc *OperatorContext) ReconcileVolumeResize() result.ReconcileResult {
 		for _, vct := range currentSts.Spec.VolumeClaimTemplates {
 			if vct.Name == VolumeClaimTemplateName {
 				if storage, ok := vct.Spec.Resources.Requests[corev1.ResourceStorage]; ok {
-					targetQty, _ := resource.ParseQuantity(cr.Status.VolumeResizeStatus.TargetSize)
+					targetQty, err := resource.ParseQuantity(cr.Status.VolumeResizeStatus.TargetSize)
+					if err != nil {
+						// Invalid target size in status - log warning and skip recovery logic
+						logger.Info("WARNING: Invalid target size in volume resize status, skipping recovery check",
+							"targetSize", cr.Status.VolumeResizeStatus.TargetSize, "error", err.Error())
+						break
+					}
 					if storage.Cmp(targetQty) >= 0 {
 						// STS already has target size - verify CR spec also matches
 						crSpecSize := cr.Spec.Persistence.Size
@@ -259,7 +265,24 @@ func (oc *OperatorContext) checkVolumeResizeNeeded(sts *appsv1.StatefulSet, cr *
 			phase != marklogicv1.VolumeResizePhaseStalled {
 
 			existingTargetSize := cr.Status.VolumeResizeStatus.TargetSize
-			if existingTargetSize != targetSize {
+			// Parse both sizes as Quantity objects for proper comparison (handles unit equivalents like "1Gi" vs "1024Mi")
+			existingTargetQty, existingErr := resource.ParseQuantity(existingTargetSize)
+			targetQty, targetErr := resource.ParseQuantity(targetSize)
+
+			// If parsing fails, fall back to string comparison for safety
+			sizesAreDifferent := true
+			if existingErr == nil && targetErr == nil {
+				// Both parsed successfully - compare using Cmp() for semantic equality
+				sizesAreDifferent = existingTargetQty.Cmp(targetQty) != 0
+			} else if existingErr == nil || targetErr == nil {
+				// One failed to parse - consider them different
+				sizesAreDifferent = true
+			} else {
+				// Both failed to parse - use string comparison as fallback
+				sizesAreDifferent = existingTargetSize != targetSize
+			}
+
+			if sizesAreDifferent {
 				logger.Info("WARNING: Concurrent resize detected - queuing newer request",
 					"existingTarget", existingTargetSize, "newTarget", targetSize)
 				oc.Recorder.Event(cr, "Warning", "ConcurrentResize",
@@ -636,18 +659,34 @@ func (oc *OperatorContext) validateResizePrerequisites() result.ReconcileResult 
 		return result.Error(err)
 	}
 
-	logger.Info("ALL PRECHECKS PASSED: Starting volume resize operations",
+	logger.Info(fmt.Sprintf("ALL PRECHECKS PASSED: Starting volume resize operations",
 		"storageClass", storageClassName,
 		"totalPVCs", len(pvcs),
 		"originalSize", cr.Status.VolumeResizeStatus.OriginalSize,
-		"targetSize", cr.Status.VolumeResizeStatus.TargetSize)
+		"targetSize", cr.Status.VolumeResizeStatus.TargetSize))
 	oc.Recorder.Event(cr, "Normal", "AllPrechecksPassedStartingResize",
 		fmt.Sprintf("All prechecks passed. Starting volume resize from %s to %s for %d PVC(s)",
 			cr.Status.VolumeResizeStatus.OriginalSize, cr.Status.VolumeResizeStatus.TargetSize, len(pvcs)))
 
-	logger.Info(fmt.Sprintf("INFO: Identified %d PVCs with current sizes", len(pvcs)))
-	logger.Info("INFO: Current size and target size", "currentSize", cr.Status.VolumeResizeStatus.CurrentSize, "targetSize", cr.Status.VolumeResizeStatus.TargetSize)
-	oc.Recorder.Event(cr, "Normal", "VolumeResizeValidated", cr.Status.VolumeResizeStatus.Message)
+	// Log detailed PVC information
+	var pvcDetails []string
+	for i, pvc := range pvcs {
+		currentSize := ""
+		if pvc.Spec.Resources.Requests != nil {
+			if storage, ok := pvc.Spec.Resources.Requests[corev1.ResourceStorage]; ok {
+				currentSize = storage.String()
+			}
+		}
+		pvcDetails = append(pvcDetails, fmt.Sprintf("%d. %s (current: %s)", i+1, pvc.Name, currentSize))
+	}
+
+	pvcListMsg := fmt.Sprintf("PVCs to resize: %s", strings.Join(pvcDetails, " | "))
+	logger.Info(pvcListMsg)
+	oc.Recorder.Event(cr, "Normal", "PVCsIdentified",
+		fmt.Sprintf("Identified %d PVCs for resize: %s. Strategy: %s, Current: %s → Target: %s",
+			len(pvcs), strings.Join(pvcDetails, ", "),
+			cr.Status.VolumeResizeStatus.ResizeStrategy,
+			cr.Status.VolumeResizeStatus.OriginalSize, cr.Status.VolumeResizeStatus.TargetSize))
 
 	return result.RequeueSoon(1)
 }
@@ -1445,7 +1484,15 @@ func (oc *OperatorContext) verifyPodsRunning() result.ReconcileResult {
 
 			for _, pod := range podList.Items {
 				if pod.Status.Phase == corev1.PodPending {
-					// Check how long the pod has been pending
+					// Track pending pod timeout using a single timestamp across all pods.
+					// Design choice rationale:
+					// - During verifyPodsRunning, pods are checked as a group after StatefulSet recreation
+					// - Using a single timestamp provides conservative timeout tracking:
+					//   if pod-0 enters pending at T1 and pod-1 at T2, pod-1 times out sooner (safer)
+					// - In practice, only 1-2 pods are ever pending simultaneously for scheduling issues
+					// - The timestamp is cleared when verifyPodsRunning completes (line 1533),
+					//   preventing cross-phase contamination
+					// - Each pod is correctly identified in error messages (pod.Name)
 					if cr.Status.VolumeResizeStatus.PodPendingStartTime == nil {
 						// First time seeing pending pod, record timestamp
 						now := metav1.Now()
@@ -1560,6 +1607,9 @@ func (oc *OperatorContext) restartPodsForFilesystemResize() result.ReconcileResu
 	}
 
 	// Edge case: Pod stuck pending after previous restart
+	// Note: Single timestamp design works well here because pods are processed sequentially:
+	// Only one pod can be pending at a time during filesystem resize phase.
+	// Timestamp is cleared before moving to next pod (line 1647), preventing stale timestamps.
 	if pod.Status.Phase == corev1.PodPending && pod.DeletionTimestamp == nil {
 		if cr.Status.VolumeResizeStatus.PodPendingStartTime == nil {
 			now := metav1.Now()

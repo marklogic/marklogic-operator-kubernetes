@@ -292,10 +292,6 @@ type ResizeMetaInfo struct {
 	// ResizeStrategy used for this resize operation
 	// +optional
 	ResizeStrategy string `json:"resizeStrategy,omitempty"`
-
-	// ResizeInProgressAnnotation indicates the resize operation identifier for concurrent resize detection
-	// +optional
-	ResizeInProgressAnnotation string `json:"resizeInProgressAnnotation,omitempty"`
 }
 
 // VolumeResizeStatus holds the status of a volume resize operation
