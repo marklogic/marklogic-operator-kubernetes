@@ -14,9 +14,6 @@ spec:
   persistence:
     enabled: false
     size: 10Gi
-  auth:
-    adminPassword: admin
-    adminUsername: admin
   markLogicGroups:
   - replicas: 2
     name: node
