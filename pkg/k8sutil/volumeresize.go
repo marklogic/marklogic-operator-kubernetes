@@ -659,11 +659,11 @@ func (oc *OperatorContext) validateResizePrerequisites() result.ReconcileResult 
 		return result.Error(err)
 	}
 
-	logger.Info(fmt.Sprintf("ALL PRECHECKS PASSED: Starting volume resize operations",
+	logger.Info("ALL PRECHECKS PASSED: Starting volume resize operations",
 		"storageClass", storageClassName,
 		"totalPVCs", len(pvcs),
 		"originalSize", cr.Status.VolumeResizeStatus.OriginalSize,
-		"targetSize", cr.Status.VolumeResizeStatus.TargetSize))
+		"targetSize", cr.Status.VolumeResizeStatus.TargetSize)
 	oc.Recorder.Event(cr, "Normal", "AllPrechecksPassedStartingResize",
 		fmt.Sprintf("All prechecks passed. Starting volume resize from %s to %s for %d PVC(s)",
 			cr.Status.VolumeResizeStatus.OriginalSize, cr.Status.VolumeResizeStatus.TargetSize, len(pvcs)))
