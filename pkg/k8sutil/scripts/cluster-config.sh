@@ -134,11 +134,11 @@ fi
 function restart_check {
     info "Waiting for MarkLogic to restart."
     local retry_count LAST_START
-    LAST_START=$(curl -s --anyauth --user "${ML_ADMIN_USERNAME}":"${ML_ADMIN_PASSWORD}" "http://$1:8001/admin/v1/timestamp")
+    LAST_START=$(curl -s -m 5 --anyauth --user "${ML_ADMIN_USERNAME}":"${ML_ADMIN_PASSWORD}" "http://$1:8001/admin/v1/timestamp")
     for ((retry_count = 0; retry_count < N_RETRY; retry_count = retry_count + 1)); do
         if [ "$2" == "${LAST_START}" ] || [ -z "${LAST_START}" ]; then
             sleep ${RETRY_INTERVAL}
-            LAST_START=$(curl -s --anyauth --user "${ML_ADMIN_USERNAME}":"${ML_ADMIN_PASSWORD}" "http://$1:8001/admin/v1/timestamp")
+            LAST_START=$(curl -s -m 5 --anyauth --user "${ML_ADMIN_USERNAME}":"${ML_ADMIN_PASSWORD}" "http://$1:8001/admin/v1/timestamp")
         else
             info "MarkLogic has restarted."
             return 0
@@ -385,7 +385,7 @@ function join_cluster {
         "-H" "Content-type: application/x-www-form-urlencoded" \
         "-o" "/tmp/cluster.zip" $HTTPS_OPTION
 
-    timestamp=$(curl -s "http://localhost:8001/admin/v1/timestamp" )
+    timestamp=$(curl -s --anyauth --user "${MARKLOGIC_ADMIN_USERNAME}:${MARKLOGIC_ADMIN_PASSWORD}" "http://localhost:8001/admin/v1/timestamp" )
 
     info "joining cluster of group ${MARKLOGIC_GROUP}"
     curl_retry_validate false "http://localhost:8001/admin/v1/cluster-config" 202 \
