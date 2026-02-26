@@ -1,5 +1,5 @@
 #! /bin/bash   
-# Copyright (c) 2024-2025 Progress Software Corporation and/or its subsidiaries or affiliates. All Rights Reserved. 
+# Copyright (c) 2024-2026 Progress Software Corporation and/or its subsidiaries or affiliates. All Rights Reserved. 
 
 # MarkLogic Cluster Configuration Script
 # Handles cluster initialization, security setup, host joining, TLS configuration, and group management
@@ -694,26 +694,11 @@ function set_status_file {
 
 function check_status_file_for_nonbootstrap {
     if [[ -f "$ML_KUBERNETES_FILE_PATH/status.txt" ]]; then
-        log "Info: status file exists. Verifying cluster state..."
-        # Verify the host is actually in the cluster by checking with bootstrap host
-        local protocol=$(get_current_host_protocol $MARKLOGIC_BOOTSTRAP_HOST)
-        local https_opt=""
-        if [[ $protocol == "https" ]]; then
-            https_opt="-k"
-        fi
-        response_code=$(curl -s --anyauth -o /dev/null -w '%{http_code}' \
-            --user "${MARKLOGIC_ADMIN_USERNAME}":"${MARKLOGIC_ADMIN_PASSWORD}" $https_opt \
-            $protocol://${MARKLOGIC_BOOTSTRAP_HOST}:8002/manage/v2/hosts/${HOST_FQDN}/properties?format=xml 2>/dev/null || echo "000")
-        
-        if [[ "${response_code}" == "200" ]]; then
-            log "Info: Host is already in cluster. Skip configuration"
-            exit 0
-        else
-            log "Info: Host not in cluster (response: ${response_code}). Continue configuration"
-            rm -f "$ML_KUBERNETES_FILE_PATH/status.txt"
-        fi
+        log "Info: status file exists. Configuration functions will verify state."
+        # Don't exit early - let the configuration functions handle state verification
+        # They already check if the host is in the cluster and skip if needed
     else
-        log "Info:  status file does not exist. Continue"
+        log "Info: status file does not exist. Continue"
     fi
 }
 
@@ -726,30 +711,16 @@ function check_status_file_for_boostrap {
         
         # Check if configuration values have changed
         if [[ "$new_group_name" != "$group_name" ]] || [[ "$new_group_xdqp_ssl_enabled" != "$group_xdqp_ssl_enabled" ]] || [[ "$new_https_enabled" != "$https_enabled" ]]; then
-            log "Info: changes made in values file. Continue Configuration"
+            log "Info: Configuration values changed. Removing status file and continuing."
+            rm -f "$ML_KUBERNETES_FILE_PATH/status.txt"
             return 0
         fi
         
-        # Values haven't changed, verify security DB is actually initialized
-        log "Info: No changes in values. Verifying security DB state..."
-        local protocol=$(get_current_host_protocol $MARKLOGIC_BOOTSTRAP_HOST)
-        local https_opt=""
-        if [[ $protocol == "https" ]]; then
-            https_opt="-k"
-        fi
-        response_code=$(curl -s --anyauth -o /dev/null -w '%{http_code}' \
-            --user "${MARKLOGIC_ADMIN_USERNAME}":"${MARKLOGIC_ADMIN_PASSWORD}" $https_opt \
-            $protocol://${MARKLOGIC_BOOTSTRAP_HOST}:8002/manage/v2/hosts/${MARKLOGIC_BOOTSTRAP_HOST}/properties 2>/dev/null || echo "000")
-        
-        if [[ "${response_code}" == "200" ]]; then
-            log "Info: Security DB already initialized. Skip configuration"
-            exit 0
-        else
-            log "Info: Security DB not initialized (response: ${response_code}). Continue configuration"
-            rm -f "$ML_KUBERNETES_FILE_PATH/status.txt"
-        fi
+        # Values match - let configuration functions verify and skip if already done
+        log "Info: Configuration values match. Configuration functions will verify current state."
+        # Don't exit early - the init functions already check and skip if configured
     else
-        return 0
+        log "Info: status file does not exist. Continue"
     fi
 }
 
