@@ -139,6 +139,7 @@ type License struct {
 }
 
 //+kubebuilder:object:root=true
+//+kubebuilder:metadata:annotations="helm.sh/resource-policy=keep"
 //+kubebuilder:subresource:status
 
 // MarklogicGroup is the Schema for the marklogicgroup API

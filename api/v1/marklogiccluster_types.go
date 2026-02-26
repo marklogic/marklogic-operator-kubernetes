@@ -138,6 +138,7 @@ type MarklogicClusterStatus struct {
 }
 
 //+kubebuilder:object:root=true
+//+kubebuilder:metadata:annotations="helm.sh/resource-policy=keep"
 //+kubebuilder:subresource:status
 
 // MarklogicCluster is the Schema for the marklogicclusters API
