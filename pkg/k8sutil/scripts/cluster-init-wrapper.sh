@@ -4,7 +4,7 @@
 # Combined Wrapper: Istio Resilience + Rootless Support + Auto-Restart Handling
 
 # --- Safety: Reset Readiness State ---
-rm -f /tmp/wrapper_ready
+rm -f /tmp/marklogic_ready
 
 # --- Port Liveness Helper ---
 # Checks if MarkLogic port 8001 is accepting connections.
@@ -317,7 +317,7 @@ else
 fi
 
 # --- Phase 6: Signal Readiness ---
-touch /tmp/wrapper_ready
+touch /tmp/marklogic_ready
 
 # --- Phase 7: Port-Based Watchdog ---
 # NOTE: kill -0 cannot be used to check the MarkLogic process liveness in rootless

@@ -777,7 +777,7 @@ func getReadinessProbe(probe marklogicv1.ContainerProbe) *corev1.Probe {
 					"-c",
 					// Only pass if MarkLogic is healthy AND the Wrapper finished successfully
 					// curl -f
-					"test -f /tmp/wrapper_ready && curl -s -f http://localhost:7997/",
+					"test -f /tmp/marklogic_ready && curl -s -f http://localhost:7997/",
 				},
 			},
 		},
