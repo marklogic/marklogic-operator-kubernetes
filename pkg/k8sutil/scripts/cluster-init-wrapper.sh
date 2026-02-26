@@ -368,10 +368,12 @@ while true; do
             fi
 
             echo "[Wrapper] Disk space:"
-            df -h /var/opt/MarkLogic 2>/dev/null || df -h
+            # Try specific path, then general df, then gracefully print unavailable
+            df -h /var/opt/MarkLogic 2>/dev/null || df -h 2>/dev/null || echo "  [Unavailable: 'df' command not found]"
 
             echo "[Wrapper] Memory usage:"
-            free -h 2>/dev/null || vm_stat
+            # Try 'free', fallback to raw kernel meminfo, then gracefully print unavailable
+            free -h 2>/dev/null || head -n 5 /proc/meminfo 2>/dev/null || echo "  [Unavailable: memory tools not found]"
 
             echo "[Wrapper] Terminating vendor script to trigger Pod restart..."
             kill -TERM "$SCRIPT_PID" 2>/dev/null
