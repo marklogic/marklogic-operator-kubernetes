@@ -68,10 +68,55 @@ echo "[Wrapper] MarkLogic is running with PID: $REAL_ML_PID"
 
 # --- Phase 3: Local Readiness Gate ---
 echo "[Wrapper] Waiting for local socket (localhost:8001)..."
+MAX_STARTUP_WAIT=60
+startup_count=0
 until curl -s -m 2 localhost:8001 > /dev/null; do 
     if ! kill -0 "$REAL_ML_PID" 2>/dev/null; then
          echo "[Wrapper] ERROR: MarkLogic process died during local startup."
          exit 1
+    fi
+    startup_count=$((startup_count+1))
+    if [ $startup_count -ge $MAX_STARTUP_WAIT ]; then
+        echo "[Wrapper] WARNING: Timeout waiting for localhost:8001 after $MAX_STARTUP_WAIT attempts."
+        echo "[Wrapper] This may indicate stale cluster configuration. Checking for status file..."
+        ML_KUBERNETES_FILE_PATH="/var/opt/MarkLogic/Kubernetes"
+        if [[ -f "$ML_KUBERNETES_FILE_PATH/status.txt" ]]; then
+            echo "[Wrapper] Found stale status file. Removing and restarting MarkLogic..."
+            rm -f "$ML_KUBERNETES_FILE_PATH/status.txt"
+            # Trigger restart by stopping MarkLogic
+            if [ -f "/etc/init.d/MarkLogic" ]; then
+                /etc/init.d/MarkLogic stop
+            else
+                /etc/MarkLogic/MarkLogic-service.sh stop
+            fi
+            # Wait for process to stop
+            for i in {1..30}; do
+                if ! kill -0 "$REAL_ML_PID" 2>/dev/null; then
+                    break
+                fi
+                sleep 1
+            done
+            # Start MarkLogic again
+            if [ -f "/etc/init.d/MarkLogic" ]; then
+                /etc/init.d/MarkLogic start
+            else
+                /etc/MarkLogic/MarkLogic-service.sh start
+            fi
+            # Update PID
+            sleep 5
+            if [ -f "$PID_FILE" ]; then
+                REAL_ML_PID=$(cat "$PID_FILE")
+                echo "[Wrapper] MarkLogic restarted with new PID: $REAL_ML_PID"
+            else
+                echo "[Wrapper] ERROR: Failed to restart MarkLogic"
+                exit 1
+            fi
+            # Reset counter to give it another chance
+            startup_count=0
+        else
+            echo "[Wrapper] ERROR: Timeout waiting for localhost:8001 and no status file found."
+            exit 1
+        fi
     fi
     sleep 2
 done
