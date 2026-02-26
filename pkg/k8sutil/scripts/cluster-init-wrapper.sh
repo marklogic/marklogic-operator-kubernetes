@@ -6,6 +6,17 @@
 # --- Safety: Reset Readiness State ---
 rm -f /tmp/wrapper_ready
 
+# --- Port Liveness Helper ---
+# Checks if MarkLogic port 8001 is accepting connections.
+# Uses -k to ignore TLS cert errors and tries both http and https so this
+# works before AND after cluster-config.sh enables TLS on the Admin port.
+# Returns 0 for any HTTP response (including 401 Unauthorized), non-zero
+# only when the connection is refused (i.e. the process is truly down).
+ml_port_open() {
+    curl -s -k -m 3 -o /dev/null http://localhost:8001 2>/dev/null || \
+    curl -s -k -m 3 -o /dev/null https://localhost:8001 2>/dev/null
+}
+
 # --- Define Graceful Shutdown Handler ---
 shutdown_handler() {
     echo "[Wrapper] SIGTERM received. Shutting down MarkLogic gracefully..."
@@ -17,17 +28,17 @@ shutdown_handler() {
         /etc/MarkLogic/MarkLogic-service.sh stop
     fi
     
-    # Wait for the REAL database process to exit
-    if [ -n "$REAL_ML_PID" ]; then
-        echo "[Wrapper] Waiting for MarkLogic (PID $REAL_ML_PID) to stop..."
-        for i in {1..30}; do
-            if ! kill -0 "$REAL_ML_PID" 2>/dev/null; then
-                echo "[Wrapper] Process exited."
-                break
-            fi
-            sleep 1
-        done
-    fi
+    # Wait for MarkLogic to stop by watching port 8001 close.
+    # Note: kill -0 is not used here - EPERM is indistinguishable from ESRCH in
+    # rootless containers, causing immediate false exit before data is flushed.
+    echo "[Wrapper] Waiting for MarkLogic to stop..."
+    for i in {1..30}; do
+        if ! ml_port_open; then
+            echo "[Wrapper] Port 8001 closed. Process exited."
+            break
+        fi
+        sleep 1
+    done
     
     exit 0
 }
@@ -70,7 +81,7 @@ echo "[Wrapper] MarkLogic is running with PID: $REAL_ML_PID"
 echo "[Wrapper] Waiting for local socket (localhost:8001)..."
 MAX_STARTUP_WAIT=60
 startup_count=0
-until curl -s -m 2 localhost:8001 > /dev/null; do 
+until ml_port_open; do
     # Note: kill -0 is not used here - EPERM is indistinguishable from ESRCH in
     # rootless containers (MarkLogic runs as different user). Rely on timeout instead.
     startup_count=$((startup_count+1))
@@ -98,8 +109,11 @@ if [[ "$MARKLOGIC_CLUSTER_TYPE" == "non-bootstrap" ]]; then
     echo "[Wrapper] Checking mesh connectivity to Bootstrap Host: $MARKLOGIC_BOOTSTRAP_HOST..."
     MAX_RETRIES=60
     count=0
-    until curl -s -o /dev/null -m 2 "http://${MARKLOGIC_BOOTSTRAP_HOST}:8001/"; do
-        # Note: kill -0 is not used here - EPERM is indistinguishable from ESRCH in
+    until curl -s -k -o /dev/null -m 2 "http://${MARKLOGIC_BOOTSTRAP_HOST}:8001/" 2>/dev/null || \
+          curl -s -k -o /dev/null -m 2 "https://${MARKLOGIC_BOOTSTRAP_HOST}:8001/" 2>/dev/null; do
+        # Note: Both http and https are tried (-k ignores cert errors) so this works
+        # whether or not the Bootstrap node has already enabled TLS via cluster-config.sh.
+        # kill -0 is not used here - EPERM is indistinguishable from ESRCH in
         # rootless containers (MarkLogic runs as different user). Rely on timeout instead.
         count=$((count+1))
         if [ $count -ge $MAX_RETRIES ]; then
@@ -149,7 +163,7 @@ TOTAL_CHECKS=$((MAX_TOTAL_WAIT / 3))
 for stability_check in $(seq 1 $TOTAL_CHECKS); do
     sleep 3
 
-    if curl -s -m 2 localhost:8001 > /dev/null 2>&1; then
+    if ml_port_open; then
         # Port is up
         if [ "$PORT_WAS_DOWN" = true ]; then
             echo "[Wrapper] Port 8001 recovered after restart - refreshing PID..."
@@ -206,7 +220,7 @@ if [ -f "$PID_FILE" ]; then
 fi
 
 # Verify MarkLogic is still responsive (confirming stability monitor result holds)
-if ! curl -s -m 5 localhost:8001 > /dev/null 2>&1; then
+if ! ml_port_open; then
     echo "[Wrapper] FATAL: MarkLogic port 8001 not responding after stability check!"
     if [ -f "/var/opt/MarkLogic/Logs/ErrorLog.txt" ]; then
         echo "[Wrapper] Last 80 lines of ErrorLog:"
@@ -243,7 +257,7 @@ until [ $health_retry -ge $MAX_HEALTH_RETRIES ]; do
     # Use port 8001 as liveness signal (kill -0 is unreliable during heavy I/O)
     # Port-based stability was already confirmed in Phase 5.5; here we just track
     # any additional restart that may occur during health check wait.
-    if ! curl -s -m 2 localhost:8001 > /dev/null 2>&1; then
+    if ! ml_port_open; then
         echo "[Wrapper] Port 8001 down during health check (attempt $health_retry/$MAX_HEALTH_RETRIES) - MarkLogic may be restarting..."
         health_retry=$((health_retry + 1))
         sleep 2
@@ -325,7 +339,7 @@ while true; do
     fi
 
     # 2. Check MarkLogic liveness via port (reliable in rootless containers)
-    if curl -s -m 3 localhost:8001 > /dev/null 2>&1; then
+    if ml_port_open; then
         # Port is up - MarkLogic is alive
         if [ $PORT_DOWN_COUNT -gt 0 ]; then
             echo "[Wrapper] Port 8001 recovered after $PORT_DOWN_COUNT down checks. MarkLogic restarted."
