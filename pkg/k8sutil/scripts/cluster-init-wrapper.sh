@@ -46,10 +46,20 @@ shutdown_handler() {
 trap 'shutdown_handler' SIGTERM SIGINT
 
 # --- Phase 1: Background Application Startup ---
-echo "[Wrapper] Starting MarkLogic vendor script..."
-# We run the ORIGINAL script. It will hang on 'tail -f'. That is fine.
+# Detect the correct startup script for backward compatibility with older QA images.
+# QA images use starter.sh (user switching). Official images use start-marklogic.sh.
+if [ -f "/usr/local/bin/starter.sh" ]; then
+    STARTUP_SCRIPT="/usr/local/bin/starter.sh"
+elif [ -f "/usr/local/bin/start-marklogic.sh" ]; then
+    STARTUP_SCRIPT="/usr/local/bin/start-marklogic.sh"
+else
+    echo "[Wrapper] FATAL ERROR: No valid startup script found in /usr/local/bin/."
+    exit 1
+fi
+echo "[Wrapper] Starting MarkLogic via ${STARTUP_SCRIPT}..."
+# We run the startup script in the background. It will hang on 'tail -f'. That is fine.
 # This avoids permission issues in rootless containers.
-/usr/local/bin/start-marklogic.sh &
+${STARTUP_SCRIPT} &
 SCRIPT_PID=$!
 echo "[Wrapper] Vendor script started with PID: $SCRIPT_PID"
 
