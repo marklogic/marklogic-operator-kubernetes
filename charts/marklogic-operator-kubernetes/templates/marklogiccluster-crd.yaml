@@ -4,6 +4,7 @@ metadata:
   name: marklogicclusters.marklogic.progress.com
   annotations:
     controller-gen.kubebuilder.io/version: v0.19.0
+    helm.sh/resource-policy: keep
   labels:
   {{- include "marklogic-operator-kubernetes.labels" . | nindent 4 }}
 spec:

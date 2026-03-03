@@ -1,4 +1,4 @@
-# Copyright (c) 2024-2025 Progress Software Corporation and/or its subsidiaries or affiliates. All Rights Reserved.
+# Copyright (c) 2024-2026 Progress Software Corporation and/or its subsidiaries or affiliates. All Rights Reserved.
 
 # VERSION defines the project version for the bundle.
 # Update this value when you upgrade the version of your project.
