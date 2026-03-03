@@ -124,6 +124,26 @@ backend marklogic-{{ .PortNumber}}-backend
 				result += getBackendServerConfigs(data)
 			}
 		}
+
+		// Add dynamic hosts to the same backend (not a new backend)
+		if cr.Spec.DynamicHost != nil && cr.Spec.DynamicHost.Enabled {
+			dynamicHostName := cr.GetObjectMeta().GetName() + "-dynamic"
+			replicas := int(cr.Spec.DynamicHost.Size)
+			for i := 0; i < replicas; i++ {
+				data := &HAProxyTemplateData{
+					PortNumber:       int(appServer.Port),
+					PodName:          dynamicHostName,
+					Path:             appServer.Path,
+					Index:            i,
+					ServiceName:      dynamicHostName,
+					NSName:           cr.ObjectMeta.Namespace,
+					ClusterName:      cr.Spec.ClusterDomain,
+					sslEnabledServer: cr.Spec.Tls != nil && cr.Spec.Tls.EnableOnDefaultAppServers,
+				}
+				result += getBackendServerConfigs(data)
+			}
+		}
+
 		result += "\n"
 	}
 
@@ -215,6 +235,23 @@ listen marklogic-TCP-{{.PortNumber}}
 					PodName:     name,
 					Index:       i,
 					ServiceName: name,
+					NSName:      cr.ObjectMeta.Namespace,
+					ClusterName: cr.Spec.ClusterDomain,
+				}
+				result += getBackendForTCP(data)
+			}
+		}
+
+		// Add dynamic hosts to TCP backend
+		if cr.Spec.DynamicHost != nil && cr.Spec.DynamicHost.Enabled {
+			dynamicHostName := cr.GetObjectMeta().GetName() + "-dynamic"
+			replicas := int(cr.Spec.DynamicHost.Size)
+			for i := 0; i < replicas; i++ {
+				data := &HAProxyTemplateData{
+					PortNumber:  int(tcpPort.Port),
+					PodName:     dynamicHostName,
+					Index:       i,
+					ServiceName: dynamicHostName,
 					NSName:      cr.ObjectMeta.Namespace,
 					ClusterName: cr.Spec.ClusterDomain,
 				}
