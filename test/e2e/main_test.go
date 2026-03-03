@@ -150,16 +150,30 @@ func TestMain(m *testing.M) {
 				return ctx, err
 			}
 			wd, _ := os.Getwd()
-			os.Setenv("GOBIN", wd+"/bin")
-			os.Setenv("PATH", os.Getenv("PATH")+":"+os.Getenv("GOBIN"))
+			gobin := wd + "/bin"
+			os.Setenv("GOBIN", gobin)
+			os.Setenv("PATH", os.Getenv("PATH")+":"+gobin)
 
-			if p := utils.RunCommand(fmt.Sprintf("go install sigs.k8s.io/kustomize/kustomize/v5@%s", kustomizeVer)); p.Err() != nil {
-				log.Printf("Failed to install kustomize binary: %s: %s", p.Err(), p.Result())
-				return ctx, p.Err()
+			// Only download kustomize if it is not already present in bin/
+			kustomizePath := gobin + "/kustomize"
+			if _, err := os.Stat(kustomizePath); os.IsNotExist(err) {
+				if p := utils.RunCommand(fmt.Sprintf("go install sigs.k8s.io/kustomize/kustomize/v5@%s", kustomizeVer)); p.Err() != nil {
+					log.Printf("Failed to install kustomize binary: %s: %s", p.Err(), p.Result())
+					return ctx, p.Err()
+				}
+			} else {
+				log.Printf("kustomize already present at %s, skipping install", kustomizePath)
 			}
-			if p := utils.RunCommand(fmt.Sprintf("go install sigs.k8s.io/controller-tools/cmd/controller-gen@%s", ctrlgenVer)); p.Err() != nil {
-				log.Printf("Failed to install controller-gen binary: %s: %s", p.Err(), p.Result())
-				return ctx, p.Err()
+
+			// Only download controller-gen if it is not already present in bin/
+			ctrlgenPath := gobin + "/controller-gen"
+			if _, err := os.Stat(ctrlgenPath); os.IsNotExist(err) {
+				if p := utils.RunCommand(fmt.Sprintf("go install sigs.k8s.io/controller-tools/cmd/controller-gen@%s", ctrlgenVer)); p.Err() != nil {
+					log.Printf("Failed to install controller-gen binary: %s: %s", p.Err(), p.Result())
+					return ctx, p.Err()
+				}
+			} else {
+				log.Printf("controller-gen already present at %s, skipping install", ctrlgenPath)
 			}
 
 			p := utils.RunCommand("kustomize version")

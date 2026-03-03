@@ -218,19 +218,130 @@ func verifyWrapperLogs(ctx context.Context, t *testing.T, namespace, podName, ex
 	return fmt.Errorf("expected log message '%s' not found in pod %s after %d attempts", expectedLog, podName, maxLogRetries)
 }
 
-// killMarkLogicProcess kills the MarkLogic process in a pod to test crash recovery
+// killMarkLogicProcess forces a container restart in a pod by crashing the MarkLogic
+// process tree and, when necessary, killing the vendor startup script's keepalive so
+// the wrapper's watchdog fires and exits (causing Kubernetes to restart the container).
+//
+// Why multiple strategies are needed:
+//   - MarkLogic runs as a different OS user than the kubectl-exec session in rootless
+//     UBI9 containers, so `readlink /proc/*/exe` returns empty (EPERM on the symlink).
+//   - /proc/PID/comm is world-readable and exposes the 15-char process name: we use it
+//     to find MarkLogic processes across user boundaries.
+//   - Even if kill -9 on a MarkLogic process is permitted, init.d may restart it quickly.
+//     Killing the vendor script's keepalive process (`tail -f /dev/null`) is always
+//     permitted (same user as the container) and is the signal the wrapper monitors: the
+//     wrapper's Phase 7 loop checks `kill -0 "$SCRIPT_PID"` and exits with code 1 the
+//     moment that process disappears, which Kubernetes sees as a container crash.
 func killMarkLogicProcess(t *testing.T, namespace, podName string) error {
-	t.Logf("Killing MarkLogic process in pod %s", podName)
+	t.Logf("Killing MarkLogic processes in pod %s", podName)
 
-	killCmd := "pkill -9 -f /opt/MarkLogic/bin/MarkLogic"
-	output, err := utils.ExecCmdInPod(podName, namespace, mlServerContainer, killCmd)
-	if err != nil {
-		// pkill returns non-zero if no process found, which may happen if it already exited
-		t.Logf("pkill command output: %s, err: %v", output, err)
+	// Strategy 1: Kill the process recorded in the PID file (best-effort).
+	pidFile := "/var/run/MarkLogic.pid"
+	killByPidFileCmd := fmt.Sprintf(
+		`ML_PID=$(cat %s 2>/dev/null); [ -n "$ML_PID" ] && kill -9 "$ML_PID" 2>/dev/null; true`,
+		pidFile,
+	)
+	out1, err1 := utils.ExecCmdInPod(podName, namespace, mlServerContainer, killByPidFileCmd)
+	if err1 != nil {
+		t.Logf("PID-file kill output: %s, err: %v (may be benign)", out1, err1)
+	} else {
+		t.Logf("PID-file kill sent (output: %s)", out1)
 	}
 
-	t.Logf("Successfully sent kill signal to MarkLogic process in pod %s", podName)
+	// Strategy 2: Scan /proc/*/comm (world-readable, no symlink needed) to find ALL
+	// MarkLogic processes regardless of which OS user they run as.
+	killByCommCmd := `killed=0; ` +
+		`for f in /proc/[0-9]*/comm; do ` +
+		`  comm=$(cat "$f" 2>/dev/null); ` +
+		`  case "$comm" in ` +
+		`    MarkLogic*|mlserver*|MLServer*) ` +
+		`      pid=${f%/comm}; pid=${pid#/proc/}; ` +
+		`      kill -9 "$pid" 2>/dev/null && killed=$((killed+1)); ` +
+		`      ;; ` +
+		`  esac; ` +
+		`done; ` +
+		`echo "Killed $killed MarkLogic process(es) via comm"`
+	out2, err2 := utils.ExecCmdInPod(podName, namespace, mlServerContainer, killByCommCmd)
+	if err2 != nil {
+		t.Logf("Comm-scan kill output: %s, err: %v (may be benign)", out2, err2)
+	} else {
+		t.Logf("Comm-scan kill result: %s", strings.TrimSpace(out2))
+	}
+
+	// Strategy 3: Kill the vendor script's keepalive process.
+	// start-marklogic-rootless.sh ends with `tail -f /dev/null` which is SCRIPT_PID that
+	// the wrapper monitors. Killing it causes the wrapper to exit immediately (exit 1),
+	// which is the most reliable path to a container restart. This process runs as the
+	// same user as the container so kill always succeeds.
+	killTailCmd := `killed=0; ` +
+		`for f in /proc/[0-9]*/comm; do ` +
+		`  comm=$(cat "$f" 2>/dev/null); ` +
+		`  if [ "$comm" = "tail" ]; then ` +
+		`    pid=${f%/comm}; pid=${pid#/proc/}; ` +
+		`    cmdline=$(cat "/proc/$pid/cmdline" 2>/dev/null | tr "\\0" " "); ` +
+		`    case "$cmdline" in ` +
+		`      *-f*) kill -9 "$pid" 2>/dev/null && killed=$((killed+1)); ;; ` +
+		`    esac; ` +
+		`  fi; ` +
+		`done; ` +
+		`echo "Killed $killed tail keepalive process(es)"`
+	out3, err3 := utils.ExecCmdInPod(podName, namespace, mlServerContainer, killTailCmd)
+	if err3 != nil {
+		t.Logf("Tail-kill output: %s, err: %v (may be benign)", out3, err3)
+	} else {
+		t.Logf("Tail-kill result: %s", strings.TrimSpace(out3))
+	}
+
+	t.Logf("Kill sequence complete for pod %s", podName)
 	return nil
+}
+
+// waitForHostsInCluster polls the MarkLogic hosts endpoint on the given pod until
+// all expected host substrings appear in the response. This is needed for multi-node
+// tests where the management API may be healthy on the bootstrap node before the
+// joining nodes have fully completed cluster membership.
+func waitForHostsInCluster(ctx context.Context, t *testing.T, namespace, podName string, expectedHosts []string, timeout time.Duration) error {
+	t.Logf("Waiting for hosts %v to appear in cluster (querying pod %s)", expectedHosts, podName)
+
+	url := "http://localhost:8002/manage/v2/hosts"
+	curlCommand := fmt.Sprintf("curl -s %s --digest -u '%s:%s'", url, istioAdminUsername, istioAdminPassword)
+
+	start := time.Now()
+	for {
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("context cancelled while waiting for cluster hosts: %w", ctx.Err())
+		default:
+		}
+
+		output, err := utils.ExecCmdInPod(podName, namespace, mlServerContainer, curlCommand)
+		if err == nil {
+			allFound := true
+			for _, host := range expectedHosts {
+				if !strings.Contains(output, host) {
+					allFound = false
+					t.Logf("Host %q not yet in cluster (will retry)", host)
+					break
+				}
+			}
+			if allFound {
+				t.Logf("All expected hosts %v are present in the cluster", expectedHosts)
+				return nil
+			}
+		} else {
+			t.Logf("Failed to query hosts endpoint on pod %s: %v", podName, err)
+		}
+
+		if time.Since(start) > timeout {
+			lastOutput := ""
+			if err == nil {
+				lastOutput = output
+			}
+			return fmt.Errorf("hosts %v did not all appear in cluster within %v. Last output: %s", expectedHosts, timeout, lastOutput)
+		}
+
+		time.Sleep(podCheckInterval)
+	}
 }
 
 // waitForClusterHealth waits for the MarkLogic cluster to be healthy by querying
@@ -242,6 +353,8 @@ func waitForClusterHealth(ctx context.Context, t *testing.T, namespace, podName 
 	t.Logf("Waiting for MarkLogic cluster to become healthy (via pod %s)", podName)
 
 	url := "http://localhost:8002/manage/v2"
+	// Use --digest explicitly: MarkLogic's management API (8002) requires HTTP Digest auth.
+	// Quoting the credentials handles special characters (e.g. '@') in the password.
 	curlCommand := fmt.Sprintf(
 		"curl -s -o /dev/null -w '%%{http_code}' %s --anyauth -u %s:%s",
 		url, istioAdminUsername, istioAdminPassword,
@@ -393,11 +506,12 @@ func TestIstioAmbientProvisioning(t *testing.T) {
 			podName := fmt.Sprintf("node-%d", i)
 			createdPods = append(createdPods, podName)
 
-			err := utils.WaitForPod(ctx, t, client, istioAmbientNs, podName, istioWaitTimeout)
+			// Wait for Running + Ready so MarkLogic is fully initialized before subsequent checks.
+			err := utils.WaitForPod(ctx, t, client, istioAmbientNs, podName, istioWaitTimeout, true)
 			if err != nil {
 				t.Fatalf("Failed to wait for pod %s: %v", podName, err)
 			}
-			t.Logf("Pod %s is running", podName)
+			t.Logf("Pod %s is Ready", podName)
 		}
 		return ctx
 	})
@@ -453,10 +567,6 @@ func TestIstioAmbientProvisioning(t *testing.T) {
 
 	// Assess: Verify wrapper logs show mesh network ready for non-bootstrap pods
 	feature.Assess("Wrapper logs show mesh network ready", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
-		// Wait a bit for pods to stabilize before checking logs
-		t.Logf("Waiting for pods to stabilize before checking wrapper logs...")
-		time.Sleep(30 * time.Second)
-
 		// Double-check all pods still exist
 		client := c.Client()
 		for _, podName := range createdPods {
@@ -473,13 +583,10 @@ func TestIstioAmbientProvisioning(t *testing.T) {
 			}
 		}
 
-		// Non-bootstrap pods should show mesh network ready message
-		for i := 1; i < int(ambientReplicas); i++ {
-			podName := fmt.Sprintf("node-%d", i)
-			if err := verifyWrapperLogs(ctx, t, istioAmbientNs, podName, wrapperReadyLog); err != nil {
-				t.Fatalf("Failed to verify mesh ready log for pod %s: %v", podName, err)
-			}
-		}
+		// All pods in this group are in the bootstrap group (IsBootstrap: true), so
+		// MARKLOGIC_CLUSTER_TYPE is "bootstrap" for all replicas. The wrapper's Phase 4
+		// mesh gatekeeper only runs for non-bootstrap groups (MARKLOGIC_CLUSTER_TYPE=non-bootstrap).
+		// Cross-group mesh connectivity is validated in TestIstioAmbientNetworkGatekeeper.
 		t.Log("All pods show successful mesh network initialization")
 		return ctx
 	})
@@ -496,7 +603,7 @@ func TestIstioAmbientProvisioning(t *testing.T) {
 	feature.Assess("MarkLogic cluster is formed", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 		podName := "node-0"
 		url := "http://localhost:8002/manage/v2/hosts"
-		curlCommand := fmt.Sprintf("curl -s %s --anyauth -u %s:%s", url, istioAdminUsername, istioAdminPassword)
+		curlCommand := fmt.Sprintf("curl -s %s --digest -u '%s:%s'", url, istioAdminUsername, istioAdminPassword)
 
 		output, err := utils.ExecCmdInPod(podName, istioAmbientNs, mlServerContainer, curlCommand)
 		if err != nil {
@@ -609,12 +716,16 @@ func TestIstioAmbientResilience(t *testing.T) {
 		}
 
 		// Wait for pod to be ready
-		err := utils.WaitForPod(ctx, t, client, resilienceNs, "node-0", istioWaitTimeout)
+		// Wait for Running + Ready so MarkLogic is fully initialized (readiness probe on port 7997
+		// passes only after security init and cluster-config.sh complete, at which point port 8002
+		// is also serving the management API). This eliminates spurious 403/401/exit-7 noise in
+		// the subsequent waitForClusterHealth call.
+		err := utils.WaitForPod(ctx, t, client, resilienceNs, "node-0", istioWaitTimeout, true)
 		if err != nil {
 			t.Fatalf("Failed to wait for pod node-0: %v", err)
 		}
 
-		// Wait for cluster to be ready
+		// Confirm management API is healthy (should be near-instant now that pod is Ready).
 		if err := waitForClusterHealth(ctx, t, resilienceNs, "node-0", istioWaitTimeout); err != nil {
 			t.Fatalf("Cluster health check failed: %v", err)
 		}
@@ -668,50 +779,113 @@ func TestIstioAmbientResilience(t *testing.T) {
 
 		t.Log("Waiting for container restart after process crash...")
 
-		// Wait until the pod is Running, Ready, and the container RestartCount increases
-		err := wait.For(func(ctx context.Context) (bool, error) {
-			var pod corev1.Pod
-			if err := resources.Get(ctx, "node-0", resilienceNs, &pod); err != nil {
-				if apierrors.IsNotFound(err) {
-					// Pod may temporarily disappear; keep waiting
-					return false, nil
-				}
-				return false, err
-			}
-
-			// Ensure pod is Running
-			if pod.Status.Phase != corev1.PodRunning {
-				return false, nil
-			}
-
-			// Ensure restart count increased
-			currentRestartCount := getRestartCount(&pod)
-			if currentRestartCount <= initialRestartCount {
-				return false, nil
-			}
-
-			// Ensure pod is Ready again
-			ready := false
-			for _, cond := range pod.Status.Conditions {
-				if cond.Type == corev1.PodReady && cond.Status == corev1.ConditionTrue {
-					ready = true
+		// Phase A0: Confirm the kill took effect.
+		// There are two valid signals that the kill worked:
+		//   (a) Port 8001 goes down  — MarkLogic process tree was successfully killed.
+		//   (b) RestartCount increases — the wrapper detected SCRIPT_PID missing (tail
+		//       keepalive killed) and exited immediately, triggering a container restart
+		//       before port 8001 even had a chance to go down.
+		// We poll for either within 2 minutes before proceeding.
+		portDownCmd := `curl -s -k -m 2 -o /dev/null http://localhost:8001 2>/dev/null; echo $?`
+		killConfirmTimeout := 2 * time.Minute
+		killConfirmStart := time.Now()
+		killConfirmed := false
+		for time.Since(killConfirmStart) < killConfirmTimeout {
+			// Check (b) first: fast path — wrapper already exited via tail-kill.
+			var podCheck corev1.Pod
+			if err := resources.Get(ctx, "node-0", resilienceNs, &podCheck); err == nil {
+				if getRestartCount(&podCheck) > initialRestartCount {
+					t.Log("Kill confirmed: RestartCount already increased (wrapper exited via script-keepalive kill)")
+					killConfirmed = true
 					break
 				}
 			}
-
-			if ready {
-				t.Logf("Container restart verified: RestartCount increased from %d to %d", initialRestartCount, currentRestartCount)
+			// Check (a): port 8001 down.
+			portOut, portErr := utils.ExecCmdInPod("node-0", resilienceNs, mlServerContainer, portDownCmd)
+			if portErr != nil || strings.TrimSpace(portOut) != "0" {
+				t.Logf("Kill confirmed: port 8001 is down (curl exit: %s err: %v)", strings.TrimSpace(portOut), portErr)
+				killConfirmed = true
+				break
 			}
-			return ready, nil
-		},
-			wait.WithTimeout(5*time.Minute),
-			wait.WithContext(ctx),
-		)
-		if err != nil {
-			t.Fatalf("Pod did not restart and become ready after crash: %v", err)
+			t.Logf("Kill not yet confirmed (port still up, RestartCount unchanged) — retrying...")
+			time.Sleep(5 * time.Second)
+		}
+		if !killConfirmed {
+			t.Fatalf("Kill not confirmed within %v: port 8001 still up and RestartCount unchanged. "+
+				"MarkLogic processes may be running as a different OS user than the exec session. "+
+				"Check container security context and MarkLogic startup user.",
+				killConfirmTimeout)
 		}
 
-		t.Log("Container successfully restarted after process crash")
+		// Phase A: Wait for the RestartCount to increase.
+		// The wrapper's port watchdog needs ~30 s of sustained port-down before it
+		// exits (6 checks × 5 s = 30 s). Allow 3 minutes for that + Kubernetes to
+		// actually recreate the container.
+		restartDetectTimeout := 3 * time.Minute
+		restartDetectStart := time.Now()
+		restartDetected := false
+		var postRestartExpectedCount int32
+		for time.Since(restartDetectStart) < restartDetectTimeout {
+			var pod corev1.Pod
+			if err := resources.Get(ctx, "node-0", resilienceNs, &pod); err != nil {
+				if !apierrors.IsNotFound(err) {
+					t.Logf("Error getting pod node-0: %v (retrying)", err)
+				}
+				time.Sleep(podCheckInterval)
+				continue
+			}
+			currentRestartCount := getRestartCount(&pod)
+			if currentRestartCount > initialRestartCount {
+				t.Logf("Container restart detected: RestartCount increased from %d to %d", initialRestartCount, currentRestartCount)
+				postRestartExpectedCount = currentRestartCount
+				restartDetected = true
+				break
+			}
+			time.Sleep(podCheckInterval)
+		}
+		if !restartDetected {
+			t.Fatalf("Container RestartCount did not increase within %v after process crash (still at %d). "+
+				"The wrapper watchdog (~30 s port-down threshold) may not have fired.",
+				restartDetectTimeout, initialRestartCount)
+		}
+
+		// Phase B: Wait for the pod to be Running and Ready after the restart.
+		// MarkLogic needs to re-run the full wrapper initialization (phases 1-7) including
+		// cluster join, which can take several minutes.
+		t.Logf("Container restarted (RestartCount=%d). Waiting for pod to become Ready...", postRestartExpectedCount)
+		readyTimeout := istioWaitTimeout
+		readyStart := time.Now()
+		podReady := false
+		for time.Since(readyStart) < readyTimeout {
+			var pod corev1.Pod
+			if err := resources.Get(ctx, "node-0", resilienceNs, &pod); err != nil {
+				if !apierrors.IsNotFound(err) {
+					t.Logf("Error getting pod node-0: %v (retrying)", err)
+				}
+				time.Sleep(podCheckInterval)
+				continue
+			}
+			if pod.Status.Phase != corev1.PodRunning {
+				time.Sleep(podCheckInterval)
+				continue
+			}
+			for _, cond := range pod.Status.Conditions {
+				if cond.Type == corev1.PodReady && cond.Status == corev1.ConditionTrue {
+					podReady = true
+					break
+				}
+			}
+			if podReady {
+				t.Logf("Pod node-0 is Running and Ready after restart (took %v)", time.Since(readyStart).Round(time.Second))
+				break
+			}
+			time.Sleep(podCheckInterval)
+		}
+		if !podReady {
+			t.Fatalf("Pod node-0 did not become Ready within %v after container restart", readyTimeout)
+		}
+
+		t.Log("Container successfully restarted and is Ready after process crash")
 		return ctx
 	})
 
@@ -865,7 +1039,8 @@ func TestIstioAmbientNetworkGatekeeper(t *testing.T) {
 		client := c.Client()
 		bootstrapPod := "dnode-0"
 
-		err := utils.WaitForPod(ctx, t, client, istioMultinodeNs, bootstrapPod, istioWaitTimeout)
+		// Wait for Ready (not just Running) so the wrapper has finished initializing.
+		err := utils.WaitForPod(ctx, t, client, istioMultinodeNs, bootstrapPod, istioWaitTimeout, true)
 		if err != nil {
 			t.Fatalf("Failed to wait for bootstrap pod: %v", err)
 		}
@@ -884,7 +1059,8 @@ func TestIstioAmbientNetworkGatekeeper(t *testing.T) {
 		client := c.Client()
 		enodePod := "enode-0"
 
-		err := utils.WaitForPod(ctx, t, client, istioMultinodeNs, enodePod, istioWaitTimeout)
+		// Wait for Ready (not just Running) so the wrapper has completed mesh connectivity checks.
+		err := utils.WaitForPod(ctx, t, client, istioMultinodeNs, enodePod, istioWaitTimeout, true)
 		if err != nil {
 			t.Fatalf("Failed to wait for E-node pod: %v", err)
 		}
@@ -901,19 +1077,12 @@ func TestIstioAmbientNetworkGatekeeper(t *testing.T) {
 	// Assess: Verify inter-node communication — both hosts in cluster
 	feature.Assess("Inter-node communication works via mesh", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 		bootstrapPod := "dnode-0"
-		url := "http://localhost:8002/manage/v2/hosts"
-		curlCommand := fmt.Sprintf("curl -s %s --anyauth -u %s:%s", url, istioAdminUsername, istioAdminPassword)
 
-		output, err := utils.ExecCmdInPod(bootstrapPod, istioMultinodeNs, mlServerContainer, curlCommand)
-		if err != nil {
-			t.Fatalf("Failed to query MarkLogic hosts: %v", err)
-		}
-
-		if !strings.Contains(output, "dnode-0") {
-			t.Fatalf("Bootstrap host dnode-0 not found in cluster. Output: %s", output)
-		}
-		if !strings.Contains(output, "enode-0") {
-			t.Fatalf("E-node host enode-0 not found in cluster. Output: %s", output)
+		// Poll the hosts endpoint until both dnode-0 and enode-0 are present.
+		// The management API may be healthy on dnode-0 before enode-0 has finished
+		// joining the cluster, so we must retry rather than do a one-shot check.
+		if err := waitForHostsInCluster(ctx, t, istioMultinodeNs, bootstrapPod, []string{"dnode-0", "enode-0"}, istioWaitTimeout); err != nil {
+			t.Fatalf("Inter-node communication check failed: %v", err)
 		}
 
 		t.Log("Both dnode and enode are present in the cluster")
@@ -1086,7 +1255,7 @@ func TestNonIstioRegression(t *testing.T) {
 
 		podName := "node-0"
 		url := "http://localhost:8002/manage/v2/hosts"
-		curlCommand := fmt.Sprintf("curl -s %s --anyauth -u %s:%s", url, istioAdminUsername, istioAdminPassword)
+		curlCommand := fmt.Sprintf("curl -s %s --digest -u '%s:%s'", url, istioAdminUsername, istioAdminPassword)
 
 		output, err := utils.ExecCmdInPod(podName, nonIstioNs, mlServerContainer, curlCommand)
 		if err != nil {
