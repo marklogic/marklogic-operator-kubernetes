@@ -5008,6 +5008,11 @@ spec:
                     description: CompletionTime is when the resize operation completed
                     format: date-time
                     type: string
+                  consecutiveRetries:
+                    description: ConsecutiveRetries tracks consecutive retries for
+                      the same error (resets on success)
+                    format: int32
+                    type: integer
                   currentPVCIndex:
                     description: CurrentPVCIndex tracks which PVC is being processed
                       in sequential mode
@@ -5015,6 +5020,10 @@ spec:
                     type: integer
                   currentSize:
                     description: CurrentSize is the current/original size of the volumes
+                    type: string
+                  errorClassification:
+                    description: ErrorClassification categorizes the error type (e.g.,
+                      Transient, Persistent, RateLimited)
                     type: string
                   failedPVCs:
                     description: FailedPVCs contains details about PVCs that failed
@@ -5042,6 +5051,10 @@ spec:
                     description: FileSystemResizePending indicates if pods need restart
                       for filesystem resize
                     type: boolean
+                  lastErrorMessage:
+                    description: LastErrorMessage stores the most recent error message
+                      for troubleshooting
+                    type: string
                   lastPhaseBeforeStall:
                     description: LastPhaseBeforeStall records the phase before entering
                       stalled state for recovery
@@ -5051,6 +5064,11 @@ spec:
                       during filesystem resize
                     format: int32
                     type: integer
+                  lastRetryTime:
+                    description: LastRetryTime stores when the last retry attempt
+                      was made
+                    format: date-time
+                    type: string
                   markLogicHealthPassed:
                     description: MarkLogicHealthPassed indicates if MarkLogic health
                       checks passed
@@ -5076,19 +5094,6 @@ spec:
                     type: array
                   phase:
                     description: Phase is the current phase of the volume resize operation
-                    enum:
-                    - Validating
-                    - ResizingPVCs
-                    - WaitingForPVCResize
-                    - VerifyingHealth
-                    - BackingUpStatefulSet
-                    - DeletingStatefulSet
-                    - RecreatingStatefulSet
-                    - VerifyingPodsRunning
-                    - RestartingPods
-                    - Completed
-                    - Stalled
-                    - Failed
                     type: string
                   podPendingStartTime:
                     description: PodPendingStartTime tracks when a pod first entered
@@ -5100,6 +5105,11 @@ spec:
                       resized
                     format: int32
                     type: integer
+                  queuedTargetSize:
+                    description: |-
+                      QueuedTargetSize is a new resize request that came in while another resize was in progress
+                      This will be picked up after the current resize completes
+                    type: string
                   reason:
                     description: Reason provides specific reason for stalled or failed
                       states

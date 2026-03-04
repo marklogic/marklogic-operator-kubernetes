@@ -140,6 +140,13 @@ func main() {
 		setupLog.Error(err, "unable to create controller", "controller", "MarklogicCluster")
 		os.Exit(1)
 	}
+	// Setup webhooks if running in a cluster with webhook support
+	if os.Getenv("ENABLE_WEBHOOKS") != "false" {
+		if err = (&marklogicv1.MarklogicGroup{}).SetupWebhookWithManager(mgr); err != nil {
+			setupLog.Error(err, "unable to create webhook", "webhook", "MarklogicGroup")
+			os.Exit(1)
+		}
+	}
 	//+kubebuilder:scaffold:builder
 
 	if err := mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {

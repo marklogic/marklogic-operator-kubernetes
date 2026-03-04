@@ -211,6 +211,11 @@ type ResizeProgress struct {
 	// TargetSize is the desired size for the volumes
 	TargetSize string `json:"targetSize,omitempty"`
 
+	// QueuedTargetSize is a new resize request that came in while another resize was in progress
+	// This will be picked up after the current resize completes
+	// +optional
+	QueuedTargetSize string `json:"queuedTargetSize,omitempty"`
+
 	// OriginalSize is the size before resize (alias for CurrentSize, kept for compatibility)
 	OriginalSize string `json:"originalSize,omitempty"`
 
@@ -249,6 +254,22 @@ type ResizeRetryInfo struct {
 	// FailedPVCs contains details about PVCs that failed to resize
 	// +optional
 	FailedPVCs []FailedPVCInfo `json:"failedPVCs,omitempty"`
+
+	// LastErrorMessage stores the most recent error message for troubleshooting
+	// +optional
+	LastErrorMessage string `json:"lastErrorMessage,omitempty"`
+
+	// ErrorClassification categorizes the error type (e.g., Transient, Persistent, RateLimited)
+	// +optional
+	ErrorClassification string `json:"errorClassification,omitempty"`
+
+	// ConsecutiveRetries tracks consecutive retries for the same error (resets on success)
+	// +optional
+	ConsecutiveRetries int32 `json:"consecutiveRetries,omitempty"`
+
+	// LastRetryTime stores when the last retry attempt was made
+	// +optional
+	LastRetryTime *metav1.Time `json:"lastRetryTime,omitempty"`
 }
 
 // ResizeHealthInfo tracks health and validation status

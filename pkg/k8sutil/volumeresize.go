@@ -21,24 +21,18 @@ import (
 )
 
 const (
-	// PVCResizeTimeoutMinutes is the timeout for each PVC resize operation
-	PVCResizeTimeoutMinutes = 10
 	// VolumeClaimTemplateName is the default name for the data volume claim template
 	VolumeClaimTemplateName = "datadir"
-	// EBSCooldownRequeueMinutes is the requeue delay when EBS cooldown is detected
-	EBSCooldownRequeueMinutes = 30
 	// ConditionTypeProgressing is the condition type for tracking resize progress
 	ConditionTypeProgressing = "Progressing"
 	// ConditionTypeVolumeResizeComplete is the condition type for resize completion
 	ConditionTypeVolumeResizeComplete = "VolumeResizeComplete"
-	// PodPendingTimeoutMinutes is the timeout for pods stuck in pending state
-	PodPendingTimeoutMinutes = 15
 	// MaxRetryCount is the maximum number of retries for recoverable operations
 	MaxRetryCount = 3
 	// ResizeAnnotationKey is the annotation key for tracking resize operations
 	ResizeAnnotationKey = "marklogic.com/volume-resize-id"
-	// STSRecreateRecoveryMinutes is the time to wait before recovering from interrupted STS recreate
-	STSRecreateRecoveryMinutes = 5
+	// PauseResizeAnnotationKey is the annotation key to pause/resume resize operations
+	PauseResizeAnnotationKey = "marklogic.com/pause-resize"
 )
 
 // ReconcileVolumeResize handles the volume resize workflow for a MarklogicGroup
@@ -53,10 +47,11 @@ func (oc *OperatorContext) ReconcileVolumeResize() result.ReconcileResult {
 	}
 
 	// Check for interrupted template update recovery (edge case: Template update interrupted)
+	// If StatefulSet deletion timestamp exists, track it for logging but don't timeout
 	if cr.Status.VolumeResizeStatus != nil && cr.Status.VolumeResizeStatus.StatefulSetDeletionTimestamp != nil {
 		elapsed := time.Since(cr.Status.VolumeResizeStatus.StatefulSetDeletionTimestamp.Time)
-		if elapsed > time.Duration(STSRecreateRecoveryMinutes)*time.Minute {
-			logger.Info("WARNING: Recovered from interrupted template update", "elapsed", elapsed)
+		if elapsed > 5*time.Minute {
+			logger.Info("INFO: Recovered from interrupted template update", "elapsed", elapsed)
 			oc.Recorder.Event(cr, "Warning", "TemplateUpdateRecovered", fmt.Sprintf("Recovered from interrupted template update after %v", elapsed))
 			// Clear stale deletion timestamp and proceed with recreation
 			cr.Status.VolumeResizeStatus.StatefulSetDeletionTimestamp = nil
@@ -191,11 +186,24 @@ func (oc *OperatorContext) ReconcileVolumeResize() result.ReconcileResult {
 	}
 
 	// Check if a new resize has been requested after a previous one completed
-	if cr.Status.VolumeResizeStatus.Phase == marklogicv1.VolumeResizePhaseCompleted &&
-		cr.Status.VolumeResizeStatus.TargetSize != targetSize {
-		logger.Info("New resize request after previous completion", "previousTarget", cr.Status.VolumeResizeStatus.TargetSize, "newTarget", targetSize)
-		// Reset status to allow new resize to proceed
-		return oc.initializeVolumeResizeStatus(currentSize, targetSize)
+	if cr.Status.VolumeResizeStatus.Phase == marklogicv1.VolumeResizePhaseCompleted {
+		// Check if there's a queued resize request
+		if cr.Status.VolumeResizeStatus.QueuedTargetSize != "" {
+			queuedTarget := cr.Status.VolumeResizeStatus.QueuedTargetSize
+			logger.Info("Queued resize request found after completion - starting new resize",
+				"queuedTarget", queuedTarget)
+			cr.Status.VolumeResizeStatus.QueuedTargetSize = "" // Clear the queue
+			if err := oc.updateStatus(); err != nil {
+				logger.Error(err, "Failed to clear queued target size")
+			}
+			return oc.initializeVolumeResizeStatus(currentSize, queuedTarget)
+		}
+		// Check if a new resize has been requested via spec change
+		if cr.Status.VolumeResizeStatus.TargetSize != targetSize {
+			logger.Info("New resize request after previous completion", "previousTarget", cr.Status.VolumeResizeStatus.TargetSize, "newTarget", targetSize)
+			// Reset status to allow new resize to proceed
+			return oc.initializeVolumeResizeStatus(currentSize, targetSize)
+		}
 	}
 
 	// Execute resize based on current phase
@@ -287,6 +295,11 @@ func (oc *OperatorContext) checkVolumeResizeNeeded(sts *appsv1.StatefulSet, cr *
 					"existingTarget", existingTargetSize, "newTarget", targetSize)
 				oc.Recorder.Event(cr, "Warning", "ConcurrentResize",
 					fmt.Sprintf("New resize request (%s) queued; current resize to %s in progress", targetSize, existingTargetSize))
+				// Store the queued target size so it can be picked up after completion
+				cr.Status.VolumeResizeStatus.QueuedTargetSize = targetSize
+				if err := oc.updateStatus(); err != nil {
+					logger.Error(err, "Failed to update status with queued resize target")
+				}
 				// Continue with existing resize, new request will be picked up after completion
 				return true, currentSize, existingTargetSize, nil
 			}
@@ -352,7 +365,7 @@ func (oc *OperatorContext) initializeVolumeResizeStatus(currentSize, targetSize 
 	}
 
 	logger.Info("INFO: Starting resize validation")
-	oc.Recorder.Event(cr, "Normal", "VolumeResizeStarted", fmt.Sprintf("Starting volume resize from %s to %s using %s strategy", currentSize, targetSize, resizeStrategy))
+	// Event will be recorded once prechecks pass and resize actually starts
 
 	return result.RequeueSoon(1)
 }
@@ -493,14 +506,10 @@ func (oc *OperatorContext) validateResizePrerequisites() result.ReconcileResult 
 
 	if storageClassName != "" {
 		logger.Info("PRECHECK: Validating StorageClass expansion capability", "storageClass", storageClassName)
-		oc.Recorder.Event(cr, "Normal", "PrecheckStorageClass",
-			fmt.Sprintf("Validating StorageClass %s for volume expansion capability", storageClassName))
 
 		storageClass := &storagev1.StorageClass{}
 		if err := oc.Client.Get(oc.Ctx, client.ObjectKey{Name: storageClassName}, storageClass); err != nil {
 			logger.Error(nil, "PRECHECK FAILED: Could not retrieve StorageClass", "storageClass", storageClassName, "error", err)
-			oc.Recorder.Event(cr, "Warning", "PrecheckStorageClassFailed",
-				fmt.Sprintf("Failed to retrieve StorageClass %s: %v", storageClassName, err))
 			return oc.setResizeFailure(fmt.Sprintf("Failed to get StorageClass %s: %v", storageClassName, err), marklogicv1.ResizeReasonResizeFailed)
 		}
 
@@ -508,23 +517,17 @@ func (oc *OperatorContext) validateResizePrerequisites() result.ReconcileResult 
 		if storageClass.AllowVolumeExpansion == nil || !*storageClass.AllowVolumeExpansion {
 			logger.Error(nil, "PRECHECK FAILED: StorageClass lacks expansion capability",
 				"storageClass", storageClassName)
-			oc.Recorder.Event(cr, "Warning", "PrecheckStorageClassNoExpansion",
-				fmt.Sprintf("StorageClass %s does not allow volume expansion - resize blocked", storageClassName))
 			return oc.setResizeFailure(
 				fmt.Sprintf("StorageClass %s does not allow volume expansion (allowVolumeExpansion: false)", storageClassName),
 				marklogicv1.ResizeReasonStorageClassNotExpandable)
 		}
 		logger.Info("PRECHECK PASSED: StorageClass allows volume expansion", "storageClass", storageClassName)
-		oc.Recorder.Event(cr, "Normal", "PrecheckStorageClassPassed",
-			fmt.Sprintf("StorageClass %s supports volume expansion", storageClassName))
 	}
 
 	// Get PVCs for StatefulSet
 	pvcs, err := oc.getPVCsForStatefulSet(sts)
 	if err != nil {
 		logger.Error(nil, "PRECHECK FAILED: Could not retrieve PVCs", "error", err)
-		oc.Recorder.Event(cr, "Warning", "PrecheckPVCListingFailed",
-			fmt.Sprintf("Failed to list PVCs for StatefulSet: %v", err))
 		return oc.setResizeFailure(fmt.Sprintf("Failed to list PVCs: %v", err), marklogicv1.ResizeReasonResizeFailed)
 	}
 
@@ -532,41 +535,28 @@ func (oc *OperatorContext) validateResizePrerequisites() result.ReconcileResult 
 	cloudProvider, err := oc.detectCloudProvider(sts, cr)
 	if err != nil {
 		logger.Error(err, "PRECHECK FAILED: Could not detect cloud provider")
-		oc.Recorder.Event(cr, "Warning", "PrecheckCloudProviderDetectionFailed",
-			fmt.Sprintf("Failed to detect cloud provider: %v", err))
 		return oc.setResizeFailure(fmt.Sprintf("Failed to detect cloud provider: %v", err), marklogicv1.ResizeReasonResizeFailed)
 	}
 	logger.Info("PRECHECK: Detected cloud provider", "cloudProvider", cloudProvider)
-	oc.Recorder.Event(cr, "Normal", "CloudProviderDetected",
-		fmt.Sprintf("Detected cloud provider: %s", cloudProvider))
 
 	// Edge case: Verify all PVCs are Bound
 	logger.Info("PRECHECK: Validating PVC binding status", "pvcCount", len(pvcs))
-	oc.Recorder.Event(cr, "Normal", "PrecheckPVCBinding",
-		fmt.Sprintf("Validating binding status of %d PVC(s)", len(pvcs)))
 
 	for _, pvc := range pvcs {
 		if pvc.Status.Phase != corev1.ClaimBound {
 			logger.Error(nil, "PRECHECK FAILED: PVC not bound",
 				"pvc", pvc.Name, "phase", pvc.Status.Phase)
-			oc.Recorder.Event(cr, "Warning", "PrecheckPVCNotBound",
-				fmt.Sprintf("PVC %s is in %s phase (not Bound) - resize blocked", pvc.Name, pvc.Status.Phase))
 			return oc.setResizeStalled(
 				fmt.Sprintf("PVC %s is not in Bound state (current: %s) - waiting for PVC to bind", pvc.Name, pvc.Status.Phase),
 				marklogicv1.ResizeReasonPVCNotBound)
 		}
 	}
 	logger.Info("PRECHECK PASSED: All PVCs are bound", "pvcCount", len(pvcs))
-	oc.Recorder.Event(cr, "Normal", "PrecheckPVCBindingPassed",
-		fmt.Sprintf("All %d PVC(s) are in Bound state", len(pvcs)))
 
 	// Verify new size > current size (edge case: Shrink requested or no change)
 	logger.Info("PRECHECK: Validating resize size parameters",
 		"originalSize", cr.Status.VolumeResizeStatus.OriginalSize,
 		"targetSize", cr.Status.VolumeResizeStatus.TargetSize)
-	oc.Recorder.Event(cr, "Normal", "PrecheckSizeValidation",
-		fmt.Sprintf("Validating resize parameters: %s -> %s",
-			cr.Status.VolumeResizeStatus.OriginalSize, cr.Status.VolumeResizeStatus.TargetSize))
 
 	targetQty, _ := resource.ParseQuantity(cr.Status.VolumeResizeStatus.TargetSize)
 	originalQty, _ := resource.ParseQuantity(cr.Status.VolumeResizeStatus.OriginalSize)
@@ -598,15 +588,10 @@ func (oc *OperatorContext) validateResizePrerequisites() result.ReconcileResult 
 	logger.Info("PRECHECK PASSED: Size validation successful",
 		"originalSize", cr.Status.VolumeResizeStatus.OriginalSize,
 		"targetSize", cr.Status.VolumeResizeStatus.TargetSize)
-	oc.Recorder.Event(cr, "Normal", "PrecheckSizeValidationPassed",
-		fmt.Sprintf("Resize size valid: %s -> %s (expansion allowed)",
-			cr.Status.VolumeResizeStatus.OriginalSize, cr.Status.VolumeResizeStatus.TargetSize))
 
 	// Step 1: MarkLogic pre-resize health check
 	// Health check is critical - MarkLogic must be healthy before volume resize
 	logger.Info("PRECHECK: Validating MarkLogic cluster health before resize")
-	oc.Recorder.Event(cr, "Normal", "PrecheckMarkLogicHealth",
-		"Validating MarkLogic cluster health: checking all hosts online and forests healthy")
 
 	healthStatus, err := oc.CheckMarkLogicHealth()
 	if err != nil {
@@ -623,10 +608,8 @@ func (oc *OperatorContext) validateResizePrerequisites() result.ReconcileResult 
 		}
 		// Health check failed with a real error - fail the resize
 		logger.Error(err, "PRECHECK FAILED: MarkLogic pre-resize health check failed")
-		oc.Recorder.Event(cr, "Warning", "PrecheckMarkLogicHealthFailed",
-			fmt.Sprintf("MarkLogic health check failed: %v - resize blocked", err))
-		oc.Recorder.Event(cr, "Warning", "MarkLogicHealthCheckFailed",
-			fmt.Sprintf("Pre-resize MarkLogic health check failed: %v", err))
+		oc.Recorder.Event(cr, "Warning", "ResizeFailedHealthCheck",
+			fmt.Sprintf("Volume resize failed: MarkLogic health check failed - %v", err))
 		return oc.setResizeFailure(
 			fmt.Sprintf("MarkLogic health check failed: %v", err),
 			marklogicv1.ResizeReasonMarkLogicHealthCheckFailed)
@@ -634,10 +617,8 @@ func (oc *OperatorContext) validateResizePrerequisites() result.ReconcileResult 
 		// Health check completed successfully but cluster reported unhealthy
 		logger.Error(nil, "PRECHECK FAILED: MarkLogic cluster is unhealthy, cannot proceed with resize",
 			"errors", healthStatus.Errors, "hostsOnline", healthStatus.HostsOnline)
-		oc.Recorder.Event(cr, "Warning", "PrecheckMarkLogicUnhealthy",
-			fmt.Sprintf("MarkLogic cluster unhealthy: %v - resize blocked", healthStatus.Errors))
-		oc.Recorder.Event(cr, "Warning", "MarkLogicUnhealthy",
-			fmt.Sprintf("MarkLogic cluster unhealthy: %v", healthStatus.Errors))
+		oc.Recorder.Event(cr, "Warning", "ResizeFailedUnhealthy",
+			fmt.Sprintf("Volume resize failed: MarkLogic cluster unhealthy - %v", healthStatus.Errors))
 		return oc.setResizeFailure(
 			fmt.Sprintf("MarkLogic cluster is unhealthy: %v", healthStatus.Errors),
 			marklogicv1.ResizeReasonMarkLogicHealthCheckFailed)
@@ -645,9 +626,6 @@ func (oc *OperatorContext) validateResizePrerequisites() result.ReconcileResult 
 		logger.Info("PRECHECK PASSED: MarkLogic cluster is healthy and ready for resize",
 			"hostsOnline", healthStatus.HostsOnline,
 			"forestsOpen", healthStatus.ForestsOpen)
-		oc.Recorder.Event(cr, "Normal", "PrecheckMarkLogicHealthPassed",
-			fmt.Sprintf("MarkLogic health verified: %d hosts online, %d forests healthy",
-				healthStatus.HostsOnline, healthStatus.ForestsOpen))
 	}
 
 	// Update status to next phase
@@ -664,8 +642,8 @@ func (oc *OperatorContext) validateResizePrerequisites() result.ReconcileResult 
 		"totalPVCs", len(pvcs),
 		"originalSize", cr.Status.VolumeResizeStatus.OriginalSize,
 		"targetSize", cr.Status.VolumeResizeStatus.TargetSize)
-	oc.Recorder.Event(cr, "Normal", "AllPrechecksPassedStartingResize",
-		fmt.Sprintf("All prechecks passed. Starting volume resize from %s to %s for %d PVC(s)",
+	oc.Recorder.Event(cr, "Normal", "VolumeResizeStarted",
+		fmt.Sprintf("Started volume resize from %s to %s for %d PVC(s)",
 			cr.Status.VolumeResizeStatus.OriginalSize, cr.Status.VolumeResizeStatus.TargetSize, len(pvcs)))
 
 	// Log detailed PVC information
@@ -682,11 +660,7 @@ func (oc *OperatorContext) validateResizePrerequisites() result.ReconcileResult 
 
 	pvcListMsg := fmt.Sprintf("PVCs to resize: %s", strings.Join(pvcDetails, " | "))
 	logger.Info(pvcListMsg)
-	oc.Recorder.Event(cr, "Normal", "PVCsIdentified",
-		fmt.Sprintf("Identified %d PVCs for resize: %s. Strategy: %s, Current: %s → Target: %s",
-			len(pvcs), strings.Join(pvcDetails, ", "),
-			cr.Status.VolumeResizeStatus.ResizeStrategy,
-			cr.Status.VolumeResizeStatus.OriginalSize, cr.Status.VolumeResizeStatus.TargetSize))
+	// Log detailed PVC info but don't record individual PVC events
 
 	return result.RequeueSoon(1)
 }
@@ -744,8 +718,7 @@ func (oc *OperatorContext) resizePVCsParallel() result.ReconcileResult {
 			errLower := strings.ToLower(errMsg)
 			if strings.Contains(errLower, "optimizing") || strings.Contains(errLower, "cannot currently modify") {
 				logger.Info("Volume is in OPTIMIZING state, request will be queued and retried", "PVC", pvc.Name)
-				oc.Recorder.Event(cr, "Normal", "PVCResizeQueuedVolumeOptimizing",
-					fmt.Sprintf("Volume %s is currently optimizing after a previous modification. Resize request queued and will retry automatically in %d seconds.", pvc.Name, 30))
+				// Queuing for retry - logged but not recorded as event
 				cr.Status.VolumeResizeStatus.Message = fmt.Sprintf("Parallel resize - volume %s optimizing, request queued for %d/%d PVCs. Will retry automatically.", pvc.Name, resizedCount, len(pvcs))
 				if err := oc.updateStatus(); err != nil {
 					return result.Error(err)
@@ -783,7 +756,7 @@ func (oc *OperatorContext) resizePVCsParallel() result.ReconcileResult {
 		}
 
 		logger.Info(fmt.Sprintf("INFO: Initiated and verified resize for PVC %s from %s to %s", pvc.Name, originalSize, cr.Status.VolumeResizeStatus.TargetSize))
-		oc.Recorder.Event(cr, "Normal", "PVCResizeInitiated", fmt.Sprintf("Initiated resize for PVC %s", pvc.Name))
+		// PVC resize initiated - logged but not recorded as event
 		resizedCount++
 	}
 
@@ -914,7 +887,7 @@ func (oc *OperatorContext) resizePVCsSequential() result.ReconcileResult {
 
 	logger.Info(fmt.Sprintf("INFO: Sequential resize - initiated and verified resize for PVC %s from %s to %s (%d/%d)",
 		pvc.Name, originalSize, cr.Status.VolumeResizeStatus.TargetSize, currentIndex+1, len(pvcs)))
-	oc.Recorder.Event(cr, "Normal", "PVCResizeInitiated", fmt.Sprintf("Sequential resize: initiated for PVC %s (%d/%d)", pvc.Name, currentIndex+1, len(pvcs)))
+	// Individual PVC resize initiated - logged but not recorded as event
 
 	cr.Status.VolumeResizeStatus.Message = fmt.Sprintf("Sequential resize - waiting for PVC %s (%d/%d)", pvc.Name, currentIndex+1, len(pvcs))
 	if err := oc.updateStatus(); err != nil {
@@ -994,28 +967,11 @@ func (oc *OperatorContext) waitForPVCResizeParallel() result.ReconcileResult {
 		}
 	}
 
-	// Check timeout
+	// Monitor resize progress (no timeout - retries handle delays)
+	// PVCs may take time to resize depending on cloud provider and volume size
 	if cr.Status.VolumeResizeStatus.StartTime != nil {
 		elapsed := time.Since(cr.Status.VolumeResizeStatus.StartTime.Time)
-
-		// Calculate timeout based on resize strategy
-		// Parallel: all PVCs resize concurrently (fixed timeout with safety margin)
-		// Sequential: PVCs resize one-by-one (scale with total PVCs)
-		var timeoutDuration time.Duration
-		if cr.Status.VolumeResizeStatus.ResizeStrategy == string(marklogicv1.ResizeStrategySequential) {
-			// Sequential: scale timeout with number of PVCs (resized one-by-one)
-			timeoutDuration = time.Duration(PVCResizeTimeoutMinutes*int(cr.Status.VolumeResizeStatus.TotalPVCs)) * time.Minute
-		} else {
-			// Parallel: fixed timeout with 2x safety margin (all resizing concurrently)
-			timeoutDuration = time.Duration(PVCResizeTimeoutMinutes*2) * time.Minute
-		}
-
-		if elapsed > timeoutDuration {
-			return oc.setResizeFailure(
-				fmt.Sprintf("Timeout waiting for PVC resize after %v. Resizing PVCs: %v", elapsed, resizingPVCs),
-				marklogicv1.ResizeReasonTimeout,
-			)
-		}
+		logger.Info("PVC resize in progress", "elapsed", elapsed, "resizingCount", len(resizingPVCs))
 	}
 
 	if !allResized && !filesystemResizePending {
@@ -1094,30 +1050,6 @@ func (oc *OperatorContext) waitForPVCResizeSequential() result.ReconcileResult {
 					)
 				}
 			}
-		}
-	}
-
-	// Check timeout
-	if cr.Status.VolumeResizeStatus.StartTime != nil {
-		elapsed := time.Since(cr.Status.VolumeResizeStatus.StartTime.Time)
-
-		// Calculate timeout based on resize strategy
-		// Parallel: all PVCs resize concurrently (fixed timeout with safety margin)
-		// Sequential: PVCs resize one-by-one (scale with total PVCs)
-		var timeoutDuration time.Duration
-		if cr.Status.VolumeResizeStatus.ResizeStrategy == string(marklogicv1.ResizeStrategySequential) {
-			// Sequential: scale timeout with number of PVCs (resized one-by-one)
-			timeoutDuration = time.Duration(PVCResizeTimeoutMinutes*int(cr.Status.VolumeResizeStatus.TotalPVCs)) * time.Minute
-		} else {
-			// Parallel: fixed timeout with 2x safety margin (all resizing concurrently)
-			timeoutDuration = time.Duration(PVCResizeTimeoutMinutes*2) * time.Minute
-		}
-
-		if elapsed > timeoutDuration {
-			return oc.setResizeFailure(
-				fmt.Sprintf("Timeout waiting for PVC resize after %v (sequential mode)", elapsed),
-				marklogicv1.ResizeReasonTimeout,
-			)
 		}
 	}
 
@@ -1206,8 +1138,8 @@ func (oc *OperatorContext) verifyHealthBeforeStatefulSetChanges() result.Reconci
 		}
 		// Health check failed with a real error
 		logger.Error(err, "MarkLogic post-resize health check failed")
-		oc.Recorder.Event(cr, "Warning", "MarkLogicHealthCheckFailed",
-			fmt.Sprintf("Post-resize MarkLogic health check failed: %v", err))
+		oc.Recorder.Event(cr, "Warning", "ResizeFailedPostHealthCheck",
+			fmt.Sprintf("Volume resize failed: Post-resize health check failed - %v", err))
 		return oc.setResizeFailure(
 			fmt.Sprintf("MarkLogic post-resize health check failed: %v", err),
 			marklogicv1.ResizeReasonMarkLogicHealthCheckFailed)
@@ -1216,8 +1148,8 @@ func (oc *OperatorContext) verifyHealthBeforeStatefulSetChanges() result.Reconci
 		logger.Error(nil, "MarkLogic cluster is unhealthy after volume resize",
 			"errors", healthStatus.Errors,
 			"warnings", healthStatus.Warnings)
-		oc.Recorder.Event(cr, "Warning", "MarkLogicUnhealthy",
-			fmt.Sprintf("MarkLogic cluster unhealthy after resize: %v", healthStatus.Errors))
+		oc.Recorder.Event(cr, "Warning", "ResizeFailedPostUnhealthy",
+			fmt.Sprintf("Volume resize failed: MarkLogic cluster unhealthy - %v", healthStatus.Errors))
 		return oc.setResizeFailure(
 			fmt.Sprintf("MarkLogic cluster unhealthy after resize: %v", healthStatus.Errors),
 			marklogicv1.ResizeReasonMarkLogicHealthCheckFailed)
@@ -1226,8 +1158,7 @@ func (oc *OperatorContext) verifyHealthBeforeStatefulSetChanges() result.Reconci
 			"hostsOnline", healthStatus.HostsOnline,
 			"forestsHealthy", healthStatus.ForestsOpen,
 			"databases", healthStatus.DatabaseCount)
-		oc.Recorder.Event(cr, "Normal", "MarkLogicHealthCheckPassed",
-			fmt.Sprintf("MarkLogic health verified: %d hosts online, %d forests healthy", healthStatus.HostsOnline, healthStatus.ForestsOpen))
+		// Health check passed - logged but event removed
 	}
 
 	healthPassed := true
@@ -1270,7 +1201,7 @@ func (oc *OperatorContext) backupStatefulSet() result.ReconcileResult {
 	}
 
 	logger.Info("INFO: Backed up StatefulSet spec")
-	oc.Recorder.Event(cr, "Normal", "StatefulSetBackedUp", "StatefulSet spec backed up for recovery")
+	// StatefulSet backup - logged but not recorded as event
 
 	return result.RequeueSoon(1)
 }
@@ -1352,7 +1283,7 @@ func (oc *OperatorContext) deleteStatefulSetWithOrphan() result.ReconcileResult 
 	}
 
 	logger.Info("INFO: Deleted StatefulSet with orphan policy")
-	oc.Recorder.Event(cr, "Normal", "StatefulSetDeleted", "StatefulSet deleted with orphan policy for volume resize")
+	// StatefulSet deletion - logged but not recorded as event
 
 	cr.Status.VolumeResizeStatus.Phase = marklogicv1.VolumeResizePhaseRecreatingStatefulSet
 	cr.Status.VolumeResizeStatus.Message = "Deleted StatefulSet, recreating with new volume size"
@@ -1393,8 +1324,6 @@ func (oc *OperatorContext) recreateStatefulSet() result.ReconcileResult {
 	if len(cr.Status.VolumeResizeStatus.OrphanedPods) > 0 {
 		logger.Info("WARNING: Orphaned pods detected from previous STS delete",
 			"orphanedPods", cr.Status.VolumeResizeStatus.OrphanedPods)
-		oc.Recorder.Event(cr, "Warning", "OrphanedPodsDetected",
-			fmt.Sprintf("Pods still running but unmanaged: %v", cr.Status.VolumeResizeStatus.OrphanedPods))
 	}
 
 	// Generate new StatefulSet with updated volumeClaimTemplate
@@ -1442,7 +1371,7 @@ func (oc *OperatorContext) recreateStatefulSet() result.ReconcileResult {
 	}
 
 	logger.Info("INFO: Recreated StatefulSet with new template")
-	oc.Recorder.Event(cr, "Normal", "StatefulSetRecreated", "StatefulSet recreated with updated volume claim template")
+	// StatefulSet recreation - logged but not recorded as event
 
 	cr.Status.VolumeResizeStatus.Phase = marklogicv1.VolumeResizePhaseVerifyingPodsRunning
 	cr.Status.VolumeResizeStatus.Message = "StatefulSet recreated, verifying all pods are running"
@@ -1501,29 +1430,15 @@ func (oc *OperatorContext) verifyPodsRunning() result.ReconcileResult {
 						oc.Recorder.Event(cr, "Warning", "PodPending",
 							fmt.Sprintf("Pod %s is pending after restart - monitoring for scheduling issues", pod.Name))
 					} else {
+						// Pod is pending - monitor but don't timeout
+						// Retry strategy handles prolonged delays; user can pause/resume with annotation
 						pendingDuration := time.Since(cr.Status.VolumeResizeStatus.PodPendingStartTime.Time)
-						if pendingDuration > time.Duration(PodPendingTimeoutMinutes)*time.Minute {
-							// Pod has been pending too long - check events for scheduling issues
-							events := &corev1.EventList{}
-							if err := oc.Client.List(oc.Ctx, events, client.InNamespace(cr.Namespace)); err == nil {
-								for _, event := range events.Items {
-									if event.InvolvedObject.Name == pod.Name &&
-										(strings.Contains(event.Reason, "FailedScheduling") ||
-											strings.Contains(event.Reason, "Unschedulable")) {
-
-										logger.Info("WARNING: Pod stuck pending - scheduling issues detected",
-											"pod", pod.Name, "duration", pendingDuration, "reason", event.Message)
-										oc.Recorder.Event(cr, "Warning", "PodSchedulingIssue",
-											fmt.Sprintf("Pod %s stuck pending for %v: %s", pod.Name, pendingDuration, event.Message))
-
-										// Stall with warning but don't fail - user may need to fix node resources
-										return oc.setResizeStalled(
-											fmt.Sprintf("Pod %s stuck in Pending for %v due to scheduling issues. Check node resources.",
-												pod.Name, pendingDuration),
-											marklogicv1.ResizeReasonPodSchedulingFailed)
-									}
-								}
-							}
+						if pendingDuration > 5*time.Minute {
+							// Log warnings for monitoring purposes
+							logger.Info("WARNING: Pod pending after restart - check scheduling and node resources",
+								"pod", pod.Name, "pending_duration", pendingDuration)
+							oc.Recorder.Event(cr, "Warning", "PodSchedulingMonitoring",
+								fmt.Sprintf("Pod %s pending for %v - check node resources and scheduling", pod.Name, pendingDuration))
 						}
 					}
 				}
@@ -1541,7 +1456,7 @@ func (oc *OperatorContext) verifyPodsRunning() result.ReconcileResult {
 	cr.Status.VolumeResizeStatus.PodPendingStartTime = nil
 
 	logger.Info("INFO: All pods running and adopted by StatefulSet")
-	oc.Recorder.Event(cr, "Normal", "PodsAdopted", "All pods adopted by recreated StatefulSet")
+	// Pod adoption - logged but not recorded as event
 
 	// Determine next phase based on filesystem resize pending
 	if cr.Status.VolumeResizeStatus.FileSystemResizePending {
@@ -1550,7 +1465,7 @@ func (oc *OperatorContext) verifyPodsRunning() result.ReconcileResult {
 		cr.Status.VolumeResizeStatus.LastResizedPodIndex = -1
 	} else {
 		logger.Info("INFO: FileSystemResizePending is false, skipping pod restart")
-		oc.Recorder.Event(cr, "Normal", "PodRestartSkipped", "Pod restart not required, filesystem resize not pending")
+		// Pod restart check - logged but not recorded as event
 		// Skip directly to completion
 		return oc.completeVolumeResize()
 	}
@@ -1609,23 +1524,22 @@ func (oc *OperatorContext) restartPodsForFilesystemResize() result.ReconcileResu
 	// Edge case: Pod stuck pending after previous restart
 	// Note: Single timestamp design works well here because pods are processed sequentially:
 	// Only one pod can be pending at a time during filesystem resize phase.
-	// Timestamp is cleared before moving to next pod (line 1647), preventing stale timestamps.
+	// Timestamp is cleared before moving to next pod, preventing stale timestamps.
 	if pod.Status.Phase == corev1.PodPending && pod.DeletionTimestamp == nil {
 		if cr.Status.VolumeResizeStatus.PodPendingStartTime == nil {
 			now := metav1.Now()
 			cr.Status.VolumeResizeStatus.PodPendingStartTime = &now
 		} else {
+			// Pod is pending - monitor but don't timeout
+			// Retry strategy handles prolonged delays; user can pause/resume with annotation
 			pendingDuration := time.Since(cr.Status.VolumeResizeStatus.PodPendingStartTime.Time)
-			if pendingDuration > time.Duration(PodPendingTimeoutMinutes)*time.Minute {
-				logger.Info("WARNING: Pod stuck pending during filesystem resize",
-					"pod", podName, "duration", pendingDuration)
-				oc.Recorder.Event(cr, "Warning", "PodSchedulingIssue",
-					fmt.Sprintf("Pod %s stuck pending for %v during filesystem resize", podName, pendingDuration))
-				return oc.setResizeStalled(
-					fmt.Sprintf("Pod %s stuck in Pending for %v during filesystem resize. Check node resources.",
-						podName, pendingDuration),
-					marklogicv1.ResizeReasonPodSchedulingFailed)
+			if pendingDuration > 5*time.Minute {
+				logger.Info("WARNING: Pod pending during filesystem resize - check scheduling and node resources",
+					"pod", podName, "pending_duration", pendingDuration)
+				oc.Recorder.Event(cr, "Warning", "PodSchedulingMonitoring",
+					fmt.Sprintf("Pod %s pending for %v during filesystem resize - check node resources", podName, pendingDuration))
 			}
+			// Continue monitoring without timeout - retry strategy will handle delays
 		}
 		cr.Status.VolumeResizeStatus.Message = fmt.Sprintf("Waiting for pod %s to be scheduled", podName)
 		if err := oc.updateStatus(); err != nil {
@@ -1665,7 +1579,7 @@ func (oc *OperatorContext) restartPodsForFilesystemResize() result.ReconcileResu
 	}
 
 	logger.Info(fmt.Sprintf("INFO: Restarting pod %s for filesystem resize", podName))
-	oc.Recorder.Event(cr, "Normal", "PodRestarted", fmt.Sprintf("Restarting pod %s for filesystem resize", podName))
+	// Pod restart - logged but not recorded as event
 
 	cr.Status.VolumeResizeStatus.LastResizedPodIndex = nextIndex
 	cr.Status.VolumeResizeStatus.Message = fmt.Sprintf("Restarted pod %s, waiting for ready state", podName)
@@ -1729,7 +1643,7 @@ func (oc *OperatorContext) completeVolumeResize() result.ReconcileResult {
 	}
 
 	logger.Info(fmt.Sprintf("SUCCESS: Resize completed duration=%s marklogicHealthPassed=%s", duration, healthPassed))
-	oc.Recorder.Event(cr, "Normal", "VolumeResizeCompleted", fmt.Sprintf("Volume resize completed successfully in %s", duration))
+	oc.Recorder.Event(cr, "Normal", "VolumeResizeCompleted", fmt.Sprintf("Volume resize from %s to %s completed successfully", cr.Status.VolumeResizeStatus.OriginalSize, cr.Status.VolumeResizeStatus.TargetSize))
 
 	return result.Continue()
 }
@@ -1797,6 +1711,11 @@ func (oc *OperatorContext) setResizeFailure(message string, reason marklogicv1.V
 
 // setResizeStalled sets the resize status to stalled (temporary blockage) and returns
 func (oc *OperatorContext) setResizeStalled(message string, reason marklogicv1.VolumeResizeReason) result.ReconcileResult {
+	return oc.setResizeStalledWithError(message, reason, nil)
+}
+
+// setResizeStalledWithError sets the resize status to stalled with error details and intelligent retry strategy
+func (oc *OperatorContext) setResizeStalledWithError(message string, reason marklogicv1.VolumeResizeReason, err error) result.ReconcileResult {
 	logger := oc.ReqLogger
 	cr := oc.MarklogicGroup
 
@@ -1804,6 +1723,14 @@ func (oc *OperatorContext) setResizeStalled(message string, reason marklogicv1.V
 
 	if cr.Status.VolumeResizeStatus == nil {
 		cr.Status.VolumeResizeStatus = &marklogicv1.VolumeResizeStatus{}
+	}
+
+	// Check if resize is paused via annotation
+	if CheckIfPausedByAnnotation(cr) {
+		logger.Info("Volume resize paused by annotation - user intervention required",
+			"annotation", PauseResizeAnnotationKey)
+		cr.Status.VolumeResizeStatus.Message = fmt.Sprintf("Paused: %s (Resume by removing annotation %s)", message, PauseResizeAnnotationKey)
+		return oc.updateStatusAndRequeue(30*time.Minute, "Paused by annotation")
 	}
 
 	now := metav1.Now()
@@ -1816,6 +1743,39 @@ func (oc *OperatorContext) setResizeStalled(message string, reason marklogicv1.V
 	cr.Status.VolumeResizeStatus.Phase = marklogicv1.VolumeResizePhaseStalled
 	cr.Status.VolumeResizeStatus.Reason = reason
 	cr.Status.VolumeResizeStatus.Message = message
+
+	// Evaluate retry strategy
+	retryConfig := DefaultRetryConfig()
+	retryStrategy := EvaluateRetry(retryConfig, cr.Status.VolumeResizeStatus, err)
+
+	if retryStrategy.ShouldRetry {
+		// Update retry status
+		UpdateRetryStatus(cr.Status.VolumeResizeStatus, retryStrategy, message)
+
+		logger.Info("Volume resize will retry",
+			"retryCount", cr.Status.VolumeResizeStatus.RetryCount,
+			"consecutiveRetries", cr.Status.VolumeResizeStatus.ConsecutiveRetries,
+			"classification", retryStrategy.Classification,
+			"nextRetryTime", retryStrategy.NextRetryTime.Format(time.RFC3339))
+
+		// Record event with retry info
+		eventMsg := fmt.Sprintf("Volume resize stalled: %s - Will retry #%d in %s (classification: %s)",
+			message, cr.Status.VolumeResizeStatus.RetryCount, time.Until(retryStrategy.NextRetryTime).Round(time.Second), retryStrategy.Classification)
+		oc.Recorder.Event(cr, "Warning", "VolumeResizeStalled", eventMsg)
+	} else {
+		// No more retries available
+		logger.Error(err, "Volume resize stalled - max retries exceeded",
+			"classification", retryStrategy.Classification,
+			"message", retryStrategy.Message)
+
+		eventMsg := fmt.Sprintf("Volume resize stalled with no more retries: %s (%s)", message, retryStrategy.Classification)
+		oc.Recorder.Event(cr, "Warning", "VolumeResizeStalled", eventMsg)
+
+		// Mark as failed if no more retries
+		if retryStrategy.Classification == ErrorClassificationPersistent || retryStrategy.Classification == ErrorClassificationInternal {
+			return oc.setResizeFailure(fmt.Sprintf("Stalled: %s - manual intervention required", message), reason)
+		}
+	}
 
 	// Set Progressing condition to False
 	cr.SetCondition(metav1.Condition{
@@ -1835,22 +1795,29 @@ func (oc *OperatorContext) setResizeStalled(message string, reason marklogicv1.V
 		LastTransitionTime: now,
 	})
 
-	// Calculate requeue delay based on reason
-	requeueMinutes := 1
-	if reason == marklogicv1.ResizeReasonEBSCooldownPeriod {
-		requeueMinutes = EBSCooldownRequeueMinutes
-		nextRetry := metav1.NewTime(time.Now().Add(time.Duration(requeueMinutes) * time.Minute))
-		cr.Status.VolumeResizeStatus.NextRetryTime = &nextRetry
-		logger.Info(fmt.Sprintf("WARNING: EBS volume modification rate limited, next retry in %d minutes", requeueMinutes))
-	}
-
 	if err := oc.updateStatus(); err != nil {
 		logger.Error(err, "Failed to update status after resize stalled")
 	}
 
-	oc.Recorder.Event(cr, "Warning", "VolumeResizeStalled", message)
+	// Return requeue with calculated backoff
+	timeUntilRetry := time.Until(retryStrategy.NextRetryTime)
+	if timeUntilRetry < 0 {
+		timeUntilRetry = 1 * time.Second
+	}
 
-	return result.RequeueAfter(time.Duration(requeueMinutes) * time.Minute)
+	return result.RequeueAfter(timeUntilRetry)
+}
+
+// updateStatusAndRequeue is a helper function to update status and requeue with a specific delay
+func (oc *OperatorContext) updateStatusAndRequeue(delay time.Duration, reason string) result.ReconcileResult {
+	logger := oc.ReqLogger
+
+	if err := oc.updateStatus(); err != nil {
+		logger.Error(err, "Failed to update status", "reason", reason)
+		return result.Error(err)
+	}
+
+	return result.RequeueAfter(delay)
 }
 
 // extractErrorReason extracts a VolumeResizeReason from a Kubernetes API error

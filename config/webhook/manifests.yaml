@@ -1,0 +1,26 @@
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingWebhookConfiguration
+metadata:
+  name: validating-webhook-configuration
+webhooks:
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: webhook-service
+      namespace: system
+      path: /validate-marklogic-progress-com-v1-marklogicgroup
+  failurePolicy: Fail
+  name: vmarklogicgroup.marklogic.progress.com
+  rules:
+  - apiGroups:
+    - marklogic.progress.com
+    apiVersions:
+    - v1
+    operations:
+    - CREATE
+    - UPDATE
+    resources:
+    - marklogicgroups
+  sideEffects: None

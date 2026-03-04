@@ -1,0 +1,18 @@
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    app.kubernetes.io/name: marklogic-operator
+    app.kubernetes.io/component: webhook
+  name: marklogic-operator-webhook-service
+  namespace: marklogic-operator-system
+spec:
+  ports:
+  - name: webhook
+    port: 443
+    protocol: TCP
+    targetPort: 9443
+  selector:
+    control-plane: controller-manager
+  type: ClusterIP
