@@ -1,4 +1,4 @@
-// Copyright (c) 2024-2025 Progress Software Corporation and/or its subsidiaries or affiliates. All Rights Reserved.
+// Copyright (c) 2024-2026 Progress Software Corporation and/or its subsidiaries or affiliates. All Rights Reserved.
 
 /* groovylint-disable CompileStatic, LineLength, VariableTypeRequired */
 // This Jenkinsfile defines internal MarkLogic build pipeline.
@@ -149,6 +149,18 @@ void runMinikubeCleanup() {
     '''
 }
 
+void runIstioMinikubeSetup() {
+    sh """
+        make e2e-setup-minikube-istio IMG=${operatorRepo}:${VERSION}
+    """
+}
+
+void runIstioE2eTests() {
+    sh """
+        make e2e-test-istio IMG=${operatorRepo}:${VERSION} E2E_ISTIO_AMBIENT=true
+    """
+}
+
 void runBlackDuckScan() {
     // Trigger BlackDuck scan job with CONTAINER_IMAGES parameter when params.PUBLISH_IMAGE is true
     if (params.PUBLISH_IMAGE) {
@@ -201,7 +213,8 @@ pipeline {
     triggers {
         // Trigger nightly builds on the develop branch
         parameterizedCron( env.BRANCH_NAME == 'develop' ? '''00 05 * * * % E2E_MARKLOGIC_IMAGE_VERSION=ml-docker-db-dev-tierpoint.bed-artifactory.bedford.progress.com/marklogic/marklogic-server-ubi-rootless:latest-12
-                                                             00 05 * * * % E2E_MARKLOGIC_IMAGE_VERSION=ml-docker-db-dev-tierpoint.bed-artifactory.bedford.progress.com/marklogic/marklogic-server-ubi-rootless:latest-11; PUBLISH_IMAGE=false''' : '')
+                                                             00 05 * * * % E2E_MARKLOGIC_IMAGE_VERSION=ml-docker-db-dev-tierpoint.bed-artifactory.bedford.progress.com/marklogic/marklogic-server-ubi-rootless:latest-11; PUBLISH_IMAGE=false
+                                                             00 07 * * * % E2E_MARKLOGIC_IMAGE_VERSION=ml-docker-db-dev-tierpoint.bed-artifactory.bedford.progress.com/marklogic/marklogic-server-ubi-rootless:latest-12; VERIFY_ISTIO_AMBIENT=true''' : '')
     }
 
     environment {
@@ -214,9 +227,10 @@ pipeline {
 
     parameters {
         string(name: 'E2E_MARKLOGIC_IMAGE_VERSION', defaultValue: 'ml-docker-db-dev-tierpoint.bed-artifactory.bedford.progress.com/marklogic/marklogic-server-ubi-rootless:latest-12', description: 'Docker image to use for tests.', trim: true)
-        string(name: 'VERSION', defaultValue: '1.1.0', description: 'Version to tag the image with.', trim: true)
+        string(name: 'VERSION', defaultValue: '1.2.0', description: 'Version to tag the image with.', trim: true)
         booleanParam(name: 'PUBLISH_IMAGE', defaultValue: false, description: 'Publish image to internal registry')
         string(name: 'emailList', defaultValue: emailList, description: 'List of email for build notification', trim: true)
+        booleanParam(name: 'VERIFY_ISTIO_AMBIENT', defaultValue: true, description: 'Run Istio ambient mode e2e tests (requires fresh minikube cluster with Istio)')
     }
 
     stages {
@@ -245,6 +259,35 @@ pipeline {
         }
 
         stage('Cleanup Environment') {
+            steps {
+                catchError(buildResult: 'SUCCESS', stageResult: 'FAILURE') {
+                    runMinikubeCleanup()
+                }
+            }
+        }
+
+        stage('Istio-Minikube-Setup') {
+            when {
+                expression { return params.VERIFY_ISTIO_AMBIENT }
+            }
+            steps {
+                runIstioMinikubeSetup()
+            }
+        }
+
+        stage('Run-Istio-e2e-Tests') {
+            when {
+                expression { return params.VERIFY_ISTIO_AMBIENT }
+            }
+            steps {
+                runIstioE2eTests()
+            }
+        }
+
+        stage('Istio-Cleanup') {
+            when {
+                expression { return params.VERIFY_ISTIO_AMBIENT }
+            }
             steps {
                 runMinikubeCleanup()
             }

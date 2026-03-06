@@ -1,5 +1,5 @@
 /*
-Copyright (c) 2024-2025 Progress Software Corporation and/or its subsidiaries or affiliates. All Rights Reserved.
+Copyright (c) 2024-2026 Progress Software Corporation and/or its subsidiaries or affiliates. All Rights Reserved.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -208,7 +208,18 @@ func GetProjectDir() (string, error) {
 	return wd, nil
 }
 
-func WaitForPod(ctx context.Context, t *testing.T, client klient.Client, namespace, podName string, timeout time.Duration) error {
+// WaitForPod waits for a pod to be in Running phase, or optionally for Running + Ready condition.
+// By default, it only checks for Running phase. Pass true for checkReady to also wait for Ready condition.
+// Usage:
+//   - WaitForPod(ctx, t, client, ns, name, timeout) // waits for Running only
+//   - WaitForPod(ctx, t, client, ns, name, timeout, true) // waits for Running + Ready
+func WaitForPod(ctx context.Context, t *testing.T, client klient.Client, namespace, podName string, timeout time.Duration, checkReady ...bool) error {
+	// Default to checking only Running phase
+	waitForReady := false
+	if len(checkReady) > 0 {
+		waitForReady = checkReady[0]
+	}
+
 	start := time.Now()
 	pod := &corev1.Pod{}
 	p := utils.RunCommand(`kubectl get ns`)
@@ -216,23 +227,128 @@ func WaitForPod(ctx context.Context, t *testing.T, client klient.Client, namespa
 	p = utils.RunCommand("kubectl get pods --namespace " + "marklogic-operator-system" + " -o wide")
 	t.Logf("Kubernetes Operator Running Status: %s", p.Result())
 
+	statusMsg := "Running"
+	if waitForReady {
+		statusMsg = "Ready"
+	}
+
 	for {
-		t.Logf("Waiting for pod %s in namespace %s ", podName, namespace)
+		t.Logf("Waiting for pod %s in namespace %s to be %s", podName, namespace, statusMsg)
 		p := utils.RunCommand("kubectl get pods --namespace " + namespace)
 		t.Logf("Kubernetes Pods: %s", p.Result())
 		err := client.Resources(namespace).Get(ctx, podName, namespace, pod)
-		t.Logf("Pod %s is in phase %s", pod.Name, pod.Status.Phase)
+
 		if err == nil {
-			if pod.Status.Phase == "Running" {
-				return nil
+			t.Logf("Pod %s is in phase %s", pod.Name, pod.Status.Phase)
+
+			// Check for Running state
+			if pod.Status.Phase == corev1.PodRunning {
+				if waitForReady {
+					// Check if pod is actually Ready
+					for _, cond := range pod.Status.Conditions {
+						if cond.Type == corev1.PodReady && cond.Status == corev1.ConditionTrue {
+							t.Logf("Pod %s is Ready", pod.Name)
+							return nil
+						}
+					}
+					t.Logf("Pod %s is Running but not yet Ready", pod.Name)
+				} else {
+					// Just checking for Running is sufficient
+					t.Logf("Pod %s is Running", pod.Name)
+					return nil
+				}
 			}
+
+			// Diagnostic: Check for failed state
+			if pod.Status.Phase == corev1.PodFailed {
+				return fmt.Errorf("pod %s entered Failed state: %s", podName, pod.Status.Message)
+			}
+
+			// Diagnostic: Check init containers
+			for i, initStatus := range pod.Status.InitContainerStatuses {
+				if initStatus.State.Waiting != nil {
+					t.Logf("Init container [%d] %s is waiting: %s - %s",
+						i, initStatus.Name, initStatus.State.Waiting.Reason, initStatus.State.Waiting.Message)
+				}
+				if initStatus.State.Terminated != nil && initStatus.State.Terminated.ExitCode != 0 {
+					t.Errorf("Init container [%d] %s failed with exit code %d: %s",
+						i, initStatus.Name, initStatus.State.Terminated.ExitCode, initStatus.State.Terminated.Reason)
+					// Get logs from failed init container
+					logsCmd := fmt.Sprintf("kubectl logs %s -n %s -c %s --tail=50", podName, namespace, initStatus.Name)
+					logResult := utils.RunCommand(logsCmd)
+					t.Logf("Failed init container logs:\n%s", logResult.Result())
+					return fmt.Errorf("init container %s failed", initStatus.Name)
+				}
+			}
+
+			// Diagnostic: Check main containers
+			for _, containerStatus := range pod.Status.ContainerStatuses {
+				if containerStatus.State.Waiting != nil {
+					t.Logf("Container %s is waiting: %s - %s",
+						containerStatus.Name, containerStatus.State.Waiting.Reason, containerStatus.State.Waiting.Message)
+					if containerStatus.State.Waiting.Reason == "ImagePullBackOff" ||
+						containerStatus.State.Waiting.Reason == "ErrImagePull" {
+						return fmt.Errorf("image pull failed for container %s: %s",
+							containerStatus.Name, containerStatus.State.Waiting.Message)
+					}
+					// Fail fast on CrashLoopBackOff after multiple restarts
+					if containerStatus.State.Waiting.Reason == "CrashLoopBackOff" && containerStatus.RestartCount >= 3 {
+						// Get logs from the failing container
+						logsCmd := fmt.Sprintf("kubectl logs %s -n %s -c %s --tail=100", podName, namespace, containerStatus.Name)
+						logResult := utils.RunCommand(logsCmd)
+						t.Logf("Container %s logs:\n%s", containerStatus.Name, logResult.Result())
+
+						// Also try to get previous logs if available
+						prevLogsCmd := fmt.Sprintf("kubectl logs %s -n %s -c %s --previous --tail=100", podName, namespace, containerStatus.Name)
+						prevLogResult := utils.RunCommand(prevLogsCmd)
+						if prevLogResult.Result() != "" {
+							t.Logf("Container %s previous logs:\n%s", containerStatus.Name, prevLogResult.Result())
+						}
+
+						return fmt.Errorf("container %s is in CrashLoopBackOff with %d restarts: %s",
+							containerStatus.Name, containerStatus.RestartCount, containerStatus.State.Waiting.Message)
+					}
+				}
+				// Check for terminated state with non-zero exit code
+				if containerStatus.State.Terminated != nil && containerStatus.State.Terminated.ExitCode != 0 {
+					t.Errorf("Container %s terminated with exit code %d: %s",
+						containerStatus.Name, containerStatus.State.Terminated.ExitCode, containerStatus.State.Terminated.Reason)
+					// Get logs from terminated container
+					logsCmd := fmt.Sprintf("kubectl logs %s -n %s -c %s --tail=100", podName, namespace, containerStatus.Name)
+					logResult := utils.RunCommand(logsCmd)
+					t.Logf("Terminated container logs:\n%s", logResult.Result())
+					return fmt.Errorf("container %s terminated with exit code %d: %s",
+						containerStatus.Name, containerStatus.State.Terminated.ExitCode, containerStatus.State.Terminated.Reason)
+				}
+			}
+
+			// Diagnostic: Check pod conditions
+			for _, cond := range pod.Status.Conditions {
+				if cond.Status == "False" && cond.Type == "PodScheduled" {
+					// Unschedulable due to unbound PVCs is transient; the PVC provisioner
+					// may still be creating the volume. Log and continue waiting instead of
+					// failing immediately.
+					if cond.Reason == "Unschedulable" && strings.Contains(cond.Message, "PersistentVolumeClaim") {
+						t.Logf("Pod %s is Unschedulable due to unbound PVCs, waiting for PVC provisioning: %s", podName, cond.Message)
+						break
+					}
+					return fmt.Errorf("pod scheduling failed: %s - %s", cond.Reason, cond.Message)
+				}
+			}
+
 		} else if !errors.IsNotFound(err) {
 			t.Logf("Failed to get pod %s: %v", podName, err)
 			continue
 		}
 
 		if time.Since(start) > timeout {
-			return fmt.Errorf("timed out waiting for pod %s to be created", podName)
+			// Enhanced timeout error with pod describe
+			describeCmd := fmt.Sprintf("kubectl describe pod %s -n %s", podName, namespace)
+			describeResult := utils.RunCommand(describeCmd)
+			t.Logf("Pod description:\n%s", describeResult.Result())
+
+			return fmt.Errorf("timed out after %v waiting for pod %s to be %s (current phase: %s)",
+				timeout, podName, statusMsg, pod.Status.Phase)
 		}
 
 		time.Sleep(5 * time.Second)
@@ -267,7 +383,23 @@ func ExecCmdInPod(podName, namespace, containerName, command string) (string, er
 
 	err := cmd.Run()
 	if err != nil {
-		return "", fmt.Errorf("failed to execute command: %v, stderr: %v", err, stderr.String())
+		return "", fmt.Errorf("failed to execute command: %v, stderr: %s", err, stderr.String())
+	}
+	return out.String(), nil
+}
+
+// GetPodLogs retrieves logs from a specific container in a pod
+func GetPodLogs(namespace, podName, containerName string) (string, error) {
+	cmd := exec.Command("kubectl", "logs", podName, "-n", namespace, "-c", containerName, "--tail=500")
+
+	var out bytes.Buffer
+	var stderr bytes.Buffer
+	cmd.Stdout = &out
+	cmd.Stderr = &stderr
+
+	err := cmd.Run()
+	if err != nil {
+		return "", fmt.Errorf("failed to get pod logs: %v, stderr: %s", err, stderr.String())
 	}
 	return out.String(), nil
 }

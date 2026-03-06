@@ -13,7 +13,7 @@ controllerManager:
       readOnlyRootFilesystem: true
       runAsNonRoot: true
     image:
-      repository: gcr.io/kubebuilder/kube-rbac-proxy
+      repository: quay.io/brancz/kube-rbac-proxy
       tag: v0.15.0
     resources:
       limits:
@@ -36,7 +36,7 @@ controllerManager:
       runAsNonRoot: true
     image:
       repository: progressofficial/marklogic-operator-kubernetes
-      tag: 1.1.1
+      tag: 1.2.0
     resources:
       limits:
         cpu: 500m

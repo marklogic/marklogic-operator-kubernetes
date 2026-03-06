@@ -4,6 +4,7 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.19.0
+    helm.sh/resource-policy: keep
   name: marklogicgroups.marklogic.progress.com
 spec:
   group: marklogic.progress.com
@@ -4302,7 +4303,7 @@ spec:
                 type: string
               readinessProbe:
                 default:
-                  enabled: false
+                  enabled: true
                   failureThreshold: 3
                   initialDelaySeconds: 10
                   periodSeconds: 30

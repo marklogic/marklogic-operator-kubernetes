@@ -324,8 +324,9 @@ func generateContainerDef(name string, containerParams containerParameters) []co
 			Name:            name,
 			Image:           containerParams.Image,
 			ImagePullPolicy: containerParams.ImagePullPolicy,
+			Command:         []string{"/tini", "--", "/bin/bash", "/tmp/helm-scripts/cluster-init-wrapper.sh"},
 			Env:             getEnvironmentVariables(containerParams),
-			Lifecycle:       getLifeCycle(),
+			Lifecycle:       getLifeCycleWithoutPostStart(),
 			SecurityContext: containerParams.SecurityContext,
 			VolumeMounts:    getVolumeMount(containerParams),
 		},
@@ -432,9 +433,21 @@ func getLifeCycle() *corev1.Lifecycle {
 	return &corev1.Lifecycle{
 		PostStart: &corev1.LifecycleHandler{
 			Exec: &corev1.ExecAction{
-				Command: []string{"/bin/bash", "/tmp/helm-scripts/poststart-hook.sh"},
+				Command: []string{"/bin/bash", "/tmp/helm-scripts/cluster-config.sh"},
 			},
 		},
+		PreStop: &corev1.LifecycleHandler{
+			Exec: &corev1.ExecAction{
+				Command: []string{"/bin/bash", "/tmp/helm-scripts/prestop-hook.sh"},
+			},
+		},
+	}
+}
+
+// getLifeCycleWithoutPostStart returns lifecycle with only PreStop hook
+// PostStart is handled in the wrapper script for ISTIO ambient mode compatibility
+func getLifeCycleWithoutPostStart() *corev1.Lifecycle {
+	return &corev1.Lifecycle{
 		PreStop: &corev1.LifecycleHandler{
 			Exec: &corev1.ExecAction{
 				Command: []string{"/bin/bash", "/tmp/helm-scripts/prestop-hook.sh"},
@@ -590,9 +603,6 @@ func getEnvironmentVariables(containerParams containerParameters) []corev1.EnvVa
 	}, corev1.EnvVar{
 		Name:  "XDQP_SSL_ENABLED",
 		Value: strconv.FormatBool(enableXdqpSsl),
-	}, corev1.EnvVar{
-		Name:  "MARKLOGIC_CLUSTER_TYPE",
-		Value: "bootstrap",
 	}, corev1.EnvVar{
 		Name:  "INSTALL_CONVERTERS",
 		Value: strconv.FormatBool(containerParams.EnableConverters),
@@ -758,11 +768,13 @@ func getReadinessProbe(probe marklogicv1.ContainerProbe) *corev1.Probe {
 		TimeoutSeconds:      probe.TimeoutSeconds,
 		SuccessThreshold:    probe.SuccessThreshold,
 		ProbeHandler: corev1.ProbeHandler{
-			HTTPGet: &corev1.HTTPGetAction{
-				Path: "/",
-				Port: intstr.IntOrString{
-					Type:   intstr.Int,
-					IntVal: 7997,
+			Exec: &corev1.ExecAction{
+				Command: []string{
+					"/bin/bash",
+					"-c",
+					// Only pass if MarkLogic is healthy AND the Wrapper finished successfully
+					// curl -f
+					"test -f /tmp/marklogic_ready && curl -s -f http://localhost:7997/",
 				},
 			},
 		},

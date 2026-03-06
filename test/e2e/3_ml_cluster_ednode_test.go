@@ -1,4 +1,4 @@
-// Copyright (c) 2024-2025 Progress Software Corporation and/or its subsidiaries or affiliates. All Rights Reserved.
+// Copyright (c) 2024-2026 Progress Software Corporation and/or its subsidiaries or affiliates. All Rights Reserved.
 
 package e2e
 
@@ -81,7 +81,8 @@ func TestMlClusterWithEdnode(t *testing.T) {
 		client := c.Client()
 		namespace := &corev1.Namespace{
 			ObjectMeta: metav1.ObjectMeta{
-				Name: mlClusterNs,
+				Name:   mlClusterNs,
+				Labels: namespaceLabels(),
 			},
 		}
 		if err := client.Resources().Create(ctx, namespace); err != nil {
@@ -125,12 +126,12 @@ func TestMlClusterWithEdnode(t *testing.T) {
 		client := c.Client()
 
 		podName := "dnode-0"
-		err := utils.WaitForPod(ctx, t, client, mlClusterNs, podName, 120*time.Second)
+		err := utils.WaitForPod(ctx, t, client, mlClusterNs, podName, 120*time.Second, true)
 		if err != nil {
 			t.Fatalf("Failed to wait for pod creation: %v", err)
 		}
 		epodName := "enode-0"
-		err = utils.WaitForPod(ctx, t, client, mlClusterNs, epodName, 180*time.Second)
+		err = utils.WaitForPod(ctx, t, client, mlClusterNs, epodName, 180*time.Second, true)
 		if err != nil {
 			t.Fatalf("Failed to wait for pod creation: %v", err)
 		}
@@ -148,7 +149,8 @@ func TestMlClusterWithEdnode(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Failed to execute curl command in pod: %v", err)
 		}
-		if !strings.Contains(output, "<nameref>dnode</nameref>") && !strings.Contains(output, "<nameref>enode</nameref>") {
+		if !strings.Contains(output, "<nameref>dnode</nameref>") || !strings.Contains(output, "<nameref>enode</nameref>") {
+			t.Logf("Groups output: %s", output)
 			t.Fatal("Groups does not exists on MarkLogic cluster")
 		}
 		return ctx
@@ -173,12 +175,12 @@ func TestMlClusterWithEdnode(t *testing.T) {
 	feature.Assess("New Pods created", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 		client := c.Client()
 		podNameOne := "dnode-1"
-		err := utils.WaitForPod(ctx, t, client, mlClusterNs, podNameOne, 60*time.Second)
+		err := utils.WaitForPod(ctx, t, client, mlClusterNs, podNameOne, 60*time.Second, true)
 		if err != nil {
 			t.Fatalf("Failed to wait for pod %s creation: %v", podNameOne, err)
 		}
 		epodNameTwo := "enode-1"
-		err = utils.WaitForPod(ctx, t, client, mlClusterNs, epodNameTwo, 120*time.Second)
+		err = utils.WaitForPod(ctx, t, client, mlClusterNs, epodNameTwo, 120*time.Second, true)
 		if err != nil {
 			t.Fatalf("Failed to wait for pod %s creation: %v", epodNameTwo, err)
 		}
