@@ -4,7 +4,6 @@ metadata:
   name: marklogicgroups.marklogic.progress.com
   annotations:
     controller-gen.kubebuilder.io/version: v0.19.0
-    helm.sh/resource-policy: keep
   labels:
   {{- include "marklogic-operator-kubernetes.labels" . | nindent 4 }}
 spec:
@@ -4291,7 +4290,7 @@ spec:
                 type: string
               readinessProbe:
                 default:
-                  enabled: true
+                  enabled: false
                   failureThreshold: 3
                   initialDelaySeconds: 10
                   periodSeconds: 30

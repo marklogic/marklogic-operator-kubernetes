@@ -1,4 +1,4 @@
-// Copyright (c) 2024-2026 Progress Software Corporation and/or its subsidiaries or affiliates. All Rights Reserved.
+// Copyright (c) 2024-2025 Progress Software Corporation and/or its subsidiaries or affiliates. All Rights Reserved.
 
 package e2e
 
@@ -80,8 +80,7 @@ func TestHAPorxyPathBaseEnabled(t *testing.T) {
 		client := c.Client()
 		client.Resources(namespace).Create(ctx, &corev1.Namespace{
 			ObjectMeta: metav1.ObjectMeta{
-				Name:   namespace,
-				Labels: namespaceLabels(),
+				Name: namespace,
 			},
 		})
 		marklogicv1.AddToScheme(client.Resources(namespace).GetScheme())
@@ -105,7 +104,7 @@ func TestHAPorxyPathBaseEnabled(t *testing.T) {
 	feature.Assess("MarklogicCluster Pod created", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 		client := c.Client()
 		podName := "ml-0"
-		err := utils.WaitForPod(ctx, t, client, namespace, podName, 120*time.Second, true)
+		err := utils.WaitForPod(ctx, t, client, namespace, podName, 120*time.Second)
 		if err != nil {
 			t.Fatalf("Failed to wait for pod creation: %v", err)
 		}
@@ -212,8 +211,7 @@ func TestHAPorxWithNoPathBasedDisabled(t *testing.T) {
 		client := c.Client()
 		client.Resources(namespace).Create(ctx, &corev1.Namespace{
 			ObjectMeta: metav1.ObjectMeta{
-				Name:   namespace,
-				Labels: namespaceLabels(),
+				Name: namespace,
 			},
 		})
 		marklogicv1.AddToScheme(client.Resources(namespace).GetScheme())
@@ -242,7 +240,7 @@ func TestHAPorxWithNoPathBasedDisabled(t *testing.T) {
 	feature.Assess("MarklogicCluster Pod created", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 		client := c.Client()
 		podName := "ml-0"
-		err := utils.WaitForPod(ctx, t, client, namespace, podName, 120*time.Second, true)
+		err := utils.WaitForPod(ctx, t, client, namespace, podName, 120*time.Second)
 		if err != nil {
 			t.Fatalf("Failed to wait for pod creation: %v", err)
 		}
