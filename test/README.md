@@ -8,6 +8,7 @@ make e2e-test
 make e2e-delete-minikube
 ```
 
+## Run Specific Test Types
 Each test is assigned a “type” label, allowing you to run only the tests of a specified type.
 
 For example, to run only the test for TLS named cert test:

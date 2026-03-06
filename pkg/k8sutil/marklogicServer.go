@@ -1,4 +1,4 @@
-// Copyright (c) 2024-2025 Progress Software Corporation and/or its subsidiaries or affiliates. All Rights Reserved.
+// Copyright (c) 2024-2026 Progress Software Corporation and/or its subsidiaries or affiliates. All Rights Reserved.
 
 package k8sutil
 
@@ -42,6 +42,8 @@ type MarkLogicGroupParameters struct {
 	NodeSelector                   map[string]string
 	TopologySpreadConstraints      []corev1.TopologySpreadConstraint
 	HugePages                      *marklogicv1.HugePages
+	LivenessProbe                  marklogicv1.ContainerProbe
+	ReadinessProbe                 marklogicv1.ContainerProbe
 	PodSecurityContext             *corev1.PodSecurityContext
 	ContainerSecurityContext       *corev1.SecurityContext
 	IsBootstrap                    bool
@@ -72,6 +74,8 @@ type MarkLogicClusterParameters struct {
 	EnableConverters               bool
 	Resources                      *corev1.ResourceRequirements
 	HugePages                      *marklogicv1.HugePages
+	LivenessProbe                  marklogicv1.ContainerProbe
+	ReadinessProbe                 marklogicv1.ContainerProbe
 	LogCollection                  *marklogicv1.LogCollection
 	PodSecurityContext             *corev1.PodSecurityContext
 	ContainerSecurityContext       *corev1.SecurityContext
@@ -144,6 +148,8 @@ func (cc *ClusterContext) GenerateMarkLogicGroupDef(cr *marklogicv1.MarklogicClu
 			NodeSelector:                   params.NodeSelector,
 			Persistence:                    params.Persistence,
 			Service:                        params.Service,
+			LivenessProbe:                  params.LivenessProbe,
+			ReadinessProbe:                 params.ReadinessProbe,
 			LogCollection:                  params.LogCollection,
 			TopologySpreadConstraints:      params.TopologySpreadConstraints,
 			PodSecurityContext:             params.PodSecurityContext,
@@ -245,6 +251,8 @@ func generateMarkLogicClusterParams(cr *marklogicv1.MarklogicCluster) *MarkLogic
 		EnableConverters:               cr.Spec.EnableConverters,
 		Resources:                      cr.Spec.Resources,
 		HugePages:                      cr.Spec.HugePages,
+		LivenessProbe:                  marklogicv1.ContainerProbe{Enabled: true, InitialDelaySeconds: 30, TimeoutSeconds: 5, PeriodSeconds: 30, SuccessThreshold: 1, FailureThreshold: 3},
+		ReadinessProbe:                 marklogicv1.ContainerProbe{Enabled: true, InitialDelaySeconds: 10, TimeoutSeconds: 5, PeriodSeconds: 30, SuccessThreshold: 1, FailureThreshold: 3},
 		LogCollection:                  cr.Spec.LogCollection,
 		Auth:                           cr.Spec.Auth,
 		PodSecurityContext:             cr.Spec.PodSecurityContext,
@@ -293,6 +301,8 @@ func generateMarkLogicGroupParams(cr *marklogicv1.MarklogicCluster, index int, c
 		NodeSelector:                   clusterParams.NodeSelector,
 		TopologySpreadConstraints:      clusterParams.TopologySpreadConstraints,
 		HugePages:                      clusterParams.HugePages,
+		LivenessProbe:                  clusterParams.LivenessProbe,
+		ReadinessProbe:                 clusterParams.ReadinessProbe,
 		PodSecurityContext:             clusterParams.PodSecurityContext,
 		ContainerSecurityContext:       clusterParams.ContainerSecurityContext,
 		IsBootstrap:                    cr.Spec.MarkLogicGroups[index].IsBootstrap,
@@ -357,6 +367,12 @@ func generateMarkLogicGroupParams(cr *marklogicv1.MarklogicCluster, index int, c
 	}
 	if cr.Spec.MarkLogicGroups[index].AdditionalVolumeMounts != nil {
 		markLogicGroupParameters.AdditionalVolumeMounts = cr.Spec.MarkLogicGroups[index].AdditionalVolumeMounts
+	}
+	if cr.Spec.MarkLogicGroups[index].LivenessProbe.Enabled {
+		markLogicGroupParameters.LivenessProbe = cr.Spec.MarkLogicGroups[index].LivenessProbe
+	}
+	if cr.Spec.MarkLogicGroups[index].ReadinessProbe.Enabled {
+		markLogicGroupParameters.ReadinessProbe = cr.Spec.MarkLogicGroups[index].ReadinessProbe
 	}
 	return markLogicGroupParameters
 }

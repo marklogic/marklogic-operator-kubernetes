@@ -1,11 +1,21 @@
-# Copyright (c) 2024-2025 Progress Software Corporation and/or its subsidiaries or affiliates. All Rights Reserved.
+# Copyright (c) 2024-2026 Progress Software Corporation and/or its subsidiaries or affiliates. All Rights Reserved.
 
 # VERSION defines the project version for the bundle.
 # Update this value when you upgrade the version of your project.
 # To re-generate a bundle for another specific version without changing the standard setup, you can:
 # - use the VERSION as arg of the bundle target (e.g make bundle VERSION=0.0.2)
 # - use environment variables to overwrite this value (e.g export VERSION=0.0.2)
-VERSION ?= 1.1.1
+VERSION ?= 1.2.0
+
+# Tool Versions
+KUSTOMIZE_VERSION ?= v5.5.0
+CONTROLLER_TOOLS_VERSION ?= v0.19.0
+ISTIO_VERSION ?= 1.28.3
+OPERATOR_SDK_VERSION ?= v1.34.2
+GOLANGCI_LINT_VERSION ?= v1.62.2
+
+# ENVTEST_K8S_VERSION refers to the version of kubebuilder assets to be downloaded by envtest binary.
+ENVTEST_K8S_VERSION = 1.31.0
 
 # VERIFY_HUGE_PAGES defines if hugepages test is enabled or not for e2e test
 VERIFY_HUGE_PAGES ?= false
@@ -14,10 +24,9 @@ export E2E_DOCKER_IMAGE ?= $(IMG)
 export E2E_KUSTOMIZE_VERSION ?= $(KUSTOMIZE_VERSION)
 export E2E_CONTROLLER_TOOLS_VERSION ?= $(CONTROLLER_TOOLS_VERSION)
 export E2E_MARKLOGIC_IMAGE_VERSION ?= progressofficial/marklogic-db:12.0.0-ubi9-rootless-2.2.2
+export FLUENT_BIT_IMAGE ?= fluent/fluent-bit:4.1.1
 export E2E_KUBERNETES_VERSION ?= v1.31.13
-
-# ENVTEST_K8S_VERSION refers to the version of kubebuilder assets to be downloaded by envtest binary.
-ENVTEST_K8S_VERSION = 1.31.0
+export E2E_ISTIO_AMBIENT ?= false
 
 
 # CHANNELS define the bundle channels used in the bundle.
@@ -60,10 +69,6 @@ USE_IMAGE_DIGESTS ?= false
 ifeq ($(USE_IMAGE_DIGESTS), true)
 	BUNDLE_GEN_FLAGS += --use-image-digests
 endif
-
-# Set the Operator SDK version to use. By default, what is installed on the system is used.
-# This is useful for CI or a project to utilize a specific version of the operator-sdk toolkit.
-OPERATOR_SDK_VERSION ?= v1.34.2
 
 # Image URL to use all building/pushing image targets
 # Image for dev: ml-marklogic-operator-dev.bed-artifactory.bedford.progress.com/marklogic-operator-kubernetes
@@ -157,15 +162,43 @@ else
 	go test -v -count=1 -timeout 30m ./test/e2e
 endif
 
+.PHONY: e2e-test-istio  # Run Istio ambient mode e2e tests
+e2e-test-istio:
+	@echo "=====Running Istio ambient mode e2e tests"
+	E2E_ISTIO_AMBIENT=true go test -v -count=1 -timeout 30m ./test/e2e -run "Test(Istio|NonIstio)"
+
 .PHONY: e2e-setup-minikube
 e2e-setup-minikube: kustomize controller-gen build docker-build
 	minikube version
 	minikube delete || true
 	minikube start --driver=docker --kubernetes-version=$(E2E_KUBERNETES_VERSION) --memory=8192 --cpus=2
 	minikube addons enable ingress
+	minikube addons enable storage-provisioner
+	minikube addons enable default-storageclass
 	minikube image load $(IMG)
 	minikube image load $(E2E_MARKLOGIC_IMAGE_VERSION)
 	minikube image load "docker.io/haproxytech/haproxy-alpine:3.2"
+	minikube image load $(FLUENT_BIT_IMAGE)
+	minikube image ls
+
+.PHONY: e2e-setup-minikube-istio
+e2e-setup-minikube-istio: kustomize controller-gen build docker-build istioctl ## Setup minikube with Istio ambient mode for e2e tests.
+	minikube version
+	minikube delete || true
+	minikube start --driver=docker --kubernetes-version=$(E2E_KUBERNETES_VERSION) --memory=8192 --cpus=2
+	minikube addons enable ingress
+	minikube addons enable storage-provisioner
+	minikube addons enable default-storageclass
+	@echo "=====Installing Istio with ambient profile====="
+	$(ISTIOCTL) install --set profile=ambient -y
+	@echo "=====Waiting for Istio components to be ready====="
+	kubectl wait --for=condition=Ready pods --all -n istio-system --timeout=120s
+	@echo "=====Istio ambient mode installed successfully====="
+	kubectl get pods -n istio-system
+	minikube image load $(IMG)
+	minikube image load $(E2E_MARKLOGIC_IMAGE_VERSION)
+	minikube image load "docker.io/haproxytech/haproxy-alpine:3.2"
+	minikube image load $(FLUENT_BIT_IMAGE)
 	minikube image ls
 
 .PHONY: e2e-cleanup-minikube
@@ -174,7 +207,6 @@ e2e-cleanup-minikube:
 	minikube delete
 	
 GOLANGCI_LINT = $(shell pwd)/bin/golangci-lint
-GOLANGCI_LINT_VERSION ?= v1.62.2
 golangci-lint:
 	@[ -f $(GOLANGCI_LINT) ] || { \
 	set -e ;\
@@ -263,10 +295,7 @@ KUBECTL ?= kubectl
 KUSTOMIZE ?= $(LOCALBIN)/kustomize
 CONTROLLER_GEN ?= $(LOCALBIN)/controller-gen
 ENVTEST ?= $(LOCALBIN)/setup-envtest
-
-## Tool Versions
-KUSTOMIZE_VERSION ?= v5.5.0
-CONTROLLER_TOOLS_VERSION ?= v0.19.0
+ISTIOCTL ?= $(LOCALBIN)/istioctl
 
 .PHONY: kustomize
 kustomize: $(KUSTOMIZE) ## Download kustomize locally if necessary. If wrong version is installed, it will be removed before downloading.
@@ -287,6 +316,41 @@ $(CONTROLLER_GEN): $(LOCALBIN)
 envtest: $(ENVTEST) ## Download envtest-setup locally if necessary.
 $(ENVTEST): $(LOCALBIN)
 	test -s $(LOCALBIN)/setup-envtest || GOBIN=$(LOCALBIN) go install sigs.k8s.io/controller-runtime/tools/setup-envtest@latest
+
+.PHONY: istioctl
+istioctl: $(ISTIOCTL) ## Download istioctl locally if necessary.
+$(ISTIOCTL): $(LOCALBIN)
+ifeq (,$(wildcard $(ISTIOCTL)))
+ifeq (, $(shell which istioctl 2>/dev/null))
+	@{ \
+	set -e ;\
+	mkdir -p $(dir $(ISTIOCTL)) ;\
+	OS=$$(uname | tr '[:upper:]' '[:lower:]') ;\
+	if [ "$$OS" = "darwin" ]; then OS=osx; fi ;\
+	ARCH=$$(go env GOARCH) ;\
+	ARCHIVE="istio-$(ISTIO_VERSION)-$${OS}-$${ARCH}.tar.gz" ;\
+	URL="https://github.com/istio/istio/releases/download/$(ISTIO_VERSION)/$${ARCHIVE}" ;\
+	TMP_DIR=$$(mktemp -d) ;\
+	echo "Downloading istioctl $(ISTIO_VERSION) for $${OS}-$${ARCH}..." ;\
+	curl -sSLo "$$TMP_DIR/$${ARCHIVE}" "$${URL}" ;\
+	curl -sSLo "$$TMP_DIR/$${ARCHIVE}.sha256" "$${URL}.sha256" ;\
+	cd "$$TMP_DIR" ;\
+	if command -v sha256sum >/dev/null 2>&1; then \
+		sha256sum -c "$${ARCHIVE}.sha256" ;\
+	else \
+		shasum -a 256 -c "$${ARCHIVE}.sha256" ;\
+	fi ;\
+	tar xzf "$${ARCHIVE}" ;\
+	cd - > /dev/null ;\
+	mv "$$TMP_DIR/istio-$(ISTIO_VERSION)/bin/istioctl" "$(ISTIOCTL)" ;\
+	rm -rf "$$TMP_DIR" ;\
+	chmod +x "$(ISTIOCTL)" ;\
+	echo "istioctl successfully installed to $(ISTIOCTL)" ;\
+	}
+else
+ISTIOCTL = $(shell which istioctl)
+endif
+endif
 
 .PHONY: operator-sdk
 OPERATOR_SDK ?= $(LOCALBIN)/operator-sdk
@@ -370,7 +434,7 @@ $(HELMIFY): $(LOCALBIN)
     
 helm: manifests kustomize helmify
 	cd config/manager && $(KUSTOMIZE) edit set image controller=$(IMG)
-	$(KUSTOMIZE) build config/default | $(HELMIFY) -image-pull-secrets -original-name charts/marklogic-operator-kubernetes 
+	$(KUSTOMIZE) build config/default | $(HELMIFY) -image-pull-secrets -original-name charts/marklogic-operator-kubernetes
 
 .PHONY: image-scan
 image-scan: docker-build

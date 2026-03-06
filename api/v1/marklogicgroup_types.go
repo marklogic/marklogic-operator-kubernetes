@@ -1,5 +1,5 @@
 /*
-Copyright (c) 2024-2025 Progress Software Corporation and/or its subsidiaries or affiliates. All Rights Reserved.
+Copyright (c) 2024-2026 Progress Software Corporation and/or its subsidiaries or affiliates. All Rights Reserved.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -62,7 +62,7 @@ type MarklogicGroupSpec struct {
 	HugePages *HugePages `json:"hugePages,omitempty"`
 	// +kubebuilder:default:={enabled: true, initialDelaySeconds: 30, timeoutSeconds: 5, periodSeconds: 30, successThreshold: 1, failureThreshold: 3}
 	LivenessProbe ContainerProbe `json:"livenessProbe,omitempty"`
-	// +kubebuilder:default:={enabled: false, initialDelaySeconds: 10, timeoutSeconds: 5, periodSeconds: 30, successThreshold: 1, failureThreshold: 3}
+	// +kubebuilder:default:={enabled: true, initialDelaySeconds: 10, timeoutSeconds: 5, periodSeconds: 30, successThreshold: 1, failureThreshold: 3}
 	ReadinessProbe ContainerProbe `json:"readinessProbe,omitempty"`
 	// +kubebuilder:default:={enabled: false, image: "fluent/fluent-bit:4.1.1", resources: {requests: {cpu: "100m", memory: "200Mi"}, limits: {cpu: "200m", memory: "500Mi"}}, files: {errorLogs: true, accessLogs: true, requestLogs: true}, outputs: "stdout"}
 	LogCollection *LogCollection `json:"logCollection,omitempty"`
@@ -139,6 +139,7 @@ type License struct {
 }
 
 //+kubebuilder:object:root=true
+//+kubebuilder:metadata:annotations="helm.sh/resource-policy=keep"
 //+kubebuilder:subresource:status
 
 // MarklogicGroup is the Schema for the marklogicgroup API

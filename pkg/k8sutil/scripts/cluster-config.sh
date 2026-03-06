@@ -1,6 +1,8 @@
 #! /bin/bash   
-# Copyright (c) 2024-2025 Progress Software Corporation and/or its subsidiaries or affiliates. All Rights Reserved. 
+# Copyright (c) 2024-2026 Progress Software Corporation and/or its subsidiaries or affiliates. All Rights Reserved. 
 
+# MarkLogic Cluster Configuration Script
+# Handles cluster initialization, security setup, host joining, TLS configuration, and group management
 # Refer to https://docs.marklogic.com/guide/admin-api/cluster#id_10889 for cluster joining process
 
 N_RETRY=10
@@ -43,9 +45,8 @@ error() {
 
 log () {
     local TIMESTAMP=$(date +"%Y-%m-%d %T.%3N")
-    message="${TIMESTAMP} [postStart] $@"
+    message="${TIMESTAMP} [cluster-config] $@"
     echo $message  > /proc/1/fd/1
-    echo $message >> /tmp/script.log
 }
 
 # Function to retry a command based on the return code
@@ -132,11 +133,11 @@ fi
 function restart_check {
     info "Waiting for MarkLogic to restart."
     local retry_count LAST_START
-    LAST_START=$(curl -s --anyauth --user "${ML_ADMIN_USERNAME}":"${ML_ADMIN_PASSWORD}" "http://$1:8001/admin/v1/timestamp")
+    LAST_START=$(curl -s -m 5 --anyauth --user "${MARKLOGIC_ADMIN_USERNAME}":"${MARKLOGIC_ADMIN_PASSWORD}" "http://$1:8001/admin/v1/timestamp")
     for ((retry_count = 0; retry_count < N_RETRY; retry_count = retry_count + 1)); do
         if [ "$2" == "${LAST_START}" ] || [ -z "${LAST_START}" ]; then
             sleep ${RETRY_INTERVAL}
-            LAST_START=$(curl -s --anyauth --user "${ML_ADMIN_USERNAME}":"${ML_ADMIN_PASSWORD}" "http://$1:8001/admin/v1/timestamp")
+            LAST_START=$(curl -s -m 5 --anyauth --user "${MARKLOGIC_ADMIN_USERNAME}":"${MARKLOGIC_ADMIN_PASSWORD}" "http://$1:8001/admin/v1/timestamp")
         else
             info "MarkLogic has restarted."
             return 0
@@ -166,7 +167,7 @@ function curl_retry_validate {
     local curl_options=("$@")
 
     for ((retry_count = 0; retry_count < N_RETRY; retry_count = retry_count + 1)); do
-        response=$(curl -v -m 30 -w '%{http_code}' "${curl_options[@]}" "$endpoint")
+        response=$(curl -s -m 30 -w '%{http_code}' "${curl_options[@]}" "$endpoint")
         response_code=$(tail -n1 <<< "$response")
         response_content=$(sed '$ d' <<< "$response")
         if [[ ${response_code} -eq ${expected_response_code} ]]; then
@@ -295,7 +296,7 @@ function init_security_db {
 
         curl_retry_validate false "http://${MARKLOGIC_BOOTSTRAP_HOST}:8001/admin/v1/instance-admin" 202 \
             "-o" "/dev/null" \
-            "-X" "POST" "-H" "Content-type:application/x-www-form-urlencoded; charset=utf-8" \
+            "-H" "Content-type:application/x-www-form-urlencoded; charset=utf-8" \
             "--data-urlencode" "admin-username=${MARKLOGIC_ADMIN_USERNAME}" "--data-urlencode" "admin-password=${MARKLOGIC_ADMIN_PASSWORD}" \
             "--data-urlencode" "realm=${ML_REALM}" "--data-urlencode" "${MARKLOGIC_WALLET_PASSWORD_PAYLOAD}"
 
@@ -352,6 +353,8 @@ function join_cluster {
     retry_count=10
     while [ $retry_count -gt 0 ]; do
         GROUP_RESP_CODE=$( curl --anyauth -m 20 -s -o /dev/null -w "%{http_code}" $HTTPS_OPTION -X GET $HTTP_PROTOCOL://${MARKLOGIC_BOOTSTRAP_HOST}:8002/manage/v2/groups/${MARKLOGIC_GROUP} --anyauth --user ${MARKLOGIC_ADMIN_USERNAME}:${MARKLOGIC_ADMIN_PASSWORD} )
+        info "MARKLOGIC_BOOTSTRAP_HOST: $MARKLOGIC_BOOTSTRAP_HOST"
+        info "MARKLOGIC_GROUP: $MARKLOGIC_GROUP"
         info "GROUP_RESP_CODE: $GROUP_RESP_CODE"
         if [[ ${GROUP_RESP_CODE} -eq 200 ]]; then
             info "Found the group, process to join the group"
@@ -381,7 +384,7 @@ function join_cluster {
         "-H" "Content-type: application/x-www-form-urlencoded" \
         "-o" "/tmp/cluster.zip" $HTTPS_OPTION
 
-    timestamp=$(curl -s "http://localhost:8001/admin/v1/timestamp" )
+    timestamp=$(curl -s --anyauth --user "${MARKLOGIC_ADMIN_USERNAME}:${MARKLOGIC_ADMIN_PASSWORD}" "http://localhost:8001/admin/v1/timestamp" )
 
     info "joining cluster of group ${MARKLOGIC_GROUP}"
     curl_retry_validate false "http://localhost:8001/admin/v1/cluster-config" 202 \
@@ -435,7 +438,7 @@ function configure_group {
             response_code=$( \
                 curl -s --anyauth \
                 --user ${MARKLOGIC_ADMIN_USERNAME}:${MARKLOGIC_ADMIN_PASSWORD} \
-                -w '%{http_code}' --retry 5 \
+                -w '%{http_code}' --retry 5  \
                 -X PUT \
                 -H "Content-type: application/json" \
                 $LOCAL_HTTPS_OPTION -d "${group_cfg}" \
@@ -450,7 +453,8 @@ function configure_group {
                 # Note: THIS SHOULD NOT HAPPEN WITH THE CURRENT GROUP CONFIG
                 info "group \"${current_group}\" updated and a restart of all hosts in the group was triggered"
             else
-                info "unexpected response when updating group \"${current_group}\": ${response_code}"
+                error "unexpected response when updating group \"${current_group}\": ${response_code}"
+                return 1
             fi
         else
             info "failed to get current group, response code: ${response_code}"
@@ -459,24 +463,36 @@ function configure_group {
         if [[ "$MARKLOGIC_CLUSTER_TYPE" == "non-bootstrap" ]]; then
             info "creating group $MARKLOGIC_GROUP"
 
+            # Detect the current protocol of bootstrap host for group operations
+            GROUP_HTTP_PROTOCOL="http"
+            GROUP_HTTPS_OPTION=""
+            group_bootstrap_protocol=$(get_current_host_protocol $MARKLOGIC_BOOTSTRAP_HOST 8002)
+            if [[ $group_bootstrap_protocol == "https" ]]; then
+                GROUP_HTTP_PROTOCOL="https"
+                GROUP_HTTPS_OPTION="-k"
+                info "Bootstrap host is using HTTPS on port 8002"
+            else
+                info "Bootstrap host is using HTTP on port 8002"
+            fi
+
             # Create a group if group is not already exits
-            GROUP_RESP_CODE=$( curl --anyauth --retry 5 -m 20 -s -o /dev/null -w "%{http_code}" $HTTPS_OPTION -X GET $HTTP_PROTOCOL://${MARKLOGIC_BOOTSTRAP_HOST}:8002/manage/v2/groups/${MARKLOGIC_GROUP} --anyauth --user ${MARKLOGIC_ADMIN_USERNAME}:${MARKLOGIC_ADMIN_PASSWORD} )
+            GROUP_RESP_CODE=$( curl --anyauth --retry 5 -m 20 -s -o /dev/null -w "%{http_code}" $GROUP_HTTPS_OPTION -X GET $GROUP_HTTP_PROTOCOL://${MARKLOGIC_BOOTSTRAP_HOST}:8002/manage/v2/groups/${MARKLOGIC_GROUP} --anyauth --user ${MARKLOGIC_ADMIN_USERNAME}:${MARKLOGIC_ADMIN_PASSWORD} )
             if [[ ${GROUP_RESP_CODE} -eq 200 ]]; then
                 info "Skipping creation of group $MARKLOGIC_GROUP as it already exists on the MarkLogic cluster." 
             else 
-                res_code=$(curl --anyauth --retry 5 --user ${MARKLOGIC_ADMIN_USERNAME}:${MARKLOGIC_ADMIN_PASSWORD} $HTTPS_OPTION -m 20 -s -w '%{http_code}' -X POST -d "${group_cfg}" -H "Content-type: application/json" $HTTP_PROTOCOL://${MARKLOGIC_BOOTSTRAP_HOST}:8002/manage/v2/groups)
+                res_code=$(curl --anyauth --retry 5 --user ${MARKLOGIC_ADMIN_USERNAME}:${MARKLOGIC_ADMIN_PASSWORD} $GROUP_HTTPS_OPTION -m 20 -s -w '%{http_code}' -X POST -d "${group_cfg}" -H "Content-type: application/json" $GROUP_HTTP_PROTOCOL://${MARKLOGIC_BOOTSTRAP_HOST}:8002/manage/v2/groups)
                 if [[ ${res_code} -eq 201 ]]; then
                     log "Info: Successfully configured group $MARKLOGIC_GROUP on the MarkLogic cluster."
                 else
-                    log "Info: Expected response code 201, got $res_code"
+                    log "Info: Expected response code 201, got $res_code for group creation"
                 fi
             fi
             log "Info: Group $MARKLOGIC_GROUP has been created, configuring App-server App-Services in group $MARKLOGIC_GROUP on the MarkLogic cluster."
-            res_code=`curl --retry 5 --retry-max-time 60 --anyauth --user ${MARKLOGIC_ADMIN_USERNAME}:${MARKLOGIC_ADMIN_PASSWORD} -m 20 -s ${HTTPS_OPTION} -w '%{http_code}' -X POST -d '{"server-name":"App-Services", "root":"/", "port":8000,"modules-database":"Modules", "content-database":"Documents", "error-handler":"/MarkLogic/rest-api/8000-error-handler.xqy", "url-rewriter":"/MarkLogic/rest-api/8000-rewriter.xml"}' -H "Content-type: application/json" "${HTTP_PROTOCOL}://${MARKLOGIC_BOOTSTRAP_HOST}:8002/manage/v2/servers?group-id=${MARKLOGIC_GROUP}&server-type=http"`
+            res_code=`curl --retry 5 --retry-max-time 60 --anyauth --user ${MARKLOGIC_ADMIN_USERNAME}:${MARKLOGIC_ADMIN_PASSWORD} -m 20 -s ${GROUP_HTTPS_OPTION} -w '%{http_code}' -X POST -d '{"server-name":"App-Services", "root":"/", "port":8000,"modules-database":"Modules", "content-database":"Documents", "error-handler":"/MarkLogic/rest-api/8000-error-handler.xqy", "url-rewriter":"/MarkLogic/rest-api/8000-rewriter.xml"}' -H "Content-type: application/json" "${GROUP_HTTP_PROTOCOL}://${MARKLOGIC_BOOTSTRAP_HOST}:8002/manage/v2/servers?group-id=${MARKLOGIC_GROUP}&server-type=http"`
             if [[ ${res_code} -eq 201 ]]; then
               log "Info: Successfully configured App-server App-Services into group $MARKLOGIC_GROUP on the MarkLogic cluster."
             else
-              log "Info: Expected response code 201, got $res_code"
+              log "Info: Expected response code 201, got $res_code for App-Services configuration"
               exit 1
             fi        
         fi
@@ -677,10 +693,11 @@ function set_status_file {
 
 function check_status_file_for_nonbootstrap {
     if [[ -f "$ML_KUBERNETES_FILE_PATH/status.txt" ]]; then
-        log "Info: status file exists. Skip configuration"
-        exit 0
+        log "Info: status file exists. Configuration functions will verify state."
+        # Don't exit early - let the configuration functions handle state verification
+        # They already check if the host is in the cluster and skip if needed
     else
-        log "Info:  status file does not exist. Continue"
+        log "Info: status file does not exist. Continue"
     fi
 }
 
@@ -690,14 +707,19 @@ function check_status_file_for_boostrap {
         new_group_xdqp_ssl_enabled="${XDQP_SSL_ENABLED}"
         new_https_enabled="${MARKLOGIC_JOIN_TLS_ENABLED}"
         source "$ML_KUBERNETES_FILE_PATH/status.txt"
-        if [[ "$new_group_name" == "$group_name" ]] && [[ "$new_group_xdqp_ssl_enabled" == "$group_xdqp_ssl_enabled" ]] && [[ "$new_https_enabled" == "$https_enabled" ]]; then
-            log "No change in values file. Skip configuration"
-            exit 0
-        else
-            log "Info: changes made in values file. Continue Configuration"
+        
+        # Check if configuration values have changed
+        if [[ "$new_group_name" != "$group_name" ]] || [[ "$new_group_xdqp_ssl_enabled" != "$group_xdqp_ssl_enabled" ]] || [[ "$new_https_enabled" != "$https_enabled" ]]; then
+            log "Info: Configuration values changed. Removing status file and continuing."
+            rm -f "$ML_KUBERNETES_FILE_PATH/status.txt"
+            return 0
         fi
+        
+        # Values match - let configuration functions verify and skip if already done
+        log "Info: Configuration values match. Configuration functions will verify current state."
+        # Don't exit early - the init functions already check and skip if configured
     else
-        return 0
+        log "Info: status file does not exist. Continue"
     fi
 }
 
@@ -734,4 +756,4 @@ fi
 
 set_status_file
 
-info "post-start hook script completed"
+info "cluster configuration completed"

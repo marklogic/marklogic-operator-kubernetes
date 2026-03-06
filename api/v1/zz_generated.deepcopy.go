@@ -850,6 +850,8 @@ func (in *MarklogicGroups) DeepCopyInto(out *MarklogicGroups) {
 		*out = new(HugePages)
 		**out = **in
 	}
+	out.LivenessProbe = in.LivenessProbe
+	out.ReadinessProbe = in.ReadinessProbe
 	if in.LogCollection != nil {
 		in, out := &in.LogCollection, &out.LogCollection
 		*out = new(LogCollection)

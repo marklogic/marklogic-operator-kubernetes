@@ -1,5 +1,5 @@
 /*
-Copyright (c) 2024-2025 Progress Software Corporation and/or its subsidiaries or affiliates. All Rights Reserved.
+Copyright (c) 2024-2026 Progress Software Corporation and/or its subsidiaries or affiliates. All Rights Reserved.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -109,8 +109,12 @@ type MarklogicGroups struct {
 	NodeSelector              map[string]string                 `json:"nodeSelector,omitempty"`
 	PriorityClassName         string                            `json:"priorityClassName,omitempty"`
 	HugePages                 *HugePages                        `json:"hugePages,omitempty"`
-	LogCollection             *LogCollection                    `json:"logCollection,omitempty"`
-	HAProxy                   *HAProxyGroup                     `json:"haproxy,omitempty"`
+	// +kubebuilder:default:={enabled: true, initialDelaySeconds: 30, timeoutSeconds: 5, periodSeconds: 30, successThreshold: 1, failureThreshold: 3}
+	LivenessProbe ContainerProbe `json:"livenessProbe,omitempty"`
+	// +kubebuilder:default:={enabled: true, initialDelaySeconds: 10, timeoutSeconds: 5, periodSeconds: 30, successThreshold: 1, failureThreshold: 3}
+	ReadinessProbe ContainerProbe `json:"readinessProbe,omitempty"`
+	LogCollection  *LogCollection `json:"logCollection,omitempty"`
+	HAProxy        *HAProxyGroup  `json:"haproxy,omitempty"`
 	// +kubebuilder:default:=false
 	IsBootstrap                    bool                            `json:"isBootstrap,omitempty"`
 	Tls                            *Tls                            `json:"tls,omitempty"`
@@ -134,6 +138,7 @@ type MarklogicClusterStatus struct {
 }
 
 //+kubebuilder:object:root=true
+//+kubebuilder:metadata:annotations="helm.sh/resource-policy=keep"
 //+kubebuilder:subresource:status
 
 // MarklogicCluster is the Schema for the marklogicclusters API
