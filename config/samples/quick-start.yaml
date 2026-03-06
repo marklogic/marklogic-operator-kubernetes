@@ -1,4 +1,4 @@
-# Copyright (c) 2024-2026 Progress Software Corporation and/or its subsidiaries or affiliates. All Rights Reserved.
+# Copyright (c) 2024-2025 Progress Software Corporation and/or its subsidiaries or affiliates. All Rights Reserved.
 
 apiVersion: marklogic.progress.com/v1
 kind: MarklogicCluster
@@ -12,9 +12,11 @@ spec:
   ## kubectl create secret generic admincreds --from-literal=username=admin --from-literal=password=admin
   ## If you do not provide the admin credentials, the operator will generate a secret for you containing admin credentials
   persistence:
-    enabled: false
+    enabled: true
     size: 10Gi
   markLogicGroups:
-  - replicas: 2
+  - replicas: 1
     name: node
+    groupConfig:
+      name: node
     isBootstrap: true

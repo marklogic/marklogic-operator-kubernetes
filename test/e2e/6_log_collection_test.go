@@ -85,8 +85,7 @@ func TestLogCollectionDisabled(t *testing.T) {
 
 		namespace := &corev1.Namespace{
 			ObjectMeta: metav1.ObjectMeta{
-				Name:   logCollectionNamespace,
-				Labels: namespaceLabels(),
+				Name: logCollectionNamespace,
 			},
 		}
 		if err := client.Resources().Create(ctx, namespace); err != nil {
@@ -235,8 +234,7 @@ func TestLogCollectionPartialLogs(t *testing.T) {
 
 		namespace := &corev1.Namespace{
 			ObjectMeta: metav1.ObjectMeta{
-				Name:   logCollectionNamespace,
-				Labels: namespaceLabels(),
+				Name: logCollectionNamespace,
 			},
 		}
 		if err := client.Resources().Create(ctx, namespace); err != nil {
@@ -412,8 +410,7 @@ func TestLogCollectionCustomResources(t *testing.T) {
 
 		namespace := &corev1.Namespace{
 			ObjectMeta: metav1.ObjectMeta{
-				Name:   logCollectionNamespace,
-				Labels: namespaceLabels(),
+				Name: logCollectionNamespace,
 			},
 		}
 		if err := client.Resources().Create(ctx, namespace); err != nil {
@@ -592,8 +589,7 @@ func TestLogCollectionCustomFilters(t *testing.T) {
 
 		namespace := &corev1.Namespace{
 			ObjectMeta: metav1.ObjectMeta{
-				Name:   logCollectionNamespace,
-				Labels: namespaceLabels(),
+				Name: logCollectionNamespace,
 			},
 		}
 		if err := client.Resources().Create(ctx, namespace); err != nil {
