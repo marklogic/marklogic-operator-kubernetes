@@ -26,7 +26,7 @@ entries:
     appVersion: 1.2.0
     created: "2026-03-06T20:04:07.835911395Z"
     description: A Helm chart for MarkLogic Operator for Kubernetes
-    digest: 2b06fadb457d9ccf5b6841dbdf6483fbfafa732c5697a1f2b9c814c4d7d08bb8
+    digest: 97ae49d2b288cd217c7c811c130391de1e96a3de9150bb5a5445c50be460d56d
     name: marklogic-operator-kubernetes
     type: application
     urls:
