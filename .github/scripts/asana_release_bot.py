@@ -73,10 +73,10 @@ def main():
         "Content-Type": "application/json"
     }
     
-    target_task_name = f"Release {release_version}"
+    target_task_name = f"Operator {release_version} Release Checklist"
 
     try:
-        # 3. Find the main release task (e.g., "Release v1.4.0")
+        # 3. Find the main release task (e.g., "Operator 1.4.0 Release Checklist")
         main_task_gid = get_task_gid_by_name(project_gid, target_task_name, headers)
         if not main_task_gid:
             sys.exit(1)
