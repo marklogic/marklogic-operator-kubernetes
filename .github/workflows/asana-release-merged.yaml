@@ -1,0 +1,45 @@
+name: Asana Release - Merge to Main
+
+on:
+  pull_request:
+    types: [closed]
+    branches:
+      - main  # (Change to 'master' if that is your primary branch)
+
+jobs:
+  update-asana-on-merge:
+    runs-on: ubuntu-latest
+    # Run ONLY if the PR was merged AND the source branch was a release branch
+    if: github.event.pull_request.merged == true && startsWith(github.event.pull_request.head.ref, 'release/')
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install Dependencies
+        run: pip install requests
+
+      - name: Extract Release Version
+        id: get_version
+        run: |
+          # Grab the name of the branch that was just merged (e.g., release/v1.4.0)
+          SOURCE_BRANCH="${{ github.event.pull_request.head.ref }}"
+          
+          # Strip the prefix
+          VERSION=${SOURCE_BRANCH#release/}
+          echo "Extracted version: $VERSION"
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Check off Asana Subtask
+        env:
+          ASANA_PAT: ${{ secrets.ASANA_PAT }}
+          ASANA_PROJECT_GID: ${{ secrets.ASANA_PROJECT_GID }}
+          RELEASE_VERSION: ${{ steps.get_version.outputs.version }}
+          # ⬇️ Here is where we target the new subtask
+          TARGET_SUBTASK_NAME: "Release operator package to GitHub" 
+        run: python .github/scripts/asana_release_bot.py
