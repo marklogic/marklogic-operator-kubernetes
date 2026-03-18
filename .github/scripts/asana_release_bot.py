@@ -48,6 +48,20 @@ def complete_task(task_id, headers):
     response = requests.put(url, headers=headers, json=payload)
     response.raise_for_status()
     print("🎉 Successfully checked the box in Asana!")
+    
+def add_task_comment(task_id, text, headers):
+    """Adds a comment (story) to a specific task or subtask."""
+    print(f"💬 Adding comment to task...")
+    url = f"{BASE_URL}/tasks/{task_id}/stories"
+    payload = {
+        "data": {
+            "text": text
+        }
+    }
+    
+    response = requests.post(url, headers=headers, json=payload)
+    response.raise_for_status()
+    print("✅ Comment added successfully!")
 
 def main():
     # 1. Fetch Environment Variables
@@ -88,6 +102,10 @@ def main():
             
         # 5. Check the box
         complete_task(subtask_gid, headers)
+        
+        # 6. Leave the audit trail comment
+        comment_text = f"🤖 Automatically marked complete by GitHub Actions upon creation of the {release_version} branch."
+        add_task_comment(subtask_gid, comment_text, headers)
             
     except requests.exceptions.HTTPError as err:
         print(f"❌ API Request failed with status code {err.response.status_code}")
