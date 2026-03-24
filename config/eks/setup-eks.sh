@@ -173,10 +173,16 @@ else
     --set serviceAccount.create=false \
     --set serviceAccount.name=aws-load-balancer-controller
 
-  log "Waiting for Load Balancer Controller pods to be ready..."
-  kubectl wait --for=condition=Available deployment/aws-load-balancer-controller \
-    -n kube-system --timeout=120s
-  ok "AWS Load Balancer Controller installed and ready"
+  # Only wait for pods if worker nodes are available; they may be scaled to 0
+  # when the cluster is idle and will come up automatically on eks-scale-up.
+  if kubectl get nodes --no-headers 2>/dev/null | grep -q Ready; then
+    log "Waiting for Load Balancer Controller pods to be ready..."
+    kubectl wait --for=condition=Available deployment/aws-load-balancer-controller \
+      -n kube-system --timeout=120s
+    ok "AWS Load Balancer Controller installed and ready"
+  else
+    ok "AWS Load Balancer Controller installed (pods will start once nodes are scaled up)"
+  fi
 fi
 
 # ---------------------------------------------------------------------------
