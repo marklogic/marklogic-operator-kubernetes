@@ -13,7 +13,7 @@ controllerManager:
       readOnlyRootFilesystem: true
       runAsNonRoot: true
     image:
-      repository: gcr.io/kubebuilder/kube-rbac-proxy
+      repository: quay.io/brancz/kube-rbac-proxy
       tag: v0.15.0
     resources:
       limits:
