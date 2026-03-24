@@ -1,0 +1,62 @@
+# Copyright (c) 2024-2026 Progress Software Corporation and/or its subsidiaries or affiliates. All Rights Reserved.
+#
+# eksctl ClusterConfig for the Jenkins EKS test environment.
+# Used by config/eks/setup-eks.sh for initial one-time provisioning.
+#
+# To replicate this cluster in a different AWS account, update:
+#   - metadata.region
+#   - Any account-specific ARNs (none hardcoded here — IAM policies are
+#     created by setup-eks.sh and referenced by name, not ARN)
+#
+# Usage:
+#   eksctl create cluster -f cluster-config.yaml
+#
+apiVersion: eksctl.io/v1alpha5
+kind: ClusterConfig
+
+metadata:
+  name: jenkins-kube-ninjas
+  region: us-west-1
+  version: "1.31"
+  tags:
+    project: marklogic-kubernetes-operator
+    managed-by: eksctl
+
+# Enable OIDC provider — required for IAM Roles for Service Accounts (IRSA),
+# used by the AWS Load Balancer Controller and EBS CSI driver.
+iam:
+  withOIDC: true
+
+# Managed node group. Worker nodes are scaled to 0 between CI runs to minimise cost.
+# The EKS control plane (~$0.10/hr) continues to run when nodes are at 0.
+managedNodeGroups:
+  - name: ml-worker
+    # r5.2xlarge: 8 vCPU, 64 GB RAM — sized for MarkLogic memory requirements.
+    instanceType: r5.2xlarge
+    # AL2023 satisfies Istio ambient mode's kernel ≥ 5.10 requirement.
+    amiFamily: AmazonLinux2023
+    minSize: 0
+    maxSize: 6
+    # desiredCapacity is used only at initial cluster creation.
+    # Ongoing scaling is managed via: eksctl scale nodegroup
+    desiredCapacity: 3
+    volumeSize: 100
+    labels:
+      role: ml-worker
+    tags:
+      project: marklogic-kubernetes-operator
+    iam:
+      attachPolicyARNs:
+        - arn:aws:iam::aws:policy/AmazonEKSWorkerNodePolicy
+        - arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly
+        - arn:aws:iam::aws:policy/AmazonEKS_CNI_Policy
+
+# EBS CSI driver — required for PersistentVolumeClaims backed by EBS volumes.
+# Inline addon avoids the separate 'eksctl create iamserviceaccount' step.
+addons:
+  - name: aws-ebs-csi-driver
+    wellKnownPolicies:
+      ebsCSIController: true
+  - name: coredns
+  - name: kube-proxy
+  - name: vpc-cni

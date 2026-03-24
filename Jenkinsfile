@@ -161,6 +161,67 @@ void runIstioE2eTests() {
     """
 }
 
+// ---------------------------------------------------------------------------
+// EKS / ECR helper functions
+// AWS credentials are bound using the 'KUBE_NINJAS_OPS_AWS_JENKINS' credential ID.
+// ECR_REGISTRY and ECR_OPERATOR_IMAGE are computed inside each make target;
+// AWS_ACCOUNT_ID is resolved once per function and exported to make.
+// ---------------------------------------------------------------------------
+
+void withEksCredentials(Closure body) {
+    withCredentials([[$class: 'AmazonWebServicesCredentialsBinding',
+                      credentialsId: 'KUBE_NINJAS_OPS_AWS_JENKINS',
+                      accessKeyVariable: 'AWS_ACCESS_KEY_ID',
+                      secretKeyVariable: 'AWS_SECRET_ACCESS_KEY']]) {
+        // Resolve account ID once and export so Make vars (ECR_REGISTRY, etc.) resolve correctly
+        env.AWS_ACCOUNT_ID = sh(returnStdout: true,
+            script: 'aws sts get-caller-identity --query Account --output text').trim()
+        body()
+    }
+}
+
+void runEKSSetup() {
+    withEksCredentials {
+        sh """
+            make e2e-setup-eks \\
+              E2E_MARKLOGIC_IMAGE_VERSION=${params.E2E_MARKLOGIC_IMAGE_VERSION}
+        """
+    }
+}
+
+void runEKSE2eTests() {
+    withEksCredentials {
+        sh """
+            make e2e-test-eks \\
+              E2E_MARKLOGIC_IMAGE_VERSION=${params.E2E_MARKLOGIC_IMAGE_VERSION}
+        """
+    }
+}
+
+void runEKSCleanup() {
+    withEksCredentials {
+        sh 'make e2e-cleanup-eks'
+    }
+}
+
+void runEKSIstioSetup() {
+    withEksCredentials {
+        sh """
+            make e2e-setup-eks-istio \\
+              E2E_MARKLOGIC_IMAGE_VERSION=${params.E2E_MARKLOGIC_IMAGE_VERSION}
+        """
+    }
+}
+
+void runEKSIstioE2eTests() {
+    withEksCredentials {
+        sh """
+            make e2e-test-eks-istio \\
+              E2E_MARKLOGIC_IMAGE_VERSION=${params.E2E_MARKLOGIC_IMAGE_VERSION}
+        """
+    }
+}
+
 void runBlackDuckScan() {
     // Trigger BlackDuck scan job with CONTAINER_IMAGES parameter when params.PUBLISH_IMAGE is true
     if (params.PUBLISH_IMAGE) {
@@ -214,7 +275,8 @@ pipeline {
         // Trigger nightly builds on the develop branch
         parameterizedCron( env.BRANCH_NAME == 'develop' ? '''00 05 * * * % E2E_MARKLOGIC_IMAGE_VERSION=ml-docker-db-dev-tierpoint.bed-artifactory.bedford.progress.com/marklogic/marklogic-server-ubi-rootless:latest-12
                                                              00 05 * * * % E2E_MARKLOGIC_IMAGE_VERSION=ml-docker-db-dev-tierpoint.bed-artifactory.bedford.progress.com/marklogic/marklogic-server-ubi-rootless:latest-11; PUBLISH_IMAGE=false
-                                                             00 07 * * * % E2E_MARKLOGIC_IMAGE_VERSION=ml-docker-db-dev-tierpoint.bed-artifactory.bedford.progress.com/marklogic/marklogic-server-ubi-rootless:latest-12; VERIFY_ISTIO_AMBIENT=true''' : '')
+                                                             00 07 * * * % E2E_MARKLOGIC_IMAGE_VERSION=ml-docker-db-dev-tierpoint.bed-artifactory.bedford.progress.com/marklogic/marklogic-server-ubi-rootless:latest-12; VERIFY_ISTIO_AMBIENT=true
+                                                             30 05 * * * % TEST_ON_EKS=true; VERIFY_ISTIO_AMBIENT=true; E2E_MARKLOGIC_IMAGE_VERSION=308453789681.dkr.ecr.us-west-1.amazonaws.com/jenkins-kube-ninjas/marklogic-server-ubi-rootless:latest-12''' : '')
     }
 
     environment {
@@ -231,6 +293,7 @@ pipeline {
         booleanParam(name: 'PUBLISH_IMAGE', defaultValue: false, description: 'Publish image to internal registry')
         string(name: 'emailList', defaultValue: emailList, description: 'List of email for build notification', trim: true)
         booleanParam(name: 'VERIFY_ISTIO_AMBIENT', defaultValue: true, description: 'Run Istio ambient mode e2e tests (requires fresh minikube cluster with Istio)')
+        booleanParam(name: 'TEST_ON_EKS', defaultValue: false, description: 'Run e2e tests on the EKS cluster (jenkins-kube-ninjas) instead of Minikube. Requires KUBE_NINJAS_OPS_AWS_JENKINS credentials on this agent.')
     }
 
     stages {
@@ -247,18 +310,27 @@ pipeline {
         }
 
         stage('Run-Minikube-Setup') {
+            when {
+                expression { return !params.TEST_ON_EKS }
+            }
             steps {
                 runMinikubeSetup()
             }
         }
 
         stage('Run-e2e-Tests') {
+            when {
+                expression { return !params.TEST_ON_EKS }
+            }
             steps {
                 runE2eTests()
             }
         }
 
         stage('Cleanup Environment') {
+            when {
+                expression { return !params.TEST_ON_EKS }
+            }
             steps {
                 catchError(buildResult: 'SUCCESS', stageResult: 'FAILURE') {
                     runMinikubeCleanup()
@@ -268,7 +340,7 @@ pipeline {
 
         stage('Istio-Minikube-Setup') {
             when {
-                expression { return params.VERIFY_ISTIO_AMBIENT }
+                expression { return !params.TEST_ON_EKS && params.VERIFY_ISTIO_AMBIENT }
             }
             steps {
                 runIstioMinikubeSetup()
@@ -277,7 +349,7 @@ pipeline {
 
         stage('Run-Istio-e2e-Tests') {
             when {
-                expression { return params.VERIFY_ISTIO_AMBIENT }
+                expression { return !params.TEST_ON_EKS && params.VERIFY_ISTIO_AMBIENT }
             }
             steps {
                 runIstioE2eTests()
@@ -286,12 +358,89 @@ pipeline {
 
         stage('Istio-Cleanup') {
             when {
-                expression { return params.VERIFY_ISTIO_AMBIENT }
+                expression { return !params.TEST_ON_EKS && params.VERIFY_ISTIO_AMBIENT }
             }
             steps {
                 runMinikubeCleanup()
             }
         }
+
+        // -----------------------------------------------------------------------
+        // EKS stages — only run when TEST_ON_EKS=true
+        //
+        // TODO (MLE-24929): Uncomment the lock() and timeout() wrappers below
+        // once the 'eks-cluster-jenkins-kube-ninjas' Lockable Resource has been
+        // created in Jenkins (Manage Jenkins → Lockable Resources → Add Resource).
+        // This serialises concurrent EKS test runs across all Jenkins agents so
+        // that only one build holds the shared cluster at a time.
+        // The timeout(3h) aborts a queued build rather than waiting indefinitely.
+        //
+        // lock(resource: 'eks-cluster-jenkins-kube-ninjas', inversePrecedence: true) {
+        //   timeout(time: 3, unit: 'HOURS') {
+        // -----------------------------------------------------------------------
+
+        stage('EKS-Setup') {
+            when {
+                expression { return params.TEST_ON_EKS }
+            }
+            steps {
+                runEKSSetup()
+            }
+        }
+
+        stage('Run-EKS-e2e-Tests') {
+            when {
+                expression { return params.TEST_ON_EKS }
+            }
+            steps {
+                runEKSE2eTests()
+            }
+        }
+
+        stage('EKS-Cleanup') {
+            when {
+                expression { return params.TEST_ON_EKS }
+            }
+            steps {
+                // Always scale workers down, even if tests failed
+                catchError(buildResult: 'SUCCESS', stageResult: 'FAILURE') {
+                    runEKSCleanup()
+                }
+            }
+        }
+
+        stage('EKS-Istio-Setup') {
+            when {
+                expression { return params.TEST_ON_EKS && params.VERIFY_ISTIO_AMBIENT }
+            }
+            steps {
+                runEKSIstioSetup()
+            }
+        }
+
+        stage('Run-EKS-Istio-e2e-Tests') {
+            when {
+                expression { return params.TEST_ON_EKS && params.VERIFY_ISTIO_AMBIENT }
+            }
+            steps {
+                runEKSIstioE2eTests()
+            }
+        }
+
+        stage('EKS-Istio-Cleanup') {
+            when {
+                expression { return params.TEST_ON_EKS && params.VERIFY_ISTIO_AMBIENT }
+            }
+            steps {
+                catchError(buildResult: 'SUCCESS', stageResult: 'FAILURE') {
+                    runEKSCleanup()
+                }
+            }
+        }
+
+        // TODO (MLE-24929): Uncomment closing braces when lock/timeout are enabled:
+        //   }  // end timeout
+        //   }  // end lock
 
         // Publish image to internal registries (conditional)
         stage('Publish Image') {
