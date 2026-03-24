@@ -366,18 +366,12 @@ pipeline {
         }
 
         // -----------------------------------------------------------------------
-        // EKS stages — only run when TEST_ON_EKS=true
-        //
-        // TODO (MLE-24929): Uncomment the lock() and timeout() wrappers below
-        // once the 'eks-cluster-jenkins-kube-ninjas' Lockable Resource has been
-        // created in Jenkins (Manage Jenkins → Lockable Resources → Add Resource).
-        // This serialises concurrent EKS test runs across all Jenkins agents so
-        // that only one build holds the shared cluster at a time.
-        // The timeout(3h) aborts a queued build rather than waiting indefinitely.
-        //
-        // lock(resource: 'eks-cluster-jenkins-kube-ninjas', inversePrecedence: true) {
-        //   timeout(time: 3, unit: 'HOURS') {
+        // EKS stages — only run when TEST_ON_EKS=true.
+        // Serialises concurrent runs on the shared cluster; aborts after 3 hours
+        // if a build is waiting for the lock rather than queuing indefinitely.
         // -----------------------------------------------------------------------
+        lock(resource: 'jenkinsKubeNinjasEksCluster', inversePrecedence: true) {
+          timeout(time: 3, unit: 'HOURS') {
 
         stage('EKS-Setup') {
             when {
@@ -438,9 +432,8 @@ pipeline {
             }
         }
 
-        // TODO (MLE-24929): Uncomment closing braces when lock/timeout are enabled:
-        //   }  // end timeout
-        //   }  // end lock
+          }  // end timeout
+        }  // end lock
 
         // Publish image to internal registries (conditional)
         stage('Publish Image') {
