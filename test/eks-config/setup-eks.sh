@@ -9,6 +9,8 @@
 #   2. ECR repositories for MarkLogic server images and the Operator image
 #   3. IAM policy + service account for the AWS Load Balancer Controller
 #   4. AWS Load Balancer Controller (Helm)
+#   5. EBS CSI driver (EKS managed add-on) for dynamic EBS volume provisioning
+#   6. gp2 storage class marked as default
 #
 # To replicate in a different AWS account:
 #   Set the following environment variables before running:
@@ -183,6 +185,56 @@ else
   else
     ok "AWS Load Balancer Controller installed (pods will start once nodes are scaled up)"
   fi
+fi
+
+# ---------------------------------------------------------------------------
+# 6. EBS CSI Driver (required for PVC provisioning on K8s 1.23+)
+# ---------------------------------------------------------------------------
+# K8s 1.23+ uses CSI migration: even the in-tree gp2 class delegates to
+# ebs.csi.aws.com, so the EBS CSI driver must be present.
+log "Checking EBS CSI driver add-on..."
+EBS_ADDON_STATUS=$(aws eks describe-addon \
+  --cluster-name "${CLUSTER_NAME}" \
+  --addon-name aws-ebs-csi-driver \
+  --region "${AWS_DEFAULT_REGION}" \
+  --query "addon.status" --output text 2>/dev/null || echo "NOT_FOUND")
+
+if [[ "${EBS_ADDON_STATUS}" == "ACTIVE" ]]; then
+  ok "EBS CSI driver add-on already active"
+else
+  log "Creating IAM service account for EBS CSI driver..."
+  eksctl create iamserviceaccount \
+    --cluster "${CLUSTER_NAME}" \
+    --namespace kube-system \
+    --name ebs-csi-controller-sa \
+    --attach-policy-arn arn:aws:iam::aws:policy/service-role/AmazonEBSCSIDriverPolicy \
+    --region "${AWS_DEFAULT_REGION}" \
+    --override-existing-serviceaccounts \
+    --approve
+
+  EBS_SA_ROLE_ARN=$(kubectl get serviceaccount -n kube-system ebs-csi-controller-sa \
+    -o jsonpath='{.metadata.annotations.eks\.amazonaws\.com/role-arn}' 2>/dev/null)
+
+  log "Installing EBS CSI driver add-on (role: ${EBS_SA_ROLE_ARN})..."
+  aws eks create-addon \
+    --cluster-name "${CLUSTER_NAME}" \
+    --addon-name aws-ebs-csi-driver \
+    --service-account-role-arn "${EBS_SA_ROLE_ARN}" \
+    --resolve-conflicts OVERWRITE \
+    --region "${AWS_DEFAULT_REGION}" >/dev/null
+
+  log "Waiting for EBS CSI driver add-on to become ACTIVE..."
+  for i in {1..20}; do
+    STATUS=$(aws eks describe-addon \
+      --cluster-name "${CLUSTER_NAME}" \
+      --addon-name aws-ebs-csi-driver \
+      --region "${AWS_DEFAULT_REGION}" \
+      --query "addon.status" --output text 2>/dev/null)
+    [[ "${STATUS}" == "ACTIVE" ]] && { ok "EBS CSI driver add-on is ACTIVE"; break; }
+    [[ "${STATUS}" == "CREATE_FAILED" ]] && { echo "ERROR: EBS CSI driver add-on failed to install"; exit 1; }
+    echo "  ... status: ${STATUS} (${i}/20)"
+    sleep 15
+  done
 fi
 
 # ---------------------------------------------------------------------------
