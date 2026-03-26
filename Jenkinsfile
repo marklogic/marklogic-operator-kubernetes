@@ -10,6 +10,29 @@ import groovy.json.JsonSlurperClassic
 emailList = 'vitaly.korolev@progress.com, sumanth.ravipati@progress.com, peng.zhou@progress.com, barkha.choithani@progress.com, romain.winieski@progress.com'
 emailSecList = 'Mahalakshmi.Srinivasan@progress.com'
 gitCredID = 'marklogic-builder-github'
+
+// Extract the AWS account ID from the KUBE_NINJAS_OPS_AWS_JENKINS credential description
+// (e.g. "KubeNinjas AWS credentials for 308453789681 (ML Containers/K8)").
+// Used to build the ECR base URL without hardcoding the account number.
+@NonCPS
+String eksAccountIdFromCredential() {
+    try {
+        def creds = com.cloudbees.plugins.credentials.CredentialsProvider.lookupCredentials(
+            com.cloudbees.plugins.credentials.common.StandardCredentials,
+            jenkins.model.Jenkins.instance,
+            null,
+            []
+        )
+        def cred = creds.find { it.id == 'KUBE_NINJAS_OPS_AWS_JENKINS' }
+        if (cred?.description) {
+            def m = (cred.description =~ /\b(\d{12})\b/)
+            if (m) return m[0][1]
+        }
+    } catch (any) { /* credentials not available at this point — fall through */ }
+    return ''
+}
+
+eksEcrBase = "${eksAccountIdFromCredential()}.dkr.ecr.us-west-1.amazonaws.com"
 operatorRegistry = 'ml-marklogic-operator-dev.bed-artifactory.bedford.progress.com'
 JIRA_ID = ''
 JIRA_ID_PATTERN = /(?i)(MLE)-\d{3,6}/
@@ -273,10 +296,10 @@ pipeline {
     
     triggers {
         // Trigger nightly builds on the develop branch
-        parameterizedCron( env.BRANCH_NAME == 'develop' ? '''00 05 * * * % E2E_MARKLOGIC_IMAGE_VERSION=ml-docker-db-dev-tierpoint.bed-artifactory.bedford.progress.com/marklogic/marklogic-server-ubi-rootless:latest-12
+        parameterizedCron( env.BRANCH_NAME == 'develop' ? """00 05 * * * % E2E_MARKLOGIC_IMAGE_VERSION=ml-docker-db-dev-tierpoint.bed-artifactory.bedford.progress.com/marklogic/marklogic-server-ubi-rootless:latest-12
                                                              00 05 * * * % E2E_MARKLOGIC_IMAGE_VERSION=ml-docker-db-dev-tierpoint.bed-artifactory.bedford.progress.com/marklogic/marklogic-server-ubi-rootless:latest-11; PUBLISH_IMAGE=false
                                                              00 07 * * * % E2E_MARKLOGIC_IMAGE_VERSION=ml-docker-db-dev-tierpoint.bed-artifactory.bedford.progress.com/marklogic/marklogic-server-ubi-rootless:latest-12; VERIFY_ISTIO_AMBIENT=true
-                                                             30 05 * * * % TEST_ON_EKS=true; VERIFY_ISTIO_AMBIENT=true; E2E_MARKLOGIC_IMAGE_VERSION=308453789681.dkr.ecr.us-west-1.amazonaws.com/jenkins-kube-ninjas/marklogic-server-ubi-rootless:latest-12''' : '')
+                                                             30 05 * * * % TEST_ON_EKS=true; VERIFY_ISTIO_AMBIENT=true; E2E_MARKLOGIC_IMAGE_VERSION=${eksEcrBase}/jenkins-kube-ninjas/marklogic-server-ubi-rootless:latest-12""" : '')
     }
 
     environment {
