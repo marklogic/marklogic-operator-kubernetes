@@ -26,7 +26,7 @@ Kubernetes Operator on AWS EKS.
 | **Min nodes** | 0 (scaled down when idle) |
 | **Max nodes** | 6 |
 | **Desired (active)** | 3 |
-| **Kubernetes version** | 1.33 |
+| **Kubernetes version** | 1.34 |
 
 ---
 
