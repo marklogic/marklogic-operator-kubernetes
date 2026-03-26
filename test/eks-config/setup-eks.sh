@@ -186,6 +186,18 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# 7. Default storage class
+# ---------------------------------------------------------------------------
+log "Checking default storage class..."
+if kubectl get storageclass gp2 -o jsonpath='{.metadata.annotations.storageclass\.kubernetes\.io/is-default-class}' 2>/dev/null | grep -q "true"; then
+  ok "gp2 is already the default storage class"
+else
+  log "Setting gp2 as the default storage class..."
+  kubectl annotate storageclass gp2 storageclass.kubernetes.io/is-default-class=true --overwrite
+  ok "gp2 set as default storage class"
+fi
+
+# ---------------------------------------------------------------------------
 # Summary
 # ---------------------------------------------------------------------------
 echo ""

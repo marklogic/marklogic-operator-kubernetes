@@ -31,10 +31,11 @@ export E2E_ISTIO_AMBIENT ?= false
 # EKS / ECR configuration for Jenkins EKS test environment.
 # Set AWS_ACCOUNT_ID in the environment (or pass on the make command line).
 # Example: make e2e-setup-eks AWS_ACCOUNT_ID=123456789012
-# Jenkins sets AWS_ACCOUNT_ID via 'aws sts get-caller-identity' before invoking make.
+# If not set, it is auto-derived via: aws sts get-caller-identity.
 EKS_CLUSTER_NAME ?= jenkins-kube-ninjas
 EKS_NODEGROUP_NAME ?= ml-worker
 EKS_REGION ?= us-west-1
+AWS_ACCOUNT_ID ?= $(shell aws sts get-caller-identity --query Account --output text 2>/dev/null)
 ECR_REGISTRY ?= $(AWS_ACCOUNT_ID).dkr.ecr.$(EKS_REGION).amazonaws.com
 ECR_OPERATOR_IMAGE ?= $(ECR_REGISTRY)/$(EKS_CLUSTER_NAME)/marklogic-kubernetes-operator:$(VERSION)
 
