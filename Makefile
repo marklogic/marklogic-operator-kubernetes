@@ -228,7 +228,7 @@ ecr-login: ## Authenticate Docker to ECR.
 .PHONY: eks-scale-up
 eks-scale-up: ## Scale EKS worker nodes to 3.
 	@echo "=====Scaling EKS worker nodes to 3====="
-	ekstctl scale nodegroup \
+	eksctl scale nodegroup \
 	  --cluster $(EKS_CLUSTER_NAME) \
 	  --name $(EKS_NODEGROUP_NAME) \
 	  --nodes 3 \
@@ -242,7 +242,7 @@ eks-scale-up: ## Scale EKS worker nodes to 3.
 .PHONY: eks-scale-down
 eks-scale-down: ## Scale EKS worker nodes to 0.
 	@echo "=====Scaling EKS worker nodes to 0====="
-	ekstctl scale nodegroup \
+	eksctl scale nodegroup \
 	  --cluster $(EKS_CLUSTER_NAME) \
 	  --name $(EKS_NODEGROUP_NAME) \
 	  --nodes 0 \
