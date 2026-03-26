@@ -11,6 +11,8 @@
 #   4. AWS Load Balancer Controller (Helm)
 #   5. EBS CSI driver (EKS managed add-on) for dynamic EBS volume provisioning
 #   6. gp2 storage class marked as default
+#   7. (step numbering preserved in code)
+#   8. Amazon EKS Pod Identity Agent (required for vpc-cni on K8s 1.34+ / AL2023)
 #
 # To replicate in a different AWS account:
 #   Set the following environment variables before running:
@@ -250,6 +252,44 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# 8. Amazon EKS Pod Identity Agent (required for K8s 1.34+ with AL2023 AMI)
+# ---------------------------------------------------------------------------
+# Starting with the K8s 1.34 AMI (AL2023 + containerd 2.x), the vpc-cni
+# add-on's aws-k8s-agent subprocess fetches IAM credentials from the EKS Pod
+# Identity Agent at 169.254.170.23:80 on each node. Without this agent, ipamd
+# hangs during startup and nodes never reach Ready state.
+log "Checking Amazon EKS Pod Identity Agent add-on..."
+POD_IDENTITY_STATUS=$(aws eks describe-addon \
+  --cluster-name "${CLUSTER_NAME}" \
+  --addon-name eks-pod-identity-agent \
+  --region "${AWS_DEFAULT_REGION}" \
+  --query "addon.status" --output text 2>/dev/null || echo "NOT_FOUND")
+
+if [[ "${POD_IDENTITY_STATUS}" == "ACTIVE" ]]; then
+  ok "Amazon EKS Pod Identity Agent add-on already active"
+else
+  log "Installing Amazon EKS Pod Identity Agent add-on..."
+  aws eks create-addon \
+    --cluster-name "${CLUSTER_NAME}" \
+    --addon-name eks-pod-identity-agent \
+    --resolve-conflicts OVERWRITE \
+    --region "${AWS_DEFAULT_REGION}" >/dev/null
+
+  log "Waiting for Amazon EKS Pod Identity Agent add-on to become ACTIVE..."
+  for i in {1..20}; do
+    STATUS=$(aws eks describe-addon \
+      --cluster-name "${CLUSTER_NAME}" \
+      --addon-name eks-pod-identity-agent \
+      --region "${AWS_DEFAULT_REGION}" \
+      --query "addon.status" --output text 2>/dev/null)
+    [[ "${STATUS}" == "ACTIVE" ]] && { ok "Amazon EKS Pod Identity Agent add-on is ACTIVE"; break; }
+    [[ "${STATUS}" == "CREATE_FAILED" ]] && { echo "ERROR: EKS Pod Identity Agent add-on failed to install"; exit 1; }
+    echo "  ... status: ${STATUS} (${i}/20)"
+    sleep 15
+  done
+fi
+
+# ---------------------------------------------------------------------------
 # Summary
 # ---------------------------------------------------------------------------
 echo ""
@@ -262,6 +302,8 @@ echo "  ECR repos:"
 echo "    ${CLUSTER_NAME}/marklogic-server-ubi"
 echo "    ${CLUSTER_NAME}/marklogic-server-ubi-rootless"
 echo "    ${CLUSTER_NAME}/marklogic-kubernetes-operator"
+echo "  Add-ons:       vpc-cni, coredns, kube-proxy, aws-ebs-csi-driver,"
+echo "                 eks-pod-identity-agent"
 echo ""
 echo "  Worker nodes are currently at their initial capacity."
 echo "  To scale down to 0 when idle:"

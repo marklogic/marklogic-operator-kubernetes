@@ -226,6 +226,73 @@ If the cluster needs to be recreated in a different account:
 
 ---
 
+## Upgrading Kubernetes Version
+
+When the cluster control plane is upgraded to a new Kubernetes minor version (e.g., 1.33 → 1.34),
+the EKS managed add-ons and the worker node AMI both change. Follow these steps:
+
+### 1. Update `cluster-config.yaml`
+
+Change `version:` in `cluster-config.yaml` to the new Kubernetes version.
+
+### 2. Upgrade the control plane
+
+```bash
+eksctl upgrade cluster --name jenkins-kube-ninjas --version 1.34 --region us-west-1 --approve
+```
+
+### 3. Upgrade EKS managed add-ons
+
+Upgrade each managed add-on to the version compatible with the new K8s release:
+
+```bash
+# List current add-ons and recommended versions
+aws eks describe-addon-versions --kubernetes-version 1.34 --region us-west-1 \
+  --query "addons[*].{name:addonName,default:addonVersions[?defaultVersion==\`true\`].addonVersion|[0]}" \
+  --output table
+```
+
+### 4. Install the Amazon EKS Pod Identity Agent (required for K8s 1.34+)
+
+Starting with the K8s 1.34 AMI (AL2023 + containerd 2.x), the `vpc-cni` add-on's
+`aws-k8s-agent` subprocess fetches IAM credentials via the **EKS Pod Identity Agent**
+running on each node at `169.254.170.23:80`. Without this agent, `ipamd` hangs
+indefinitely during startup and nodes never reach `Ready` state.
+
+Install the add-on once per cluster (idempotent):
+
+```bash
+aws eks create-addon \
+  --cluster-name jenkins-kube-ninjas \
+  --addon-name eks-pod-identity-agent \
+  --region us-west-1
+```
+
+Or check/update it:
+
+```bash
+aws eks describe-addon --cluster-name jenkins-kube-ninjas \
+  --addon-name eks-pod-identity-agent --region us-west-1 --query "{status:addon.status,version:addon.addonVersion}"
+```
+
+> **Symptom without this agent:** after `make eks-scale-up`, nodes join the cluster
+> but never leave `NotReady` state. The `aws-node` pod shows `1/2 Running` with
+> `CrashLoopBackOff`. In the ipamd log (`/var/log/aws-routed-eni/ipamd.log` on the
+> node) the last line is `"Found IPv4 addresses associated with interface"` and the
+> `aws-k8s-agent` subprocess has an open TCP connection in `SYN-SENT` state to
+> `169.254.170.23:80`. Fix: install the add-on above.
+
+### 5. Replace worker nodes
+
+```bash
+eksctl upgrade nodegroup --cluster jenkins-kube-ninjas --name ml-worker \
+  --kubernetes-version 1.34 --region us-west-1
+```
+
+Or scale the nodegroup to 0 and back to 3 — EKS will launch nodes with the new AMI.
+
+---
+
 ## Teardown (Cluster Deletion)
 
 ```bash
