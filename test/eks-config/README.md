@@ -19,20 +19,20 @@ Kubernetes Operator on AWS EKS.
 |---|---|
 | **Cluster name** | `jenkins-kube-ninjas` |
 | **AWS Region** | `us-west-1` |
-| **AWS Account** | `308453789681` |
+| **AWS Account** | set via `AWS_ACCOUNT_ID` environment variable |
 | **Node group** | `ml-worker` |
 | **Instance type** | `r5.2xlarge` |
 | **Node OS** | Amazon Linux 2023 (AL2023) |
 | **Min nodes** | 0 (scaled down when idle) |
 | **Max nodes** | 6 |
 | **Desired (active)** | 3 |
-| **Kubernetes version** | 1.32 |
+| **Kubernetes version** | 1.33 |
 
 ---
 
 ## ECR Repositories
 
-All images are stored in ECR in account `308453789681` / region `us-west-1`.
+All images are stored in ECR in account `$AWS_ACCOUNT_ID` / region `us-west-1`.
 
 | Repository | Purpose |
 |---|---|
@@ -40,7 +40,7 @@ All images are stored in ECR in account `308453789681` / region `us-west-1`.
 | `jenkins-kube-ninjas/marklogic-server-ubi-rootless` | MarkLogic server image (rootless) |
 | `jenkins-kube-ninjas/marklogic-kubernetes-operator` | Operator image built by CI |
 
-Full URI prefix: `308453789681.dkr.ecr.us-west-1.amazonaws.com`
+Full URI prefix: `${AWS_ACCOUNT_ID}.dkr.ecr.us-west-1.amazonaws.com`
 
 ---
 
@@ -59,7 +59,7 @@ The following tools must be available on the Jenkins agent (`cld-kubernetes`):
 The Jenkins credential **`KUBE_NINJAS_OPS_AWS_JENKINS`** must have these IAM permissions:
 
 - `eks:*` (cluster describe/update, nodegroup scaling)
-- `ecr:*` (login, push, pull in account 308453789681)
+- `ecr:*` (login, push, pull)
 - `iam:PassRole`, `iam:CreateServiceLinkedRole`
 - `elasticloadbalancing:*`
 - EC2 permissions for VPC/subnet tagging
@@ -74,7 +74,7 @@ idempotent — it is safe to re-run at any time.
 ```bash
 cd test/eks-config
 AWS_DEFAULT_REGION=us-west-1 \
-AWS_ACCOUNT_ID=308453789681 \
+AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text) \
 CLUSTER_NAME=jenkins-kube-ninjas \
   bash setup-eks.sh
 ```
@@ -145,14 +145,14 @@ or directly:
 ```bash
 aws ecr get-login-password --region us-west-1 \
   | docker login --username AWS --password-stdin \
-    308453789681.dkr.ecr.us-west-1.amazonaws.com
+    "$(aws sts get-caller-identity --query Account --output text).dkr.ecr.us-west-1.amazonaws.com"
 ```
 
 ### Build and push the operator image
 
 ```bash
 make docker-build docker-push \
-  IMG=308453789681.dkr.ecr.us-west-1.amazonaws.com/jenkins-kube-ninjas/marklogic-kubernetes-operator:latest
+  IMG=$(aws sts get-caller-identity --query Account --output text).dkr.ecr.us-west-1.amazonaws.com/jenkins-kube-ninjas/marklogic-kubernetes-operator:latest
 ```
 
 ### Build and push the MarkLogic server image
@@ -181,7 +181,7 @@ The pipeline runs automatically at **05:30 UTC** daily with:
 ```
 TEST_ON_EKS=true
 VERIFY_ISTIO_AMBIENT=true
-E2E_MARKLOGIC_IMAGE_VERSION=308453789681.dkr.ecr.us-west-1.amazonaws.com/jenkins-kube-ninjas/marklogic-server-ubi-rootless:latest-12
+E2E_MARKLOGIC_IMAGE_VERSION=${AWS_ACCOUNT_ID}.dkr.ecr.us-west-1.amazonaws.com/jenkins-kube-ninjas/marklogic-server-ubi-rootless:latest-12
 ```
 
 ### Concurrent access control
