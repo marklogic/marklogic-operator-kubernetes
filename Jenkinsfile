@@ -11,28 +11,10 @@ emailList = 'vitaly.korolev@progress.com, sumanth.ravipati@progress.com, peng.zh
 emailSecList = 'Mahalakshmi.Srinivasan@progress.com'
 gitCredID = 'marklogic-builder-github'
 
-// Extract the AWS account ID from the KUBE_NINJAS_OPS_AWS_JENKINS credential description
-// (e.g. "KubeNinjas AWS credentials for 308453789681 (ML Containers/K8)").
-// Used to build the ECR base URL without hardcoding the account number.
-@NonCPS
-String eksAccountIdFromCredential() {
-    try {
-        def creds = com.cloudbees.plugins.credentials.CredentialsProvider.lookupCredentials(
-            com.cloudbees.plugins.credentials.common.StandardCredentials,
-            jenkins.model.Jenkins.instance,
-            null,
-            []
-        )
-        def cred = creds.find { it.id == 'KUBE_NINJAS_OPS_AWS_JENKINS' }
-        if (cred?.description) {
-            def m = (cred.description =~ /\b(\d{12})\b/)
-            if (m) return m[0][1]
-        }
-    } catch (any) { /* credentials not available at this point — fall through */ }
-    return ''
-}
-
-eksEcrBase = "${eksAccountIdFromCredential()}.dkr.ecr.us-west-1.amazonaws.com"
+// ECR base URL for the EKS cluster's private registry.
+// Requires EKS_AWS_ACCOUNT_ID to be set as a Jenkins global environment variable
+// (Manage Jenkins → Configure System → Global properties → Environment variables).
+eksEcrBase = "${env.EKS_AWS_ACCOUNT_ID}.dkr.ecr.us-west-1.amazonaws.com"
 operatorRegistry = 'ml-marklogic-operator-dev.bed-artifactory.bedford.progress.com'
 JIRA_ID = ''
 JIRA_ID_PATTERN = /(?i)(MLE)-\d{3,6}/
