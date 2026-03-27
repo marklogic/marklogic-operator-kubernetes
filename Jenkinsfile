@@ -10,11 +10,6 @@ import groovy.json.JsonSlurperClassic
 emailList = 'vitaly.korolev@progress.com, sumanth.ravipati@progress.com, peng.zhou@progress.com, barkha.choithani@progress.com, romain.winieski@progress.com'
 emailSecList = 'Mahalakshmi.Srinivasan@progress.com'
 gitCredID = 'marklogic-builder-github'
-
-// ECR base URL for the EKS cluster's private registry.
-// Requires EKS_AWS_ACCOUNT_ID to be set as a Jenkins global environment variable
-// (Manage Jenkins → Configure System → Global properties → Environment variables).
-eksEcrBase = "${env.EKS_AWS_ACCOUNT_ID}.dkr.ecr.us-west-1.amazonaws.com"
 operatorRegistry = 'ml-marklogic-operator-dev.bed-artifactory.bedford.progress.com'
 JIRA_ID = ''
 JIRA_ID_PATTERN = /(?i)(MLE)-\d{3,6}/
@@ -169,8 +164,8 @@ void runIstioE2eTests() {
 // ---------------------------------------------------------------------------
 // EKS / ECR helper functions
 // AWS credentials are bound using the 'KUBE_NINJAS_OPS_AWS_JENKINS' credential ID.
-// ECR_REGISTRY and ECR_OPERATOR_IMAGE are computed inside each make target;
-// AWS_ACCOUNT_ID is resolved once per function and exported to make.
+// AWS_ACCOUNT_ID is resolved via 'aws sts get-caller-identity' inside withEksCredentials.
+// EKS_MARKLOGIC_IMAGE_VERSION is derived at runtime from AWS_ACCOUNT_ID + EKS_MARKLOGIC_IMAGE_TAG.
 // ---------------------------------------------------------------------------
 
 void withEksCredentials(Closure body) {
@@ -178,9 +173,11 @@ void withEksCredentials(Closure body) {
                       credentialsId: 'KUBE_NINJAS_OPS_AWS_JENKINS',
                       accessKeyVariable: 'AWS_ACCESS_KEY_ID',
                       secretKeyVariable: 'AWS_SECRET_ACCESS_KEY']]) {
-        // Resolve account ID once and export so Make vars (ECR_REGISTRY, etc.) resolve correctly
+        // Resolve account ID via STS — no account number is hardcoded in this file.
         env.AWS_ACCOUNT_ID = sh(returnStdout: true,
             script: 'aws sts get-caller-identity --query Account --output text').trim()
+        // Construct the ECR image URL; tag is configurable via the EKS_MARKLOGIC_IMAGE_TAG parameter.
+        env.EKS_MARKLOGIC_IMAGE_VERSION = "${env.AWS_ACCOUNT_ID}.dkr.ecr.us-west-1.amazonaws.com/jenkins-kube-ninjas/marklogic-server-ubi-rootless:${params.EKS_MARKLOGIC_IMAGE_TAG}"
         body()
     }
 }
@@ -189,7 +186,7 @@ void runEKSSetup() {
     withEksCredentials {
         sh """
             make e2e-setup-eks \\
-              E2E_MARKLOGIC_IMAGE_VERSION=${params.E2E_MARKLOGIC_IMAGE_VERSION}
+              E2E_MARKLOGIC_IMAGE_VERSION=${env.EKS_MARKLOGIC_IMAGE_VERSION}
         """
     }
 }
@@ -198,7 +195,7 @@ void runEKSE2eTests() {
     withEksCredentials {
         sh """
             make e2e-test-eks \\
-              E2E_MARKLOGIC_IMAGE_VERSION=${params.E2E_MARKLOGIC_IMAGE_VERSION}
+              E2E_MARKLOGIC_IMAGE_VERSION=${env.EKS_MARKLOGIC_IMAGE_VERSION}
         """
     }
 }
@@ -213,7 +210,7 @@ void runEKSIstioSetup() {
     withEksCredentials {
         sh """
             make e2e-setup-eks-istio \\
-              E2E_MARKLOGIC_IMAGE_VERSION=${params.E2E_MARKLOGIC_IMAGE_VERSION}
+              E2E_MARKLOGIC_IMAGE_VERSION=${env.EKS_MARKLOGIC_IMAGE_VERSION}
         """
     }
 }
@@ -222,7 +219,7 @@ void runEKSIstioE2eTests() {
     withEksCredentials {
         sh """
             make e2e-test-eks-istio \\
-              E2E_MARKLOGIC_IMAGE_VERSION=${params.E2E_MARKLOGIC_IMAGE_VERSION}
+              E2E_MARKLOGIC_IMAGE_VERSION=${env.EKS_MARKLOGIC_IMAGE_VERSION}
         """
     }
 }
@@ -278,10 +275,10 @@ pipeline {
     
     triggers {
         // Trigger nightly builds on the develop branch
-        parameterizedCron( env.BRANCH_NAME == 'develop' ? """00 05 * * * % E2E_MARKLOGIC_IMAGE_VERSION=ml-docker-db-dev-tierpoint.bed-artifactory.bedford.progress.com/marklogic/marklogic-server-ubi-rootless:latest-12
+        parameterizedCron( env.BRANCH_NAME == 'develop' ? '''00 05 * * * % E2E_MARKLOGIC_IMAGE_VERSION=ml-docker-db-dev-tierpoint.bed-artifactory.bedford.progress.com/marklogic/marklogic-server-ubi-rootless:latest-12
                                                              00 05 * * * % E2E_MARKLOGIC_IMAGE_VERSION=ml-docker-db-dev-tierpoint.bed-artifactory.bedford.progress.com/marklogic/marklogic-server-ubi-rootless:latest-11; PUBLISH_IMAGE=false
                                                              00 07 * * * % E2E_MARKLOGIC_IMAGE_VERSION=ml-docker-db-dev-tierpoint.bed-artifactory.bedford.progress.com/marklogic/marklogic-server-ubi-rootless:latest-12; VERIFY_ISTIO_AMBIENT=true
-                                                             30 05 * * * % TEST_ON_EKS=true; VERIFY_ISTIO_AMBIENT=true; E2E_MARKLOGIC_IMAGE_VERSION=${eksEcrBase}/jenkins-kube-ninjas/marklogic-server-ubi-rootless:latest-12""" : '')
+                                                             30 05 * * * % TEST_ON_EKS=true; VERIFY_ISTIO_AMBIENT=true''' : '')
     }
 
     environment {
@@ -299,6 +296,7 @@ pipeline {
         string(name: 'emailList', defaultValue: emailList, description: 'List of email for build notification', trim: true)
         booleanParam(name: 'VERIFY_ISTIO_AMBIENT', defaultValue: true, description: 'Run Istio ambient mode e2e tests (requires fresh minikube cluster with Istio)')
         booleanParam(name: 'TEST_ON_EKS', defaultValue: false, description: 'Run e2e tests on the EKS cluster (jenkins-kube-ninjas) instead of Minikube. Requires KUBE_NINJAS_OPS_AWS_JENKINS credentials on this agent.')
+        string(name: 'EKS_MARKLOGIC_IMAGE_TAG', defaultValue: 'latest-12', description: 'MarkLogic image tag to pull from the EKS ECR registry when TEST_ON_EKS=true. The full ECR URL is constructed at runtime from the AWS account ID resolved via STS.', trim: true)
     }
 
     stages {
