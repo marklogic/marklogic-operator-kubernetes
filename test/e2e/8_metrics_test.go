@@ -97,8 +97,15 @@ func TestMetricsEndpoint(t *testing.T) {
 		waitForPortForward(t, localAddr)
 
 		// #nosec G402 — self-signed cert in test environment
-		httpClient := &http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}}
-		resp, err := httpClient.Get(fmt.Sprintf("https://%s/metrics", localAddr))
+		httpClient := &http.Client{
+			Timeout:   30 * time.Second,
+			Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}},
+		}
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, fmt.Sprintf("https://%s/metrics", localAddr), nil)
+		if err != nil {
+			t.Fatalf("failed to build metrics request: %v", err)
+		}
+		resp, err := httpClient.Do(req)
 		if err != nil {
 			t.Fatalf("unexpected error hitting metrics endpoint without token: %v", err)
 		}
@@ -131,7 +138,10 @@ func TestMetricsEndpoint(t *testing.T) {
 		waitForPortForward(t, localAddr)
 
 		// #nosec G402 — self-signed cert in test environment
-		httpClient := &http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}}
+		httpClient := &http.Client{
+			Timeout:   30 * time.Second,
+			Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}},
+		}
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, fmt.Sprintf("https://%s/metrics", localAddr), nil)
 		if err != nil {
 			t.Fatalf("failed to build metrics request: %v", err)
@@ -187,7 +197,10 @@ func TestMetricsEndpoint(t *testing.T) {
 		waitForPortForward(t, localAddr)
 
 		// #nosec G402 — self-signed cert in test environment
-		httpClient := &http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}}
+		httpClient := &http.Client{
+			Timeout:   30 * time.Second,
+			Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}},
+		}
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, fmt.Sprintf("https://%s/metrics", localAddr), nil)
 		if err != nil {
 			t.Fatalf("failed to build request: %v", err)
