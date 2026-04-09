@@ -7,7 +7,9 @@ import (
 	"crypto/tls"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"os"
 	"os/exec"
 	"strings"
 	"testing"
@@ -26,56 +28,83 @@ import (
 )
 
 const (
-	metricsReaderSA    = "metrics-reader-e2e"
-	metricsReaderCRB   = "metrics-reader-e2e-binding"
-	metricsReaderRole  = "marklogic-operator-metrics-reader"
-	metricsServiceName = "marklogic-operator-controller-manager-metrics-service"
-	metricsLocalPort   = "19443"
-	metricsRemotePort  = "8443"
+	metricsReaderSA           = "metrics-reader-e2e"
+	metricsReaderCRB          = "metrics-reader-e2e-binding"
+	metricsReaderRole         = "marklogic-operator-metrics-reader"
+	metricsServiceName        = "marklogic-operator-controller-manager-metrics-service"
+	metricsLocalSecurePort    = "19443"
+	metricsRemoteSecurePort   = "8443"
+	metricsLocalInsecurePort  = "18080"
+	metricsRemoteInsecurePort = "8080"
 )
 
-// TestMetricsEndpoint verifies that the native secure metrics server:
-//  1. Serves HTTPS on port 8443 inside the cluster.
-//  2. Accepts requests authenticated with a valid Kubernetes ServiceAccount token
-//     (validated via the TokenReview API).
-//  3. Authorises only service accounts that hold the metrics-reader ClusterRole
-//     (enforced via the SubjectAccessReview API).
-//  4. Returns valid Prometheus text-format metrics.
+// TestMetricsEndpoint verifies the metrics server across all supported configurations:
+//
+//   - scope=cluster, metrics.secure=true  (default): HTTPS on :8443, Kubernetes authn/authz enforced.
+//   - scope=cluster, metrics.secure=false           : HTTP  on :8080, no authentication required.
+//   - scope=namespace, metrics.secure=false         : HTTP  on :8080, no authentication required.
+//   - scope=namespace, metrics.secure=true          : unsupported — test is skipped.
+//     (auth RBAC requires ClusterRole which is unavailable in namespace scope)
+//
+// Runtime configuration via environment variables:
+//
+//	E2E_METRICS_SECURE  "true"|"false"            (default: "true")
+//	E2E_SCOPE_TYPE      "cluster"|"namespace"     (default: "cluster")
 func TestMetricsEndpoint(t *testing.T) {
+	// ── Resolve runtime configuration ─────────────────────────────────────────
+	metricsSecure := os.Getenv("E2E_METRICS_SECURE") != "false" // default true
+	scopeType := os.Getenv("E2E_SCOPE_TYPE")
+	if scopeType == "" {
+		scopeType = "cluster"
+	}
+
+	// Unsupported combination: auth RBAC (ClusterRole for TokenReview/SubjectAccessReview)
+	// cannot exist in namespace scope — skip rather than fail.
+	if metricsSecure && scopeType != "cluster" {
+		t.Skip("metrics.secure=true with scope.type!=cluster is unsupported: auth RBAC requires ClusterRole")
+	}
+
+	localPort := metricsLocalSecurePort
+	remotePort := metricsRemoteSecurePort
+	scheme := "https"
+	if !metricsSecure {
+		localPort = metricsLocalInsecurePort
+		remotePort = metricsRemoteInsecurePort
+		scheme = "http"
+	}
+
+	t.Logf("TestMetricsEndpoint: scope=%s secure=%v scheme=%s port=%s", scopeType, metricsSecure, scheme, remotePort)
+
 	feature := features.New("Metrics Endpoint").
 		WithLabel("type", "metrics")
 
-	// ── Setup: create a dedicated ServiceAccount and bind the metrics-reader role ──
+	// ── Setup ──────────────────────────────────────────────────────────────────
+	// Only create the metrics-reader SA and CRB when running in secure mode:
+	// in insecure mode the ClusterRole does not exist (not rendered by the chart).
 	feature.Setup(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
+		if !metricsSecure {
+			t.Log("Insecure metrics: skipping auth ServiceAccount/ClusterRoleBinding setup.")
+			return ctx
+		}
+
 		client := c.Client()
 
-		// ServiceAccount
 		sa := &corev1.ServiceAccount{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      metricsReaderSA,
-				Namespace: namespace,
-			},
+			ObjectMeta: metav1.ObjectMeta{Name: metricsReaderSA, Namespace: namespace},
 		}
 		if err := client.Resources(namespace).Create(ctx, sa); err != nil && !apierrors.IsAlreadyExists(err) {
 			t.Fatalf("failed to create metrics-reader ServiceAccount: %v", err)
 		}
 
-		// ClusterRoleBinding: metrics-reader → metricsReaderSA
 		crb := &rbacv1.ClusterRoleBinding{
-			ObjectMeta: metav1.ObjectMeta{
-				Name: metricsReaderCRB,
-			},
+			ObjectMeta: metav1.ObjectMeta{Name: metricsReaderCRB},
 			RoleRef: rbacv1.RoleRef{
 				APIGroup: "rbac.authorization.k8s.io",
 				Kind:     "ClusterRole",
 				Name:     metricsReaderRole,
 			},
 			Subjects: []rbacv1.Subject{
-				{
-					Kind:      "ServiceAccount",
-					Name:      metricsReaderSA,
-					Namespace: namespace,
-				},
+				{Kind: "ServiceAccount", Name: metricsReaderSA, Namespace: namespace},
 			},
 		}
 		if err := client.Resources().Create(ctx, crb); err != nil && !apierrors.IsAlreadyExists(err) {
@@ -85,144 +114,186 @@ func TestMetricsEndpoint(t *testing.T) {
 		return ctx
 	})
 
-	// ── Assessment 1: metrics endpoint requires authentication ────────────────────
-	feature.Assess("Unauthenticated request is rejected", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
-		pf, localAddr, cancel := startPortForward(t, namespace, metricsServiceName, metricsLocalPort, metricsRemotePort)
-		defer func() {
-			cancel()
-			_ = pf.Wait()
-		}()
+	if !metricsSecure {
+		// ── Insecure path: HTTP on :8080, no authentication ────────────────────
+		feature.Assess("Metrics endpoint is publicly accessible without authentication", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
+			pf, localAddr, cancel := startPortForward(t, namespace, metricsServiceName, localPort, remotePort)
+			defer func() {
+				cancel()
+				_ = pf.Wait()
+			}()
 
-		waitForPortForward(t, localAddr)
+			waitForPortForward(t, localAddr)
 
-		// #nosec G402 — self-signed cert in test environment
-		httpClient := &http.Client{
-			Timeout:   30 * time.Second,
-			Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}},
-		}
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, fmt.Sprintf("https://%s/metrics", localAddr), nil)
-		if err != nil {
-			t.Fatalf("failed to build metrics request: %v", err)
-		}
-		resp, err := httpClient.Do(req)
-		if err != nil {
-			t.Fatalf("unexpected error hitting metrics endpoint without token: %v", err)
-		}
-		defer resp.Body.Close()
+			httpClient := &http.Client{Timeout: 30 * time.Second}
+			req, err := http.NewRequestWithContext(ctx, http.MethodGet,
+				fmt.Sprintf("%s://%s/metrics", scheme, localAddr), nil)
+			if err != nil {
+				t.Fatalf("failed to build metrics request: %v", err)
+			}
+			resp, err := httpClient.Do(req)
+			if err != nil {
+				t.Fatalf("failed to GET /metrics: %v", err)
+			}
+			defer resp.Body.Close()
 
-		if resp.StatusCode != http.StatusUnauthorized && resp.StatusCode != http.StatusForbidden {
-			t.Errorf("expected 401/403 without token, got %d", resp.StatusCode)
-		}
-		t.Logf("Unauthenticated request correctly rejected with HTTP %d", resp.StatusCode)
-		return ctx
-	})
+			if resp.StatusCode != http.StatusOK {
+				body, _ := io.ReadAll(resp.Body)
+				t.Fatalf("expected HTTP 200 (no auth required), got %d: %s", resp.StatusCode, body)
+			}
 
-	// ── Assessment 2: authorised SA can read metrics ───────────────────────────
-	feature.Assess("Authorised ServiceAccount can scrape /metrics", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
-		// Obtain a bound ServiceAccount token for the metrics-reader SA.
-		restCfg, err := rest.InClusterConfig()
-		if err != nil {
-			// Fallback: use the test kubeconfig (running outside the cluster).
-			restCfg = c.Client().RESTConfig()
-		}
+			body, err := io.ReadAll(resp.Body)
+			if err != nil {
+				t.Fatalf("failed to read metrics body: %v", err)
+			}
+			metrics := string(body)
+			if !strings.Contains(metrics, "# HELP") || !strings.Contains(metrics, "# TYPE") {
+				t.Errorf("response does not look like Prometheus text-format metrics:\n%.500s...", metrics)
+			}
+			if !strings.Contains(metrics, "controller_runtime_reconcile") {
+				t.Errorf("expected controller_runtime_reconcile metric not found")
+			}
+			t.Logf("Insecure metrics endpoint returned valid Prometheus output (%d bytes)", len(body))
+			return ctx
+		})
+	} else {
+		// ── Secure path: HTTPS on :8443, Kubernetes authn/authz enforced ──────
 
-		token := requestSAToken(ctx, t, restCfg, namespace, metricsReaderSA)
+		// Assessment 1: unauthenticated request must be rejected
+		feature.Assess("Unauthenticated request is rejected", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
+			pf, localAddr, cancel := startPortForward(t, namespace, metricsServiceName, localPort, remotePort)
+			defer func() {
+				cancel()
+				_ = pf.Wait()
+			}()
 
-		pf, localAddr, cancel := startPortForward(t, namespace, metricsServiceName, metricsLocalPort, metricsRemotePort)
-		defer func() {
-			cancel()
-			_ = pf.Wait()
-		}()
+			waitForPortForward(t, localAddr)
 
-		waitForPortForward(t, localAddr)
+			// #nosec G402 — self-signed cert in test environment
+			httpClient := &http.Client{
+				Timeout:   30 * time.Second,
+				Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}},
+			}
+			req, err := http.NewRequestWithContext(ctx, http.MethodGet,
+				fmt.Sprintf("%s://%s/metrics", scheme, localAddr), nil)
+			if err != nil {
+				t.Fatalf("failed to build metrics request: %v", err)
+			}
+			resp, err := httpClient.Do(req)
+			if err != nil {
+				t.Fatalf("unexpected error hitting metrics endpoint without token: %v", err)
+			}
+			defer resp.Body.Close()
 
-		// #nosec G402 — self-signed cert in test environment
-		httpClient := &http.Client{
-			Timeout:   30 * time.Second,
-			Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}},
-		}
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, fmt.Sprintf("https://%s/metrics", localAddr), nil)
-		if err != nil {
-			t.Fatalf("failed to build metrics request: %v", err)
-		}
-		req.Header.Set("Authorization", "Bearer "+token)
+			if resp.StatusCode != http.StatusUnauthorized && resp.StatusCode != http.StatusForbidden {
+				t.Errorf("expected 401/403 without token, got %d", resp.StatusCode)
+			}
+			t.Logf("Unauthenticated request correctly rejected with HTTP %d", resp.StatusCode)
+			return ctx
+		})
 
-		resp, err := httpClient.Do(req)
-		if err != nil {
-			t.Fatalf("failed to GET /metrics: %v", err)
-		}
-		defer resp.Body.Close()
+		// Assessment 2: authorised SA can read metrics
+		feature.Assess("Authorised ServiceAccount can scrape /metrics", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
+			restCfg, err := rest.InClusterConfig()
+			if err != nil {
+				restCfg = c.Client().RESTConfig()
+			}
+			token := requestSAToken(ctx, t, restCfg, namespace, metricsReaderSA)
 
-		if resp.StatusCode != http.StatusOK {
-			body, _ := io.ReadAll(resp.Body)
-			t.Fatalf("expected HTTP 200, got %d: %s", resp.StatusCode, body)
-		}
+			pf, localAddr, cancel := startPortForward(t, namespace, metricsServiceName, localPort, remotePort)
+			defer func() {
+				cancel()
+				_ = pf.Wait()
+			}()
 
-		body, err := io.ReadAll(resp.Body)
-		if err != nil {
-			t.Fatalf("failed to read metrics response body: %v", err)
-		}
-		metrics := string(body)
+			waitForPortForward(t, localAddr)
 
-		// Prometheus text format always contains "# HELP" and "# TYPE" comment lines.
-		if !strings.Contains(metrics, "# HELP") || !strings.Contains(metrics, "# TYPE") {
-			t.Errorf("response does not look like Prometheus text-format metrics:\n%.500s...", metrics)
-		} else {
-			t.Logf("Metrics endpoint returned valid Prometheus output (%d bytes)", len(body))
-		}
+			// #nosec G402 — self-signed cert in test environment
+			httpClient := &http.Client{
+				Timeout:   30 * time.Second,
+				Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}},
+			}
+			req, err := http.NewRequestWithContext(ctx, http.MethodGet,
+				fmt.Sprintf("%s://%s/metrics", scheme, localAddr), nil)
+			if err != nil {
+				t.Fatalf("failed to build metrics request: %v", err)
+			}
+			req.Header.Set("Authorization", "Bearer "+token)
 
-		// Spot-check for a controller-runtime metric that is always present.
-		if !strings.Contains(metrics, "controller_runtime_reconcile") {
-			t.Errorf("expected controller_runtime_reconcile metric not found in output")
-		}
+			resp, err := httpClient.Do(req)
+			if err != nil {
+				t.Fatalf("failed to GET /metrics: %v", err)
+			}
+			defer resp.Body.Close()
 
-		return ctx
-	})
+			if resp.StatusCode != http.StatusOK {
+				body, _ := io.ReadAll(resp.Body)
+				t.Fatalf("expected HTTP 200, got %d: %s", resp.StatusCode, body)
+			}
 
-	// ── Assessment 3: unauthorised SA is denied ───────────────────────────────
-	feature.Assess("Unauthorised ServiceAccount is denied", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
-		restCfg := c.Client().RESTConfig()
+			body, err := io.ReadAll(resp.Body)
+			if err != nil {
+				t.Fatalf("failed to read metrics response body: %v", err)
+			}
+			metrics := string(body)
+			if !strings.Contains(metrics, "# HELP") || !strings.Contains(metrics, "# TYPE") {
+				t.Errorf("response does not look like Prometheus text-format metrics:\n%.500s...", metrics)
+			} else {
+				t.Logf("Metrics endpoint returned valid Prometheus output (%d bytes)", len(body))
+			}
+			if !strings.Contains(metrics, "controller_runtime_reconcile") {
+				t.Errorf("expected controller_runtime_reconcile metric not found in output")
+			}
+			return ctx
+		})
 
-		// Use the operator controller-manager SA — it has many permissions but
-		// is NOT bound to the metrics-reader ClusterRole, so the SAR check must deny it.
-		token := requestSAToken(ctx, t, restCfg, namespace, "marklogic-operator-controller-manager")
+		// Assessment 3: unauthorised SA is denied
+		feature.Assess("Unauthorised ServiceAccount is denied", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
+			restCfg := c.Client().RESTConfig()
+			// Use the operator controller-manager SA — it has many permissions but
+			// is NOT bound to the metrics-reader ClusterRole, so the SAR check must deny it.
+			token := requestSAToken(ctx, t, restCfg, namespace, "marklogic-operator-controller-manager")
 
-		pf, localAddr, cancel := startPortForward(t, namespace, metricsServiceName, metricsLocalPort, metricsRemotePort)
-		defer func() {
-			cancel()
-			_ = pf.Wait()
-		}()
+			pf, localAddr, cancel := startPortForward(t, namespace, metricsServiceName, localPort, remotePort)
+			defer func() {
+				cancel()
+				_ = pf.Wait()
+			}()
 
-		waitForPortForward(t, localAddr)
+			waitForPortForward(t, localAddr)
 
-		// #nosec G402 — self-signed cert in test environment
-		httpClient := &http.Client{
-			Timeout:   30 * time.Second,
-			Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}},
-		}
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, fmt.Sprintf("https://%s/metrics", localAddr), nil)
-		if err != nil {
-			t.Fatalf("failed to build request: %v", err)
-		}
-		req.Header.Set("Authorization", "Bearer "+token)
+			// #nosec G402 — self-signed cert in test environment
+			httpClient := &http.Client{
+				Timeout:   30 * time.Second,
+				Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}},
+			}
+			req, err := http.NewRequestWithContext(ctx, http.MethodGet,
+				fmt.Sprintf("%s://%s/metrics", scheme, localAddr), nil)
+			if err != nil {
+				t.Fatalf("failed to build request: %v", err)
+			}
+			req.Header.Set("Authorization", "Bearer "+token)
 
-		resp, err := httpClient.Do(req)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		defer resp.Body.Close()
+			resp, err := httpClient.Do(req)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			defer resp.Body.Close()
 
-		if resp.StatusCode != http.StatusForbidden {
-			t.Errorf("expected HTTP 403 for unauthorised SA, got %d", resp.StatusCode)
-		} else {
-			t.Logf("Unauthorised SA correctly denied with HTTP 403")
-		}
+			if resp.StatusCode != http.StatusForbidden {
+				t.Errorf("expected HTTP 403 for unauthorised SA, got %d", resp.StatusCode)
+			} else {
+				t.Logf("Unauthorised SA correctly denied with HTTP 403")
+			}
+			return ctx
+		})
+	}
 
-		return ctx
-	})
-
-	// ── Teardown: remove the dedicated SA and CRB ────────────────────────────
+	// ── Teardown ───────────────────────────────────────────────────────────────
 	feature.Teardown(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
+		if !metricsSecure {
+			return ctx
+		}
 		client := c.Client()
 
 		crb := &rbacv1.ClusterRoleBinding{ObjectMeta: metav1.ObjectMeta{Name: metricsReaderCRB}}
@@ -262,12 +333,12 @@ func startPortForward(t *testing.T, ns, svc, localPort, remotePort string) (*exe
 }
 
 // waitForPortForward polls until the forwarded port accepts TCP connections.
+// Uses a plain TCP dial so it works for both HTTP (:8080) and HTTPS (:8443) targets.
 func waitForPortForward(t *testing.T, addr string) {
 	t.Helper()
 	deadline := time.Now().Add(30 * time.Second)
 	for time.Now().Before(deadline) {
-		// #nosec G402 — only checking TCP connectivity, not validating cert here
-		c, err := tls.Dial("tcp", addr, &tls.Config{InsecureSkipVerify: true})
+		c, err := net.DialTimeout("tcp", addr, 2*time.Second)
 		if err == nil {
 			_ = c.Close()
 			return
