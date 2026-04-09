@@ -73,7 +73,7 @@ scope:
   # cluster: operator watches all namespaces (requires ClusterRole/ClusterRoleBinding)
   # namespace: operator watches only specified namespace(s) (requires Role/RoleBinding)
   type: cluster
-  
+
   # watchNamespaces defines which namespace(s) the operator should watch
   # Only applicable when scope.type is "namespace"
   # Can be a single string, comma-separated string, or array of strings

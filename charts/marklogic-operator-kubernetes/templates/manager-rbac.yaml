@@ -98,14 +98,14 @@ subjects:
   namespace: '{{ .Release.Namespace }}'
 {{- else }}
 {{- /*
-Namespace-scoped mode: Create Role and RoleBinding in each watched namespace
-Support for single namespace, comma-separated list, or array of namespaces
+Namespace-scoped mode: Create Role and RoleBinding in each watched namespace.
+Supports single namespace, comma-separated list, or array of namespaces.
 */}}
 {{- $namespaces := list }}
 {{- if .Values.scope.watchNamespaces }}
   {{- if kindIs "string" .Values.scope.watchNamespaces }}
     {{- if contains "," .Values.scope.watchNamespaces }}
-      {{- /* Comma-separated string */}}
+      {{- /* Comma-separated string – split into individual entries */}}
       {{- range $ns := splitList "," .Values.scope.watchNamespaces }}
         {{- $namespaces = append $namespaces (trim $ns) }}
       {{- end }}
@@ -118,7 +118,7 @@ Support for single namespace, comma-separated list, or array of namespaces
     {{- $namespaces = .Values.scope.watchNamespaces }}
   {{- end }}
 {{- else }}
-  {{- /* Default to release namespace if not specified */}}
+  {{- /* Default to the release namespace if watchNamespaces is unset */}}
   {{- $namespaces = list .Release.Namespace }}
 {{- end }}
 {{- /* Create Role and RoleBinding for each watched namespace */}}

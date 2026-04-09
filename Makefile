@@ -370,7 +370,8 @@ $(HELMIFY): $(LOCALBIN)
     
 helm: manifests kustomize helmify
 	cd config/manager && $(KUSTOMIZE) edit set image controller=$(IMG)
-	$(KUSTOMIZE) build config/default | $(HELMIFY) -image-pull-secrets -original-name charts/marklogic-operator-kubernetes 
+	$(KUSTOMIZE) build config/default | $(HELMIFY) -image-pull-secrets -original-name charts/marklogic-operator-kubernetes
+	bash hack/helmify-post-process.sh
 
 .PHONY: image-scan
 image-scan: docker-build
