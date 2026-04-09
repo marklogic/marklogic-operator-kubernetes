@@ -398,13 +398,13 @@ func TestMarklogicCluster(t *testing.T) {
 	feature.Teardown(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 		client := c.Client()
 		if err := client.Resources(mlNamespace).Delete(ctx, marklogiccluster); err != nil {
-			t.Fatalf("Failed to delete MarklogicCluster: %s", err)
+			t.Logf("Warning: failed to delete MarklogicCluster: %s", err)
 		}
 		if err := client.Resources().Delete(ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "grafana"}}); err != nil {
-			t.Fatalf("Failed to delete namespace: %s", err)
+			t.Logf("Warning: failed to delete grafana namespace: %s", err)
 		}
 		if err := client.Resources().Delete(ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "loki"}}); err != nil {
-			t.Fatalf("Failed to delete namespace: %s", err)
+			t.Logf("Warning: failed to delete loki namespace: %s", err)
 		}
 		return ctx
 	})

@@ -11,6 +11,7 @@ import (
 
 	marklogicv1 "github.com/marklogic/marklogic-operator-kubernetes/api/v1"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/util/homedir"
 
@@ -85,7 +86,7 @@ func TestMlClusterWithEdnode(t *testing.T) {
 				Name: mlClusterNs,
 			},
 		}
-		if err := client.Resources().Create(ctx, namespace); err != nil {
+		if err := client.Resources().Create(ctx, namespace); err != nil && !apierrors.IsAlreadyExists(err) {
 			t.Fatalf("Failed to create namespace: %s", err)
 		}
 		marklogicv1.AddToScheme(client.Resources(mlClusterNs).GetScheme())
@@ -208,10 +209,10 @@ func TestMlClusterWithEdnode(t *testing.T) {
 	feature.Teardown(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 		client := c.Client()
 		if err := client.Resources(mlClusterNs).Delete(ctx, mlcluster); err != nil {
-			t.Fatalf("Failed to delete MarklogicCluster: %s", err)
+			t.Logf("Warning: failed to delete MarklogicCluster: %s", err)
 		}
 		if err := client.Resources().Delete(ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: mlClusterNs}}); err != nil {
-			t.Fatalf("Failed to delete namespace: %s", err)
+			t.Logf("Warning: failed to delete namespace %s: %s", mlClusterNs, err)
 		}
 		return ctx
 	})

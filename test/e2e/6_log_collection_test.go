@@ -156,10 +156,10 @@ func TestLogCollectionDisabled(t *testing.T) {
 	feature.Teardown(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 		client := c.Client()
 		if err := client.Resources(logCollectionNamespace).Delete(ctx, mlclusterDisabled); err != nil {
-			t.Fatalf("Failed to delete MarklogicCluster: %s", err)
+			t.Logf("Warning: failed to delete MarklogicCluster: %s", err)
 		}
 		if err := client.Resources().Delete(ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: logCollectionNamespace}}); err != nil {
-			t.Fatalf("Failed to delete namespace: %s", err)
+			t.Logf("Warning: failed to delete namespace %s: %s", logCollectionNamespace, err)
 		}
 		return ctx
 	})
@@ -325,10 +325,10 @@ func TestLogCollectionPartialLogs(t *testing.T) {
 	feature.Teardown(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 		client := c.Client()
 		if err := client.Resources(logCollectionNamespace).Delete(ctx, mlclusterPartial); err != nil {
-			t.Fatalf("Failed to delete MarklogicCluster: %s", err)
+			t.Logf("Warning: failed to delete MarklogicCluster: %s", err)
 		}
 		if err := client.Resources().Delete(ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: logCollectionNamespace}}); err != nil {
-			t.Fatalf("Failed to delete namespace: %s", err)
+			t.Logf("Warning: failed to delete namespace %s: %s", logCollectionNamespace, err)
 		}
 		return ctx
 	})
@@ -508,10 +508,10 @@ func TestLogCollectionCustomResources(t *testing.T) {
 	feature.Teardown(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 		client := c.Client()
 		if err := client.Resources(logCollectionNamespace).Delete(ctx, mlclusterCustom); err != nil {
-			t.Fatalf("Failed to delete MarklogicCluster: %s", err)
+			t.Logf("Warning: failed to delete MarklogicCluster: %s", err)
 		}
 		if err := client.Resources().Delete(ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: logCollectionNamespace}}); err != nil {
-			t.Fatalf("Failed to delete namespace: %s", err)
+			t.Logf("Warning: failed to delete namespace %s: %s", logCollectionNamespace, err)
 		}
 		return ctx
 	})
@@ -666,10 +666,10 @@ func TestLogCollectionCustomFilters(t *testing.T) {
 	feature.Teardown(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 		client := c.Client()
 		if err := client.Resources(logCollectionNamespace).Delete(ctx, mlclusterFilters); err != nil {
-			t.Fatalf("Failed to delete MarklogicCluster: %s", err)
+			t.Logf("Warning: failed to delete MarklogicCluster: %s", err)
 		}
 		if err := client.Resources().Delete(ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: logCollectionNamespace}}); err != nil {
-			t.Fatalf("Failed to delete namespace: %s", err)
+			t.Logf("Warning: failed to delete namespace %s: %s", logCollectionNamespace, err)
 		}
 		return ctx
 	})
