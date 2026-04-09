@@ -1,9 +1,10 @@
+{{- if and (eq .Values.scope.type "cluster") (.Values.metrics.secure) }}
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: marklogic-operator-proxy-role
+  name: marklogic-operator-metrics-auth-role
   labels:
-    app.kubernetes.io/component: kube-rbac-proxy
+    app.kubernetes.io/component: metrics-auth
     app.kubernetes.io/created-by: marklogic-operator-kubernetes
     app.kubernetes.io/part-of: marklogic-operator-kubernetes
   {{- include "marklogic-operator-kubernetes.labels" . | nindent 4 }}
@@ -24,17 +25,18 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: marklogic-operator-proxy-rolebinding
+  name: marklogic-operator-metrics-auth-rolebinding
   labels:
-    app.kubernetes.io/component: kube-rbac-proxy
+    app.kubernetes.io/component: metrics-auth
     app.kubernetes.io/created-by: marklogic-operator-kubernetes
     app.kubernetes.io/part-of: marklogic-operator-kubernetes
   {{- include "marklogic-operator-kubernetes.labels" . | nindent 4 }}
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
-  name: marklogic-operator-proxy-role
+  name: marklogic-operator-metrics-auth-role
 subjects:
 - kind: ServiceAccount
   name: '{{ include "marklogic-operator-kubernetes.serviceAccountName" . }}'
   namespace: '{{ .Release.Namespace }}'
+{{- end }}

@@ -1,3 +1,4 @@
+{{- if eq .Values.scope.type "cluster" }}
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
@@ -95,3 +96,123 @@ subjects:
 - kind: ServiceAccount
   name: '{{ include "marklogic-operator-kubernetes.serviceAccountName" . }}'
   namespace: '{{ .Release.Namespace }}'
+{{- else }}
+{{- /*
+Namespace-scoped mode: Role + RoleBinding created in each watched namespace.
+Supports a single name, a comma-separated string, or a YAML list.
+*/}}
+{{- $namespaces := list }}
+{{- if .Values.scope.watchNamespaces }}
+  {{- if kindIs "string" .Values.scope.watchNamespaces }}
+    {{- range $ns := splitList "," .Values.scope.watchNamespaces }}
+      {{- $namespaces = append $namespaces (trim $ns) }}
+    {{- end }}
+  {{- else if kindIs "slice" .Values.scope.watchNamespaces }}
+    {{- $namespaces = .Values.scope.watchNamespaces }}
+  {{- end }}
+{{- else }}
+  {{- $namespaces = list .Release.Namespace }}
+{{- end }}
+{{- range $ns := $namespaces }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: marklogic-operator-manager-role
+  namespace: {{ $ns }}
+  labels:
+  {{- include "marklogic-operator-kubernetes.labels" $ | nindent 4 }}
+rules:
+- apiGroups:
+  - ""
+  resources:
+  - configmaps
+  - pods
+  - secrets
+  - serviceaccounts
+  - services
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - apps
+  resources:
+  - daemonsets
+  - deployments
+  - replicasets
+  - statefulsets
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - marklogic.progress.com
+  resources:
+  - marklogicclusters
+  - marklogicgroups
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - marklogic.progress.com
+  resources:
+  - marklogicclusters/finalizers
+  - marklogicgroups/finalizers
+  verbs:
+  - update
+- apiGroups:
+  - marklogic.progress.com
+  resources:
+  - marklogicclusters/status
+  - marklogicgroups/status
+  verbs:
+  - get
+  - patch
+  - update
+- apiGroups:
+  - networking.k8s.io
+  resources:
+  - ingresses
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: marklogic-operator-manager-rolebinding
+  namespace: {{ $ns }}
+  labels:
+    app.kubernetes.io/component: rbac
+    app.kubernetes.io/created-by: marklogic-operator-kubernetes
+    app.kubernetes.io/part-of: marklogic-operator-kubernetes
+  {{- include "marklogic-operator-kubernetes.labels" $ | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: marklogic-operator-manager-role
+subjects:
+- kind: ServiceAccount
+  name: '{{ include "marklogic-operator-kubernetes.serviceAccountName" $ }}'
+  namespace: '{{ $.Release.Namespace }}'
+{{- end }}
+{{- end }}

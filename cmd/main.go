@@ -20,6 +20,7 @@ import (
 	"crypto/tls"
 	"flag"
 	"os"
+	"strings"
 
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
 	// to ensure that exec-entrypoint and run can make use of them.
@@ -29,8 +30,10 @@ import (
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
+	"sigs.k8s.io/controller-runtime/pkg/metrics/filters"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
@@ -57,13 +60,15 @@ func main() {
 	var probeAddr string
 	var secureMetrics bool
 	var enableHTTP2 bool
-	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8080", "The address the metric endpoint binds to.")
+	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8080",
+		"The address the metrics endpoint binds to. Use :8443 when --metrics-secure is true.")
 	flag.StringVar(&probeAddr, "health-probe-bind-address", ":8081", "The address the probe endpoint binds to.")
 	flag.BoolVar(&enableLeaderElection, "leader-elect", false,
 		"Enable leader election for controller manager. "+
 			"Enabling this will ensure there is only one active controller manager.")
 	flag.BoolVar(&secureMetrics, "metrics-secure", false,
-		"If set the metrics endpoint is served securely")
+		"Serve metrics over HTTPS with Kubernetes TokenReview/SubjectAccessReview auth. "+
+			"When true, --metrics-bind-address should also be changed to :8443.")
 	flag.BoolVar(&enableHTTP2, "enable-http2", false,
 		"If set, HTTP/2 will be enabled for the metrics and webhook servers")
 	opts := zap.Options{
@@ -90,17 +95,47 @@ func main() {
 		tlsOpts = append(tlsOpts, disableHTTP2)
 	}
 
+	// FilterProvider is wired only when secure mode is requested.
+	// It validates every scrape via TokenReview (authn) and
+	// SubjectAccessReview (authz) against the Kubernetes API.
+	// When secureMetrics is false the field is left nil, meaning the
+	// plain-HTTP server accepts connections without any authentication.
+	metricsOpts := metricsserver.Options{
+		BindAddress:   metricsAddr,
+		SecureServing: secureMetrics,
+		TLSOpts:       tlsOpts,
+	}
+	if secureMetrics {
+		metricsOpts.FilterProvider = filters.WithAuthenticationAndAuthorization
+	}
+
 	webhookServer := webhook.NewServer(webhook.Options{
 		TLSOpts: tlsOpts,
 	})
 
+	// Build cache options: when WATCH_NAMESPACE is set the operator runs in
+	// namespace-scoped mode and only watches those specific namespaces.
+	cacheOpts := cache.Options{}
+	if watchNamespace := os.Getenv("WATCH_NAMESPACE"); watchNamespace != "" {
+		nsMap := make(map[string]cache.Config)
+		for _, ns := range strings.Split(watchNamespace, ",") {
+			ns = strings.TrimSpace(ns)
+			if ns != "" {
+				nsMap[ns] = cache.Config{}
+			}
+		}
+		// Always include the operator's own namespace so leader-election works.
+		if podNS := os.Getenv("POD_NAMESPACE"); podNS != "" {
+			nsMap[podNS] = cache.Config{}
+		}
+		cacheOpts.DefaultNamespaces = nsMap
+		setupLog.Info("namespace-scoped mode", "WATCH_NAMESPACE", watchNamespace)
+	}
+
 	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
-		Scheme: scheme,
-		Metrics: metricsserver.Options{
-			BindAddress:   metricsAddr,
-			SecureServing: secureMetrics,
-			TLSOpts:       tlsOpts,
-		},
+		Scheme:                 scheme,
+		Cache:                  cacheOpts,
+		Metrics:                metricsOpts,
 		WebhookServer:          webhookServer,
 		HealthProbeBindAddress: probeAddr,
 		LeaderElection:         enableLeaderElection,

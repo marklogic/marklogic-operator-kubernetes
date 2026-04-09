@@ -167,6 +167,16 @@ e2e-test-istio:
 	@echo "=====Running Istio ambient mode e2e tests"
 	E2E_ISTIO_AMBIENT=true go test -v -count=1 -timeout 30m ./test/e2e -run "Test(Istio|NonIstio)"
 
+.PHONY: e2e-test-namespace  ## Run e2e tests against a namespace-scoped operator install
+e2e-test-namespace:
+	@echo "=====Running e2e tests in namespace-scoped mode (insecure metrics; secure metrics require cluster scope)"
+	E2E_SCOPE_TYPE=namespace E2E_METRICS_SECURE=false go test -v -count=1 -timeout 30m ./test/e2e
+
+.PHONY: e2e-test-cluster  ## Run e2e tests against a cluster-scoped operator install
+e2e-test-cluster:
+	@echo "=====Running e2e tests in cluster-scoped mode"
+	E2E_SCOPE_TYPE=cluster go test -v -count=1 -timeout 30m ./test/e2e
+
 .PHONY: e2e-setup-minikube
 e2e-setup-minikube: kustomize controller-gen build docker-build
 	minikube version
@@ -431,10 +441,12 @@ HELMIFY ?= $(LOCALBIN)/helmify
 helmify: $(HELMIFY) ## Download helmify locally if necessary.
 $(HELMIFY): $(LOCALBIN)
 	test -s $(LOCALBIN)/helmify || GOBIN=$(LOCALBIN) go install github.com/arttor/helmify/cmd/helmify@latest
-    
+
+.PHONY: helm
 helm: manifests kustomize helmify
 	cd config/manager && $(KUSTOMIZE) edit set image controller=$(IMG)
 	$(KUSTOMIZE) build config/default | $(HELMIFY) -image-pull-secrets -original-name charts/marklogic-operator-kubernetes
+	bash hack/helmify-post-process.sh
 
 .PHONY: image-scan
 image-scan: docker-build

@@ -1,4 +1,4 @@
-// Copyright (c) 2024-2026 Progress Software Corporation and/or its subsidiaries or affiliates. All Rights Reserved.
+// Copyright (c) 2024-2025 Progress Software Corporation and/or its subsidiaries or affiliates. All Rights Reserved.
 
 package e2e
 
@@ -28,6 +28,7 @@ const (
 
 // TestLogCollectionDisabled tests that fluent-bit is NOT created when LogCollection.Enabled is false
 func TestLogCollectionDisabled(t *testing.T) {
+	skipIfNamespaceNotWatched(t, logCollectionNamespace)
 	feature := features.New("Log Collection Disabled Test").WithLabel("type", "log-collection-disabled")
 
 	replicas := int32(1)
@@ -85,8 +86,7 @@ func TestLogCollectionDisabled(t *testing.T) {
 
 		namespace := &corev1.Namespace{
 			ObjectMeta: metav1.ObjectMeta{
-				Name:   logCollectionNamespace,
-				Labels: namespaceLabels(),
+				Name: logCollectionNamespace,
 			},
 		}
 		if err := client.Resources().Create(ctx, namespace); err != nil {
@@ -169,6 +169,7 @@ func TestLogCollectionDisabled(t *testing.T) {
 
 // TestLogCollectionPartialLogs tests selective log file collection
 func TestLogCollectionPartialLogs(t *testing.T) {
+	skipIfNamespaceNotWatched(t, logCollectionNamespace)
 	feature := features.New("Log Collection Partial Logs Test").WithLabel("type", "log-collection-partial")
 
 	replicas := int32(1)
@@ -235,8 +236,7 @@ func TestLogCollectionPartialLogs(t *testing.T) {
 
 		namespace := &corev1.Namespace{
 			ObjectMeta: metav1.ObjectMeta{
-				Name:   logCollectionNamespace,
-				Labels: namespaceLabels(),
+				Name: logCollectionNamespace,
 			},
 		}
 		if err := client.Resources().Create(ctx, namespace); err != nil {
@@ -338,6 +338,7 @@ func TestLogCollectionPartialLogs(t *testing.T) {
 
 // TestLogCollectionCustomResources tests custom resource configuration for fluent-bit
 func TestLogCollectionCustomResources(t *testing.T) {
+	skipIfNamespaceNotWatched(t, logCollectionNamespace)
 	feature := features.New("Log Collection Custom Resources Test").WithLabel("type", "log-collection-resources")
 
 	replicas := int32(1)
@@ -412,8 +413,7 @@ func TestLogCollectionCustomResources(t *testing.T) {
 
 		namespace := &corev1.Namespace{
 			ObjectMeta: metav1.ObjectMeta{
-				Name:   logCollectionNamespace,
-				Labels: namespaceLabels(),
+				Name: logCollectionNamespace,
 			},
 		}
 		if err := client.Resources().Create(ctx, namespace); err != nil {
@@ -521,6 +521,7 @@ func TestLogCollectionCustomResources(t *testing.T) {
 
 // TestLogCollectionCustomFilters tests custom filters configuration
 func TestLogCollectionCustomFilters(t *testing.T) {
+	skipIfNamespaceNotWatched(t, logCollectionNamespace)
 	feature := features.New("Log Collection Custom Filters Test").WithLabel("type", "log-collection-filters")
 
 	replicas := int32(1)
@@ -592,8 +593,7 @@ func TestLogCollectionCustomFilters(t *testing.T) {
 
 		namespace := &corev1.Namespace{
 			ObjectMeta: metav1.ObjectMeta{
-				Name:   logCollectionNamespace,
-				Labels: namespaceLabels(),
+				Name: logCollectionNamespace,
 			},
 		}
 		if err := client.Resources().Create(ctx, namespace); err != nil {

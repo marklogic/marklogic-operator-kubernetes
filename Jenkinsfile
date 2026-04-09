@@ -137,9 +137,9 @@ void runMinikubeSetup() {
     """
 }
 
-void runE2eTests() {
+void runE2eTests(String scope = 'namespace') {
     sh """
-        make e2e-test IMG=${operatorRepo}:${VERSION}
+        make e2e-test-${scope} IMG=${operatorRepo}:${VERSION}
     """
 }
 
@@ -158,6 +158,12 @@ void runIstioMinikubeSetup() {
 void runIstioE2eTests() {
     sh """
         make e2e-test-istio IMG=${operatorRepo}:${VERSION} E2E_ISTIO_AMBIENT=true
+    """
+}
+
+void runNamespaceScopedE2eTests() {
+    sh """
+        make e2e-test-namespace IMG=${operatorRepo}:${VERSION}
     """
 }
 
@@ -231,6 +237,7 @@ pipeline {
         booleanParam(name: 'PUBLISH_IMAGE', defaultValue: false, description: 'Publish image to internal registry')
         string(name: 'emailList', defaultValue: emailList, description: 'List of email for build notification', trim: true)
         booleanParam(name: 'VERIFY_ISTIO_AMBIENT', defaultValue: true, description: 'Run Istio ambient mode e2e tests (requires fresh minikube cluster with Istio)')
+        booleanParam(name: 'VERIFY_NAMESPACE_SCOPED', defaultValue: false, description: 'Run e2e tests against a namespace-scoped operator install')
     }
 
     stages {
@@ -290,6 +297,35 @@ pipeline {
             }
             steps {
                 runMinikubeCleanup()
+            }
+        }
+
+        stage('Namespace-Scoped-Minikube-Setup') {
+            when {
+                expression { return params.VERIFY_NAMESPACE_SCOPED }
+            }
+            steps {
+                runMinikubeSetup()
+            }
+        }
+
+        stage('Run-Namespace-Scoped-e2e-Tests') {
+            when {
+                expression { return params.VERIFY_NAMESPACE_SCOPED }
+            }
+            steps {
+                runNamespaceScopedE2eTests()
+            }
+        }
+
+        stage('Namespace-Scoped-Cleanup') {
+            when {
+                expression { return params.VERIFY_NAMESPACE_SCOPED }
+            }
+            steps {
+                catchError(buildResult: 'SUCCESS', stageResult: 'FAILURE') {
+                    runMinikubeCleanup()
+                }
             }
         }
 
