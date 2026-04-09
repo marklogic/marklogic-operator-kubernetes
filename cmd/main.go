@@ -1,5 +1,5 @@
 /*
-Copyright (c) 2024-2025 Progress Software Corporation and/or its subsidiaries or affiliates. All Rights Reserved.
+Copyright (c) 2024-2026 Progress Software Corporation and/or its subsidiaries or affiliates. All Rights Reserved.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -33,6 +33,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
+	"sigs.k8s.io/controller-runtime/pkg/metrics/filters"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
@@ -60,13 +61,15 @@ func main() {
 	var secureMetrics bool
 	var enableHTTP2 bool
 	var watchNamespace string
-	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8080", "The address the metric endpoint binds to.")
+	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8080",
+		"The address the metrics endpoint binds to. Use :8443 when --metrics-secure is true.")
 	flag.StringVar(&probeAddr, "health-probe-bind-address", ":8081", "The address the probe endpoint binds to.")
 	flag.BoolVar(&enableLeaderElection, "leader-elect", false,
 		"Enable leader election for controller manager. "+
 			"Enabling this will ensure there is only one active controller manager.")
 	flag.BoolVar(&secureMetrics, "metrics-secure", false,
-		"If set the metrics endpoint is served securely")
+		"Serve metrics over HTTPS with Kubernetes TokenReview/SubjectAccessReview auth. "+
+			"When true, --metrics-bind-address should also be changed to :8443.")
 	flag.BoolVar(&enableHTTP2, "enable-http2", false,
 		"If set, HTTP/2 will be enabled for the metrics and webhook servers")
 	flag.StringVar(&watchNamespace, "watch-namespace", "",
@@ -84,12 +87,9 @@ func main() {
 		watchNamespace = os.Getenv("WATCH_NAMESPACE")
 	}
 
-	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&opts)))
-
 	// Parse watch namespaces (support comma-separated list)
 	var watchNamespaces []string
 	if watchNamespace != "" {
-		// Split by comma and trim spaces
 		for _, ns := range strings.Split(watchNamespace, ",") {
 			ns = strings.TrimSpace(ns)
 			if ns != "" {
@@ -97,6 +97,8 @@ func main() {
 			}
 		}
 	}
+
+	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&opts)))
 
 	if len(watchNamespaces) > 0 {
 		if len(watchNamespaces) == 1 {
@@ -124,18 +126,27 @@ func main() {
 		tlsOpts = append(tlsOpts, disableHTTP2)
 	}
 
+	// FilterProvider is wired only when secure mode is requested.
+	// It validates every scrape via TokenReview (authn) and
+	// SubjectAccessReview (authz) against the Kubernetes API.
+	// When secureMetrics is false the field is left nil, meaning the
+	// plain-HTTP server accepts connections without any authentication.
+	metricsOpts := metricsserver.Options{
+		BindAddress:   metricsAddr,
+		SecureServing: secureMetrics,
+		TLSOpts:       tlsOpts,
+	}
+	if secureMetrics {
+		metricsOpts.FilterProvider = filters.WithAuthenticationAndAuthorization
+	}
+
 	webhookServer := webhook.NewServer(webhook.Options{
 		TLSOpts: tlsOpts,
 	})
 
-	// Configure manager options based on watch namespace
 	managerOptions := ctrl.Options{
-		Scheme: scheme,
-		Metrics: metricsserver.Options{
-			BindAddress:   metricsAddr,
-			SecureServing: secureMetrics,
-			TLSOpts:       tlsOpts,
-		},
+		Scheme:                 scheme,
+		Metrics:                metricsOpts,
 		WebhookServer:          webhookServer,
 		HealthProbeBindAddress: probeAddr,
 		LeaderElection:         enableLeaderElection,
@@ -155,7 +166,6 @@ func main() {
 
 	// If watchNamespaces are set, configure the manager to watch only those namespaces
 	if len(watchNamespaces) > 0 {
-		// Create a map of namespace to cache config for each watched namespace
 		defaultNamespaces := make(map[string]cache.Config)
 		for _, ns := range watchNamespaces {
 			defaultNamespaces[ns] = cache.Config{}

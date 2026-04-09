@@ -105,23 +105,18 @@ Supports single namespace, comma-separated list, or array of namespaces.
 {{- if .Values.scope.watchNamespaces }}
   {{- if kindIs "string" .Values.scope.watchNamespaces }}
     {{- if contains "," .Values.scope.watchNamespaces }}
-      {{- /* Comma-separated string – split into individual entries */}}
       {{- range $ns := splitList "," .Values.scope.watchNamespaces }}
         {{- $namespaces = append $namespaces (trim $ns) }}
       {{- end }}
     {{- else }}
-      {{- /* Single namespace string */}}
       {{- $namespaces = list .Values.scope.watchNamespaces }}
     {{- end }}
   {{- else if kindIs "slice" .Values.scope.watchNamespaces }}
-    {{- /* Array of namespaces */}}
     {{- $namespaces = .Values.scope.watchNamespaces }}
   {{- end }}
 {{- else }}
-  {{- /* Default to the release namespace if watchNamespaces is unset */}}
   {{- $namespaces = list .Release.Namespace }}
 {{- end }}
-{{- /* Create Role and RoleBinding for each watched namespace */}}
 {{- range $ns := $namespaces }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1

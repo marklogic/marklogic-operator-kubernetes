@@ -1,32 +1,5 @@
 controllerManager:
-  kubeRbacProxy:
-    args:
-    - --secure-listen-address=0.0.0.0:8443
-    - --upstream=http://127.0.0.1:8080/
-    - --logtostderr=true
-    - --v=0
-    containerSecurityContext:
-      allowPrivilegeEscalation: false
-      capabilities:
-        drop:
-        - ALL
-      readOnlyRootFilesystem: true
-      runAsNonRoot: true
-    image:
-      repository: gcr.io/kubebuilder/kube-rbac-proxy
-      tag: v0.15.0
-    resources:
-      limits:
-        cpu: 500m
-        memory: 128Mi
-      requests:
-        cpu: 5m
-        memory: 64Mi
   manager:
-    args:
-    - --health-probe-bind-address=:8081
-    - --metrics-bind-address=127.0.0.1:8080
-    - --leader-elect
     containerSecurityContext:
       allowPrivilegeEscalation: false
       capabilities:
@@ -53,11 +26,6 @@ controllerManager:
 imagePullSecrets: []
 kubernetesClusterDomain: cluster.local
 metricsService:
-  ports:
-  - name: https
-    port: 8443
-    protocol: TCP
-    targetPort: https
   type: ClusterIP
 serviceAccount:
   annotations: {}
@@ -71,7 +39,9 @@ serviceAccount:
 scope:
   # Deployment scope: "cluster" or "namespace"
   # cluster: operator watches all namespaces (requires ClusterRole/ClusterRoleBinding)
+  #          metrics served on :8443 with HTTPS + Kubernetes authn/authz
   # namespace: operator watches only specified namespace(s) (requires Role/RoleBinding)
+  #            metrics served on :8080 without authentication (no ClusterRole needed)
   type: cluster
 
   # watchNamespaces defines which namespace(s) the operator should watch
@@ -84,3 +54,9 @@ scope:
   #   watchNamespaces: "marklogic-prod,marklogic-dev"                # Multiple (comma-separated)
   #   watchNamespaces: ["marklogic-prod", "marklogic-dev"]           # Multiple (array)
   watchNamespaces: ""
+
+# Metrics security configuration
+metrics:
+  # secure: true  → port 8443, HTTPS, Kubernetes authn/authz (requires scope.type=cluster)
+  # secure: false → port 8080, HTTP, no authentication (suitable for dev/test or namespace scope)
+  secure: true
