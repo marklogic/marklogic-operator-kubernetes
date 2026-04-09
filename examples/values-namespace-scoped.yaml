@@ -1,0 +1,68 @@
+# values-namespace-scoped.yaml
+# Example values file for namespace-scoped deployment
+# Use: helm install marklogic-operator ./charts/marklogic-operator-kubernetes -f values-namespace-scoped.yaml
+
+# Operator scope configuration - NAMESPACE-SCOPED
+scope:
+  type: namespace
+  # If empty, watches the release namespace
+  # Set to a specific namespace name to watch a different namespace
+  # Supports multiple formats:
+  #   - Single: "marklogic-prod"
+  #   - Comma-separated: "ns1,ns2,ns3"
+  #   - Array: ["ns1", "ns2", "ns3"]
+  watchNamespaces: ""  # e.g., "marklogic-prod" or ["prod", "staging"]
+
+# Controller Manager Configuration
+controllerManager:
+  replicas: 1
+  
+  manager:
+    image:
+      repository: progressofficial/marklogic-operator-kubernetes
+      tag: 1.1.0
+    args:
+    - --health-probe-bind-address=:8081
+    - --metrics-bind-address=127.0.0.1:8080
+    - --leader-elect
+    resources:
+      limits:
+        cpu: 500m
+        memory: 128Mi
+      requests:
+        cpu: 10m
+        memory: 64Mi
+  
+  kubeRbacProxy:
+    image:
+      repository: gcr.io/kubebuilder/kube-rbac-proxy
+      tag: v0.15.0
+    resources:
+      limits:
+        cpu: 500m
+        memory: 128Mi
+      requests:
+        cpu: 5m
+        memory: 64Mi
+
+# Service Account
+serviceAccount:
+  create: true
+  annotations: {}
+  name: ""
+
+# Metrics Service
+metricsService:
+  type: ClusterIP
+  ports:
+  - name: https
+    port: 8443
+    protocol: TCP
+    targetPort: https
+
+# Image Pull Secrets (if needed for private registries)
+imagePullSecrets: []
+# - name: my-registry-secret
+
+# Kubernetes cluster domain
+kubernetesClusterDomain: cluster.local
