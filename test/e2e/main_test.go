@@ -43,18 +43,18 @@ var (
 // allTestNamespaces is the union of every application namespace used across the e2e suite.
 // Used to compute WATCH_NAMESPACE when running in namespace-scoped mode.
 var allTestNamespaces = []string{
-	"default",                 // 2_marklogic_cluster_test.go
-	"ednode",                  // 3_ml_cluster_ednode_test.go
-	"tls-self-signed",         // 4_tls_test.go
-	"marklogic-tlsnamed",      // 4_tls_test.go
-	"marklogic-tlsednode",     // 4_tls_test.go
-	"haproxy-pathbased",       // 5_haproxy_test.go
-	"haproxy-test",            // 5_haproxy_test.go
-	"log-test",                // 6_log_collection_test.go
-	"istio-ambient-test",      // 7_istio_ambient_test.go
-	"istio-resilience-test",   // 7_istio_ambient_test.go
-	"istio-multinode-test",    // 7_istio_ambient_test.go
-	"non-istio-test",          // 7_istio_ambient_test.go
+	"default",               // 2_marklogic_cluster_test.go
+	"ednode",                // 3_ml_cluster_ednode_test.go
+	"tls-self-signed",       // 4_tls_test.go
+	"marklogic-tlsnamed",    // 4_tls_test.go
+	"marklogic-tlsednode",   // 4_tls_test.go
+	"haproxy-pathbased",     // 5_haproxy_test.go
+	"haproxy-test",          // 5_haproxy_test.go
+	"log-test",              // 6_log_collection_test.go
+	"istio-ambient-test",    // 7_istio_ambient_test.go
+	"istio-resilience-test", // 7_istio_ambient_test.go
+	"istio-multinode-test",  // 7_istio_ambient_test.go
+	"non-istio-test",        // 7_istio_ambient_test.go
 }
 
 const (
