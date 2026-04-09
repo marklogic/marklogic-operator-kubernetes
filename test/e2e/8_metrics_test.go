@@ -26,13 +26,12 @@ import (
 )
 
 const (
-	metricsReaderSA      = "metrics-reader-e2e"
-	metricsReaderCRB     = "metrics-reader-e2e-binding"
-	metricsReaderRole    = "marklogic-operator-metrics-reader"
-	metricsServiceName   = "marklogic-operator-controller-manager-metrics-service"
-	metricsLocalPort     = "19443"
-	metricsRemotePort    = "8443"
-	metricsTokenAudience = "https://kubernetes.default.svc"
+	metricsReaderSA    = "metrics-reader-e2e"
+	metricsReaderCRB   = "metrics-reader-e2e-binding"
+	metricsReaderRole  = "marklogic-operator-metrics-reader"
+	metricsServiceName = "marklogic-operator-controller-manager-metrics-service"
+	metricsLocalPort   = "19443"
+	metricsRemotePort  = "8443"
 )
 
 // TestMetricsEndpoint verifies that the native secure metrics server:
@@ -127,7 +126,7 @@ func TestMetricsEndpoint(t *testing.T) {
 			restCfg = c.Client().RESTConfig()
 		}
 
-		token := requestSAToken(ctx, t, restCfg, namespace, metricsReaderSA, metricsTokenAudience)
+		token := requestSAToken(ctx, t, restCfg, namespace, metricsReaderSA)
 
 		pf, localAddr, cancel := startPortForward(t, namespace, metricsServiceName, metricsLocalPort, metricsRemotePort)
 		defer func() {
@@ -186,7 +185,7 @@ func TestMetricsEndpoint(t *testing.T) {
 
 		// Use the operator controller-manager SA — it has many permissions but
 		// is NOT bound to the metrics-reader ClusterRole, so the SAR check must deny it.
-		token := requestSAToken(ctx, t, restCfg, namespace, "marklogic-operator-controller-manager", metricsTokenAudience)
+		token := requestSAToken(ctx, t, restCfg, namespace, "marklogic-operator-controller-manager")
 
 		pf, localAddr, cancel := startPortForward(t, namespace, metricsServiceName, metricsLocalPort, metricsRemotePort)
 		defer func() {
@@ -279,8 +278,11 @@ func waitForPortForward(t *testing.T, addr string) {
 }
 
 // requestSAToken calls the TokenRequest API to obtain a bound token for the
-// given ServiceAccount. Tokens are short-lived (10 minutes) and audience-scoped.
-func requestSAToken(ctx context.Context, t *testing.T, cfg *rest.Config, ns, saName, audience string) string {
+// given ServiceAccount. No explicit audience is set so the API server applies
+// its own default audiences — this ensures the token is accepted by the
+// controller-runtime metrics server's TokenReview call regardless of the
+// cluster's OIDC issuer configuration (e.g. EKS, GKE, vanilla kubeadm).
+func requestSAToken(ctx context.Context, t *testing.T, cfg *rest.Config, ns, saName string) string {
 	t.Helper()
 
 	cs, err := kubernetes.NewForConfig(cfg)
@@ -291,7 +293,9 @@ func requestSAToken(ctx context.Context, t *testing.T, cfg *rest.Config, ns, saN
 	expirationSeconds := int64(600) // 10 minutes — sufficient for one test run
 	tr := &authenticationv1.TokenRequest{
 		Spec: authenticationv1.TokenRequestSpec{
-			Audiences:         []string{audience},
+			// Empty Audiences: the API server fills in its own default audiences.
+			// This works across all cluster types (EKS, GKE, kubeadm, etc.) because
+			// the issued token will always satisfy the server's TokenReview check.
 			ExpirationSeconds: &expirationSeconds,
 		},
 	}
