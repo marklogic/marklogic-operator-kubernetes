@@ -137,7 +137,7 @@ void runMinikubeSetup() {
     """
 }
 
-void runE2eTests(String scope = 'namespace') {
+void runE2eTests(String scope = 'cluster') {
     sh """
         make e2e-test-${scope} IMG=${operatorRepo}:${VERSION}
     """

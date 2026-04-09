@@ -14,6 +14,7 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/intstr"
 	"sigs.k8s.io/e2e-framework/klient/conf"
 	"sigs.k8s.io/e2e-framework/klient/wait"
 	"sigs.k8s.io/e2e-framework/klient/wait/conditions"
@@ -149,40 +150,60 @@ func TestMain(m *testing.M) {
 			return ctx, nil
 		},
 
-		// Configure namespace-scoped watch if E2E_SCOPE_TYPE=namespace.
-		// Patches the operator Deployment with WATCH_NAMESPACE so it only reconciles
-		// the specific test namespaces, mirroring a namespace-scoped production install.
+		// Configure namespace-scoped watch (E2E_SCOPE_TYPE=namespace) and/or insecure
+		// metrics (E2E_METRICS_SECURE=false) by patching the live Deployment and metrics
+		// Service so the cluster state matches what the test suite expects.
+		//
+		// `make deploy` always uses config/default which sets --metrics-bind-address=:8443
+		// and --metrics-secure=true. When E2E_METRICS_SECURE=false this step patches both
+		// the Deployment args/ports and the metrics Service port to :8080 so that
+		// TestMetricsEndpoint's HTTP port-forward succeeds.
+		//
+		// NOTE: this step only patches WATCH_NAMESPACE to test reconciliation scoping.
+		// The cluster-scoped RBAC (ClusterRole/ClusterRoleBinding) from `make deploy`
+		// remains in place. A true namespace-scoped install would use Role/RoleBinding
+		// per watched namespace (see config/rbac/role_namespaced.yaml); that RBAC path
+		// is not exercised here.
 		func(ctx context.Context, cfg *envconf.Config) (context.Context, error) {
 			scopeType = e2eScopeType
 			if scopeType == "" {
 				scopeType = "cluster"
 			}
-			log.Printf("Operator scope: %s", scopeType)
+			metricsSecure := os.Getenv("E2E_METRICS_SECURE") != "false" // default true
+			log.Printf("Operator scope: %s  metrics-secure: %v", scopeType, metricsSecure)
 
-			if scopeType != "namespace" {
+			// Nothing to patch for a default cluster-scoped + secure-metrics deployment.
+			if scopeType != "namespace" && metricsSecure {
 				return ctx, nil
 			}
 
-			// Determine which namespaces to watch.
-			watchNS := e2eWatchNS
-			if watchNS == "" {
-				watchNS = strings.Join(allTestNamespaces, ",")
+			// -- WATCH_NAMESPACE --------------------------------------------------
+			var watchNS string
+			if scopeType == "namespace" {
+				watchNS = e2eWatchNS
+				if watchNS == "" {
+					watchNS = strings.Join(allTestNamespaces, ",")
+				}
+				parts := strings.Split(watchNS, ",")
+				for i, p := range parts {
+					parts[i] = strings.TrimSpace(p)
+				}
+				watchedNSs = parts
+				log.Printf("Namespace-scoped mode: WATCH_NAMESPACE=%s", watchNS)
 			}
-			parts := strings.Split(watchNS, ",")
-			for i, p := range parts {
-				parts[i] = strings.TrimSpace(p)
-			}
-			watchedNSs = parts
-			log.Printf("Namespace-scoped mode: WATCH_NAMESPACE=%s", watchNS)
 
-			// Patch the operator Deployment to add WATCH_NAMESPACE.
 			client := cfg.Client()
+
+			// -- Patch the Deployment ---------------------------------------------
 			dep := &appsv1.Deployment{}
 			if err := client.Resources().Get(ctx, "marklogic-operator-controller-manager", namespace, dep); err != nil {
 				return ctx, fmt.Errorf("failed to get operator deployment: %w", err)
 			}
 			for i, c := range dep.Spec.Template.Spec.Containers {
-				if c.Name == "manager" {
+				if c.Name != "manager" {
+					continue
+				}
+				if watchNS != "" {
 					filtered := make([]v1.EnvVar, 0, len(c.Env)+1)
 					for _, e := range c.Env {
 						if e.Name != "WATCH_NAMESPACE" {
@@ -191,14 +212,57 @@ func TestMain(m *testing.M) {
 					}
 					filtered = append(filtered, v1.EnvVar{Name: "WATCH_NAMESPACE", Value: watchNS})
 					dep.Spec.Template.Spec.Containers[i].Env = filtered
-					break
 				}
+				if !metricsSecure {
+					newArgs := make([]string, 0, len(c.Args))
+					for _, arg := range c.Args {
+						switch arg {
+						case "--metrics-bind-address=:8443":
+							newArgs = append(newArgs, "--metrics-bind-address=:8080")
+						case "--metrics-secure=true":
+							newArgs = append(newArgs, "--metrics-secure=false")
+						default:
+							newArgs = append(newArgs, arg)
+						}
+					}
+					dep.Spec.Template.Spec.Containers[i].Args = newArgs
+					newPorts := make([]v1.ContainerPort, 0, len(c.Ports))
+					for _, p := range c.Ports {
+						if p.ContainerPort == 8443 {
+							newPorts = append(newPorts, v1.ContainerPort{ContainerPort: 8080, Protocol: v1.ProtocolTCP, Name: "http"})
+						} else {
+							newPorts = append(newPorts, p)
+						}
+					}
+					dep.Spec.Template.Spec.Containers[i].Ports = newPorts
+					log.Printf("Patching operator deployment to insecure metrics on :8080")
+				}
+				break
 			}
 			if err := client.Resources().Update(ctx, dep); err != nil {
-				return ctx, fmt.Errorf("failed to patch operator deployment with WATCH_NAMESPACE: %w", err)
+				return ctx, fmt.Errorf("failed to patch operator deployment: %w", err)
 			}
 
-			// Wait for the re-rollout to complete.
+			// -- Patch the metrics Service port to match --------------------------
+			if !metricsSecure {
+				svc := &v1.Service{}
+				if err := client.Resources().Get(ctx, "marklogic-operator-controller-manager-metrics-service", namespace, svc); err != nil {
+					return ctx, fmt.Errorf("failed to get metrics Service: %w", err)
+				}
+				for i, p := range svc.Spec.Ports {
+					if p.Port == 8443 {
+						svc.Spec.Ports[i].Port = 8080
+						svc.Spec.Ports[i].Name = "http"
+						svc.Spec.Ports[i].TargetPort = intstr.FromInt32(8080)
+					}
+				}
+				if err := client.Resources().Update(ctx, svc); err != nil {
+					return ctx, fmt.Errorf("failed to patch metrics Service: %w", err)
+				}
+				log.Printf("Patched metrics Service to insecure port :8080")
+			}
+
+			// -- Wait for the operator to re-roll out -----------------------------
 			if err := wait.For(
 				conditions.New(client.Resources()).DeploymentConditionMatch(
 					&appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{
@@ -211,9 +275,9 @@ func TestMain(m *testing.M) {
 				wait.WithTimeout(3*time.Minute),
 				wait.WithInterval(5*time.Second),
 			); err != nil {
-				return ctx, fmt.Errorf("operator rollout with WATCH_NAMESPACE timed out: %w", err)
+				return ctx, fmt.Errorf("operator rollout timed out: %w", err)
 			}
-			log.Printf("Operator re-deployed in namespace-scoped mode, watching %d namespace(s)", len(watchedNSs))
+			log.Printf("Operator re-deployed: scope=%s metrics-secure=%v", scopeType, metricsSecure)
 			return ctx, nil
 		},
 	)
