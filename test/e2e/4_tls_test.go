@@ -92,7 +92,20 @@ func TestTlsWithSelfSigned(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Failed to wait for pod creation: %v", err)
 		}
-		time.Sleep(10 * time.Second)
+
+		url := "https://localhost:8002/manage/v2/groups"
+		command := fmt.Sprintf("curl -k --anyauth -u %s:%s %s", adminUsername, adminPassword, url)
+		deadline := time.Now().Add(2 * time.Minute)
+
+		for {
+			if _, err := utils.ExecCmdInPod(podName, namespace, mlContainerName, command); err == nil {
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("Timed out waiting for HTTPS endpoint to become ready on pod %s", podName)
+			}
+			time.Sleep(5 * time.Second)
+		}
 		return ctx
 	})
 

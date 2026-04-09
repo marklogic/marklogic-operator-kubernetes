@@ -150,8 +150,10 @@ func TestMlClusterWithEdnode(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Failed to execute curl command in pod: %v", err)
 		}
-		if !strings.Contains(output, "<nameref>dnode</nameref>") && !strings.Contains(output, "<nameref>enode</nameref>") {
-			t.Fatal("Groups does not exists on MarkLogic cluster")
+		hasDnodeGroup := strings.Contains(output, fmt.Sprintf("<nameref>%s</nameref>", dnodeGrpName))
+		hasEnodeGroup := strings.Contains(output, fmt.Sprintf("<nameref>%s</nameref>", enodeGrpName))
+		if !hasDnodeGroup || !hasEnodeGroup {
+			t.Fatal("Expected both dnode and enode groups to exist on MarkLogic cluster")
 		}
 		return ctx
 	})
