@@ -177,6 +177,11 @@ e2e-test-cluster:
 	@echo "=====Running e2e tests in cluster-scoped mode"
 	E2E_SCOPE_TYPE=cluster go test -v -count=1 -timeout 30m ./test/e2e
 
+.PHONY: e2e-test-helm-namespace  ## Run namespace-scoped e2e tests via Helm chart install (validates Role/RoleBinding, no ClusterRole)
+e2e-test-helm-namespace:
+	@echo "=====Running namespace-scoped e2e tests via Helm chart====="
+	go test -v -count=1 -timeout 45m ./test/e2e-helm
+
 .PHONY: e2e-setup-minikube
 e2e-setup-minikube: kustomize controller-gen build docker-build
 	minikube version

@@ -161,6 +161,12 @@ void runIstioE2eTests() {
     """
 }
 
+void runHelmNamespaceScopedE2eTests() {
+    sh """
+        make e2e-test-helm-namespace IMG=${operatorRepo}:${VERSION}
+    """
+}
+
 void runBlackDuckScan() {
     // Trigger BlackDuck scan job with CONTAINER_IMAGES parameter when params.PUBLISH_IMAGE is true
     if (params.PUBLISH_IMAGE) {
@@ -212,9 +218,9 @@ pipeline {
     
     triggers {
         // Trigger nightly builds on the develop branch
-        parameterizedCron( env.BRANCH_NAME == 'develop' ? '''00 05 * * * % E2E_MARKLOGIC_IMAGE_VERSION=ml-docker-db-dev-tierpoint.bed-artifactory.bedford.progress.com/marklogic/marklogic-server-ubi-rootless:latest-12
-                                                             00 05 * * * % E2E_MARKLOGIC_IMAGE_VERSION=ml-docker-db-dev-tierpoint.bed-artifactory.bedford.progress.com/marklogic/marklogic-server-ubi-rootless:latest-11; PUBLISH_IMAGE=false
-                                                             00 07 * * * % E2E_MARKLOGIC_IMAGE_VERSION=ml-docker-db-dev-tierpoint.bed-artifactory.bedford.progress.com/marklogic/marklogic-server-ubi-rootless:latest-12; VERIFY_ISTIO_AMBIENT=true''' : '')
+        parameterizedCron( env.BRANCH_NAME == 'develop' ? '''00 05 * * * % E2E_MARKLOGIC_IMAGE_VERSION=ml-docker-db-dev-tierpoint.bed-artifactory.bedford.progress.com/marklogic/marklogic-server-ubi-rootless:latest-12; VERIFY_HELM_NAMESPACE_SCOPED=true
+                                                             00 05 * * * % E2E_MARKLOGIC_IMAGE_VERSION=ml-docker-db-dev-tierpoint.bed-artifactory.bedford.progress.com/marklogic/marklogic-server-ubi-rootless:latest-11; PUBLISH_IMAGE=false; VERIFY_HELM_NAMESPACE_SCOPED=true
+                                                             00 07 * * * % E2E_MARKLOGIC_IMAGE_VERSION=ml-docker-db-dev-tierpoint.bed-artifactory.bedford.progress.com/marklogic/marklogic-server-ubi-rootless:latest-12; VERIFY_ISTIO_AMBIENT=true; VERIFY_HELM_NAMESPACE_SCOPED=true''' : '')
     }
 
     environment {
@@ -231,6 +237,7 @@ pipeline {
         booleanParam(name: 'PUBLISH_IMAGE', defaultValue: false, description: 'Publish image to internal registry')
         string(name: 'emailList', defaultValue: emailList, description: 'List of email for build notification', trim: true)
         booleanParam(name: 'VERIFY_ISTIO_AMBIENT', defaultValue: true, description: 'Run Istio ambient mode e2e tests (requires fresh minikube cluster with Istio)')
+        booleanParam(name: 'VERIFY_HELM_NAMESPACE_SCOPED', defaultValue: false, description: 'Run namespace-scoped e2e tests via Helm chart install (validates Role/RoleBinding, no ClusterRole)')
     }
 
     stages {
@@ -290,6 +297,35 @@ pipeline {
             }
             steps {
                 runMinikubeCleanup()
+            }
+        }
+
+        stage('Helm-NS-Minikube-Setup') {
+            when {
+                expression { return params.VERIFY_HELM_NAMESPACE_SCOPED }
+            }
+            steps {
+                runMinikubeSetup()
+            }
+        }
+
+        stage('Run-Helm-NS-e2e-Tests') {
+            when {
+                expression { return params.VERIFY_HELM_NAMESPACE_SCOPED }
+            }
+            steps {
+                runHelmNamespaceScopedE2eTests()
+            }
+        }
+
+        stage('Helm-NS-Cleanup') {
+            when {
+                expression { return params.VERIFY_HELM_NAMESPACE_SCOPED }
+            }
+            steps {
+                catchError(buildResult: 'SUCCESS', stageResult: 'FAILURE') {
+                    runMinikubeCleanup()
+                }
             }
         }
 
