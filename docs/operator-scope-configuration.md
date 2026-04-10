@@ -253,10 +253,3 @@ helm install marklogic-operator-b ./charts/marklogic-operator-kubernetes \
 3. **Keep operator namespace separate** from application namespaces for better isolation
 4. **Use meaningful namespace names** to avoid confusion in multi-namespace setups
 5. **Monitor operator logs** during initial deployment to confirm scope configuration
-
-## Examples
-
-See the [examples](../examples/) directory for complete deployment examples:
-- `cluster-scoped-deployment.yaml`
-- `namespace-scoped-deployment.yaml`
-- `multi-namespace-deployment.yaml`
