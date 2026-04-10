@@ -431,7 +431,6 @@ func TestIstioAmbientProvisioning(t *testing.T) {
 	if !isIstioAmbientEnabled() {
 		t.Skip("Skipping: Istio ambient mode tests not enabled (set E2E_ISTIO_AMBIENT=true)")
 	}
-	skipIfNamespaceNotWatched(t, istioAmbientNs)
 
 	feature := features.New("Istio Ambient Mode - Happy Path Provisioning").
 		WithLabel("type", "istio-ambient")
@@ -652,12 +651,10 @@ func TestIstioAmbientResilience(t *testing.T) {
 		t.Skip("Skipping: Istio ambient mode tests not enabled (set E2E_ISTIO_AMBIENT=true)")
 	}
 
-	resilienceNs := "istio-resilience-test"
-	skipIfNamespaceNotWatched(t, resilienceNs)
-
 	feature := features.New("Istio Ambient Mode - Process Guardian & Resilience").
 		WithLabel("type", "istio-ambient")
 
+	resilienceNs := "istio-resilience-test"
 	resilienceCluster := "istio-resilience-cluster"
 	resilienceSecret := "resilience-admin-secrets"
 	resilienceReplicas := int32(1)
@@ -964,7 +961,6 @@ func TestIstioAmbientNetworkGatekeeper(t *testing.T) {
 	if !isIstioAmbientEnabled() {
 		t.Skip("Skipping: Istio ambient mode tests not enabled (set E2E_ISTIO_AMBIENT=true)")
 	}
-	skipIfNamespaceNotWatched(t, istioMultinodeNs)
 
 	feature := features.New("Istio Ambient Mode - Multi-Group Network Gatekeeper").
 		WithLabel("type", "istio-ambient-multinode")
@@ -1131,7 +1127,6 @@ func TestNonIstioRegression(t *testing.T) {
 	if !isIstioAmbientEnabled() {
 		t.Skip("Skipping: Istio ambient mode tests not enabled (set E2E_ISTIO_AMBIENT=true)")
 	}
-	skipIfNamespaceNotWatched(t, nonIstioNs)
 
 	feature := features.New("Istio Ambient Mode - Non-Istio Namespace Regression").
 		WithLabel("type", "non-istio-regression")

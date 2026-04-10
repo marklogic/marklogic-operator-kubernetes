@@ -11,7 +11,6 @@ import (
 
 	marklogicv1 "github.com/marklogic/marklogic-operator-kubernetes/api/v1"
 	corev1 "k8s.io/api/core/v1"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/util/homedir"
 
@@ -75,7 +74,6 @@ var (
 )
 
 func TestMlClusterWithEdnode(t *testing.T) {
-	skipIfNamespaceNotWatched(t, mlClusterNs)
 	feature := features.New("MarklogicCluster Resource with 2 MarkLogicGroups (Ednode and dnode)").WithLabel("type", "ednode")
 
 	// Setup for MarklogicCluster creation
@@ -83,10 +81,11 @@ func TestMlClusterWithEdnode(t *testing.T) {
 		client := c.Client()
 		namespace := &corev1.Namespace{
 			ObjectMeta: metav1.ObjectMeta{
-				Name: mlClusterNs,
+				Name:   mlClusterNs,
+				Labels: namespaceLabels(),
 			},
 		}
-		if err := client.Resources().Create(ctx, namespace); err != nil && !apierrors.IsAlreadyExists(err) {
+		if err := client.Resources().Create(ctx, namespace); err != nil {
 			t.Fatalf("Failed to create namespace: %s", err)
 		}
 		marklogicv1.AddToScheme(client.Resources(mlClusterNs).GetScheme())
@@ -127,12 +126,12 @@ func TestMlClusterWithEdnode(t *testing.T) {
 		client := c.Client()
 
 		podName := "dnode-0"
-		err := utils.WaitForPod(ctx, t, client, mlClusterNs, podName, 120*time.Second)
+		err := utils.WaitForPod(ctx, t, client, mlClusterNs, podName, 120*time.Second, true)
 		if err != nil {
 			t.Fatalf("Failed to wait for pod creation: %v", err)
 		}
 		epodName := "enode-0"
-		err = utils.WaitForPod(ctx, t, client, mlClusterNs, epodName, 180*time.Second)
+		err = utils.WaitForPod(ctx, t, client, mlClusterNs, epodName, 180*time.Second, true)
 		if err != nil {
 			t.Fatalf("Failed to wait for pod creation: %v", err)
 		}
@@ -150,10 +149,9 @@ func TestMlClusterWithEdnode(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Failed to execute curl command in pod: %v", err)
 		}
-		hasDnodeGroup := strings.Contains(output, fmt.Sprintf("<nameref>%s</nameref>", dnodeGrpName))
-		hasEnodeGroup := strings.Contains(output, fmt.Sprintf("<nameref>%s</nameref>", enodeGrpName))
-		if !hasDnodeGroup || !hasEnodeGroup {
-			t.Fatal("Expected both dnode and enode groups to exist on MarkLogic cluster")
+		if !strings.Contains(output, "<nameref>dnode</nameref>") || !strings.Contains(output, "<nameref>enode</nameref>") {
+			t.Logf("Groups output: %s", output)
+			t.Fatal("Groups does not exists on MarkLogic cluster")
 		}
 		return ctx
 	})
@@ -177,12 +175,12 @@ func TestMlClusterWithEdnode(t *testing.T) {
 	feature.Assess("New Pods created", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 		client := c.Client()
 		podNameOne := "dnode-1"
-		err := utils.WaitForPod(ctx, t, client, mlClusterNs, podNameOne, 60*time.Second)
+		err := utils.WaitForPod(ctx, t, client, mlClusterNs, podNameOne, 60*time.Second, true)
 		if err != nil {
 			t.Fatalf("Failed to wait for pod %s creation: %v", podNameOne, err)
 		}
 		epodNameTwo := "enode-1"
-		err = utils.WaitForPod(ctx, t, client, mlClusterNs, epodNameTwo, 120*time.Second)
+		err = utils.WaitForPod(ctx, t, client, mlClusterNs, epodNameTwo, 120*time.Second, true)
 		if err != nil {
 			t.Fatalf("Failed to wait for pod %s creation: %v", epodNameTwo, err)
 		}
@@ -211,10 +209,10 @@ func TestMlClusterWithEdnode(t *testing.T) {
 	feature.Teardown(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 		client := c.Client()
 		if err := client.Resources(mlClusterNs).Delete(ctx, mlcluster); err != nil {
-			t.Logf("Warning: failed to delete MarklogicCluster: %s", err)
+			t.Fatalf("Failed to delete MarklogicCluster: %s", err)
 		}
 		if err := client.Resources().Delete(ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: mlClusterNs}}); err != nil {
-			t.Logf("Warning: failed to delete namespace %s: %s", mlClusterNs, err)
+			t.Fatalf("Failed to delete namespace: %s", err)
 		}
 		return ctx
 	})

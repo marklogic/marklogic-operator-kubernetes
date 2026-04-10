@@ -7,15 +7,16 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"strings"
 	"testing"
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
-	v1 "k8s.io/api/core/v1"
+	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/util/intstr"
+	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/e2e-framework/klient/conf"
+	"sigs.k8s.io/e2e-framework/klient/k8s"
 	"sigs.k8s.io/e2e-framework/klient/wait"
 	"sigs.k8s.io/e2e-framework/klient/wait/conditions"
 	"sigs.k8s.io/e2e-framework/pkg/env"
@@ -31,36 +32,22 @@ var (
 	ctrlgenVer     = os.Getenv("E2E_CONTROLLER_TOOLS_VERSION")
 	marklogicImage = os.Getenv("E2E_MARKLOGIC_IMAGE_VERSION")
 	kubernetesVer  = os.Getenv("E2E_KUBERNETES_VERSION")
-	e2eScopeType   = os.Getenv("E2E_SCOPE_TYPE")
-	e2eWatchNS     = os.Getenv("E2E_WATCH_NAMESPACE")
 )
-
-// scopeType and watchedNSs are set during TestMain setup and used by all tests.
-var (
-	scopeType  string
-	watchedNSs []string
-)
-
-// allTestNamespaces is the union of every application namespace used across the e2e suite.
-// Used to compute WATCH_NAMESPACE when running in namespace-scoped mode.
-var allTestNamespaces = []string{
-	"default",               // 2_marklogic_cluster_test.go
-	"ednode",                // 3_ml_cluster_ednode_test.go
-	"tls-self-signed",       // 4_tls_test.go
-	"marklogic-tlsnamed",    // 4_tls_test.go
-	"marklogic-tlsednode",   // 4_tls_test.go
-	"haproxy-pathbased",     // 5_haproxy_test.go
-	"haproxy-test",          // 5_haproxy_test.go
-	"log-test",              // 6_log_collection_test.go
-	"istio-ambient-test",    // 7_istio_ambient_test.go
-	"istio-resilience-test", // 7_istio_ambient_test.go
-	"istio-multinode-test",  // 7_istio_ambient_test.go
-	"non-istio-test",        // 7_istio_ambient_test.go
-}
 
 const (
 	namespace = "marklogic-operator-system"
 )
+
+// namespaceLabels returns the labels to apply to test namespaces.
+// When Istio ambient mode is enabled, includes the ambient dataplane label.
+func namespaceLabels() map[string]string {
+	if isIstioAmbientEnabled() {
+		return map[string]string{
+			"istio.io/dataplane-mode": "ambient",
+		}
+	}
+	return nil
+}
 
 func TestMain(m *testing.M) {
 	testEnv = env.New()
@@ -80,10 +67,78 @@ func TestMain(m *testing.M) {
 	log.Printf("Controller-gen version: %s", ctrlgenVer)
 	log.Printf("MarkLogic image: %s", marklogicImage)
 	log.Printf("Kubernetes version: %s", kubernetesVer)
+	log.Printf("Istio ambient mode: %v", isIstioAmbientEnabled())
 
 	// Use Environment.Setup to configure pre-test setup
 	testEnv.Setup(
+		// Delete namespace if it exists from previous run
+		func(ctx context.Context, cfg *envconf.Config) (context.Context, error) {
+			log.Printf("Ensuring clean namespace: %s", namespace)
+			client := cfg.Client()
+			ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: namespace}}
+
+			// Try to get the namespace first
+			err := client.Resources().Get(ctx, namespace, "", ns)
+			if err == nil {
+				// Namespace exists, delete it
+				log.Printf("Deleting existing namespace: %s", namespace)
+				if err := client.Resources().Delete(ctx, ns); err != nil {
+					log.Printf("Error deleting namespace (may already be deleting): %v", err)
+				}
+
+				// Wait for namespace to be fully deleted (up to 60 seconds)
+				log.Printf("Waiting for namespace deletion to complete...")
+				for i := 0; i < 60; i++ {
+					err := client.Resources().Get(ctx, namespace, "", ns)
+					if err != nil {
+						if apierrors.IsNotFound(err) {
+							// Namespace is gone
+							log.Printf("Namespace deleted successfully")
+							break
+						}
+						// Other error - propagate it
+						return ctx, fmt.Errorf("error checking namespace deletion status: %w", err)
+					}
+					if i == 59 {
+						return ctx, fmt.Errorf("timeout waiting for namespace %s to be deleted", namespace)
+					}
+					time.Sleep(1 * time.Second)
+				}
+			} else if apierrors.IsNotFound(err) {
+				// Namespace does not exist, nothing to clean up
+				log.Printf("Namespace does not exist, will create fresh")
+			} else {
+				// Other error - propagate it
+				return ctx, fmt.Errorf("error checking if namespace exists: %w", err)
+			}
+
+			return ctx, nil
+		},
 		envfuncs.CreateNamespace(namespace),
+
+		// When Istio ambient mode is enabled, label the operator namespace
+		func(ctx context.Context, cfg *envconf.Config) (context.Context, error) {
+			if !isIstioAmbientEnabled() {
+				return ctx, nil
+			}
+			log.Println("Istio ambient mode enabled: labeling operator namespace with istio.io/dataplane-mode=ambient")
+			client := cfg.Client()
+
+			// Patch the operator namespace to add the ambient label
+			operatorNs := &corev1.Namespace{}
+			if err := client.Resources().Get(ctx, namespace, "", operatorNs); err != nil {
+				return ctx, fmt.Errorf("failed to get operator namespace: %w", err)
+			}
+
+			// Use Patch to avoid resourceVersion conflicts with other controllers
+			patchData := []byte(`{"metadata":{"labels":{"istio.io/dataplane-mode":"ambient"}}}`)
+			if err := client.Resources().Patch(ctx, operatorNs, k8s.Patch{PatchType: types.StrategicMergePatchType, Data: patchData}); err != nil {
+				return ctx, fmt.Errorf("failed to label operator namespace: %w", err)
+			}
+			log.Printf("Labeled namespace %s with istio.io/dataplane-mode=ambient", namespace)
+
+			return ctx, nil
+		},
 
 		// install tool dependencies
 		func(ctx context.Context, cfg *envconf.Config) (context.Context, error) {
@@ -95,16 +150,30 @@ func TestMain(m *testing.M) {
 				return ctx, err
 			}
 			wd, _ := os.Getwd()
-			os.Setenv("GOBIN", wd+"/bin")
-			os.Setenv("PATH", os.Getenv("PATH")+":"+os.Getenv("GOBIN"))
+			gobin := wd + "/bin"
+			os.Setenv("GOBIN", gobin)
+			os.Setenv("PATH", os.Getenv("PATH")+":"+gobin)
 
-			if p := utils.RunCommand(fmt.Sprintf("go install sigs.k8s.io/kustomize/kustomize/v5@%s", kustomizeVer)); p.Err() != nil {
-				log.Printf("Failed to install kustomize binary: %s: %s", p.Err(), p.Result())
-				return ctx, p.Err()
+			// Only download kustomize if it is not already present in bin/
+			kustomizePath := gobin + "/kustomize"
+			if _, err := os.Stat(kustomizePath); os.IsNotExist(err) {
+				if p := utils.RunCommand(fmt.Sprintf("go install sigs.k8s.io/kustomize/kustomize/v5@%s", kustomizeVer)); p.Err() != nil {
+					log.Printf("Failed to install kustomize binary: %s: %s", p.Err(), p.Result())
+					return ctx, p.Err()
+				}
+			} else {
+				log.Printf("kustomize already present at %s, skipping install", kustomizePath)
 			}
-			if p := utils.RunCommand(fmt.Sprintf("go install sigs.k8s.io/controller-tools/cmd/controller-gen@%s", ctrlgenVer)); p.Err() != nil {
-				log.Printf("Failed to install controller-gen binary: %s: %s", p.Err(), p.Result())
-				return ctx, p.Err()
+
+			// Only download controller-gen if it is not already present in bin/
+			ctrlgenPath := gobin + "/controller-gen"
+			if _, err := os.Stat(ctrlgenPath); os.IsNotExist(err) {
+				if p := utils.RunCommand(fmt.Sprintf("go install sigs.k8s.io/controller-tools/cmd/controller-gen@%s", ctrlgenVer)); p.Err() != nil {
+					log.Printf("Failed to install controller-gen binary: %s: %s", p.Err(), p.Result())
+					return ctx, p.Err()
+				}
+			} else {
+				log.Printf("controller-gen already present at %s, skipping install", ctrlgenPath)
 			}
 
 			p := utils.RunCommand("kustomize version")
@@ -136,7 +205,7 @@ func TestMain(m *testing.M) {
 			if err := wait.For(
 				conditions.New(client.Resources()).DeploymentConditionMatch(&appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: "marklogic-operator-controller-manager", Namespace: namespace}},
 					appsv1.DeploymentProgressing,
-					v1.ConditionTrue),
+					corev1.ConditionTrue),
 				wait.WithTimeout(3*time.Minute),
 				wait.WithInterval(10*time.Second),
 			); err != nil {
@@ -149,141 +218,37 @@ func TestMain(m *testing.M) {
 
 			return ctx, nil
 		},
-
-		// Configure namespace-scoped watch (E2E_SCOPE_TYPE=namespace) and/or insecure
-		// metrics (E2E_METRICS_SECURE=false) by patching the live Deployment and metrics
-		// Service so the cluster state matches what the test suite expects.
-		//
-		// `make deploy` always uses config/default which sets --metrics-bind-address=:8443
-		// and --metrics-secure=true. When E2E_METRICS_SECURE=false this step patches both
-		// the Deployment args/ports and the metrics Service port to :8080 so that
-		// TestMetricsEndpoint's HTTP port-forward succeeds.
-		//
-		// NOTE: this step only patches WATCH_NAMESPACE to test reconciliation scoping.
-		// The cluster-scoped RBAC (ClusterRole/ClusterRoleBinding) from `make deploy`
-		// remains in place. A true namespace-scoped install would use Role/RoleBinding
-		// per watched namespace (see config/rbac/role_namespaced.yaml); that RBAC path
-		// is not exercised here.
-		func(ctx context.Context, cfg *envconf.Config) (context.Context, error) {
-			scopeType = e2eScopeType
-			if scopeType == "" {
-				scopeType = "cluster"
-			}
-			metricsSecure := os.Getenv("E2E_METRICS_SECURE") != "false" // default true
-			log.Printf("Operator scope: %s  metrics-secure: %v", scopeType, metricsSecure)
-
-			// Nothing to patch for a default cluster-scoped + secure-metrics deployment.
-			if scopeType != "namespace" && metricsSecure {
-				return ctx, nil
-			}
-
-			// -- WATCH_NAMESPACE --------------------------------------------------
-			var watchNS string
-			if scopeType == "namespace" {
-				watchNS = e2eWatchNS
-				if watchNS == "" {
-					watchNS = strings.Join(allTestNamespaces, ",")
-				}
-				parts := strings.Split(watchNS, ",")
-				for i, p := range parts {
-					parts[i] = strings.TrimSpace(p)
-				}
-				watchedNSs = parts
-				log.Printf("Namespace-scoped mode: WATCH_NAMESPACE=%s", watchNS)
-			}
-
-			client := cfg.Client()
-
-			// -- Patch the Deployment ---------------------------------------------
-			dep := &appsv1.Deployment{}
-			if err := client.Resources().Get(ctx, "marklogic-operator-controller-manager", namespace, dep); err != nil {
-				return ctx, fmt.Errorf("failed to get operator deployment: %w", err)
-			}
-			for i, c := range dep.Spec.Template.Spec.Containers {
-				if c.Name != "manager" {
-					continue
-				}
-				if watchNS != "" {
-					filtered := make([]v1.EnvVar, 0, len(c.Env)+1)
-					for _, e := range c.Env {
-						if e.Name != "WATCH_NAMESPACE" {
-							filtered = append(filtered, e)
-						}
-					}
-					filtered = append(filtered, v1.EnvVar{Name: "WATCH_NAMESPACE", Value: watchNS})
-					dep.Spec.Template.Spec.Containers[i].Env = filtered
-				}
-				if !metricsSecure {
-					newArgs := make([]string, 0, len(c.Args))
-					for _, arg := range c.Args {
-						switch arg {
-						case "--metrics-bind-address=:8443":
-							newArgs = append(newArgs, "--metrics-bind-address=:8080")
-						case "--metrics-secure=true":
-							newArgs = append(newArgs, "--metrics-secure=false")
-						default:
-							newArgs = append(newArgs, arg)
-						}
-					}
-					dep.Spec.Template.Spec.Containers[i].Args = newArgs
-					newPorts := make([]v1.ContainerPort, 0, len(c.Ports))
-					for _, p := range c.Ports {
-						if p.ContainerPort == 8443 {
-							newPorts = append(newPorts, v1.ContainerPort{ContainerPort: 8080, Protocol: v1.ProtocolTCP, Name: "http"})
-						} else {
-							newPorts = append(newPorts, p)
-						}
-					}
-					dep.Spec.Template.Spec.Containers[i].Ports = newPorts
-					log.Printf("Patching operator deployment to insecure metrics on :8080")
-				}
-				break
-			}
-			if err := client.Resources().Update(ctx, dep); err != nil {
-				return ctx, fmt.Errorf("failed to patch operator deployment: %w", err)
-			}
-
-			// -- Patch the metrics Service port to match --------------------------
-			if !metricsSecure {
-				svc := &v1.Service{}
-				if err := client.Resources().Get(ctx, "marklogic-operator-controller-manager-metrics-service", namespace, svc); err != nil {
-					return ctx, fmt.Errorf("failed to get metrics Service: %w", err)
-				}
-				for i, p := range svc.Spec.Ports {
-					if p.Port == 8443 {
-						svc.Spec.Ports[i].Port = 8080
-						svc.Spec.Ports[i].Name = "http"
-						svc.Spec.Ports[i].TargetPort = intstr.FromInt32(8080)
-					}
-				}
-				if err := client.Resources().Update(ctx, svc); err != nil {
-					return ctx, fmt.Errorf("failed to patch metrics Service: %w", err)
-				}
-				log.Printf("Patched metrics Service to insecure port :8080")
-			}
-
-			// -- Wait for the operator to re-roll out -----------------------------
-			if err := wait.For(
-				conditions.New(client.Resources()).DeploymentConditionMatch(
-					&appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{
-						Name:      "marklogic-operator-controller-manager",
-						Namespace: namespace,
-					}},
-					appsv1.DeploymentAvailable,
-					v1.ConditionTrue,
-				),
-				wait.WithTimeout(3*time.Minute),
-				wait.WithInterval(5*time.Second),
-			); err != nil {
-				return ctx, fmt.Errorf("operator rollout timed out: %w", err)
-			}
-			log.Printf("Operator re-deployed: scope=%s metrics-secure=%v", scopeType, metricsSecure)
-			return ctx, nil
-		},
 	)
 
 	// Use the Environment.Finish method to define clean up steps
 	testEnv.Finish(
+		// Clean up Istio ambient label from operator namespace
+		func(ctx context.Context, cfg *envconf.Config) (context.Context, error) {
+			if !isIstioAmbientEnabled() {
+				return ctx, nil
+			}
+
+			log.Println("Removing Istio ambient label from operator namespace...")
+			client := cfg.Client()
+
+			// Remove label from operator namespace using Patch to avoid conflicts
+			operatorNs := &corev1.Namespace{}
+			if err := client.Resources().Get(ctx, namespace, "", operatorNs); err == nil {
+				if operatorNs.Labels != nil && operatorNs.Labels["istio.io/dataplane-mode"] != "" {
+					// Use Patch to remove label, avoiding resourceVersion conflicts
+					patchData := []byte(`{"metadata":{"labels":{"istio.io/dataplane-mode":null}}}`)
+					if err := client.Resources().Patch(ctx, operatorNs, k8s.Patch{PatchType: types.StrategicMergePatchType, Data: patchData}); err != nil {
+						log.Printf("Warning: failed to remove label from operator namespace: %v", err)
+					} else {
+						log.Printf("Removed Istio ambient label from %s namespace", namespace)
+					}
+				}
+			} else if !apierrors.IsNotFound(err) {
+				log.Printf("Warning: failed to get operator namespace: %v", err)
+			}
+
+			return ctx, nil
+		},
 		func(ctx context.Context, cfg *envconf.Config) (context.Context, error) {
 			log.Println("Finishing tests, cleaning cluster ...")
 			utils.RunCommand(`bash -c "kustomize build config/default | kubectl delete -f -"`)
@@ -294,23 +259,4 @@ func TestMain(m *testing.M) {
 
 	// Use Environment.Run to launch the test
 	os.Exit(testEnv.Run(m))
-}
-
-// skipIfNamespaceNotWatched skips t if the operator is running in namespace-scoped mode
-// and ns is not in the configured WATCH_NAMESPACE list. This prevents false failures
-// caused by the operator simply not reconciling resources in an unwatched namespace.
-//
-// Pass E2E_WATCH_NAMESPACE=<comma-separated namespaces> to control which namespaces
-// are watched; when unset it defaults to all known test namespaces.
-func skipIfNamespaceNotWatched(t *testing.T, ns string) {
-	t.Helper()
-	if scopeType != "namespace" {
-		return
-	}
-	for _, n := range watchedNSs {
-		if n == ns {
-			return
-		}
-	}
-	t.Skipf("namespace %q is not in WATCH_NAMESPACE %v; add it to E2E_WATCH_NAMESPACE to run this test in namespace-scoped mode", ns, watchedNSs)
 }

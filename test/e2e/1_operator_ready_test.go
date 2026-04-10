@@ -17,10 +17,7 @@ import (
 )
 
 func TestOperatorReady(t *testing.T) {
-	// Buffered so a late watcher fire doesn't block the goroutine.
-	podCreationSig := make(chan *coreV1.Pod, 1)
-	// Closed in Teardown to tell the watcher callback to stop sending.
-	done := make(chan struct{})
+	podCreationSig := make(chan *coreV1.Pod)
 
 	feature := features.New("Operator Ready")
 	// Use feature.Setup to define pre-test configuration
@@ -30,14 +27,7 @@ func TestOperatorReady(t *testing.T) {
 		if err := client.Resources(namespace).Watch(&coreV1.PodList{}).WithAddFunc(func(obj interface{}) {
 			pod := obj.(*coreV1.Pod)
 			if strings.HasPrefix(pod.Name, "marklogic-operator-controller") {
-				// Use select so that once Teardown closes `done` any further pod
-				// events (e.g. the operator pod restarting during namespace-scope
-				// patching) are silently discarded instead of causing a panic on a
-				// closed channel.
-				select {
-				case podCreationSig <- pod:
-				case <-done:
-				}
+				podCreationSig <- pod
 			}
 		}).Start(ctx); err != nil {
 			t.Fatal(err)
@@ -79,7 +69,7 @@ func TestOperatorReady(t *testing.T) {
 
 	// Using feature.Teardown to clean up
 	feature.Teardown(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
-		close(done)
+		close(podCreationSig)
 		return ctx
 	})
 

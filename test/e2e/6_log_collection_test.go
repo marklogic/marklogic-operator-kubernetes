@@ -28,7 +28,6 @@ const (
 
 // TestLogCollectionDisabled tests that fluent-bit is NOT created when LogCollection.Enabled is false
 func TestLogCollectionDisabled(t *testing.T) {
-	skipIfNamespaceNotWatched(t, logCollectionNamespace)
 	feature := features.New("Log Collection Disabled Test").WithLabel("type", "log-collection-disabled")
 
 	replicas := int32(1)
@@ -86,7 +85,8 @@ func TestLogCollectionDisabled(t *testing.T) {
 
 		namespace := &corev1.Namespace{
 			ObjectMeta: metav1.ObjectMeta{
-				Name: logCollectionNamespace,
+				Name:   logCollectionNamespace,
+				Labels: namespaceLabels(),
 			},
 		}
 		if err := client.Resources().Create(ctx, namespace); err != nil {
@@ -156,10 +156,10 @@ func TestLogCollectionDisabled(t *testing.T) {
 	feature.Teardown(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 		client := c.Client()
 		if err := client.Resources(logCollectionNamespace).Delete(ctx, mlclusterDisabled); err != nil {
-			t.Logf("Warning: failed to delete MarklogicCluster: %s", err)
+			t.Fatalf("Failed to delete MarklogicCluster: %s", err)
 		}
 		if err := client.Resources().Delete(ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: logCollectionNamespace}}); err != nil {
-			t.Logf("Warning: failed to delete namespace %s: %s", logCollectionNamespace, err)
+			t.Fatalf("Failed to delete namespace: %s", err)
 		}
 		return ctx
 	})
@@ -169,7 +169,6 @@ func TestLogCollectionDisabled(t *testing.T) {
 
 // TestLogCollectionPartialLogs tests selective log file collection
 func TestLogCollectionPartialLogs(t *testing.T) {
-	skipIfNamespaceNotWatched(t, logCollectionNamespace)
 	feature := features.New("Log Collection Partial Logs Test").WithLabel("type", "log-collection-partial")
 
 	replicas := int32(1)
@@ -236,7 +235,8 @@ func TestLogCollectionPartialLogs(t *testing.T) {
 
 		namespace := &corev1.Namespace{
 			ObjectMeta: metav1.ObjectMeta{
-				Name: logCollectionNamespace,
+				Name:   logCollectionNamespace,
+				Labels: namespaceLabels(),
 			},
 		}
 		if err := client.Resources().Create(ctx, namespace); err != nil {
@@ -325,10 +325,10 @@ func TestLogCollectionPartialLogs(t *testing.T) {
 	feature.Teardown(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 		client := c.Client()
 		if err := client.Resources(logCollectionNamespace).Delete(ctx, mlclusterPartial); err != nil {
-			t.Logf("Warning: failed to delete MarklogicCluster: %s", err)
+			t.Fatalf("Failed to delete MarklogicCluster: %s", err)
 		}
 		if err := client.Resources().Delete(ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: logCollectionNamespace}}); err != nil {
-			t.Logf("Warning: failed to delete namespace %s: %s", logCollectionNamespace, err)
+			t.Fatalf("Failed to delete namespace: %s", err)
 		}
 		return ctx
 	})
@@ -338,7 +338,6 @@ func TestLogCollectionPartialLogs(t *testing.T) {
 
 // TestLogCollectionCustomResources tests custom resource configuration for fluent-bit
 func TestLogCollectionCustomResources(t *testing.T) {
-	skipIfNamespaceNotWatched(t, logCollectionNamespace)
 	feature := features.New("Log Collection Custom Resources Test").WithLabel("type", "log-collection-resources")
 
 	replicas := int32(1)
@@ -413,7 +412,8 @@ func TestLogCollectionCustomResources(t *testing.T) {
 
 		namespace := &corev1.Namespace{
 			ObjectMeta: metav1.ObjectMeta{
-				Name: logCollectionNamespace,
+				Name:   logCollectionNamespace,
+				Labels: namespaceLabels(),
 			},
 		}
 		if err := client.Resources().Create(ctx, namespace); err != nil {
@@ -508,10 +508,10 @@ func TestLogCollectionCustomResources(t *testing.T) {
 	feature.Teardown(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 		client := c.Client()
 		if err := client.Resources(logCollectionNamespace).Delete(ctx, mlclusterCustom); err != nil {
-			t.Logf("Warning: failed to delete MarklogicCluster: %s", err)
+			t.Fatalf("Failed to delete MarklogicCluster: %s", err)
 		}
 		if err := client.Resources().Delete(ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: logCollectionNamespace}}); err != nil {
-			t.Logf("Warning: failed to delete namespace %s: %s", logCollectionNamespace, err)
+			t.Fatalf("Failed to delete namespace: %s", err)
 		}
 		return ctx
 	})
@@ -521,7 +521,6 @@ func TestLogCollectionCustomResources(t *testing.T) {
 
 // TestLogCollectionCustomFilters tests custom filters configuration
 func TestLogCollectionCustomFilters(t *testing.T) {
-	skipIfNamespaceNotWatched(t, logCollectionNamespace)
 	feature := features.New("Log Collection Custom Filters Test").WithLabel("type", "log-collection-filters")
 
 	replicas := int32(1)
@@ -593,7 +592,8 @@ func TestLogCollectionCustomFilters(t *testing.T) {
 
 		namespace := &corev1.Namespace{
 			ObjectMeta: metav1.ObjectMeta{
-				Name: logCollectionNamespace,
+				Name:   logCollectionNamespace,
+				Labels: namespaceLabels(),
 			},
 		}
 		if err := client.Resources().Create(ctx, namespace); err != nil {
@@ -666,10 +666,10 @@ func TestLogCollectionCustomFilters(t *testing.T) {
 	feature.Teardown(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 		client := c.Client()
 		if err := client.Resources(logCollectionNamespace).Delete(ctx, mlclusterFilters); err != nil {
-			t.Logf("Warning: failed to delete MarklogicCluster: %s", err)
+			t.Fatalf("Failed to delete MarklogicCluster: %s", err)
 		}
 		if err := client.Resources().Delete(ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: logCollectionNamespace}}); err != nil {
-			t.Logf("Warning: failed to delete namespace %s: %s", logCollectionNamespace, err)
+			t.Fatalf("Failed to delete namespace: %s", err)
 		}
 		return ctx
 	})
