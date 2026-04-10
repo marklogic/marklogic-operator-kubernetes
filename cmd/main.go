@@ -153,9 +153,20 @@ func main() {
 			nsMap[ns] = cache.Config{}
 		}
 		// Always include the operator's own namespace so leader-election works.
-		if podNS := os.Getenv("POD_NAMESPACE"); podNS != "" {
-			nsMap[podNS] = cache.Config{}
+		podNS := strings.TrimSpace(os.Getenv("POD_NAMESPACE"))
+		if podNS == "" {
+			nsBytes, readErr := os.ReadFile("/var/run/secrets/kubernetes.io/serviceaccount/namespace")
+			if readErr != nil {
+				setupLog.Error(readErr, "unable to determine pod namespace from POD_NAMESPACE or serviceaccount namespace file")
+				os.Exit(1)
+			}
+			podNS = strings.TrimSpace(string(nsBytes))
 		}
+		if podNS == "" {
+			setupLog.Info("unable to determine pod namespace; namespace-scoped mode requires POD_NAMESPACE or the serviceaccount namespace file")
+			os.Exit(1)
+		}
+		nsMap[podNS] = cache.Config{}
 		cacheOpts.DefaultNamespaces = nsMap
 	}
 
