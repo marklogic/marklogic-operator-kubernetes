@@ -12,6 +12,7 @@ import (
 	marklogicv1 "github.com/marklogic/marklogic-operator-kubernetes/api/v1"
 	"github.com/marklogic/marklogic-operator-kubernetes/test/utils"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/e2e-framework/klient/k8s"
 	"sigs.k8s.io/e2e-framework/klient/wait"
@@ -77,8 +78,31 @@ func TestMlClusterWithEdnode(t *testing.T) {
 	// Create namespace and admin secret, then deploy the CR.
 	feature.Setup(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 		client := c.Client()
-		ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: edNodeNS}}
-		if err := client.Resources().Create(ctx, ns); err != nil {
+
+		// Wait for any previous terminating namespace to finish before creating a new one.
+		ns := &corev1.Namespace{}
+		for i := 0; i < 60; i++ {
+			err := client.Resources().Get(ctx, edNodeNS, "", ns)
+			if err != nil {
+				if apierrors.IsNotFound(err) {
+					break
+				}
+				t.Fatalf("Error checking namespace %s: %v", edNodeNS, err)
+			}
+			if ns.Status.Phase == corev1.NamespaceTerminating {
+				if i == 59 {
+					t.Fatalf("Timeout waiting for namespace %s to finish terminating", edNodeNS)
+				}
+				t.Logf("Namespace %s is terminating, waiting... (%d/60)", edNodeNS, i+1)
+				time.Sleep(2 * time.Second)
+				continue
+			}
+			break
+		}
+
+		if err := client.Resources().Create(ctx, &corev1.Namespace{
+			ObjectMeta: metav1.ObjectMeta{Name: edNodeNS},
+		}); err != nil && !apierrors.IsAlreadyExists(err) {
 			t.Fatalf("Failed to create namespace %s: %v", edNodeNS, err)
 		}
 		marklogicv1.AddToScheme(client.Resources(edNodeNS).GetScheme())

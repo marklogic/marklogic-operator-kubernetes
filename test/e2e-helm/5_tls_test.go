@@ -62,9 +62,33 @@ func TestTlsWithSelfSigned(t *testing.T) {
 
 	feature.Setup(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 		client := c.Client()
-		client.Resources(tlsNamespace).Create(ctx, &corev1.Namespace{
+
+		// Wait for any previous terminating namespace to finish before creating a new one.
+		ns := &corev1.Namespace{}
+		for i := 0; i < 60; i++ {
+			err := client.Resources().Get(ctx, tlsNamespace, "", ns)
+			if err != nil {
+				if apierrors.IsNotFound(err) {
+					break
+				}
+				t.Fatalf("Error checking namespace %s: %v", tlsNamespace, err)
+			}
+			if ns.Status.Phase == corev1.NamespaceTerminating {
+				if i == 59 {
+					t.Fatalf("Timeout waiting for namespace %s to finish terminating", tlsNamespace)
+				}
+				t.Logf("Namespace %s is terminating, waiting... (%d/60)", tlsNamespace, i+1)
+				time.Sleep(2 * time.Second)
+				continue
+			}
+			break
+		}
+
+		if err := client.Resources().Create(ctx, &corev1.Namespace{
 			ObjectMeta: metav1.ObjectMeta{Name: tlsNamespace, Labels: namespaceLabels()},
-		})
+		}); err != nil && !apierrors.IsAlreadyExists(err) {
+			t.Fatalf("Failed to create namespace %s: %v", tlsNamespace, err)
+		}
 		marklogicv1.AddToScheme(client.Resources(tlsNamespace).GetScheme())
 		if err := client.Resources(tlsNamespace).Create(ctx, cr); err != nil {
 			t.Fatalf("Failed to create MarklogicCluster: %v", err)
@@ -171,9 +195,33 @@ func TestTlsWithNamedCert(t *testing.T) {
 
 	feature.Setup(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 		client := c.Client()
-		client.Resources(namedNS).Create(ctx, &corev1.Namespace{
+
+		// Wait for any previous terminating namespace to finish before creating a new one.
+		ns := &corev1.Namespace{}
+		for i := 0; i < 60; i++ {
+			err := client.Resources().Get(ctx, namedNS, "", ns)
+			if err != nil {
+				if apierrors.IsNotFound(err) {
+					break
+				}
+				t.Fatalf("Error checking namespace %s: %v", namedNS, err)
+			}
+			if ns.Status.Phase == corev1.NamespaceTerminating {
+				if i == 59 {
+					t.Fatalf("Timeout waiting for namespace %s to finish terminating", namedNS)
+				}
+				t.Logf("Namespace %s is terminating, waiting... (%d/60)", namedNS, i+1)
+				time.Sleep(2 * time.Second)
+				continue
+			}
+			break
+		}
+
+		if err := client.Resources().Create(ctx, &corev1.Namespace{
 			ObjectMeta: metav1.ObjectMeta{Name: namedNS, Labels: namespaceLabels()},
-		})
+		}); err != nil && !apierrors.IsAlreadyExists(err) {
+			t.Fatalf("Failed to create namespace %s: %v", namedNS, err)
+		}
 		marklogicv1.AddToScheme(client.Resources(namedNS).GetScheme())
 
 		if err := utils.GenerateCACertificate("test/test_data/ca_cert"); err != nil {

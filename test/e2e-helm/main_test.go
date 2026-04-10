@@ -132,11 +132,17 @@ func TestMain(m *testing.M) {
 				"--timeout", "3m",
 			}
 			if dockerImage != "" {
-				// IMAGE is of the form repo/name:tag — split into repository and tag.
-				parts := strings.SplitN(dockerImage, ":", 2)
-				args = append(args, "--set", "controllerManager.manager.image.repository="+parts[0])
-				if len(parts) == 2 {
-					args = append(args, "--set", "controllerManager.manager.image.tag="+parts[1])
+				// Split on the last ':' that appears after the last '/' so that registry
+				// ports (e.g. registry:5000/repo/image:tag) are handled correctly.
+				repo := dockerImage
+				tag := ""
+				if idx := strings.LastIndex(dockerImage, ":"); idx > strings.LastIndex(dockerImage, "/") {
+					repo = dockerImage[:idx]
+					tag = dockerImage[idx+1:]
+				}
+				args = append(args, "--set", "controllerManager.manager.image.repository="+repo)
+				if tag != "" {
+					args = append(args, "--set", "controllerManager.manager.image.tag="+tag)
 				}
 				args = append(args, "--set", "controllerManager.manager.image.pullPolicy=Never")
 			}

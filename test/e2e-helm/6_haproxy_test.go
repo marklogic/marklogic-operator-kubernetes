@@ -12,6 +12,7 @@ import (
 	marklogicv1 "github.com/marklogic/marklogic-operator-kubernetes/api/v1"
 	"github.com/marklogic/marklogic-operator-kubernetes/test/utils"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/e2e-framework/klient/k8s"
 	"sigs.k8s.io/e2e-framework/klient/wait"
@@ -66,9 +67,30 @@ func TestHAProxyPathBasedEnabled(t *testing.T) {
 
 	feature.Setup(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 		client := c.Client()
-		client.Resources(haProxyPathNS).Create(ctx, &corev1.Namespace{
+		ns := &corev1.Namespace{}
+		for i := 0; i < 60; i++ {
+			err := client.Resources().Get(ctx, haProxyPathNS, "", ns)
+			if err != nil {
+				if apierrors.IsNotFound(err) {
+					break
+				}
+				t.Fatalf("Error checking namespace %s: %v", haProxyPathNS, err)
+			}
+			if ns.Status.Phase == corev1.NamespaceTerminating {
+				if i == 59 {
+					t.Fatalf("Timeout waiting for namespace %s to finish terminating", haProxyPathNS)
+				}
+				t.Logf("Namespace %s is terminating, waiting... (%d/60)", haProxyPathNS, i+1)
+				time.Sleep(2 * time.Second)
+				continue
+			}
+			break
+		}
+		if err := client.Resources().Create(ctx, &corev1.Namespace{
 			ObjectMeta: metav1.ObjectMeta{Name: haProxyPathNS, Labels: namespaceLabels()},
-		})
+		}); err != nil && !apierrors.IsAlreadyExists(err) {
+			t.Fatalf("Failed to create namespace %s: %v", haProxyPathNS, err)
+		}
 		marklogicv1.AddToScheme(client.Resources(haProxyPathNS).GetScheme())
 		if err := client.Resources(haProxyPathNS).Create(ctx, cr); err != nil {
 			t.Fatalf("Failed to create MarklogicCluster: %v", err)
@@ -169,9 +191,30 @@ func TestHAProxyPathBasedDisabled(t *testing.T) {
 
 	feature.Setup(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 		client := c.Client()
-		client.Resources(haProxyNS).Create(ctx, &corev1.Namespace{
+		ns := &corev1.Namespace{}
+		for i := 0; i < 60; i++ {
+			err := client.Resources().Get(ctx, haProxyNS, "", ns)
+			if err != nil {
+				if apierrors.IsNotFound(err) {
+					break
+				}
+				t.Fatalf("Error checking namespace %s: %v", haProxyNS, err)
+			}
+			if ns.Status.Phase == corev1.NamespaceTerminating {
+				if i == 59 {
+					t.Fatalf("Timeout waiting for namespace %s to finish terminating", haProxyNS)
+				}
+				t.Logf("Namespace %s is terminating, waiting... (%d/60)", haProxyNS, i+1)
+				time.Sleep(2 * time.Second)
+				continue
+			}
+			break
+		}
+		if err := client.Resources().Create(ctx, &corev1.Namespace{
 			ObjectMeta: metav1.ObjectMeta{Name: haProxyNS, Labels: namespaceLabels()},
-		})
+		}); err != nil && !apierrors.IsAlreadyExists(err) {
+			t.Fatalf("Failed to create namespace %s: %v", haProxyNS, err)
+		}
 		marklogicv1.AddToScheme(client.Resources(haProxyNS).GetScheme())
 		if err := client.Resources(haProxyNS).Create(ctx, cr); err != nil {
 			t.Fatalf("Failed to create MarklogicCluster: %v", err)
