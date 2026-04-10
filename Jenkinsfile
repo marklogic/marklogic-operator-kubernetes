@@ -161,12 +161,6 @@ void runIstioE2eTests() {
     """
 }
 
-void runNamespaceScopedE2eTests() {
-    sh """
-        make e2e-test-namespace IMG=${operatorRepo}:${VERSION}
-    """
-}
-
 void runBlackDuckScan() {
     // Trigger BlackDuck scan job with CONTAINER_IMAGES parameter when params.PUBLISH_IMAGE is true
     if (params.PUBLISH_IMAGE) {
@@ -237,7 +231,6 @@ pipeline {
         booleanParam(name: 'PUBLISH_IMAGE', defaultValue: false, description: 'Publish image to internal registry')
         string(name: 'emailList', defaultValue: emailList, description: 'List of email for build notification', trim: true)
         booleanParam(name: 'VERIFY_ISTIO_AMBIENT', defaultValue: true, description: 'Run Istio ambient mode e2e tests (requires fresh minikube cluster with Istio)')
-        booleanParam(name: 'VERIFY_NAMESPACE_SCOPED', defaultValue: false, description: 'Run e2e tests against a namespace-scoped operator install')
     }
 
     stages {
@@ -297,35 +290,6 @@ pipeline {
             }
             steps {
                 runMinikubeCleanup()
-            }
-        }
-
-        stage('Namespace-Scoped-Minikube-Setup') {
-            when {
-                expression { return params.VERIFY_NAMESPACE_SCOPED }
-            }
-            steps {
-                runMinikubeSetup()
-            }
-        }
-
-        stage('Run-Namespace-Scoped-e2e-Tests') {
-            when {
-                expression { return params.VERIFY_NAMESPACE_SCOPED }
-            }
-            steps {
-                runNamespaceScopedE2eTests()
-            }
-        }
-
-        stage('Namespace-Scoped-Cleanup') {
-            when {
-                expression { return params.VERIFY_NAMESPACE_SCOPED }
-            }
-            steps {
-                catchError(buildResult: 'SUCCESS', stageResult: 'FAILURE') {
-                    runMinikubeCleanup()
-                }
             }
         }
 
