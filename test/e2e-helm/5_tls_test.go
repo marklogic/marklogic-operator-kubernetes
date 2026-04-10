@@ -401,17 +401,8 @@ func TestTlsWithMultiNode(t *testing.T) {
 		}
 		marklogicv1.AddToScheme(client.Resources(tlsEdNS).GetScheme())
 
-		if err := client.Resources(tlsEdNS).Create(ctx, cr); err != nil {
-			t.Fatalf("Failed to create MarklogicCluster: %v", err)
-		}
-		if err := wait.For(
-			conditions.New(client.Resources()).ResourceMatch(cr, func(object k8s.Object) bool { return true }),
-			wait.WithTimeout(3*time.Minute),
-			wait.WithInterval(5*time.Second),
-		); err != nil {
-			t.Fatal(err)
-		}
-
+		// Generate and populate TLS secrets before creating the CR so the operator
+		// never reconciles against missing secrets.
 		if err := utils.GenerateCACertificate("test/test_data/ca_cert"); err != nil {
 			t.Fatalf("GenerateCACertificate failed: %v", err)
 		}
@@ -434,6 +425,17 @@ func TestTlsWithMultiNode(t *testing.T) {
 		}
 		if p := e2eutils.RunCommand(fmt.Sprintf("kubectl -n %s create secret generic enode-0-cert --from-file=test/test_data/enode_zero_certs/tls.crt --from-file=test/test_data/enode_zero_certs/tls.key", tlsEdNS)); p.Err() != nil {
 			t.Fatalf("Failed to create enode-0-cert: %s", p.Result())
+		}
+
+		if err := client.Resources(tlsEdNS).Create(ctx, cr); err != nil {
+			t.Fatalf("Failed to create MarklogicCluster: %v", err)
+		}
+		if err := wait.For(
+			conditions.New(client.Resources()).ResourceMatch(cr, func(object k8s.Object) bool { return true }),
+			wait.WithTimeout(3*time.Minute),
+			wait.WithInterval(5*time.Second),
+		); err != nil {
+			t.Fatal(err)
 		}
 		return ctx
 	})
