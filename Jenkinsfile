@@ -275,7 +275,7 @@ pipeline {
 
         stage('Istio-Minikube-Setup') {
             when {
-                expression { return params.VERIFY_ISTIO_AMBIENT }
+                expression { return params.VERIFY_ISTIO_AMBIENT != false }
             }
             steps {
                 runIstioMinikubeSetup()
@@ -284,7 +284,7 @@ pipeline {
 
         stage('Run-Istio-e2e-Tests') {
             when {
-                expression { return params.VERIFY_ISTIO_AMBIENT }
+                expression { return params.VERIFY_ISTIO_AMBIENT != false }
             }
             steps {
                 runIstioE2eTests()
@@ -293,7 +293,7 @@ pipeline {
 
         stage('Istio-Cleanup') {
             when {
-                expression { return params.VERIFY_ISTIO_AMBIENT }
+                expression { return params.VERIFY_ISTIO_AMBIENT != false }
             }
             steps {
                 runMinikubeCleanup()
@@ -302,7 +302,7 @@ pipeline {
 
         stage('Helm-NS-Minikube-Setup') {
             when {
-                expression { return params.VERIFY_HELM_NAMESPACE_SCOPED }
+                expression { return params.VERIFY_HELM_NAMESPACE_SCOPED != false }
             }
             steps {
                 runMinikubeSetup()
@@ -311,7 +311,7 @@ pipeline {
 
         stage('Run-Helm-NS-e2e-Tests') {
             when {
-                expression { return params.VERIFY_HELM_NAMESPACE_SCOPED }
+                expression { return params.VERIFY_HELM_NAMESPACE_SCOPED != false }
             }
             steps {
                 runHelmNamespaceScopedE2eTests()
@@ -320,7 +320,7 @@ pipeline {
 
         stage('Helm-NS-Cleanup') {
             when {
-                expression { return params.VERIFY_HELM_NAMESPACE_SCOPED }
+                expression { return params.VERIFY_HELM_NAMESPACE_SCOPED != false }
             }
             steps {
                 catchError(buildResult: 'SUCCESS', stageResult: 'FAILURE') {
