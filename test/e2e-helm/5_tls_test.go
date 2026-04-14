@@ -228,11 +228,11 @@ func TestTlsWithNamedCert(t *testing.T) {
 		if err := utils.GenerateCACertificate("test/test_data/ca_cert"); err != nil {
 			t.Fatalf("Failed to generate CA certificate: %v", err)
 		}
-		if err := utils.GenerateCertificates("test/test_data/pod_zero_certs", "test/test_data/ca_cert"); err != nil {
-			t.Fatalf("Failed to generate pod_zero_certs: %v", err)
+		if err := utils.GenerateCertificates("test/test_data/helm_pod_zero_certs", "test/test_data/ca_cert"); err != nil {
+			t.Fatalf("Failed to generate helm_pod_zero_certs: %v", err)
 		}
-		if err := utils.GenerateCertificates("test/test_data/pod_one_certs", "test/test_data/ca_cert"); err != nil {
-			t.Fatalf("Failed to generate pod_one_certs: %v", err)
+		if err := utils.GenerateCertificates("test/test_data/helm_pod_one_certs", "test/test_data/ca_cert"); err != nil {
+			t.Fatalf("Failed to generate helm_pod_one_certs: %v", err)
 		}
 
 		e2eutils.RunCommand(fmt.Sprintf("kubectl -n %s delete secret ca-cert --ignore-not-found=true", namedNS))
@@ -242,10 +242,10 @@ func TestTlsWithNamedCert(t *testing.T) {
 		if p := e2eutils.RunCommand(fmt.Sprintf("kubectl -n %s create secret generic ca-cert --from-file=test/test_data/ca_cert/cacert.pem", namedNS)); p.Err() != nil {
 			t.Fatalf("Failed to create ca-cert secret: %s", p.Result())
 		}
-		if p := e2eutils.RunCommand(fmt.Sprintf("kubectl -n %s create secret generic marklogic-0-cert --from-file=test/test_data/pod_zero_certs/tls.crt --from-file=test/test_data/pod_zero_certs/tls.key", namedNS)); p.Err() != nil {
+		if p := e2eutils.RunCommand(fmt.Sprintf("kubectl -n %s create secret generic marklogic-0-cert --from-file=test/test_data/helm_pod_zero_certs/tls.crt --from-file=test/test_data/helm_pod_zero_certs/tls.key", namedNS)); p.Err() != nil {
 			t.Fatalf("Failed to create marklogic-0-cert: %s", p.Result())
 		}
-		if p := e2eutils.RunCommand(fmt.Sprintf("kubectl -n %s create secret generic marklogic-1-cert --from-file=test/test_data/pod_one_certs/tls.crt --from-file=test/test_data/pod_one_certs/tls.key", namedNS)); p.Err() != nil {
+		if p := e2eutils.RunCommand(fmt.Sprintf("kubectl -n %s create secret generic marklogic-1-cert --from-file=test/test_data/helm_pod_one_certs/tls.crt --from-file=test/test_data/helm_pod_one_certs/tls.key", namedNS)); p.Err() != nil {
 			t.Fatalf("Failed to create marklogic-1-cert: %s", p.Result())
 		}
 
@@ -409,10 +409,10 @@ func TestTlsWithMultiNode(t *testing.T) {
 		if err := utils.GenerateCACertificate("test/test_data/ca_cert"); err != nil {
 			t.Fatalf("GenerateCACertificate failed: %v", err)
 		}
-		if err := utils.GenerateCertificates("test/test_data/enode_zero_certs", "test/test_data/ca_cert"); err != nil {
+		if err := utils.GenerateCertificates("test/test_data/helm_enode_zero_certs", "test/test_data/ca_cert"); err != nil {
 			t.Fatalf("GenerateCertificates (enode) failed: %v", err)
 		}
-		if err := utils.GenerateCertificates("test/test_data/dnode_zero_certs", "test/test_data/ca_cert"); err != nil {
+		if err := utils.GenerateCertificates("test/test_data/helm_dnode_zero_certs", "test/test_data/ca_cert"); err != nil {
 			t.Fatalf("GenerateCertificates (dnode) failed: %v", err)
 		}
 
@@ -423,10 +423,10 @@ func TestTlsWithMultiNode(t *testing.T) {
 		if p := e2eutils.RunCommand(fmt.Sprintf("kubectl -n %s create secret generic ca-cert --from-file=test/test_data/ca_cert/cacert.pem", tlsEdNS)); p.Err() != nil {
 			t.Fatalf("Failed to create ca-cert: %s", p.Result())
 		}
-		if p := e2eutils.RunCommand(fmt.Sprintf("kubectl -n %s create secret generic dnode-0-cert --from-file=test/test_data/dnode_zero_certs/tls.crt --from-file=test/test_data/dnode_zero_certs/tls.key", tlsEdNS)); p.Err() != nil {
+		if p := e2eutils.RunCommand(fmt.Sprintf("kubectl -n %s create secret generic dnode-0-cert --from-file=test/test_data/helm_dnode_zero_certs/tls.crt --from-file=test/test_data/helm_dnode_zero_certs/tls.key", tlsEdNS)); p.Err() != nil {
 			t.Fatalf("Failed to create dnode-0-cert: %s", p.Result())
 		}
-		if p := e2eutils.RunCommand(fmt.Sprintf("kubectl -n %s create secret generic enode-0-cert --from-file=test/test_data/enode_zero_certs/tls.crt --from-file=test/test_data/enode_zero_certs/tls.key", tlsEdNS)); p.Err() != nil {
+		if p := e2eutils.RunCommand(fmt.Sprintf("kubectl -n %s create secret generic enode-0-cert --from-file=test/test_data/helm_enode_zero_certs/tls.crt --from-file=test/test_data/helm_enode_zero_certs/tls.key", tlsEdNS)); p.Err() != nil {
 			t.Fatalf("Failed to create enode-0-cert: %s", p.Result())
 		}
 
