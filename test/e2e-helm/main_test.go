@@ -132,6 +132,10 @@ func TestMain(m *testing.M) {
 				"--timeout", "3m",
 			}
 			if dockerImage != "" {
+				// Reject shell metacharacters before incorporating the env var into args.
+				if strings.ContainsAny(dockerImage, ";|&$`(){}[]<>") {
+					return ctx, fmt.Errorf("E2E_DOCKER_IMAGE contains invalid characters: %s", dockerImage)
+				}
 				// Split on the last ':' that appears after the last '/' so that registry
 				// ports (e.g. registry:5000/repo/image:tag) are handled correctly.
 				repo := dockerImage
@@ -147,7 +151,7 @@ func TestMain(m *testing.M) {
 				args = append(args, "--set", "controllerManager.manager.image.pullPolicy=Never")
 			}
 
-			// #nosec G204 — args are constructed from known constants and validated env vars
+			// #nosec G204 — fixed args are package constants; E2E_DOCKER_IMAGE is validated above
 			cmd := exec.Command("helm", args...)
 			cmd.Stdout = os.Stdout
 			cmd.Stderr = os.Stderr

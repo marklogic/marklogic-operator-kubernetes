@@ -107,6 +107,10 @@ func TestMlClusterWithEdnode(t *testing.T) {
 		}
 		marklogicv1.AddToScheme(client.Resources(edNodeNS).GetScheme())
 
+		e2eutils.RunCommand(fmt.Sprintf(
+			"kubectl -n %s delete secret %s --ignore-not-found=true",
+			edNodeNS, edSecretName,
+		))
 		p := e2eutils.RunCommand(fmt.Sprintf(
 			"kubectl -n %s create secret generic %s --from-literal=username=%s --from-literal=password=%s",
 			edNodeNS, edSecretName, adminUsername, adminPassword,

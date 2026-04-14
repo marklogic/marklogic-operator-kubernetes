@@ -40,7 +40,7 @@ func deleteAndRecreateLogNS(ctx context.Context, t *testing.T, c *envconf.Config
 			wait.WithTimeout(2*time.Minute),
 			wait.WithInterval(2*time.Second),
 		); err != nil {
-			t.Logf("Warning: namespace deletion timeout, proceeding: %v", err)
+			t.Fatalf("Timed out waiting for namespace %s to be deleted before recreation: %v", logNS, err)
 		}
 	}
 	if err := client.Resources().Create(ctx, &corev1.Namespace{
