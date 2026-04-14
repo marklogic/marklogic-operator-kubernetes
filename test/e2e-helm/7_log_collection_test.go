@@ -4,6 +4,7 @@ package e2ehelm
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -18,6 +19,7 @@ import (
 	"sigs.k8s.io/e2e-framework/klient/wait/conditions"
 	"sigs.k8s.io/e2e-framework/pkg/envconf"
 	"sigs.k8s.io/e2e-framework/pkg/features"
+	e2eutils "sigs.k8s.io/e2e-framework/pkg/utils"
 )
 
 const (
@@ -25,29 +27,32 @@ const (
 	logGroupName = "lognode"
 )
 
-// deleteAndRecreateLogNS deletes the log namespace (if it exists) and waits for full
-// removal before returning. This keeps each log-collection test starting from a clean state.
-func deleteAndRecreateLogNS(ctx context.Context, t *testing.T, c *envconf.Config) {
+// cleanupLogNS deletes all MarklogicCluster CRs in logNS and waits for the
+// operator to remove their StatefulSets. The namespace itself (and the
+// Helm-installed Role/RoleBinding) is intentionally preserved so the operator
+// retains RBAC for subsequent tests. Deleting and recreating the namespace
+// would destroy the Helm-created RBAC, leaving the operator forbidden from
+// creating resources in the fresh namespace.
+func cleanupLogNS(ctx context.Context, t *testing.T, _ *envconf.Config) {
 	t.Helper()
-	client := c.Client()
-	ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: logNS}}
-	if err := client.Resources().Get(ctx, logNS, "", ns); err == nil {
-		if err := client.Resources().Delete(ctx, ns); err != nil {
-			t.Logf("Warning: failed to delete existing namespace %s: %v", logNS, err)
-		}
-		if err := wait.For(
-			conditions.New(client.Resources()).ResourceDeleted(ns),
-			wait.WithTimeout(2*time.Minute),
-			wait.WithInterval(2*time.Second),
-		); err != nil {
-			t.Fatalf("Timed out waiting for namespace %s to be deleted before recreation: %v", logNS, err)
-		}
+	// Delete all MarklogicCluster CRs in the namespace.
+	if p := e2eutils.RunCommand(fmt.Sprintf(
+		"kubectl delete marklogicclusters --all -n %s --ignore-not-found=true", logNS,
+	)); p.Err() != nil {
+		t.Logf("Warning: could not delete MarklogicCluster CRs in %s: %s", logNS, p.Result())
 	}
-	if err := client.Resources().Create(ctx, &corev1.Namespace{
-		ObjectMeta: metav1.ObjectMeta{Name: logNS, Labels: namespaceLabels()},
-	}); err != nil {
-		t.Fatalf("Failed to create namespace %s: %v", logNS, err)
+	// Wait for the operator to cascade-delete all StatefulSets.
+	deadline := time.Now().Add(2 * time.Minute)
+	for time.Now().Before(deadline) {
+		p := e2eutils.RunCommand(fmt.Sprintf(
+			"kubectl get statefulsets -n %s -o name 2>/dev/null", logNS,
+		))
+		if strings.TrimSpace(p.Result()) == "" {
+			return
+		}
+		time.Sleep(3 * time.Second)
 	}
+	t.Logf("Warning: StatefulSets in %s may not be fully cleaned up before next test", logNS)
 }
 
 // TestLogCollectionDisabled verifies that fluent-bit is NOT created when
@@ -69,7 +74,7 @@ func TestLogCollectionDisabled(t *testing.T) {
 	}
 
 	feature.Setup(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
-		deleteAndRecreateLogNS(ctx, t, c)
+		cleanupLogNS(ctx, t, c)
 		client := c.Client()
 		marklogicv1.AddToScheme(client.Resources(logNS).GetScheme())
 		if err := client.Resources(logNS).Create(ctx, cr); err != nil {
@@ -116,12 +121,8 @@ func TestLogCollectionDisabled(t *testing.T) {
 	})
 
 	feature.Teardown(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
-		client := c.Client()
-		if err := client.Resources(logNS).Delete(ctx, cr); err != nil {
+		if err := c.Client().Resources(logNS).Delete(ctx, cr); err != nil {
 			t.Logf("Warning: failed to delete MarklogicCluster: %v", err)
-		}
-		if err := client.Resources().Delete(ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: logNS}}); err != nil {
-			t.Logf("Warning: failed to delete namespace %s: %v", logNS, err)
 		}
 		return ctx
 	})
@@ -159,7 +160,7 @@ func TestLogCollectionPartialLogs(t *testing.T) {
 	}
 
 	feature.Setup(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
-		deleteAndRecreateLogNS(ctx, t, c)
+		cleanupLogNS(ctx, t, c)
 		client := c.Client()
 		marklogicv1.AddToScheme(client.Resources(logNS).GetScheme())
 		if err := client.Resources(logNS).Create(ctx, cr); err != nil {
@@ -212,12 +213,8 @@ func TestLogCollectionPartialLogs(t *testing.T) {
 	})
 
 	feature.Teardown(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
-		client := c.Client()
-		if err := client.Resources(logNS).Delete(ctx, cr); err != nil {
+		if err := c.Client().Resources(logNS).Delete(ctx, cr); err != nil {
 			t.Logf("Warning: failed to delete MarklogicCluster: %v", err)
-		}
-		if err := client.Resources().Delete(ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: logNS}}); err != nil {
-			t.Logf("Warning: failed to delete namespace %s: %v", logNS, err)
 		}
 		return ctx
 	})
@@ -261,7 +258,7 @@ func TestLogCollectionCustomResources(t *testing.T) {
 	}
 
 	feature.Setup(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
-		deleteAndRecreateLogNS(ctx, t, c)
+		cleanupLogNS(ctx, t, c)
 		client := c.Client()
 		marklogicv1.AddToScheme(client.Resources(logNS).GetScheme())
 		if err := client.Resources(logNS).Create(ctx, cr); err != nil {
@@ -315,12 +312,8 @@ func TestLogCollectionCustomResources(t *testing.T) {
 	})
 
 	feature.Teardown(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
-		client := c.Client()
-		if err := client.Resources(logNS).Delete(ctx, cr); err != nil {
+		if err := c.Client().Resources(logNS).Delete(ctx, cr); err != nil {
 			t.Logf("Warning: failed to delete MarklogicCluster: %v", err)
-		}
-		if err := client.Resources().Delete(ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: logNS}}); err != nil {
-			t.Logf("Warning: failed to delete namespace %s: %v", logNS, err)
 		}
 		return ctx
 	})
@@ -361,7 +354,7 @@ func TestLogCollectionCustomFilters(t *testing.T) {
 	}
 
 	feature.Setup(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
-		deleteAndRecreateLogNS(ctx, t, c)
+		cleanupLogNS(ctx, t, c)
 		client := c.Client()
 		marklogicv1.AddToScheme(client.Resources(logNS).GetScheme())
 		if err := client.Resources(logNS).Create(ctx, cr); err != nil {
@@ -402,12 +395,8 @@ func TestLogCollectionCustomFilters(t *testing.T) {
 	})
 
 	feature.Teardown(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
-		client := c.Client()
-		if err := client.Resources(logNS).Delete(ctx, cr); err != nil {
+		if err := c.Client().Resources(logNS).Delete(ctx, cr); err != nil {
 			t.Logf("Warning: failed to delete MarklogicCluster: %v", err)
-		}
-		if err := client.Resources().Delete(ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: logNS}}); err != nil {
-			t.Logf("Warning: failed to delete namespace %s: %v", logNS, err)
 		}
 		return ctx
 	})
