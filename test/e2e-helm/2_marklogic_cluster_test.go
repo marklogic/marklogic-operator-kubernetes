@@ -58,8 +58,28 @@ func TestMarklogicClusterNamespaceScoped(t *testing.T) {
 	// Create the watched test namespace.
 	feature.Setup(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 		client := c.Client()
-		ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: mlNsTestNS}}
-		if err := client.Resources().Create(ctx, ns); err != nil && !apierrors.IsAlreadyExists(err) {
+		ns := &corev1.Namespace{}
+		for i := 0; i < 60; i++ {
+			err := client.Resources().Get(ctx, mlNsTestNS, "", ns)
+			if err != nil {
+				if apierrors.IsNotFound(err) {
+					break
+				}
+				t.Fatalf("Error checking namespace %s: %v", mlNsTestNS, err)
+			}
+			if ns.Status.Phase == corev1.NamespaceTerminating {
+				if i == 59 {
+					t.Fatalf("Timeout waiting for namespace %s to finish terminating", mlNsTestNS)
+				}
+				t.Logf("Namespace %s is terminating, waiting... (%d/60)", mlNsTestNS, i+1)
+				time.Sleep(2 * time.Second)
+				continue
+			}
+			break
+		}
+		if err := client.Resources().Create(ctx, &corev1.Namespace{
+			ObjectMeta: metav1.ObjectMeta{Name: mlNsTestNS, Labels: namespaceLabels()},
+		}); err != nil && !apierrors.IsAlreadyExists(err) {
 			t.Fatalf("Failed to create namespace %s: %v", mlNsTestNS, err)
 		}
 		return ctx

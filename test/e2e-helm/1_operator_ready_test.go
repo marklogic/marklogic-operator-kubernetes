@@ -27,6 +27,22 @@ func TestOperatorReady(t *testing.T) {
 	feature.Setup(func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
 		client := cfg.Client()
 
+		// The operator was deployed by TestMain before this test runs, so the pod may
+		// already exist. A Watch only fires for future Add events and will miss it.
+		var podList corev1.PodList
+		if err := client.Resources(helmNS).List(ctx, &podList); err == nil {
+			for i := range podList.Items {
+				if strings.HasPrefix(podList.Items[i].Name, "marklogic-operator-controller") {
+					select {
+					case podCreationSig <- &podList.Items[i]:
+					case <-done:
+					}
+					return ctx
+				}
+			}
+		}
+
+		// If not yet visible, fall back to a Watch for the pod Add event.
 		if err := client.Resources(helmNS).Watch(&corev1.PodList{}).WithAddFunc(func(obj interface{}) {
 			pod, ok := obj.(*corev1.Pod)
 			if !ok {

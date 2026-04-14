@@ -55,18 +55,14 @@ func deleteAndRecreateLogNS(ctx context.Context, t *testing.T, c *envconf.Config
 func TestLogCollectionDisabled(t *testing.T) {
 	feature := features.New("Log Collection Disabled").WithLabel("type", "log-collection-disabled")
 
-	adminUser := "admin"
-	adminPass := "Admin@8001"
-	r := int32(1)
-
 	cr := &marklogicv1.MarklogicCluster{
 		TypeMeta:   metav1.TypeMeta{APIVersion: "marklogic.progress.com/v1", Kind: "MarklogicCluster"},
 		ObjectMeta: metav1.ObjectMeta{Name: "ml-no-logs", Namespace: logNS},
 		Spec: marklogicv1.MarklogicClusterSpec{
 			Image: marklogicImage,
-			Auth:  &marklogicv1.AdminAuth{AdminUsername: &adminUser, AdminPassword: &adminPass},
+			Auth:  &marklogicv1.AdminAuth{AdminUsername: &adminUsername, AdminPassword: &adminPassword},
 			MarkLogicGroups: []*marklogicv1.MarklogicGroups{
-				{Name: logGroupName, Replicas: &r, IsBootstrap: true},
+				{Name: logGroupName, Replicas: &replicas, IsBootstrap: true},
 			},
 			LogCollection: &marklogicv1.LogCollection{Enabled: false},
 		},
@@ -136,18 +132,14 @@ func TestLogCollectionDisabled(t *testing.T) {
 func TestLogCollectionPartialLogs(t *testing.T) {
 	feature := features.New("Log Collection Partial Logs").WithLabel("type", "log-collection-partial")
 
-	adminUser := "admin"
-	adminPass := "Admin@8001"
-	r := int32(1)
-
 	cr := &marklogicv1.MarklogicCluster{
 		TypeMeta:   metav1.TypeMeta{APIVersion: "marklogic.progress.com/v1", Kind: "MarklogicCluster"},
 		ObjectMeta: metav1.ObjectMeta{Name: "ml-partial-logs", Namespace: logNS},
 		Spec: marklogicv1.MarklogicClusterSpec{
 			Image: marklogicImage,
-			Auth:  &marklogicv1.AdminAuth{AdminUsername: &adminUser, AdminPassword: &adminPass},
+			Auth:  &marklogicv1.AdminAuth{AdminUsername: &adminUsername, AdminPassword: &adminPassword},
 			MarkLogicGroups: []*marklogicv1.MarklogicGroups{
-				{Name: logGroupName, Replicas: &r, IsBootstrap: true},
+				{Name: logGroupName, Replicas: &replicas, IsBootstrap: true},
 			},
 			LogCollection: &marklogicv1.LogCollection{
 				Enabled: true,
@@ -234,10 +226,6 @@ func TestLogCollectionPartialLogs(t *testing.T) {
 func TestLogCollectionCustomResources(t *testing.T) {
 	feature := features.New("Log Collection Custom Resources").WithLabel("type", "log-collection-resources")
 
-	adminUser := "admin"
-	adminPass := "Admin@8001"
-	r := int32(1)
-
 	customRes := &corev1.ResourceRequirements{
 		Requests: corev1.ResourceList{
 			corev1.ResourceCPU:    resource.MustParse("50m"),
@@ -254,9 +242,9 @@ func TestLogCollectionCustomResources(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: "ml-custom-resources", Namespace: logNS},
 		Spec: marklogicv1.MarklogicClusterSpec{
 			Image: marklogicImage,
-			Auth:  &marklogicv1.AdminAuth{AdminUsername: &adminUser, AdminPassword: &adminPass},
+			Auth:  &marklogicv1.AdminAuth{AdminUsername: &adminUsername, AdminPassword: &adminPassword},
 			MarkLogicGroups: []*marklogicv1.MarklogicGroups{
-				{Name: logGroupName, Replicas: &r, IsBootstrap: true},
+				{Name: logGroupName, Replicas: &replicas, IsBootstrap: true},
 			},
 			LogCollection: &marklogicv1.LogCollection{
 				Enabled:   true,
@@ -339,10 +327,6 @@ func TestLogCollectionCustomResources(t *testing.T) {
 func TestLogCollectionCustomFilters(t *testing.T) {
 	feature := features.New("Log Collection Custom Filters").WithLabel("type", "log-collection-filters")
 
-	adminUser := "admin"
-	adminPass := "Admin@8001"
-	r := int32(1)
-
 	customFilters := `- name: grep
   match: "*"
   regex: log ERROR
@@ -356,9 +340,9 @@ func TestLogCollectionCustomFilters(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: "ml-custom-filters", Namespace: logNS},
 		Spec: marklogicv1.MarklogicClusterSpec{
 			Image: marklogicImage,
-			Auth:  &marklogicv1.AdminAuth{AdminUsername: &adminUser, AdminPassword: &adminPass},
+			Auth:  &marklogicv1.AdminAuth{AdminUsername: &adminUsername, AdminPassword: &adminPassword},
 			MarkLogicGroups: []*marklogicv1.MarklogicGroups{
-				{Name: logGroupName, Replicas: &r, IsBootstrap: true},
+				{Name: logGroupName, Replicas: &replicas, IsBootstrap: true},
 			},
 			LogCollection: &marklogicv1.LogCollection{
 				Enabled: true,

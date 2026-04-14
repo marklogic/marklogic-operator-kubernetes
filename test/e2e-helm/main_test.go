@@ -126,7 +126,7 @@ func TestMain(m *testing.M) {
 				"--namespace", helmNS,
 				"--create-namespace",
 				"--set", "scope.type=namespace",
-				"--set", fmt.Sprintf("scope.watchNamespaces=%s", watchedNamespaces),
+				"--set", fmt.Sprintf("scope.watchNamespaces=%s", strings.ReplaceAll(watchedNamespaces, ",", "\\,")),
 				"--set", "metrics.secure=false",
 				"--wait",
 				"--timeout", "3m",

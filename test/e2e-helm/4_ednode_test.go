@@ -199,9 +199,8 @@ func TestMlClusterWithEdnode(t *testing.T) {
 	feature.Assess("4 pods running after scaling", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 		client := c.Client()
 		podList := &corev1.PodList{}
-		if err := client.Resources().List(ctx, podList, func(lo *metav1.ListOptions) {
+		if err := client.Resources(edNodeNS).List(ctx, podList, func(lo *metav1.ListOptions) {
 			lo.LabelSelector = "app.kubernetes.io/name=marklogic"
-			lo.FieldSelector = "metadata.namespace=" + edNodeNS
 		}); err != nil {
 			t.Fatal(err)
 		}
