@@ -80,6 +80,7 @@ func TestLogCollectionDisabled(t *testing.T) {
 			wait.WithTimeout(3*time.Minute),
 			wait.WithInterval(5*time.Second),
 		); err != nil {
+			logDiagnostics(t, logNS)
 			t.Fatal(err)
 		}
 		return ctx
@@ -169,6 +170,7 @@ func TestLogCollectionPartialLogs(t *testing.T) {
 			wait.WithTimeout(3*time.Minute),
 			wait.WithInterval(5*time.Second),
 		); err != nil {
+			logDiagnostics(t, logNS)
 			t.Fatal(err)
 		}
 		return ctx
@@ -270,6 +272,7 @@ func TestLogCollectionCustomResources(t *testing.T) {
 			wait.WithTimeout(3*time.Minute),
 			wait.WithInterval(5*time.Second),
 		); err != nil {
+			logDiagnostics(t, logNS)
 			t.Fatal(err)
 		}
 		return ctx
@@ -369,6 +372,7 @@ func TestLogCollectionCustomFilters(t *testing.T) {
 			wait.WithTimeout(3*time.Minute),
 			wait.WithInterval(5*time.Second),
 		); err != nil {
+			logDiagnostics(t, logNS)
 			t.Fatal(err)
 		}
 		return ctx
