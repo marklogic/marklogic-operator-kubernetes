@@ -105,6 +105,7 @@ func TestTlsWithSelfSigned(t *testing.T) {
 
 	feature.Assess("pod ml-0 is ready", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 		if err := utils.WaitForPod(ctx, t, c.Client(), tlsNamespace, "ml-0", 120*time.Second, true); err != nil {
+			logDiagnostics(t, tlsNamespace)
 			t.Fatalf("ml-0 not ready: %v", err)
 		}
 		// Allow time for TLS to be fully configured on management port 8002.
@@ -263,9 +264,11 @@ func TestTlsWithNamedCert(t *testing.T) {
 
 	feature.Assess("pods marklogic-0 and marklogic-1 are ready", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 		if err := utils.WaitForPod(ctx, t, c.Client(), namedNS, "marklogic-0", 180*time.Second, true); err != nil {
+			logDiagnostics(t, namedNS)
 			t.Fatalf("marklogic-0 not ready: %v", err)
 		}
 		if err := utils.WaitForPod(ctx, t, c.Client(), namedNS, "marklogic-1", 180*time.Second, true); err != nil {
+			logDiagnostics(t, namedNS)
 			t.Fatalf("marklogic-1 not ready: %v", err)
 		}
 		return ctx
@@ -442,9 +445,11 @@ func TestTlsWithMultiNode(t *testing.T) {
 
 	feature.Assess("dnode-0 and enode-0 pods are ready", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 		if err := utils.WaitForPod(ctx, t, c.Client(), tlsEdNS, "dnode-0", 180*time.Second, true); err != nil {
+			logDiagnostics(t, tlsEdNS)
 			t.Fatalf("dnode-0 not ready: %v", err)
 		}
 		if err := utils.WaitForPod(ctx, t, c.Client(), tlsEdNS, "enode-0", 180*time.Second, true); err != nil {
+			logDiagnostics(t, tlsEdNS)
 			t.Fatalf("enode-0 not ready: %v", err)
 		}
 		t.Log("Waiting for enode to join cluster and configure TLS...")

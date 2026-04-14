@@ -145,6 +145,7 @@ func TestMlClusterWithEdnode(t *testing.T) {
 
 	feature.Assess("dnode-0 pod is ready", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 		if err := utils.WaitForPod(ctx, t, c.Client(), edNodeNS, "dnode-0", 120*time.Second, true); err != nil {
+			logDiagnostics(t, edNodeNS)
 			t.Fatalf("dnode-0 not ready: %v", err)
 		}
 		return ctx
@@ -152,6 +153,7 @@ func TestMlClusterWithEdnode(t *testing.T) {
 
 	feature.Assess("enode-0 pod is ready", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 		if err := utils.WaitForPod(ctx, t, c.Client(), edNodeNS, "enode-0", 180*time.Second, true); err != nil {
+			logDiagnostics(t, edNodeNS)
 			t.Fatalf("enode-0 not ready: %v", err)
 		}
 		return ctx
@@ -188,6 +190,7 @@ func TestMlClusterWithEdnode(t *testing.T) {
 
 	feature.Assess("dnode-1 pod created after scaling", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 		if err := utils.WaitForPod(ctx, t, c.Client(), edNodeNS, "dnode-1", 60*time.Second, true); err != nil {
+			logDiagnostics(t, edNodeNS)
 			t.Fatalf("dnode-1 not ready: %v", err)
 		}
 		return ctx
@@ -195,6 +198,7 @@ func TestMlClusterWithEdnode(t *testing.T) {
 
 	feature.Assess("enode-1 pod created after scaling", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 		if err := utils.WaitForPod(ctx, t, c.Client(), edNodeNS, "enode-1", 120*time.Second, true); err != nil {
+			logDiagnostics(t, edNodeNS)
 			t.Fatalf("enode-1 not ready: %v", err)
 		}
 		return ctx

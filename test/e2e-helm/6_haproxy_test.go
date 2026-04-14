@@ -107,6 +107,7 @@ func TestHAProxyPathBasedEnabled(t *testing.T) {
 
 	feature.Assess("pod ml-0 is ready", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 		if err := utils.WaitForPod(ctx, t, c.Client(), haProxyPathNS, "ml-0", 120*time.Second, true); err != nil {
+			logDiagnostics(t, haProxyPathNS)
 			t.Fatalf("ml-0 not ready: %v", err)
 		}
 		return ctx
@@ -231,6 +232,7 @@ func TestHAProxyPathBasedDisabled(t *testing.T) {
 
 	feature.Assess("pod ml-0 is ready", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 		if err := utils.WaitForPod(ctx, t, c.Client(), haProxyNS, "ml-0", 120*time.Second, true); err != nil {
+			logDiagnostics(t, haProxyNS)
 			t.Fatalf("ml-0 not ready: %v", err)
 		}
 		return ctx

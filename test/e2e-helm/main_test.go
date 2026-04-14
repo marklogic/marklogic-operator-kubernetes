@@ -35,6 +35,7 @@ import (
 	"sigs.k8s.io/e2e-framework/pkg/env"
 	"sigs.k8s.io/e2e-framework/pkg/envconf"
 	"sigs.k8s.io/e2e-framework/pkg/envfuncs"
+	e2eutils "sigs.k8s.io/e2e-framework/pkg/utils"
 )
 
 // helmNS is the namespace the operator is installed into.
@@ -67,6 +68,27 @@ var (
 // Istio ambient mode is not used in this suite, so no extra labels are needed.
 func namespaceLabels() map[string]string {
 	return nil
+}
+
+// logDiagnostics dumps pods, statefulsets, services, and MarklogicCluster resources
+// for the given namespace, plus the last 50 lines of the operator pod logs.
+// Call this immediately before a fatal pod-readiness assertion to get actionable context.
+func logDiagnostics(t *testing.T, ns string) {
+	t.Helper()
+	for _, cmd := range []string{
+		fmt.Sprintf("kubectl get pods -n %s -o wide", ns),
+		fmt.Sprintf("kubectl get statefulsets -n %s", ns),
+		fmt.Sprintf("kubectl get services -n %s", ns),
+		fmt.Sprintf("kubectl get marklogicclusters -n %s", ns),
+	} {
+		p := e2eutils.RunCommand(cmd)
+		t.Logf("$ %s\n%s", cmd, p.Result())
+	}
+	// Operator logs give context on reconciliation failures and CrashLoopBackOff.
+	p := e2eutils.RunCommand(
+		fmt.Sprintf("kubectl logs -n %s -l control-plane=controller-manager --tail=50 --prefix=true", helmNS),
+	)
+	t.Logf("Operator logs (last 50 lines):\n%s", p.Result())
 }
 
 func TestMain(m *testing.M) {

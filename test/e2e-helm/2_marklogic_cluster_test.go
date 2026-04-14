@@ -117,6 +117,7 @@ func TestMarklogicClusterNamespaceScoped(t *testing.T) {
 	feature.Assess("MarklogicCluster pod running", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 		client := c.Client()
 		if err := utils.WaitForPod(ctx, t, client, mlNsTestNS, "node-0", 240*time.Second, true); err != nil {
+			logDiagnostics(t, mlNsTestNS)
 			t.Fatalf("Pod node-0 not ready: %v", err)
 		}
 		return ctx

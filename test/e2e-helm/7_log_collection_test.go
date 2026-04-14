@@ -88,6 +88,7 @@ func TestLogCollectionDisabled(t *testing.T) {
 	feature.Assess("Pod created without fluent-bit container", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 		client := c.Client()
 		if err := utils.WaitForPod(ctx, t, client, logNS, "lognode-0", 120*time.Second); err != nil {
+			logDiagnostics(t, logNS)
 			t.Fatalf("Failed to wait for pod: %v", err)
 		}
 		var pod corev1.Pod
@@ -176,6 +177,7 @@ func TestLogCollectionPartialLogs(t *testing.T) {
 	feature.Assess("Pod created with fluent-bit container", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 		client := c.Client()
 		if err := utils.WaitForPod(ctx, t, client, logNS, "lognode-0", 120*time.Second); err != nil {
+			logDiagnostics(t, logNS)
 			t.Fatalf("Failed to wait for pod: %v", err)
 		}
 		var pod corev1.Pod
@@ -275,6 +277,7 @@ func TestLogCollectionCustomResources(t *testing.T) {
 
 	feature.Assess("Pod created with custom resources", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 		if err := utils.WaitForPod(ctx, t, c.Client(), logNS, "lognode-0", 120*time.Second); err != nil {
+			logDiagnostics(t, logNS)
 			t.Fatalf("Failed to wait for pod: %v", err)
 		}
 		return ctx
@@ -373,6 +376,7 @@ func TestLogCollectionCustomFilters(t *testing.T) {
 
 	feature.Assess("Pod created with custom filters", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 		if err := utils.WaitForPod(ctx, t, c.Client(), logNS, "lognode-0", 120*time.Second); err != nil {
+			logDiagnostics(t, logNS)
 			t.Fatalf("Failed to wait for pod: %v", err)
 		}
 		return ctx
