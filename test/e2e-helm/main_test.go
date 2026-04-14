@@ -105,6 +105,21 @@ func TestMain(m *testing.M) {
 		},
 		envfuncs.CreateNamespace(helmNS),
 
+		// Pre-create all watched namespaces so the Helm chart can create
+		// Role/RoleBinding in them during install.
+		func(ctx context.Context, cfg *envconf.Config) (context.Context, error) {
+			client := cfg.Client()
+			for _, ns := range strings.Split(watchedNamespaces, ",") {
+				if err := client.Resources().Create(ctx, &corev1.Namespace{
+					ObjectMeta: metav1.ObjectMeta{Name: ns},
+				}); err != nil && !apierrors.IsAlreadyExists(err) {
+					return ctx, fmt.Errorf("failed to create watched namespace %s: %w", ns, err)
+				}
+				log.Printf("Watched namespace ready: %s", ns)
+			}
+			return ctx, nil
+		},
+
 		// Change working directory to the repo root (same pattern as test/e2e).
 		func(ctx context.Context, cfg *envconf.Config) (context.Context, error) {
 			if err := os.Chdir("../.."); err != nil {
@@ -199,6 +214,19 @@ func TestMain(m *testing.M) {
 			return ctx, nil
 		},
 		envfuncs.DeleteNamespace(helmNS),
+
+		// Delete all watched namespaces created during Setup.
+		func(ctx context.Context, cfg *envconf.Config) (context.Context, error) {
+			client := cfg.Client()
+			for _, ns := range strings.Split(watchedNamespaces, ",") {
+				if err := client.Resources().Delete(ctx, &corev1.Namespace{
+					ObjectMeta: metav1.ObjectMeta{Name: ns},
+				}); err != nil && !apierrors.IsNotFound(err) {
+					log.Printf("Warning: failed to delete watched namespace %s: %v", ns, err)
+				}
+			}
+			return ctx, nil
+		},
 	)
 
 	os.Exit(testEnv.Run(m))
