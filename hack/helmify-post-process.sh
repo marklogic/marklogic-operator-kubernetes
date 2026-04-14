@@ -325,6 +325,9 @@ subjects:
 {{- /*
 Namespace-scoped mode: Role + RoleBinding created in each watched namespace.
 Supports a single name, a comma-separated string, or a YAML list.
+The operator's own namespace (.Release.Namespace) is always included because
+cmd/main.go adds it to the controller-runtime cache DefaultNamespaces for
+leader-election and CRD informer syncing.
 */}}
 {{- $namespaces := list }}
 {{- if .Values.scope.watchNamespaces }}
@@ -337,6 +340,10 @@ Supports a single name, a comma-separated string, or a YAML list.
   {{- end }}
 {{- else }}
   {{- $namespaces = list .Release.Namespace }}
+{{- end }}
+{{- /* Always include the operator's own namespace so its cache can watch CRs there */}}
+{{- if not (has .Release.Namespace $namespaces) }}
+  {{- $namespaces = append $namespaces .Release.Namespace }}
 {{- end }}
 {{- range $ns := $namespaces }}
 ---
