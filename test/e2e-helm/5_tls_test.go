@@ -27,6 +27,7 @@ import (
 // TestTlsWithSelfSigned verifies that the operator correctly enables TLS with a
 // self-signed certificate on the default app servers in a watched namespace.
 func TestTlsWithSelfSigned(t *testing.T) {
+	trackTest(t)
 	feature := features.New("TLS with Self Signed Certificate").WithLabel("type", "tls-self-signed")
 	tlsNamespace := "ml-ns-tls" // must be in watchedNamespaces
 	releaseName := "ml"
@@ -159,6 +160,7 @@ func TestTlsWithSelfSigned(t *testing.T) {
 // TestTlsWithNamedCert verifies that the operator correctly applies per-pod named
 // TLS certificates in a watched namespace.
 func TestTlsWithNamedCert(t *testing.T) {
+	trackTest(t)
 	feature := features.New("TLS with Named Certificate").WithLabel("type", "tls-named-cert")
 	namedNS := "ml-ns-tls-named" // must be in watchedNamespaces
 	releaseName := "marklogic"
@@ -319,6 +321,7 @@ func TestTlsWithNamedCert(t *testing.T) {
 // TestTlsWithMultiNode verifies that TLS with per-pod named certificates works correctly
 // in a two-group (dnode + enode) cluster deployed in a watched namespace.
 func TestTlsWithMultiNode(t *testing.T) {
+	trackTest(t)
 	feature := features.New("TLS with Multi Node Named Certificate").WithLabel("type", "tls-multi-node")
 	tlsEdNS := "ml-ns-tls-ednode" // must be in watchedNamespaces
 	enodeName := "enode"

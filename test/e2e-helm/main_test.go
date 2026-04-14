@@ -22,6 +22,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -68,6 +69,69 @@ var (
 // Istio ambient mode is not used in this suite, so no extra labels are needed.
 func namespaceLabels() map[string]string {
 	return nil
+}
+
+// ── Test summary tracker ──────────────────────────────────────────────────────
+
+type testResult struct {
+	name   string
+	passed bool
+}
+
+var (
+	trackMu      sync.Mutex
+	trackedTests []testResult
+)
+
+// trackTest registers t in the global summary. Call it at the top of each Test* function.
+// t.Cleanup runs after the test (and all its sub-tests) complete, so t.Failed() is final.
+func trackTest(t *testing.T) {
+	t.Helper()
+	t.Cleanup(func() {
+		trackMu.Lock()
+		trackedTests = append(trackedTests, testResult{name: t.Name(), passed: !t.Failed()})
+		trackMu.Unlock()
+	})
+}
+
+// printTestSummary logs a structured summary of all tracked tests to stdout.
+func printTestSummary() {
+	trackMu.Lock()
+	results := make([]testResult, len(trackedTests))
+	copy(results, trackedTests)
+	trackMu.Unlock()
+
+	total := len(results)
+	passed := 0
+	var failed []string
+	for _, r := range results {
+		if r.passed {
+			passed++
+		} else {
+			failed = append(failed, r.name)
+		}
+	}
+
+	fmt.Println()
+	fmt.Println("╔══════════════════════════════════════════════════════════════╗")
+	fmt.Println("║               E2E-HELM TEST SUITE SUMMARY                   ║")
+	fmt.Println("╠══════════════════════════════════════════════════════════════╣")
+	fmt.Printf("║  Total  : %-51d║\n", total)
+	fmt.Printf("║  Passed : %-51d║\n", passed)
+	fmt.Printf("║  Failed : %-51d║\n", len(failed))
+	if len(failed) > 0 {
+		fmt.Println("╠══════════════════════════════════════════════════════════════╣")
+		fmt.Println("║  Failed tests:                                               ║")
+		for _, name := range failed {
+			// Truncate long names to fit the box
+			if len(name) > 49 {
+				name = name[:46] + "..."
+			}
+			fmt.Printf("║    ✗ %-57s║\n", name)
+		}
+	}
+	fmt.Println("╚══════════════════════════════════════════════════════════════╝")
+	fmt.Println()
 }
 
 // logDiagnostics dumps pods, statefulsets, services, and MarklogicCluster resources
@@ -251,5 +315,7 @@ func TestMain(m *testing.M) {
 		},
 	)
 
-	os.Exit(testEnv.Run(m))
+	exitCode := testEnv.Run(m)
+	printTestSummary()
+	os.Exit(exitCode)
 }

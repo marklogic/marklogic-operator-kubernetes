@@ -26,6 +26,7 @@ import (
 // because make deploy always applies ClusterRole/ClusterRoleBinding regardless of
 // any WATCH_NAMESPACE patch made afterwards.
 func TestNamespaceScopedRBAC(t *testing.T) {
+	trackTest(t)
 	feature := features.New("Namespace-Scoped RBAC").
 		WithLabel("type", "rbac")
 

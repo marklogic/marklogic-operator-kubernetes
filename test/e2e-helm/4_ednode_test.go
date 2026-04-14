@@ -72,6 +72,7 @@ var (
 // TestMlClusterWithEdnode verifies a two-group (dnode + enode) cluster is reconciled
 // correctly in a watched namespace using only Role/RoleBinding RBAC from the Helm chart.
 func TestMlClusterWithEdnode(t *testing.T) {
+	trackTest(t)
 	feature := features.New("MarklogicCluster with 2 MarkLogicGroups (dnode + enode)").
 		WithLabel("type", "ednode")
 

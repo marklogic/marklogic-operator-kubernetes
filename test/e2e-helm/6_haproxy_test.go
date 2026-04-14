@@ -24,6 +24,7 @@ import (
 // TestHAProxyPathBasedEnabled verifies that path-based HAProxy routing works correctly
 // in a watched namespace with namespace-scoped RBAC.
 func TestHAProxyPathBasedEnabled(t *testing.T) {
+	trackTest(t)
 	feature := features.New("HAProxy with Path-Based Routing Enabled").WithLabel("type", "haproxy-pathbased-enabled")
 	haProxyPathNS := "ml-ns-haproxy-path" // must be in watchedNamespaces
 	releaseName := "ml"
@@ -149,6 +150,7 @@ func TestHAProxyPathBasedEnabled(t *testing.T) {
 // TestHAProxyPathBasedDisabled verifies that HAProxy with path-based routing disabled
 // works correctly in a watched namespace.
 func TestHAProxyPathBasedDisabled(t *testing.T) {
+	trackTest(t)
 	feature := features.New("HAProxy with Path-Based Routing Disabled").WithLabel("type", "haproxy-pathbased-disabled")
 	haProxyNS := "ml-ns-haproxy" // must be in watchedNamespaces
 	releaseName := "ml"

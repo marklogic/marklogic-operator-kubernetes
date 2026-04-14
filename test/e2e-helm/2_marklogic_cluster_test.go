@@ -52,6 +52,7 @@ var nsTestCluster = &marklogicv1.MarklogicCluster{
 // and verifies the operator reconciles it correctly using only the namespace-scoped
 // Role/RoleBinding installed by the Helm chart (no ClusterRole backstop).
 func TestMarklogicClusterNamespaceScoped(t *testing.T) {
+	trackTest(t)
 	feature := features.New("MarklogicCluster — Namespace-Scoped").
 		WithLabel("type", "cluster-ns")
 

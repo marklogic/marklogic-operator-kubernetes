@@ -58,6 +58,7 @@ func cleanupLogNS(ctx context.Context, t *testing.T, _ *envconf.Config) {
 // TestLogCollectionDisabled verifies that fluent-bit is NOT created when
 // LogCollection.Enabled is false.
 func TestLogCollectionDisabled(t *testing.T) {
+	trackTest(t)
 	feature := features.New("Log Collection Disabled").WithLabel("type", "log-collection-disabled")
 
 	cr := &marklogicv1.MarklogicCluster{
@@ -133,6 +134,7 @@ func TestLogCollectionDisabled(t *testing.T) {
 // TestLogCollectionPartialLogs verifies that only the requested log files are configured
 // in the fluent-bit ConfigMap.
 func TestLogCollectionPartialLogs(t *testing.T) {
+	trackTest(t)
 	feature := features.New("Log Collection Partial Logs").WithLabel("type", "log-collection-partial")
 
 	cr := &marklogicv1.MarklogicCluster{
@@ -225,6 +227,7 @@ func TestLogCollectionPartialLogs(t *testing.T) {
 // TestLogCollectionCustomResources verifies that custom resource requests/limits for the
 // fluent-bit sidecar are applied correctly.
 func TestLogCollectionCustomResources(t *testing.T) {
+	trackTest(t)
 	feature := features.New("Log Collection Custom Resources").WithLabel("type", "log-collection-resources")
 
 	customRes := &corev1.ResourceRequirements{
@@ -324,6 +327,7 @@ func TestLogCollectionCustomResources(t *testing.T) {
 // TestLogCollectionCustomFilters verifies that custom fluent-bit filter configuration
 // is correctly written to the fluent-bit ConfigMap.
 func TestLogCollectionCustomFilters(t *testing.T) {
+	trackTest(t)
 	feature := features.New("Log Collection Custom Filters").WithLabel("type", "log-collection-filters")
 
 	customFilters := `- name: grep

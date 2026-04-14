@@ -38,6 +38,7 @@ const (
 // The Helm chart installs with metrics.secure=false which exposes HTTP on :8080
 // with no authentication required.
 func TestMetricsEndpointInsecure(t *testing.T) {
+	trackTest(t)
 	feature := features.New("Metrics Endpoint — Insecure (namespace-scoped)").
 		WithLabel("type", "metrics")
 

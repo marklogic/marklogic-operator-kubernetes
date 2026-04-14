@@ -18,6 +18,7 @@ import (
 // the CRD is registered and the controller-manager pod is present and owned by the
 // marklogic-operator Deployment.
 func TestOperatorReady(t *testing.T) {
+	trackTest(t)
 	podCreationSig := make(chan *corev1.Pod, 1)
 	done := make(chan struct{})
 
