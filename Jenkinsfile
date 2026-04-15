@@ -161,6 +161,12 @@ void runIstioE2eTests() {
     """
 }
 
+void runHelmNamespaceScopedE2eTests() {
+    sh """
+        make e2e-test-helm-namespace IMG=${operatorRepo}:${VERSION}
+    """
+}
+
 void runBlackDuckScan() {
     // Trigger BlackDuck scan job with CONTAINER_IMAGES parameter when params.PUBLISH_IMAGE is true
     if (params.PUBLISH_IMAGE) {
