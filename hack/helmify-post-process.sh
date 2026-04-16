@@ -94,11 +94,21 @@ if cleaned != content:
 PYEOF
 
 # Strip metricsService.ports block if helmify re-added it (now in metrics-service.yaml template)
+# The regex is scoped to only the metricsService: block to avoid accidentally removing
+# unrelated ports: keys that may exist elsewhere in values.yaml.
 python3 - "${VALUES_FILE}" << 'PYEOF'
 import sys, re
+
 with open(sys.argv[1], 'r') as f:
     content = f.read()
-cleaned = re.sub(r'(?m)^  ports:\n(?:  [ -][^\n]*\n)*', '', content)
+
+def _remove_ports(block_match):
+    """Remove the ports: sub-key from within the matched metricsService: block."""
+    return re.sub(r'  ports:\n(?:  [ -][^\n]*\n)*', '', block_match.group(0))
+
+# Match the entire metricsService: block (zero-indent key + all 2-space-indented lines).
+# Only the ports: sub-key inside that block is removed by the callback.
+cleaned = re.sub(r'(?m)^metricsService:\n(?:  [^\n]*\n)*', _remove_ports, content)
 if cleaned != content:
     with open(sys.argv[1], 'w') as f:
         f.write(cleaned)
@@ -546,6 +556,28 @@ else
     else
         echo "  [metrics-service.yaml] metrics.secure conditional port already present – skipping."
     fi
+fi
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 7. validation.yaml – render-time guard: scope=namespace + metrics.secure=true
+#    is an invalid combination because the TokenReview/SubjectAccessReview
+#    ClusterRoles are gated on scope.type=cluster and will not be rendered,
+#    so the manager would start expecting those permissions but never receive them.
+# ──────────────────────────────────────────────────────────────────────────────
+VALIDATION_FILE="${TEMPLATES_DIR}/validation.yaml"
+if [ ! -f "${VALIDATION_FILE}" ] || ! grep -q "metrics.secure" "${VALIDATION_FILE}"; then
+    echo "  [validation.yaml] Creating render-time guard..."
+    cat > "${VALIDATION_FILE}" << 'TMPL_EOF'
+{{- /*
+Render-time validation: catch invalid value combinations before deploying.
+*/}}
+{{- if and (eq .Values.scope.type "namespace") .Values.metrics.secure }}
+{{- fail "Invalid configuration: metrics.secure=true is not supported when scope.type=namespace. The TokenReview/SubjectAccessReview ClusterRoles required for secure metrics are only rendered in cluster scope. Set metrics.secure=false when using namespace scope." }}
+{{- end }}
+TMPL_EOF
+    echo "  [validation.yaml] Done."
+else
+    echo "  [validation.yaml] Guard already present – skipping."
 fi
 
 echo "=== Post-processing complete ==="

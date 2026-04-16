@@ -82,6 +82,8 @@ func main() {
 	opts.BindFlags(flag.CommandLine)
 	flag.Parse()
 
+	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&opts)))
+
 	// Get watch namespace from environment variable if not set via flag
 	if watchNamespace == "" {
 		watchNamespace = os.Getenv("WATCH_NAMESPACE")
@@ -97,8 +99,6 @@ func main() {
 			}
 		}
 	}
-
-	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&opts)))
 
 	if len(watchNamespaces) > 0 {
 		if len(watchNamespaces) == 1 {
