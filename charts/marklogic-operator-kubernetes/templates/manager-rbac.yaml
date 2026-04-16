@@ -105,7 +105,10 @@ Supports a single name, a comma-separated string, or a YAML list.
 {{- if .Values.scope.watchNamespaces }}
   {{- if kindIs "string" .Values.scope.watchNamespaces }}
     {{- range $ns := splitList "," .Values.scope.watchNamespaces }}
-      {{- $namespaces = append $namespaces (trim $ns) }}
+      {{- $ns = trim $ns }}
+      {{- if $ns }}
+        {{- $namespaces = append $namespaces $ns }}
+      {{- end }}
     {{- end }}
   {{- else if kindIs "slice" .Values.scope.watchNamespaces }}
     {{- $namespaces = .Values.scope.watchNamespaces }}
