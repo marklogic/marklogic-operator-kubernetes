@@ -30,7 +30,7 @@ import (
 const (
 	metricsReaderSA           = "metrics-reader-e2e"
 	metricsReaderCRB          = "metrics-reader-e2e-binding"
-	metricsReaderRole         = "marklogic-operator-metrics-reader"
+	metricsReaderRole         = "metrics-reader"
 	metricsServiceName        = "controller-manager-metrics-service"
 	metricsLocalSecurePort    = "19443"
 	metricsRemoteSecurePort   = "8443"
