@@ -31,7 +31,7 @@ const (
 	metricsReaderSA           = "metrics-reader-e2e"
 	metricsReaderCRB          = "metrics-reader-e2e-binding"
 	metricsReaderRole         = "marklogic-operator-metrics-reader"
-	metricsServiceName        = "marklogic-operator-controller-manager-metrics-service"
+	metricsServiceName        = "controller-manager-metrics-service"
 	metricsLocalSecurePort    = "19443"
 	metricsRemoteSecurePort   = "8443"
 	metricsLocalInsecurePort  = "18080"
