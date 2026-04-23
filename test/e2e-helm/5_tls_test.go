@@ -561,7 +561,9 @@ func TestTlsWithMultiNode(t *testing.T) {
 	})
 
 	feature.Teardown(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
-		utils.DeleteNS(ctx, c, tlsEdNS)
+		if err := c.Client().Resources().Delete(ctx, cr); err != nil && !apierrors.IsNotFound(err) {
+			t.Fatalf("failed to delete MarklogicCluster %s/%s during teardown: %v", cr.Namespace, cr.Name, err)
+		}
 		return ctx
 	})
 
