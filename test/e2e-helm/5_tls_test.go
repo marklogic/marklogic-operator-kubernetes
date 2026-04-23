@@ -320,7 +320,7 @@ func TestTlsWithNamedCert(t *testing.T) {
 	})
 
 	feature.Teardown(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
-		ml := &marklogicv1.MarkLogicCluster{
+		ml := &marklogicv1.MarklogicCluster{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      "marklogic",
 				Namespace: namedNS,
