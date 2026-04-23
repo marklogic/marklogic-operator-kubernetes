@@ -140,7 +140,42 @@ func TestHAProxyPathBasedEnabled(t *testing.T) {
 	})
 
 	feature.Teardown(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
-		utils.DeleteNS(ctx, c, haProxyPathNS)
+		mlc := &marklogicv1.MarklogicCluster{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "ml",
+				Namespace: haProxyPathNS,
+			},
+		}
+		if err := c.Client().Resources().Delete(ctx, mlc); err != nil && !apierrors.IsNotFound(err) {
+			t.Fatalf("failed to delete MarklogicCluster %s/%s: %v", haProxyPathNS, mlc.Name, err)
+		}
+
+		deadline := time.Now().Add(2 * time.Minute)
+		for time.Now().Before(deadline) {
+			current := &marklogicv1.MarklogicCluster{}
+			err := c.Client().Resources().Get(ctx, mlc.Name, haProxyPathNS, current)
+			if apierrors.IsNotFound(err) {
+				break
+			}
+			if err != nil {
+				t.Fatalf("failed waiting for MarklogicCluster %s/%s deletion: %v", haProxyPathNS, mlc.Name, err)
+			}
+			time.Sleep(5 * time.Second)
+		}
+
+		for time.Now().Before(deadline) {
+			pod := &corev1.Pod{}
+			err := c.Client().Resources().Get(ctx, "ml-0", haProxyPathNS, pod)
+			if apierrors.IsNotFound(err) {
+				return ctx
+			}
+			if err != nil {
+				t.Fatalf("failed waiting for owned pod ml-0 deletion in namespace %s: %v", haProxyPathNS, err)
+			}
+			time.Sleep(5 * time.Second)
+		}
+
+		t.Fatalf("timed out waiting for MarklogicCluster owned resources to be removed in namespace %s", haProxyPathNS)
 		return ctx
 	})
 
