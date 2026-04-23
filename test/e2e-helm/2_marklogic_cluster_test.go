@@ -126,12 +126,38 @@ func TestMarklogicClusterNamespaceScoped(t *testing.T) {
 
 	feature.Teardown(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 		client := c.Client()
-		if err := client.Resources(mlNsTestNS).Delete(ctx, nsTestCluster); err != nil {
+		resources := client.Resources(mlNsTestNS)
+
+		if err := resources.Delete(ctx, nsTestCluster); err != nil && !apierrors.IsNotFound(err) {
 			t.Logf("Warning: failed to delete MarklogicCluster: %v", err)
 		}
-		ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: mlNsTestNS}}
-		if err := client.Resources().Delete(ctx, ns); err != nil {
-			t.Logf("Warning: failed to delete namespace %s: %v", mlNsTestNS, err)
+
+		deadline := time.Now().Add(3 * time.Minute)
+		for time.Now().Before(deadline) {
+			cluster := &marklogicv1.MarklogicCluster{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      nsTestCluster.Name,
+					Namespace: mlNsTestNS,
+				},
+			}
+			if err := resources.Get(ctx, cluster.Name, cluster.Namespace, cluster); err != nil {
+				if apierrors.IsNotFound(err) {
+					break
+				}
+				t.Logf("Warning: failed to verify MarklogicCluster deletion: %v", err)
+			}
+			time.Sleep(5 * time.Second)
+		}
+
+		for time.Now().Before(deadline) {
+			pod := &corev1.Pod{}
+			if err := resources.Get(ctx, "node-0", mlNsTestNS, pod); err != nil {
+				if apierrors.IsNotFound(err) {
+					break
+				}
+				t.Logf("Warning: failed to verify pod deletion: %v", err)
+			}
+			time.Sleep(5 * time.Second)
 		}
 		return ctx
 	})

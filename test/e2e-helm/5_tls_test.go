@@ -150,7 +150,16 @@ func TestTlsWithSelfSigned(t *testing.T) {
 	})
 
 	feature.Teardown(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
-		utils.DeleteNS(ctx, c, tlsNamespace)
+		if err := c.Client().Resources().Delete(ctx, cr); err != nil && !apierrors.IsNotFound(err) {
+			t.Fatalf("Failed to delete MarklogicCluster %s/%s: %v", cr.Namespace, cr.Name, err)
+		}
+		if err := wait.For(
+			conditions.New(c.Client().Resources()).ResourceDeleted(cr),
+			wait.WithTimeout(5*time.Minute),
+			wait.WithInterval(10*time.Second),
+		); err != nil && !apierrors.IsNotFound(err) {
+			t.Fatalf("Timed out waiting for MarklogicCluster %s/%s deletion: %v", cr.Namespace, cr.Name, err)
+		}
 		return ctx
 	})
 
@@ -311,7 +320,41 @@ func TestTlsWithNamedCert(t *testing.T) {
 	})
 
 	feature.Teardown(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
-		utils.DeleteNS(ctx, c, namedNS)
+		ml := &marklogicv1.MarkLogicCluster{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "marklogic",
+				Namespace: namedNS,
+			},
+		}
+		if err := c.Client().Resources().Delete(ctx, ml); err != nil && !apierrors.IsNotFound(err) {
+			t.Fatalf("failed to delete MarkLogicCluster %s/%s: %v", namedNS, ml.Name, err)
+		}
+
+		deadline := time.Now().Add(3 * time.Minute)
+		for time.Now().Before(deadline) {
+			err := c.Client().Resources().Get(ctx, ml.Name, namedNS, ml)
+			if apierrors.IsNotFound(err) {
+				break
+			}
+			if err != nil {
+				t.Fatalf("failed to get MarkLogicCluster %s/%s while waiting for deletion: %v", namedNS, ml.Name, err)
+			}
+			time.Sleep(5 * time.Second)
+		}
+
+		for _, podName := range []string{"marklogic-0", "marklogic-1"} {
+			pod := &corev1.Pod{}
+			for time.Now().Before(deadline) {
+				err := c.Client().Resources().Get(ctx, podName, namedNS, pod)
+				if apierrors.IsNotFound(err) {
+					break
+				}
+				if err != nil {
+					t.Fatalf("failed to get pod %s/%s while waiting for deletion: %v", namedNS, podName, err)
+				}
+				time.Sleep(5 * time.Second)
+			}
+		}
 		return ctx
 	})
 
@@ -518,7 +561,9 @@ func TestTlsWithMultiNode(t *testing.T) {
 	})
 
 	feature.Teardown(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
-		utils.DeleteNS(ctx, c, tlsEdNS)
+		if err := c.Client().Resources().Delete(ctx, cr); err != nil && !apierrors.IsNotFound(err) {
+			t.Fatalf("failed to delete MarklogicCluster %s/%s during teardown: %v", cr.Namespace, cr.Name, err)
+		}
 		return ctx
 	})
 

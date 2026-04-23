@@ -221,11 +221,8 @@ func TestMlClusterWithEdnode(t *testing.T) {
 
 	feature.Teardown(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 		client := c.Client()
-		if err := client.Resources(edNodeNS).Delete(ctx, edCluster); err != nil {
+		if err := client.Resources(edNodeNS).Delete(ctx, edCluster); err != nil && !apierrors.IsNotFound(err) {
 			t.Logf("Warning: failed to delete MarklogicCluster: %v", err)
-		}
-		if err := client.Resources().Delete(ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: edNodeNS}}); err != nil {
-			t.Logf("Warning: failed to delete namespace %s: %v", edNodeNS, err)
 		}
 		return ctx
 	})
