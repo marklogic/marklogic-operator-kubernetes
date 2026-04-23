@@ -93,25 +93,57 @@ if cleaned != content:
     print("  [values.yaml] Removed manager.args (now in deployment template).")
 PYEOF
 
-# Strip metricsService.ports block if helmify re-added it (now in metrics-service.yaml template)
-# The regex is scoped to only the metricsService: block to avoid accidentally removing
-# unrelated ports: keys that may exist elsewhere in values.yaml.
+# Strip metricsService.ports block if helmify re-added it (now in metrics-service.yaml template).
+# Uses a line-based walker scoped to the `metricsService:` block so we never
+# touch a `ports:` key under any other top-level section.
 python3 - "${VALUES_FILE}" << 'PYEOF'
-import sys, re
+import sys
 
-with open(sys.argv[1], 'r') as f:
-    content = f.read()
+path = sys.argv[1]
+with open(path, 'r') as f:
+    lines = f.readlines()
 
-def _remove_ports(block_match):
-    """Remove the ports: sub-key from within the matched metricsService: block."""
-    return re.sub(r'  ports:\n(?:  [ -][^\n]*\n)*', '', block_match.group(0))
+out = []
+in_metrics_service = False     # currently inside the metricsService: block
+in_ports = False               # currently inside metricsService.ports: sub-block
+removed = False
 
-# Match the entire metricsService: block (zero-indent key + all 2-space-indented lines).
-# Only the ports: sub-key inside that block is removed by the callback.
-cleaned = re.sub(r'(?m)^metricsService:\n(?:  [^\n]*\n)*', _remove_ports, content)
-if cleaned != content:
-    with open(sys.argv[1], 'w') as f:
-        f.write(cleaned)
+for line in lines:
+    stripped = line.rstrip('\n')
+
+    # Detect entering the metricsService: top-level block.
+    if stripped == 'metricsService:':
+        in_metrics_service = True
+        in_ports = False
+        out.append(line)
+        continue
+
+    if in_metrics_service:
+        # A new top-level key (no leading whitespace, not blank) ends the block.
+        if stripped and not line.startswith((' ', '\t')):
+            in_metrics_service = False
+            in_ports = False
+            out.append(line)
+            continue
+
+        # Detect the ports: sub-key at exactly 2-space indent inside metricsService.
+        if line.startswith('  ports:') and not line.startswith('   '):
+            in_ports = True
+            removed = True
+            continue  # drop the `  ports:` line itself
+
+        # While inside metricsService.ports, drop indented child lines (>= 4 spaces
+        # or a list item starting with `  -`). Anything else ends the ports block.
+        if in_ports:
+            if line.startswith('    ') or line.startswith('  -'):
+                continue
+            in_ports = False  # fall through and keep this line
+
+    out.append(line)
+
+if removed:
+    with open(path, 'w') as f:
+        f.writelines(out)
     print("  [values.yaml] Removed metricsService.ports (now in metrics-service template).")
 PYEOF
 

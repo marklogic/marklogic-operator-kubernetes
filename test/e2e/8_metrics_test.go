@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -252,7 +253,12 @@ func TestMetricsEndpoint(t *testing.T) {
 			restCfg := c.Client().RESTConfig()
 			// Use the operator controller-manager SA — it has many permissions but
 			// is NOT bound to the metrics-reader ClusterRole, so the SAR check must deny it.
-			token := requestSAToken(ctx, t, restCfg, namespace, "marklogic-operator-controller-manager")
+			// Resolve the SA name from the controller-manager Deployment spec rather than
+			// hard-coding it, so the test works for both the kustomize install
+			// (`marklogic-operator-controller-manager`) and any future install method
+			// that uses a different naming convention.
+			controllerSA := lookupControllerManagerSA(ctx, t, c)
+			token := requestSAToken(ctx, t, restCfg, namespace, controllerSA)
 
 			pf, localAddr, cancel := startPortForward(t, namespace, metricsServiceName, localPort, remotePort)
 			defer func() {
@@ -346,6 +352,27 @@ func waitForPortForward(t *testing.T, addr string) {
 		time.Sleep(500 * time.Millisecond)
 	}
 	t.Fatalf("port-forward to %s did not become ready within 30s", addr)
+}
+
+// lookupControllerManagerSA returns the ServiceAccount name used by the
+// operator's controller-manager Deployment in `namespace`. Resolving it at
+// runtime avoids hard-coding install-method-specific names (the kustomize
+// install uses `marklogic-operator-controller-manager`, but a different
+// install method could use a different name).
+func lookupControllerManagerSA(ctx context.Context, t *testing.T, c *envconf.Config) string {
+	t.Helper()
+	const deployName = "marklogic-operator-controller-manager"
+	dep := &appsv1.Deployment{}
+	if err := c.Client().Resources(namespace).Get(ctx, deployName, namespace, dep); err != nil {
+		t.Fatalf("failed to get controller-manager Deployment %s/%s: %v", namespace, deployName, err)
+	}
+	sa := strings.TrimSpace(dep.Spec.Template.Spec.ServiceAccountName)
+	if sa == "" {
+		// Defaults to the namespace's "default" SA when unset.
+		sa = "default"
+	}
+	t.Logf("Resolved controller-manager ServiceAccount: %s/%s", namespace, sa)
+	return sa
 }
 
 // requestSAToken calls the TokenRequest API to obtain a bound token for the

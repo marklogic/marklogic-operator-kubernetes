@@ -167,15 +167,27 @@ e2e-test-istio:
 	@echo "=====Running Istio ambient mode e2e tests"
 	E2E_ISTIO_AMBIENT=true go test -v -count=1 -timeout 30m ./test/e2e -run "Test(Istio|NonIstio)"
 
-.PHONY: e2e-test-namespace  ## Run e2e tests against a namespace-scoped operator install
-e2e-test-namespace:
-	@echo "=====Running e2e tests in namespace-scoped mode (insecure metrics; secure metrics require cluster scope)"
-	E2E_SCOPE_TYPE=namespace E2E_METRICS_SECURE=false go test -v -count=1 -timeout 30m ./test/e2e
+# NOTE: There is intentionally no `e2e-test-namespace` target here.
+# The `test/e2e` suite always deploys the operator via `make deploy`
+# (kustomize config/default → ClusterRole/ClusterRoleBinding, secure metrics
+# on :8443) inside its TestMain, and does not consume E2E_SCOPE_TYPE /
+# E2E_METRICS_SECURE / WATCH_NAMESPACE at runtime. A `make e2e-test-namespace`
+# that only set those env vars would silently exercise the wrong configuration
+# (e.g. the metrics test would expect HTTP/:8080 against an operator still
+# serving HTTPS/:8443). Namespace-scoped RBAC and the insecure HTTP metrics
+# endpoint are validated by `e2e-test-helm-namespace` below, which installs the
+# operator via the Helm chart with `scope.type=namespace` and
+# `metrics.secure=false`.
 
-.PHONY: e2e-test-cluster  ## Run e2e tests against a cluster-scoped operator install
+.PHONY: e2e-test-cluster  ## Run e2e tests against a cluster-scoped operator install (alias for `e2e-test`)
 e2e-test-cluster:
 	@echo "=====Running e2e tests in cluster-scoped mode"
-	E2E_SCOPE_TYPE=cluster go test -v -count=1 -timeout 30m ./test/e2e
+	go test -v -count=1 -timeout 30m ./test/e2e
+
+.PHONY: e2e-test-helm-namespace  ## Run namespace-scoped e2e tests via Helm chart install (validates Role/RoleBinding, no ClusterRole, insecure metrics on :8080)
+e2e-test-helm-namespace:
+	@echo "=====Running namespace-scoped e2e tests via Helm chart====="
+	E2E_DOCKER_IMAGE=$(IMG) go test -v -count=1 -timeout 45m ./test/e2e-helm
 
 .PHONY: e2e-setup-minikube
 e2e-setup-minikube: kustomize controller-gen build docker-build

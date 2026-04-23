@@ -146,13 +146,21 @@ func main() {
 
 	// Build cache options: when watchNamespaces is non-empty (set via --watch-namespace flag
 	// or WATCH_NAMESPACE env var) the operator runs in namespace-scoped mode.
+	// The cache is restricted strictly to the requested watch namespaces so the
+	// operator never tries to list/watch resources in its own namespace unless
+	// that namespace is also explicitly watched. Leader election runs in the
+	// operator's own namespace via LeaderElectionNamespace below, independently
+	// of the cache namespace set.
 	cacheOpts := cache.Options{}
+	var leaderElectionNamespace string
 	if len(watchNamespaces) > 0 {
 		nsMap := make(map[string]cache.Config)
 		for _, ns := range watchNamespaces {
 			nsMap[ns] = cache.Config{}
 		}
-		// Always include the operator's own namespace so leader-election works.
+		cacheOpts.DefaultNamespaces = nsMap
+
+		// Resolve the operator's own namespace for leader election only.
 		podNS := strings.TrimSpace(os.Getenv("POD_NAMESPACE"))
 		if podNS == "" {
 			nsBytes, readErr := os.ReadFile("/var/run/secrets/kubernetes.io/serviceaccount/namespace")
@@ -166,18 +174,18 @@ func main() {
 			setupLog.Info("unable to determine pod namespace; namespace-scoped mode requires POD_NAMESPACE or the serviceaccount namespace file")
 			os.Exit(1)
 		}
-		nsMap[podNS] = cache.Config{}
-		cacheOpts.DefaultNamespaces = nsMap
+		leaderElectionNamespace = podNS
 	}
 
 	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
-		Scheme:                 scheme,
-		Cache:                  cacheOpts,
-		Metrics:                metricsOpts,
-		WebhookServer:          webhookServer,
-		HealthProbeBindAddress: probeAddr,
-		LeaderElection:         enableLeaderElection,
-		LeaderElectionID:       "4d7bf7cb.marklogic.com",
+		Scheme:                  scheme,
+		Cache:                   cacheOpts,
+		Metrics:                 metricsOpts,
+		WebhookServer:           webhookServer,
+		HealthProbeBindAddress:  probeAddr,
+		LeaderElection:          enableLeaderElection,
+		LeaderElectionID:        "4d7bf7cb.marklogic.com",
+		LeaderElectionNamespace: leaderElectionNamespace,
 		// LeaderElectionReleaseOnCancel defines if the leader should step down voluntarily
 		// when the Manager ends. This requires the binary to immediately end when the
 		// Manager is stopped, otherwise, this setting is unsafe. Setting this significantly
