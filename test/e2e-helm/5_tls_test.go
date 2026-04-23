@@ -150,7 +150,16 @@ func TestTlsWithSelfSigned(t *testing.T) {
 	})
 
 	feature.Teardown(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
-		utils.DeleteNS(ctx, c, tlsNamespace)
+		if err := c.Client().Resources().Delete(ctx, cr); err != nil && !apierrors.IsNotFound(err) {
+			t.Fatalf("Failed to delete MarklogicCluster %s/%s: %v", cr.Namespace, cr.Name, err)
+		}
+		if err := wait.For(
+			conditions.New(c.Client().Resources()).ResourceDeleted(cr),
+			wait.WithTimeout(5*time.Minute),
+			wait.WithInterval(10*time.Second),
+		); err != nil && !apierrors.IsNotFound(err) {
+			t.Fatalf("Timed out waiting for MarklogicCluster %s/%s deletion: %v", cr.Namespace, cr.Name, err)
+		}
 		return ctx
 	})
 
