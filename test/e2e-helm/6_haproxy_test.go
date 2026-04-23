@@ -266,7 +266,10 @@ func TestHAProxyPathBasedDisabled(t *testing.T) {
 	})
 
 	feature.Teardown(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
-		utils.DeleteNS(ctx, c, haProxyNS)
+		// Do not delete the watched namespace here. In this suite, Helm installs
+		// namespace-scoped RBAC into watched namespaces, and deleting haProxyNS
+		// during test teardown can remove that RBAC and cause terminating-namespace
+		// churn. Namespace cleanup is deferred to the suite's final cleanup.
 		return ctx
 	})
 
