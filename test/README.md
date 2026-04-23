@@ -22,12 +22,16 @@ make e2e-cleanup-minikube
 ### Run in specific scope mode
 
 ```bash
-# Cluster-scoped (default)
+# Cluster-scoped (default — what `make e2e-test` runs)
 make e2e-test-cluster
-
-# Namespace-scoped (patches WATCH_NAMESPACE at runtime; metrics.secure forced to false)
-make e2e-test-namespace
 ```
+
+> **Note:** Namespace-scoped behaviour is **not** validated by `test/e2e`.
+> The `test/e2e` suite always deploys the operator via `make deploy`
+> (kustomize, ClusterRole/ClusterRoleBinding, secure metrics on `:8443`)
+> and does not patch `WATCH_NAMESPACE` or metrics flags at runtime.
+> To validate namespace-scoped RBAC and the insecure metrics endpoint,
+> use the Helm-based suite below: `make e2e-test-helm-namespace`.
 
 ### Run specific test types
 
