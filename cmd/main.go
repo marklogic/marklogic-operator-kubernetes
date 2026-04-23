@@ -20,6 +20,7 @@ import (
 	"crypto/tls"
 	"flag"
 	"os"
+	"sort"
 	"strings"
 
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
@@ -100,16 +101,6 @@ func main() {
 
 	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&opts)))
 
-	if len(watchNamespaces) > 0 {
-		if len(watchNamespaces) == 1 {
-			setupLog.Info("operator will watch resources in namespace", "namespace", watchNamespaces[0])
-		} else {
-			setupLog.Info("operator will watch resources in multiple namespaces", "namespaces", watchNamespaces)
-		}
-	} else {
-		setupLog.Info("operator will watch resources in all namespaces (cluster-scoped)")
-	}
-
 	// if the enable-http2 flag is false (the default), http/2 should be disabled
 	// due to its vulnerabilities. More specifically, disabling http/2 will
 	// prevent from being vulnerable to the HTTP/2 Stream Cancelation and
@@ -168,6 +159,23 @@ func main() {
 		}
 		nsMap[podNS] = cache.Config{}
 		cacheOpts.DefaultNamespaces = nsMap
+
+		// Log the effective cache namespace set, which always includes the operator's
+		// own namespace (added above for leader election) in addition to the
+		// user-requested watch namespaces.
+		cachedNamespaces := make([]string, 0, len(nsMap))
+		for ns := range nsMap {
+			cachedNamespaces = append(cachedNamespaces, ns)
+		}
+		sort.Strings(cachedNamespaces)
+		if len(watchNamespaces) == 1 && watchNamespaces[0] == podNS {
+			setupLog.Info("operator will watch resources in namespace", "namespace", podNS)
+		} else {
+			setupLog.Info("operator will watch resources in namespaces (operator namespace always included for leader election)",
+				"requested", watchNamespaces, "effective", cachedNamespaces, "operatorNamespace", podNS)
+		}
+	} else {
+		setupLog.Info("operator will watch resources in all namespaces (cluster-scoped)")
 	}
 
 	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{

@@ -316,7 +316,7 @@ func TestMetricsEndpoint(t *testing.T) {
 // It returns the process handle, the local address, and a cancel function.
 func startPortForward(t *testing.T, ns, svc, localPort, remotePort string) (*exec.Cmd, string, context.CancelFunc) {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	ctx, cancel := context.WithCancel(context.Background())
 
 	// #nosec G204 — ns, svc, localPort, remotePort are all test constants
 	cmd := exec.CommandContext(ctx, "kubectl", "port-forward",

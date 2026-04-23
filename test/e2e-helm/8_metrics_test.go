@@ -91,7 +91,7 @@ func TestMetricsEndpointInsecure(t *testing.T) {
 // in the operator namespace (helmNS). Returns the process, local address, and cancel func.
 func startMetricsPortForward(t *testing.T) (*exec.Cmd, string, context.CancelFunc) {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	ctx, cancel := context.WithCancel(context.Background())
 	// #nosec G204 — helmNS, metricsServiceName, metricsLocalPort, metricsRemotePort are package constants
 	cmd := exec.CommandContext(ctx, "kubectl", "port-forward",
 		"-n", helmNS,
