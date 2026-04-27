@@ -20,6 +20,7 @@ import (
 	"crypto/tls"
 	"flag"
 	"os"
+	"strings"
 
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
 	// to ensure that exec-entrypoint and run can make use of them.
@@ -29,6 +30,7 @@ import (
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	"sigs.k8s.io/controller-runtime/pkg/metrics/filters"
@@ -58,6 +60,7 @@ func main() {
 	var probeAddr string
 	var secureMetrics bool
 	var enableHTTP2 bool
+	var watchNamespace string
 	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8080",
 		"The address the metrics endpoint binds to. Use :8443 when --metrics-secure is true.")
 	flag.StringVar(&probeAddr, "health-probe-bind-address", ":8081", "The address the probe endpoint binds to.")
@@ -69,6 +72,10 @@ func main() {
 			"When true, --metrics-bind-address should also be changed to :8443.")
 	flag.BoolVar(&enableHTTP2, "enable-http2", false,
 		"If set, HTTP/2 will be enabled for the metrics and webhook servers")
+	flag.StringVar(&watchNamespace, "watch-namespace", "",
+		"Namespace(s) to watch for resources. If empty, watches all namespaces (cluster-scoped). "+
+			"Can be a single namespace or comma-separated list of namespaces. "+
+			"Can be set via WATCH_NAMESPACE environment variable.")
 	opts := zap.Options{
 		Development: true,
 	}
@@ -76,6 +83,33 @@ func main() {
 	flag.Parse()
 
 	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&opts)))
+
+	// Get watch namespace from environment variable if not set via flag
+	if watchNamespace == "" {
+		watchNamespace = os.Getenv("WATCH_NAMESPACE")
+	}
+
+	// Parse watch namespaces (support comma-separated list)
+	var watchNamespaces []string
+	if watchNamespace != "" {
+		for _, ns := range strings.Split(watchNamespace, ",") {
+			ns = strings.TrimSpace(ns)
+			if ns != "" {
+				watchNamespaces = append(watchNamespaces, ns)
+			}
+		}
+	}
+
+	if len(watchNamespaces) > 0 {
+		if len(watchNamespaces) == 1 {
+			setupLog.Info("operator will watch resources in namespace", "namespace", watchNamespaces[0])
+		} else {
+			setupLog.Info("operator will watch resources in multiple namespaces", "namespaces", watchNamespaces)
+		}
+	} else {
+		setupLog.Info("operator will watch resources in all namespaces (cluster-scoped)")
+	}
+
 	// if the enable-http2 flag is false (the default), http/2 should be disabled
 	// due to its vulnerabilities. More specifically, disabling http/2 will
 	// prevent from being vulnerable to the HTTP/2 Stream Cancelation and
@@ -110,13 +144,48 @@ func main() {
 		TLSOpts: tlsOpts,
 	})
 
+	// Build cache options: when watchNamespaces is non-empty (set via --watch-namespace flag
+	// or WATCH_NAMESPACE env var) the operator runs in namespace-scoped mode.
+	// The cache is restricted strictly to the requested watch namespaces so the
+	// operator never tries to list/watch resources in its own namespace unless
+	// that namespace is also explicitly watched. Leader election runs in the
+	// operator's own namespace via LeaderElectionNamespace below, independently
+	// of the cache namespace set.
+	cacheOpts := cache.Options{}
+	var leaderElectionNamespace string
+	if len(watchNamespaces) > 0 {
+		nsMap := make(map[string]cache.Config)
+		for _, ns := range watchNamespaces {
+			nsMap[ns] = cache.Config{}
+		}
+		cacheOpts.DefaultNamespaces = nsMap
+
+		// Resolve the operator's own namespace for leader election only.
+		podNS := strings.TrimSpace(os.Getenv("POD_NAMESPACE"))
+		if podNS == "" {
+			nsBytes, readErr := os.ReadFile("/var/run/secrets/kubernetes.io/serviceaccount/namespace")
+			if readErr != nil {
+				setupLog.Error(readErr, "unable to determine pod namespace from POD_NAMESPACE or serviceaccount namespace file")
+				os.Exit(1)
+			}
+			podNS = strings.TrimSpace(string(nsBytes))
+		}
+		if podNS == "" {
+			setupLog.Info("unable to determine pod namespace; namespace-scoped mode requires POD_NAMESPACE or the serviceaccount namespace file")
+			os.Exit(1)
+		}
+		leaderElectionNamespace = podNS
+	}
+
 	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
-		Scheme:                 scheme,
-		Metrics:                metricsOpts,
-		WebhookServer:          webhookServer,
-		HealthProbeBindAddress: probeAddr,
-		LeaderElection:         enableLeaderElection,
-		LeaderElectionID:       "4d7bf7cb.marklogic.com",
+		Scheme:                  scheme,
+		Cache:                   cacheOpts,
+		Metrics:                 metricsOpts,
+		WebhookServer:           webhookServer,
+		HealthProbeBindAddress:  probeAddr,
+		LeaderElection:          enableLeaderElection,
+		LeaderElectionID:        "4d7bf7cb.marklogic.com",
+		LeaderElectionNamespace: leaderElectionNamespace,
 		// LeaderElectionReleaseOnCancel defines if the leader should step down voluntarily
 		// when the Manager ends. This requires the binary to immediately end when the
 		// Manager is stopped, otherwise, this setting is unsafe. Setting this significantly

@@ -137,9 +137,9 @@ void runMinikubeSetup() {
     """
 }
 
-void runE2eTests() {
+void runE2eTests(String scope = 'cluster') {
     sh """
-        make e2e-test IMG=${operatorRepo}:${VERSION}
+        make e2e-test-${scope} IMG=${operatorRepo}:${VERSION}
     """
 }
 

@@ -23,12 +23,37 @@ spec:
         kubectl.kubernetes.io/default-container: manager
     spec:
       containers:
-      - args: {{- toYaml .Values.controllerManager.manager.args | nindent 8 }}
+      - args:
+        {{- if .Values.metrics.secure }}
+        - --health-probe-bind-address=:8081
+        - --metrics-bind-address=:8443
+        - --metrics-secure=true
+        - --leader-elect
+        {{- else }}
+        - --health-probe-bind-address=:8081
+        - --metrics-bind-address=:8080
+        - --metrics-secure=false
+        - --leader-elect
+        {{- end }}
         command:
         - /manager
         env:
         - name: KUBERNETES_CLUSTER_DOMAIN
           value: {{ quote .Values.kubernetesClusterDomain }}
+        - name: POD_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        {{- if eq .Values.scope.type "namespace" }}
+        {{- $ns := .Values.scope.watchNamespaces }}
+        {{- if not $ns }}
+          {{- $ns = .Release.Namespace }}
+        {{- else if kindIs "slice" $ns }}
+          {{- $ns = join "," $ns }}
+        {{- end }}
+        - name: WATCH_NAMESPACE
+          value: {{ $ns | quote }}
+        {{- end }}
         image: {{ .Values.controllerManager.manager.image.repository }}:{{ .Values.controllerManager.manager.image.tag
           | default .Chart.AppVersion }}
         livenessProbe:
@@ -39,9 +64,15 @@ spec:
           periodSeconds: 20
         name: manager
         ports:
+        {{- if .Values.metrics.secure }}
         - containerPort: 8443
           name: https
           protocol: TCP
+        {{- else }}
+        - containerPort: 8080
+          name: http
+          protocol: TCP
+        {{- end }}
         readinessProbe:
           httpGet:
             path: /readyz

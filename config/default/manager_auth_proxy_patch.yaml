@@ -2,13 +2,13 @@
 
 # Configures the controller manager metrics endpoint.
 #
-# ── Secure mode (default, recommended for production) ───────────────────────
+# ── Secure mode (default, recommended for production) ──────────────────────────────────────
 # The manager serves /metrics over HTTPS on :8443.
 # Every scrape is authenticated via TokenReview and authorised via
 # SubjectAccessReview.  Prometheus must present a ServiceAccount token that
 # is bound to the metrics-reader ClusterRole.
 #
-# ── Insecure mode (development / quick-start) ────────────────────────────────
+# ── Insecure mode (development / quick-start) ──────────────────────────────────
 # To serve plain HTTP on :8080 with no authentication, replace the manager
 # args block below with:
 #
@@ -23,9 +23,7 @@
 #       protocol: TCP
 #       name: http
 #
-# You must also update config/rbac/auth_proxy_service.yaml to expose port 8080
-# and config/prometheus/monitor.yaml to use scheme: http (no bearerTokenFile).
-# ─────────────────────────────────────────────────────────────────────────────
+# ──────────────────────────────────────────────────────────────────────────────
 apiVersion: apps/v1
 kind: Deployment
 metadata:

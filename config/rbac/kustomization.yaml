@@ -11,9 +11,10 @@ resources:
 - role_binding.yaml
 - leader_election_role.yaml
 - leader_election_role_binding.yaml
-# The following 4 resources grant the controller manager's ServiceAccount
-# permission to create TokenReviews and SubjectAccessReviews (required for
-# the native secure metrics server) and expose a metrics Service.
+# Comment the following 4 lines if you want to disable
+# the native secure metrics endpoint (controller-runtime authn/authz).
+# These grant the controller manager permission to perform TokenReview
+# and SubjectAccessReview, and allow scraping clients to access /metrics.
 - auth_proxy_service.yaml
 - auth_proxy_role.yaml
 - auth_proxy_role_binding.yaml
