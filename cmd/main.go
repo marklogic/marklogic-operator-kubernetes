@@ -101,6 +101,32 @@ func main() {
 
 	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&opts)))
 
+	// Get watch namespace from environment variable if not set via flag
+	if watchNamespace == "" {
+		watchNamespace = os.Getenv("WATCH_NAMESPACE")
+	}
+
+	// Parse watch namespaces (support comma-separated list)
+	var watchNamespaces []string
+	if watchNamespace != "" {
+		for _, ns := range strings.Split(watchNamespace, ",") {
+			ns = strings.TrimSpace(ns)
+			if ns != "" {
+				watchNamespaces = append(watchNamespaces, ns)
+			}
+		}
+	}
+
+	if len(watchNamespaces) > 0 {
+		if len(watchNamespaces) == 1 {
+			setupLog.Info("operator will watch resources in namespace", "namespace", watchNamespaces[0])
+		} else {
+			setupLog.Info("operator will watch resources in multiple namespaces", "namespaces", watchNamespaces)
+		}
+	} else {
+		setupLog.Info("operator will watch resources in all namespaces (cluster-scoped)")
+	}
+
 	// if the enable-http2 flag is false (the default), http/2 should be disabled
 	// due to its vulnerabilities. More specifically, disabling http/2 will
 	// prevent from being vulnerable to the HTTP/2 Stream Cancelation and
