@@ -1,0 +1,23 @@
+# Copyright (c) 2024-2026 Progress Software Corporation and/or its subsidiaries or affiliates. All Rights Reserved.
+
+# This patch adds the args to allow the manager to serve /metrics endpoint
+# using HTTPS with Kubernetes TokenReview/SubjectAccessReview authentication.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: controller-manager
+  namespace: system
+spec:
+  template:
+    spec:
+      containers:
+      - name: manager
+        args:
+        - "--health-probe-bind-address=:8081"
+        - "--metrics-bind-address=:8443"
+        - "--metrics-secure=true"
+        - "--leader-elect"
+        ports:
+        - containerPort: 8443
+          protocol: TCP
+          name: https
