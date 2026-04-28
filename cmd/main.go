@@ -101,22 +101,6 @@ func main() {
 
 	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&opts)))
 
-	// Get watch namespace from environment variable if not set via flag
-	if watchNamespace == "" {
-		watchNamespace = os.Getenv("WATCH_NAMESPACE")
-	}
-
-	// Parse watch namespaces (support comma-separated list)
-	var watchNamespaces []string
-	if watchNamespace != "" {
-		for _, ns := range strings.Split(watchNamespace, ",") {
-			ns = strings.TrimSpace(ns)
-			if ns != "" {
-				watchNamespaces = append(watchNamespaces, ns)
-			}
-		}
-	}
-
 	if len(watchNamespaces) > 0 {
 		if len(watchNamespaces) == 1 {
 			setupLog.Info("operator will watch resources in namespace", "namespace", watchNamespaces[0])
