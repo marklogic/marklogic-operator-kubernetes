@@ -20,6 +20,7 @@ import (
 	"crypto/tls"
 	"flag"
 	"os"
+	"sort"
 	"strings"
 
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
@@ -82,8 +83,6 @@ func main() {
 	opts.BindFlags(flag.CommandLine)
 	flag.Parse()
 
-	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&opts)))
-
 	// Get watch namespace from environment variable if not set via flag
 	if watchNamespace == "" {
 		watchNamespace = os.Getenv("WATCH_NAMESPACE")
@@ -99,6 +98,8 @@ func main() {
 			}
 		}
 	}
+
+	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&opts)))
 
 	if len(watchNamespaces) > 0 {
 		if len(watchNamespaces) == 1 {
@@ -146,21 +147,13 @@ func main() {
 
 	// Build cache options: when watchNamespaces is non-empty (set via --watch-namespace flag
 	// or WATCH_NAMESPACE env var) the operator runs in namespace-scoped mode.
-	// The cache is restricted strictly to the requested watch namespaces so the
-	// operator never tries to list/watch resources in its own namespace unless
-	// that namespace is also explicitly watched. Leader election runs in the
-	// operator's own namespace via LeaderElectionNamespace below, independently
-	// of the cache namespace set.
 	cacheOpts := cache.Options{}
-	var leaderElectionNamespace string
 	if len(watchNamespaces) > 0 {
 		nsMap := make(map[string]cache.Config)
 		for _, ns := range watchNamespaces {
 			nsMap[ns] = cache.Config{}
 		}
-		cacheOpts.DefaultNamespaces = nsMap
-
-		// Resolve the operator's own namespace for leader election only.
+		// Always include the operator's own namespace so leader-election works.
 		podNS := strings.TrimSpace(os.Getenv("POD_NAMESPACE"))
 		if podNS == "" {
 			nsBytes, readErr := os.ReadFile("/var/run/secrets/kubernetes.io/serviceaccount/namespace")
@@ -174,18 +167,35 @@ func main() {
 			setupLog.Info("unable to determine pod namespace; namespace-scoped mode requires POD_NAMESPACE or the serviceaccount namespace file")
 			os.Exit(1)
 		}
-		leaderElectionNamespace = podNS
+		nsMap[podNS] = cache.Config{}
+		cacheOpts.DefaultNamespaces = nsMap
+
+		// Log the effective cache namespace set, which always includes the operator's
+		// own namespace (added above for leader election) in addition to the
+		// user-requested watch namespaces.
+		cachedNamespaces := make([]string, 0, len(nsMap))
+		for ns := range nsMap {
+			cachedNamespaces = append(cachedNamespaces, ns)
+		}
+		sort.Strings(cachedNamespaces)
+		if len(watchNamespaces) == 1 && watchNamespaces[0] == podNS {
+			setupLog.Info("operator will watch resources in namespace", "namespace", podNS)
+		} else {
+			setupLog.Info("operator will watch resources in namespaces (operator namespace always included for leader election)",
+				"requested", watchNamespaces, "effective", cachedNamespaces, "operatorNamespace", podNS)
+		}
+	} else {
+		setupLog.Info("operator will watch resources in all namespaces (cluster-scoped)")
 	}
 
 	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
-		Scheme:                  scheme,
-		Cache:                   cacheOpts,
-		Metrics:                 metricsOpts,
-		WebhookServer:           webhookServer,
-		HealthProbeBindAddress:  probeAddr,
-		LeaderElection:          enableLeaderElection,
-		LeaderElectionID:        "4d7bf7cb.marklogic.com",
-		LeaderElectionNamespace: leaderElectionNamespace,
+		Scheme:                 scheme,
+		Cache:                  cacheOpts,
+		Metrics:                metricsOpts,
+		WebhookServer:          webhookServer,
+		HealthProbeBindAddress: probeAddr,
+		LeaderElection:         enableLeaderElection,
+		LeaderElectionID:       "4d7bf7cb.marklogic.com",
 		// LeaderElectionReleaseOnCancel defines if the leader should step down voluntarily
 		// when the Manager ends. This requires the binary to immediately end when the
 		// Manager is stopped, otherwise, this setting is unsafe. Setting this significantly

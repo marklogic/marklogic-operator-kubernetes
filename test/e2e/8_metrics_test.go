@@ -15,7 +15,6 @@ import (
 	"testing"
 	"time"
 
-	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -31,8 +30,8 @@ import (
 const (
 	metricsReaderSA           = "metrics-reader-e2e"
 	metricsReaderCRB          = "metrics-reader-e2e-binding"
-	metricsReaderRole         = "metrics-reader"
-	metricsServiceName        = "controller-manager-metrics-service"
+	metricsReaderRole         = "marklogic-operator-metrics-reader"
+	metricsServiceName        = "marklogic-operator-controller-manager-metrics-service"
 	metricsLocalSecurePort    = "19443"
 	metricsRemoteSecurePort   = "8443"
 	metricsLocalInsecurePort  = "18080"
@@ -253,12 +252,7 @@ func TestMetricsEndpoint(t *testing.T) {
 			restCfg := c.Client().RESTConfig()
 			// Use the operator controller-manager SA — it has many permissions but
 			// is NOT bound to the metrics-reader ClusterRole, so the SAR check must deny it.
-			// Resolve the SA name from the controller-manager Deployment spec rather than
-			// hard-coding it, so the test works for both the kustomize install
-			// (`marklogic-operator-controller-manager`) and any future install method
-			// that uses a different naming convention.
-			controllerSA := lookupControllerManagerSA(ctx, t, c)
-			token := requestSAToken(ctx, t, restCfg, namespace, controllerSA)
+			token := requestSAToken(ctx, t, restCfg, namespace, "marklogic-operator-controller-manager")
 
 			pf, localAddr, cancel := startPortForward(t, namespace, metricsServiceName, localPort, remotePort)
 			defer func() {
@@ -322,7 +316,7 @@ func TestMetricsEndpoint(t *testing.T) {
 // It returns the process handle, the local address, and a cancel function.
 func startPortForward(t *testing.T, ns, svc, localPort, remotePort string) (*exec.Cmd, string, context.CancelFunc) {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	ctx, cancel := context.WithCancel(context.Background())
 
 	// #nosec G204 — ns, svc, localPort, remotePort are all test constants
 	cmd := exec.CommandContext(ctx, "kubectl", "port-forward",
@@ -352,27 +346,6 @@ func waitForPortForward(t *testing.T, addr string) {
 		time.Sleep(500 * time.Millisecond)
 	}
 	t.Fatalf("port-forward to %s did not become ready within 30s", addr)
-}
-
-// lookupControllerManagerSA returns the ServiceAccount name used by the
-// operator's controller-manager Deployment in `namespace`. Resolving it at
-// runtime avoids hard-coding install-method-specific names (the kustomize
-// install uses `marklogic-operator-controller-manager`, but a different
-// install method could use a different name).
-func lookupControllerManagerSA(ctx context.Context, t *testing.T, c *envconf.Config) string {
-	t.Helper()
-	const deployName = "marklogic-operator-controller-manager"
-	dep := &appsv1.Deployment{}
-	if err := c.Client().Resources(namespace).Get(ctx, deployName, namespace, dep); err != nil {
-		t.Fatalf("failed to get controller-manager Deployment %s/%s: %v", namespace, deployName, err)
-	}
-	sa := strings.TrimSpace(dep.Spec.Template.Spec.ServiceAccountName)
-	if sa == "" {
-		// Defaults to the namespace's "default" SA when unset.
-		sa = "default"
-	}
-	t.Logf("Resolved controller-manager ServiceAccount: %s/%s", namespace, sa)
-	return sa
 }
 
 // requestSAToken calls the TokenRequest API to obtain a bound token for the

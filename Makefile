@@ -169,15 +169,11 @@ e2e-test-istio:
 
 # NOTE: There is intentionally no `e2e-test-namespace` target here.
 # The `test/e2e` suite always deploys the operator via `make deploy`
-# (kustomize config/default → ClusterRole/ClusterRoleBinding, secure metrics
-# on :8443) inside its TestMain, and does not consume E2E_SCOPE_TYPE /
-# E2E_METRICS_SECURE / WATCH_NAMESPACE at runtime. A `make e2e-test-namespace`
-# that only set those env vars would silently exercise the wrong configuration
-# (e.g. the metrics test would expect HTTP/:8080 against an operator still
-# serving HTTPS/:8443). Namespace-scoped RBAC and the insecure HTTP metrics
-# endpoint are validated by `e2e-test-helm-namespace` below, which installs the
-# operator via the Helm chart with `scope.type=namespace` and
-# `metrics.secure=false`.
+# (kustomize, ClusterRole/ClusterRoleBinding, secure metrics on :8443)
+# inside its TestMain, and does not honor E2E_SCOPE_TYPE / E2E_METRICS_SECURE
+# / WATCH_NAMESPACE patching. To validate namespace-scoped RBAC and the
+# insecure HTTP metrics endpoint, use `e2e-test-helm-namespace` below,
+# which installs the operator via the Helm chart with scope.type=namespace.
 
 .PHONY: e2e-test-cluster  ## Run e2e tests against a cluster-scoped operator install (alias for `e2e-test`)
 e2e-test-cluster:

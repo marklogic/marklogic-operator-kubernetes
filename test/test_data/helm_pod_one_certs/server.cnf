@@ -1,0 +1,16 @@
+# Copyright (c) 2024-2026 Progress Software Corporation and/or its subsidiaries or affiliates. All Rights Reserved.
+
+[req]
+default_md = sha256
+prompt = no
+req_extensions = v3_ext
+distinguished_name = req_distinguished_name
+
+[req_distinguished_name]
+CN = marklogic-1.marklogic.ml-ns-tls-named.svc.cluster.local
+OU=MarkLogic
+
+[v3_ext]
+keyUsage = critical,digitalSignature,keyEncipherment
+extendedKeyUsage = critical,serverAuth,clientAuth
+subjectAltName = DNS:localhost, DNS:marklogic-1.marklogic.ml-ns-tls-named.svc.cluster.local

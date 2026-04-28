@@ -93,57 +93,15 @@ if cleaned != content:
     print("  [values.yaml] Removed manager.args (now in deployment template).")
 PYEOF
 
-# Strip metricsService.ports block if helmify re-added it (now in metrics-service.yaml template).
-# Uses a line-based walker scoped to the `metricsService:` block so we never
-# touch a `ports:` key under any other top-level section.
+# Strip metricsService.ports block if helmify re-added it (now in metrics-service.yaml template)
 python3 - "${VALUES_FILE}" << 'PYEOF'
-import sys
-
-path = sys.argv[1]
-with open(path, 'r') as f:
-    lines = f.readlines()
-
-out = []
-in_metrics_service = False     # currently inside the metricsService: block
-in_ports = False               # currently inside metricsService.ports: sub-block
-removed = False
-
-for line in lines:
-    stripped = line.rstrip('\n')
-
-    # Detect entering the metricsService: top-level block.
-    if stripped == 'metricsService:':
-        in_metrics_service = True
-        in_ports = False
-        out.append(line)
-        continue
-
-    if in_metrics_service:
-        # A new top-level key (no leading whitespace, not blank) ends the block.
-        if stripped and not line.startswith((' ', '\t')):
-            in_metrics_service = False
-            in_ports = False
-            out.append(line)
-            continue
-
-        # Detect the ports: sub-key at exactly 2-space indent inside metricsService.
-        if line.startswith('  ports:') and not line.startswith('   '):
-            in_ports = True
-            removed = True
-            continue  # drop the `  ports:` line itself
-
-        # While inside metricsService.ports, drop indented child lines (>= 4 spaces
-        # or a list item starting with `  -`). Anything else ends the ports block.
-        if in_ports:
-            if line.startswith('    ') or line.startswith('  -'):
-                continue
-            in_ports = False  # fall through and keep this line
-
-    out.append(line)
-
-if removed:
-    with open(path, 'w') as f:
-        f.writelines(out)
+import sys, re
+with open(sys.argv[1], 'r') as f:
+    content = f.read()
+cleaned = re.sub(r'(?m)^  ports:\n(?:  [ -][^\n]*\n)*', '', content)
+if cleaned != content:
+    with open(sys.argv[1], 'w') as f:
+        f.write(cleaned)
     print("  [values.yaml] Removed metricsService.ports (now in metrics-service template).")
 PYEOF
 
@@ -367,21 +325,25 @@ subjects:
 {{- /*
 Namespace-scoped mode: Role + RoleBinding created in each watched namespace.
 Supports a single name, a comma-separated string, or a YAML list.
+The operator's own namespace (.Release.Namespace) is always included because
+cmd/main.go adds it to the controller-runtime cache DefaultNamespaces for
+leader-election and CRD informer syncing.
 */}}
 {{- $namespaces := list }}
 {{- if .Values.scope.watchNamespaces }}
   {{- if kindIs "string" .Values.scope.watchNamespaces }}
     {{- range $ns := splitList "," .Values.scope.watchNamespaces }}
-      {{- $ns = trim $ns }}
-      {{- if $ns }}
-        {{- $namespaces = append $namespaces $ns }}
-      {{- end }}
+      {{- $namespaces = append $namespaces (trim $ns) }}
     {{- end }}
   {{- else if kindIs "slice" .Values.scope.watchNamespaces }}
     {{- $namespaces = .Values.scope.watchNamespaces }}
   {{- end }}
 {{- else }}
   {{- $namespaces = list .Release.Namespace }}
+{{- end }}
+{{- /* Always include the operator's own namespace so its cache can watch CRs there */}}
+{{- if not (has .Release.Namespace $namespaces) }}
+  {{- $namespaces = append $namespaces .Release.Namespace }}
 {{- end }}
 {{- range $ns := $namespaces }}
 ---
@@ -591,28 +553,6 @@ else
     else
         echo "  [metrics-service.yaml] metrics.secure conditional port already present – skipping."
     fi
-fi
-
-# ──────────────────────────────────────────────────────────────────────────────
-# 7. validation.yaml – render-time guard: scope=namespace + metrics.secure=true
-#    is an invalid combination because the TokenReview/SubjectAccessReview
-#    ClusterRoles are gated on scope.type=cluster and will not be rendered,
-#    so the manager would start expecting those permissions but never receive them.
-# ──────────────────────────────────────────────────────────────────────────────
-VALIDATION_FILE="${TEMPLATES_DIR}/validation.yaml"
-if [ ! -f "${VALIDATION_FILE}" ] || ! grep -q "metrics.secure" "${VALIDATION_FILE}"; then
-    echo "  [validation.yaml] Creating render-time guard..."
-    cat > "${VALIDATION_FILE}" << 'TMPL_EOF'
-{{- /*
-Render-time validation: catch invalid value combinations before deploying.
-*/}}
-{{- if and (eq .Values.scope.type "namespace") .Values.metrics.secure }}
-{{- fail "Invalid configuration: metrics.secure=true is not supported when scope.type=namespace. The TokenReview/SubjectAccessReview ClusterRoles required for secure metrics are only rendered in cluster scope. Set metrics.secure=false when using namespace scope." }}
-{{- end }}
-TMPL_EOF
-    echo "  [validation.yaml] Done."
-else
-    echo "  [validation.yaml] Guard already present – skipping."
 fi
 
 echo "=== Post-processing complete ==="
