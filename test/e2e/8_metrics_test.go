@@ -32,7 +32,7 @@ const (
 	metricsReaderSA           = "metrics-reader-e2e"
 	metricsReaderCRB          = "metrics-reader-e2e-binding"
 	metricsReaderRole         = "metrics-reader"
-	metricsServiceName        = "controller-manager-metrics-service"
+	metricsServiceName        = "marklogic-operator-controller-manager-metrics-service"
 	metricsLocalSecurePort    = "19443"
 	metricsRemoteSecurePort   = "8443"
 	metricsLocalInsecurePort  = "18080"
@@ -330,11 +330,22 @@ func startPortForward(t *testing.T, ns, svc, localPort, remotePort string) (*exe
 		"svc/"+svc,
 		localPort+":"+remotePort,
 	)
+	// Capture kubectl's stdout/stderr so failures (e.g. "service not found")
+	// surface immediately instead of presenting only as a 30s readiness timeout.
+	var pfOut strings.Builder
+	cmd.Stdout = &pfOut
+	cmd.Stderr = &pfOut
 	if err := cmd.Start(); err != nil {
 		cancel()
 		t.Fatalf("failed to start port-forward for %s: %v", svc, err)
 	}
 	t.Logf("port-forward started: localhost:%s → %s:%s", localPort, svc, remotePort)
+	// Log kubectl output on test failure to aid debugging.
+	t.Cleanup(func() {
+		if out := strings.TrimSpace(pfOut.String()); out != "" {
+			t.Logf("kubectl port-forward output for svc/%s:\n%s", svc, out)
+		}
+	})
 	return cmd, "localhost:" + localPort, cancel
 }
 
