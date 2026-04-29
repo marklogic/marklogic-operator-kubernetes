@@ -236,8 +236,8 @@ pipeline {
         string(name: 'VERSION', defaultValue: '1.2.0', description: 'Version to tag the image with.', trim: true)
         booleanParam(name: 'PUBLISH_IMAGE', defaultValue: false, description: 'Publish image to internal registry')
         string(name: 'emailList', defaultValue: emailList, description: 'List of email for build notification', trim: true)
-        booleanParam(name: 'VERIFY_ISTIO_AMBIENT', defaultValue: false, description: 'Run Istio ambient mode e2e tests (requires fresh minikube cluster with Istio)')
-        booleanParam(name: 'VERIFY_HELM_NAMESPACE_SCOPED', defaultValue: true, description: 'Run namespace-scoped e2e tests via Helm chart install (validates Role/RoleBinding, no ClusterRole)')
+        booleanParam(name: 'VERIFY_ISTIO_AMBIENT', defaultValue: true, description: 'Run Istio ambient mode e2e tests (requires fresh minikube cluster with Istio)')
+        booleanParam(name: 'VERIFY_HELM_NAMESPACE_SCOPED', defaultValue: false, description: 'Run namespace-scoped e2e tests via Helm chart install (validates Role/RoleBinding, no ClusterRole)')
     }
 
     stages {
@@ -248,36 +248,24 @@ pipeline {
         }
 
         stage('Run-tests') {
-            when {
-                expression { return !params.VERIFY_HELM_NAMESPACE_SCOPED }
-            }
             steps {
                 runTests()
             }
         }
 
         stage('Run-Minikube-Setup') {
-            when {
-                expression { return !params.VERIFY_HELM_NAMESPACE_SCOPED }
-            }
             steps {
                 runMinikubeSetup()
             }
         }
 
         stage('Run-e2e-Tests') {
-            when {
-                expression { return !params.VERIFY_HELM_NAMESPACE_SCOPED }
-            }
             steps {
                 runE2eTests()
             }
         }
 
         stage('Cleanup Environment') {
-            when {
-                expression { return !params.VERIFY_HELM_NAMESPACE_SCOPED }
-            }
             steps {
                 catchError(buildResult: 'SUCCESS', stageResult: 'FAILURE') {
                     runMinikubeCleanup()
