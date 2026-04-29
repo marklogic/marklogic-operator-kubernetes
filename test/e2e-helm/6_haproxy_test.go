@@ -140,9 +140,13 @@ func TestHAProxyPathBasedEnabled(t *testing.T) {
 	})
 
 	feature.Teardown(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
+		// Delete the actual MarklogicCluster created in Setup. The CR's metadata
+		// name must match what was created (see cr.ObjectMeta above) — using a
+		// different name results in a silent NotFound and the owned pods never
+		// get garbage-collected, causing the wait below to time out.
 		mlc := &marklogicv1.MarklogicCluster{
 			ObjectMeta: metav1.ObjectMeta{
-				Name:      "ml",
+				Name:      cr.Name,
 				Namespace: haProxyPathNS,
 			},
 		}
