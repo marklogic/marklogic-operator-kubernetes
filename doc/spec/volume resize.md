@@ -16,7 +16,7 @@ The goals of this feature are to:
     
 2.  Support online filesystem expansion when the Kubernetes storage stack permits it.
     
-3.  Provide a safe offline fallback when Pod restart and StatefulSet template synchronization are required.
+3.  Provide a safe fallback path for storage environments that require Pod restart and StatefulSet template synchronization to complete a resize.
     
 4.  Preserve data integrity and minimize service disruption throughout the operation.
     
@@ -94,7 +94,7 @@ Acceptance criteria:
 
 1.  Requests that reduce size are rejected.
     
-2.  The operator verifies that the target PVCs are `Bound`.
+2.  The operator verifies that each target PVC exists and is `Bound` before issuing resize patches. If a target PVC is not yet `Bound`, the operator must not start resize; it should either wait in a recoverable state when binding is still expected or fail with `PVCNotBound` when the condition is not expected to resolve safely.
     
 3.  The operator verifies that the associated StorageClass allows expansion.
     
@@ -266,9 +266,9 @@ The operator shall expose resize progress under status.volumeResizeStatus.
 
 #### **Status Object**
 
-The operator reports the progress and outcome of a resize operation under status.volumeResizeStatus. This status object is the primary user-visible contract for observing the workflow, diagnosing failure, and determining whether manual intervention is required. It also serves as the persisted operation record needed for crash recovery.
+The operator reports the progress and outcome of a resize operation under status.volumeResizeStatus. This status object is the primary user-visible contract for observing the workflow, diagnosing failure, and determining whether manual intervention is required.
 
-The fields below are required or recommended for v1.
+The minimum v1 public contract is intentionally smaller than the full recovery bookkeeping the controller may persist internally. The fields below are the recommended user-facing status fields for v1.
 
 |           Field            |      Type       | Required |  Set By  |                                Description                                |                                                Notes                                                 |
 |----------------------------|-----------------|----------|----------|---------------------------------------------------------------------------|------------------------------------------------------------------------------------------------------|
@@ -285,8 +285,7 @@ The fields below are required or recommended for v1.
 |        `totalPvcs`         |     integer     |   Yes    | Operator | Total number of PVCs included in the current operation                    | Denominator for progress                                                                             |
 |    `pvcsCheckpointed`      |     integer     |   Yes    | Operator | Number of PVCs that have reached the checkpoint required for advancement  | Replaces the ambiguous term `pvcsResized`                                                            |
 |        `activePVC`         |     string      |    No    | Operator | Name of the PVC currently being processed                                 | Required in sequential mode                                                                          |
-|   `orderedTargetPVCs`      | array of string |   Yes    | Operator | Stable ordered list of PVCs included in the workflow                      | Required for crash-safe recovery in both `parallel` and `sequential`; also drives `pvcStatuses` ordering |
-|       `pvcStatuses`        |      array      |   Yes    | Operator | Per-PVC resize state for all PVCs in `orderedTargetPVCs`                  | Required for crash recovery, partial progress reporting, and selective Pod restart                    |
+|       `pvcStatuses`        |      array      |   Yes    | Operator | Per-PVC resize state for all targeted PVCs                                | Required for crash recovery, partial progress reporting, and selective Pod restart                    |
 |       `failedPVCs`         |      array      |    No    | Operator | Per-PVC failure details                                                   | Each entry includes name, reason, and message                                                        |
 |        `warnings`          | array of string |    No    | Operator | Non-fatal issues encountered during the operation                         | Does not imply terminal failure                                                                      |
 |       `retryCount`         |     integer     |    No    | Operator | Number of retries attempted for recoverable failures                      | Useful for debugging and support                                                                     |
@@ -294,12 +293,12 @@ The fields below are required or recommended for v1.
 |    `lastTransitionTime`    |    timestamp    |    No    | Operator | Time at which the phase most recently changed                             | Helps detect stuck operations                                                                        |
 |      `firstStartedTime`    |    timestamp    |    No    | Operator | Time at which the current resize operation began                          | Used for duration measurement                                                                        |
 |      `completionTime`      |    timestamp    |    No    | Operator | Time at which the operation reached a terminal state                      | Set when the phase becomes `Completed` or `Failed`                                                   |
-|    `podRestartRequired`    |     boolean     |    No    | Operator | Indicates whether any targeted PVC still requires remount-based filesystem completion | Derived from `pvcStatuses[*].restartRequired`                                                     |
-|   `podsRestartPending`     | array of string |    No    | Operator | Pods that must be restarted to complete offline filesystem expansion      | Derived from PVC-to-Pod ownership for PVCs with `restartRequired: true` and persisted for crash-safe selective restart |
-| `statefulSetSync.originalName` | string     |    No    | Operator | Name of the StatefulSet observed before delete/recreate                   | Stored with UID so recovery can distinguish missing, original, and recreated StatefulSets             |
-| `statefulSetSync.originalUID` |   string      |    No    | Operator | UID of the StatefulSet observed before delete/recreate                    | Used to distinguish old and recreated controller objects                                              |
-|  `statefulSetSync.deleteIssued` | boolean     |    No    | Operator | Indicates whether orphan deletion has already been requested              | Important for crash recovery                                                                         |
-| `statefulSetSync.recreatedUID` |   string      |    No    | Operator | UID of the recreated StatefulSet                                          | Used to confirm successful recreation                                                                |
+
+#### **Recovery Metadata**
+
+The operator may persist additional implementation-specific recovery metadata in status when needed for crash-safe resume. Recommended examples include `orderedTargetPVCs`, `podsRestartPending`, and the `statefulSetSync.*` fields used during StatefulSet delete/recreate recovery.
+
+These fields help the controller resume in-flight workflows safely, but they are not part of the minimum v1 user-facing status contract.
 
 #### **PVC Status Record**
 
@@ -331,11 +330,7 @@ The operator SHALL use the following phase values for status.volumeResizeStatus.
 |        `Validating`         |            The operator is validating the request and environment prerequisites             |
 |       `ResizingPVCs`        |                        The operator is submitting PVC resize requests                       |
 |    `WaitingForPVCResize`    |     The operator is waiting for Kubernetes and the storage backend to reach the checkpoint  |
-|    `BackingUpStatefulSet`   |              The operator is preserving StatefulSet state required for recovery             |
-|    `DeletingStatefulSet`    |                       The operator is issuing orphan deletion of the StatefulSet             |
-| `WaitingForStatefulSetDeletion` |               The operator is waiting for the old StatefulSet object to disappear       |
-|   `RecreatingStatefulSet`   |      The operator is recreating the StatefulSet with the updated volume claim template      |
-| `EvaluatingRestartRequirement` |        The operator is deciding whether Pod restart is still required                  |
+| `SynchronizingStatefulSet`  | The operator is capturing recovery metadata and reconciling the StatefulSet template state |
 |       `RestartingPods`      |        The operator is restarting Pods to complete filesystem expansion when required        |
 |      `WaitingForPodsReady`  |                  The operator is waiting for restarted or adopted Pods to become ready       |
 |    `VerifyingResizeOutcome` | The operator is verifying PVC state, StatefulSet template state, Pod readiness, and MarkLogic health |
@@ -359,18 +354,15 @@ The operator SHOULD populate status.volumeResizeStatus.reason with a machine-rea
 |     `ShrinkNotSupported`      |                                  The request attempted to reduce volume size                          |
 |         `PVCNotBound`         |                                  One or more target PVCs are not in `Bound` state                    |
 |      `ConcurrentResize`       |                     A second execution path attempted to start while an operation was already active  |
-|   `StatefulSetDeleteFailed`   |                                  The StatefulSet could not be orphan-deleted                          |
-|  `StatefulSetRecreateFailed`  |                              The StatefulSet could not be recreated successfully                      |
-|     `PodSchedulingFailed`     |                         One or more Pods failed to return to running and ready state                  |
+|    `StatefulSetSyncFailed`    |                 StatefulSet synchronization could not be completed safely or in time                  |
+|      `PodRecoveryFailed`      |                      One or more Pods failed to recover to the required healthy state                 |
 | `TemplateUpdateInterrupted`   |                      The operator was interrupted during StatefulSet delete/recreate reconciliation   |
 |  `MarkLogicHealthCheckFailed` |                Infrastructure reconciliation completed, but MarkLogic health verification failed      |
-|      `PVCResizeTimeout`       |                          PVC expansion did not reach the required checkpoint in time                  |
-| `StatefulSetDeletionTimeout`  |                           StatefulSet deletion did not complete in the expected interval              |
-| `StatefulSetRecreationTimeout` |                         StatefulSet recreation did not complete in the expected interval             |
-|      `PodReadinessTimeout`    |                              Pods did not become ready in the expected interval                       |
 |           `Paused`            |                    The resize was paused by user annotation `marklogic.progress.com/resize-paused`    |
 |    `MaxRetriesExceeded`       |                         The retry count exceeded the configured maximum, promoting `Stalled` to `Failed` |
 | `MaxOperationTimeExceeded`    |                         The total operation time exceeded the configured maximum                      |
+
+The reason enum is intentionally broader than the controller's internal error taxonomy. Phase-specific details such as delete-versus-recreate failure, or whether a failure was caused by timeout versus API rejection, should be surfaced in `message`, events, and logs rather than expanding the public reason set further.
 
 #### **Failed PVC Record**
 
@@ -566,23 +558,15 @@ The common phase model is:
     
 3.  `WaitingForPVCResize`
     
-4.  `BackingUpStatefulSet`
+4.  `SynchronizingStatefulSet`
     
-5.  `DeletingStatefulSet`
+5.  `RestartingPods`, if required
     
-6.  `WaitingForStatefulSetDeletion`
+6.  `WaitingForPodsReady`
     
-7.  `RecreatingStatefulSet`
+7.  `VerifyingResizeOutcome`
     
-8.  `EvaluatingRestartRequirement`
-    
-9.  `RestartingPods`, if required
-    
-10. `WaitingForPodsReady`
-    
-11. `VerifyingResizeOutcome`
-    
-12. `Completed`
+8.  `Completed`
 
 ### Strategy Model
 
@@ -594,7 +578,7 @@ The operator supports two execution strategies in v1:
 2.  `sequential`  
     The operator submits a resize request for exactly one target PVC during `ResizingPVCs`, then waits for that PVC to reach the required checkpoint during `WaitingForPVCResize`. If additional PVCs remain, the workflow loops back to `ResizingPVCs` and repeats until all PVCs have been processed in stable persisted order.
 
-The selected strategy does not change the later phases of the workflow. StatefulSet backup, delete/recreate, restart evaluation, Pod restart, and final verification behavior are identical for both strategies.
+The selected strategy does not change the later phases of the workflow. StatefulSet synchronization, Pod restart handling, and final verification behavior are identical for both strategies.
 
 #### Phase: `Validating`
 
@@ -705,7 +689,7 @@ Concretely, a PVC has reached the required checkpoint when one of the following 
 
 2.  **Offline expansion pending:** `pvc.spec.resources.requests[storage]` == `targetSize` AND the PVC has a condition of type `FileSystemResizePending` with status `True`. This confirms the block-level expansion has been acknowledged and workload-side remount is still required.
 
-The operator must record per-PVC checkpoint type (online vs. offline) in `pvcStatuses` so the `EvaluatingRestartRequirement` phase can determine whether any Pod restart is needed and which Pods are eligible for selective restart.
+The operator must record per-PVC checkpoint type (online vs. offline) in `pvcStatuses` so the later restart-handling logic can determine whether any Pod restart is needed and which Pods are eligible for selective restart.
 
 Shared actions:
 
@@ -743,7 +727,7 @@ For `sequential`:
 
 1.  If more PVCs remain, transition back to `ResizingPVCs`.
     
-2.  If no PVCs remain, proceed to `BackingUpStatefulSet`.
+2.  If no PVCs remain, proceed to `SynchronizingStatefulSet`.
 
 Failure behavior:
 
@@ -751,10 +735,10 @@ Failure behavior:
     
 2.  Provider rejections, quota issues, or rate limiting are surfaced through `reason`, `message`, and retry metadata.
 
-#### Phase: `BackingUpStatefulSet`
+#### Phase: `SynchronizingStatefulSet`
 
 Purpose:  
-Capture the current StatefulSet state required for safe recovery before delete/recreate.
+Capture the recovery metadata needed for safe resume and reconcile the StatefulSet template to the new storage size.
 
 Actions:
 
@@ -763,102 +747,40 @@ Actions:
 2.  Persist sufficient recovery metadata to resume or diagnose the workflow if the operator is interrupted.
     
 3.  Record the original StatefulSet UID and enough status to distinguish delete-issued from delete-observed.
+    
+4.  Delete the StatefulSet using orphan propagation.
+    
+5.  Persist that delete has been issued before later steps can proceed.
+    
+6.  Re-check for existence of the original StatefulSet by name and UID until deletion is observed, while confirming that Pods and PVCs remain preserved.
+    
+7.  Create a new StatefulSet using the updated desired configuration.
+    
+8.  Ensure non-resize fields remain consistent with the current MarkLogic group spec.
+    
+9.  Record the recreated StatefulSet UID in status.
+
+10. The recreated StatefulSet must use identical `.spec.selector` and Pod template labels as the original StatefulSet. If these differ, the StatefulSet will not adopt the orphaned Pods, leaving them permanently orphaned. The controller must derive these from the same label generation logic used for the original, not from an independently computed set.
 
 Exit criteria:
 
 1.  Recovery metadata has been captured successfully.
+    
+2.  The original StatefulSet object no longer exists.
+    
+3.  The new StatefulSet exists and reflects the desired storage size.
 
 Failure behavior:
 
 1.  If recovery metadata cannot be captured, the operator transitions to `Failed` or `Stalled`.
     
 2.  The operator must not delete the StatefulSet unless backup requirements for recovery have been met.
-
-#### Phase: `DeletingStatefulSet`
-
-Purpose:  
-Request removal of the StatefulSet object while preserving Pods and PVCs.
-
-Actions:
-
-1.  Delete the StatefulSet using orphan propagation.
     
-2.  Persist that delete has been issued before later phases can proceed.
-
-Exit criteria:
-
-1.  The delete request has been accepted by the Kubernetes API.
-
-Failure behavior:
-
-1.  If orphan deletion fails, transition to `Failed` or `Stalled` with reason such as `StatefulSetDeleteFailed`.
-
-#### Phase: `WaitingForStatefulSetDeletion`
-
-Purpose:  
-Wait for the original StatefulSet object to be fully removed before attempting recreation.
-
-Actions:
-
-1.  Re-check for existence of the original StatefulSet by name and UID.
+3.  If orphan deletion fails, transition to `Failed` or `Stalled` with reason such as `StatefulSetSyncFailed`.
     
-2.  Confirm that Pods and PVCs remain preserved.
-
-Exit criteria:
-
-1.  The original StatefulSet object no longer exists.
+4.  If deletion does not complete in the expected interval, transition to `Stalled` with reason such as `StatefulSetSyncFailed`, with timeout detail recorded in `message`.
     
-2.  PVCs and running Pods remain preserved.
-
-Failure behavior:
-
-1.  If deletion does not complete in the expected interval, transition to `Stalled` with reason such as `StatefulSetDeletionTimeout`.
-
-#### Phase: `RecreatingStatefulSet`
-
-Purpose:  
-Recreate the StatefulSet with the updated `volumeClaimTemplates` reflecting the new desired size.
-
-Actions:
-
-1.  Create a new StatefulSet using the updated desired configuration.
-    
-2.  Ensure non-resize fields remain consistent with the current MarkLogic group spec.
-    
-3.  Record the recreated StatefulSet UID in status.
-
-4.  The recreated StatefulSet must use identical `.spec.selector` and Pod template labels as the original StatefulSet. If these differ, the StatefulSet will not adopt the orphaned Pods, leaving them permanently orphaned. The controller must derive these from the same label generation logic used for the original, not from an independently computed set.
-
-Exit criteria:
-
-1.  The new StatefulSet exists.
-    
-2.  The recreated StatefulSet reflects the desired storage size.
-
-Failure behavior:
-
-1.  If StatefulSet recreation fails, transition to `Failed` or `Stalled` with reason such as `StatefulSetRecreateFailed`.
-
-#### Phase: `EvaluatingRestartRequirement`
-
-Purpose:  
-Determine whether remount-based filesystem completion still requires Pod restart.
-
-Actions:
-
-1.  Evaluate PVC checkpoint state, observed capacity, and any remaining filesystem-expansion-required signal.
-    
-2.  Set `podRestartRequired` in status.
-
-3.  Populate `podsRestartPending` from PVCs whose `pvcStatuses[*].restartRequired` is `true`.
-
-Exit criteria:
-
-1.  The controller has deterministically concluded whether restart is required.
-
-Failure behavior:
-
-1.  If the controller cannot determine whether restart is required, transition to `Stalled`.
+5.  If StatefulSet recreation fails, transition to `Failed` or `Stalled` with reason such as `StatefulSetSyncFailed`.
 
 #### Phase: `RestartingPods`
 
@@ -904,7 +826,7 @@ Exit criteria:
 
 Failure behavior:
 
-1.  If Pods fail to schedule or become ready, transition to `Stalled` with reason such as `PodSchedulingFailed` or `PodReadinessTimeout`.
+1.  If Pods fail to schedule or become ready, transition to `Stalled` with reason such as `PodRecoveryFailed`, with the specific readiness or scheduling detail recorded in `message`.
 
 #### Phase: `VerifyingResizeOutcome`
 
@@ -962,9 +884,9 @@ For `parallel`:
     
 2.  `ResizingPVCs` -> `WaitingForPVCResize`
     
-3.  `WaitingForPVCResize` -> `BackingUpStatefulSet` once all PVCs reach the required checkpoint
+3.  `WaitingForPVCResize` -> `SynchronizingStatefulSet` once all PVCs reach the required checkpoint
     
-4.  Later phases proceed linearly through StatefulSet synchronization, restart evaluation, restart if required, readiness waiting, and final verification
+4.  Later phases proceed linearly through StatefulSet synchronization, restart if required, readiness waiting, and final verification
 
 For `sequential`:
 
@@ -974,7 +896,7 @@ For `sequential`:
     
 3.  `WaitingForPVCResize` -> `ResizingPVCs` if more PVCs remain
     
-4.  `WaitingForPVCResize` -> `BackingUpStatefulSet` only after the final PVC reaches the required checkpoint
+4.  `WaitingForPVCResize` -> `SynchronizingStatefulSet` only after the final PVC reaches the required checkpoint
     
 5.  Later phases are identical to `parallel`
 
@@ -996,7 +918,7 @@ Rules:
     
 6.  The operator must record the stable ordered PVC list for every active resize operation and the currently active PVC in `sequential` mode.
 
-7.  `pvcStatuses` must contain one entry for each PVC in `orderedTargetPVCs`, including checkpoint type and restart requirement when known.
+7.  `pvcStatuses` must contain one entry for each targeted PVC, including checkpoint type and restart requirement when known. If `orderedTargetPVCs` is persisted for recovery, the two lists must remain aligned.
 
 ### Happy Path Summary
 
@@ -1040,7 +962,7 @@ The operator shall apply the following principles during failure handling and re
 
 8.  Derive recovery from observed cluster state first and persisted resize status second. A missing or stale status update must not be interpreted as proof that no mutation occurred.
 
-9.  Phase values are intent markers, not completion confirmations. On recovery after a crash, the controller must always re-derive actual state from the live cluster rather than trusting the persisted phase as proof that the corresponding mutation succeeded or failed. For example, a persisted phase of `DeletingStatefulSet` does not prove the delete API call was issued; the controller must check whether the StatefulSet still exists.
+9.  Phase values are intent markers, not completion confirmations. On recovery after a crash, the controller must always re-derive actual state from the live cluster rather than trusting the persisted phase as proof that the corresponding mutation succeeded or failed. For example, a persisted phase of `SynchronizingStatefulSet` does not prove which internal sub-step has completed; the controller must check whether backup metadata exists, whether delete was issued, whether the old StatefulSet still exists, and whether recreation has already occurred.
 
 ### State Semantics
 
@@ -1095,14 +1017,14 @@ These categories should be reflected in machine-readable `reason` values and use
 |                 Provider quota is exhausted                  |                Stop and require remediation                |     `Stalled`     |    `StorageQuotaExceeded`       |
 |        Some PVCs resize successfully and others fail         |       Surface partial progress and stop later phases       |     `Stalled`     |    `PartialResizeFailure`       |
 |        StatefulSet backup metadata cannot be captured        |                 Stop before delete/recreate                |     `Failed`      |        `ResizeFailed`           |
-|               StatefulSet orphan delete fails                |                 Preserve resources and retry               |     `Stalled`     |   `StatefulSetDeleteFailed`     |
-|                 StatefulSet recreation fails                 |               Preserve PVCs and retry safely              |     `Stalled`     |  `StatefulSetRecreateFailed`    |
-|       Pods remain `Pending`, `NotReady`, or unschedulable   |              Surface workload recovery issue               |     `Stalled`     |      `PodSchedulingFailed`      |
+|               StatefulSet orphan delete fails                |                 Preserve resources and retry               |     `Stalled`     |    `StatefulSetSyncFailed`      |
+|                 StatefulSet recreation fails                 |               Preserve PVCs and retry safely              |     `Stalled`     |    `StatefulSetSyncFailed`      |
+|       Pods remain `Pending`, `NotReady`, or unschedulable   |              Surface workload recovery issue               |     `Stalled`     |      `PodRecoveryFailed`        |
 | MarkLogic health check fails after infrastructure is healthy |         Surface application-level problem and stop         |     `Stalled`     | `MarkLogicHealthCheckFailed`    |
 |       Operator restarts during StatefulSet transition        | Resume from persisted state and observed resources         |     `Stalled`     |  `TemplateUpdateInterrupted`    |
-|             Workflow exceeds expected wait time              |           Stop that phase and expose specific timeout      |     `Stalled`     | Applicable phase-specific timeout reason |
+|             Workflow exceeds expected wait time              |           Stop that phase and expose specific timeout      |     `Stalled`     | Broad phase reason plus timeout detail in `message` |
 
-The controller should use phase-specific timeout reasons instead of a single generic `Timeout` value. Recommended reasons include `PVCResizeTimeout`, `StatefulSetDeletionTimeout`, `StatefulSetRecreationTimeout`, and `PodReadinessTimeout`.
+The controller should keep timeout semantics in `message`, events, and logs rather than creating separate public reason values for each timed-out sub-step.
 
 ### Retry and Resume Semantics
 
@@ -1229,7 +1151,7 @@ At minimum, the persisted recovery record must include:
 
 10. Whether Pod restart is still pending, including `podsRestartPending`
 
-If the operator restarts during or after the `DeletingStatefulSet` phase, it should:
+If the operator restarts during or after the `SynchronizingStatefulSet` phase, it should:
 
 1.  Detect whether the StatefulSet still exists.
     
@@ -1247,10 +1169,10 @@ The following decision matrix defines the controller's recovery action based on 
 
 | `deleteIssued` | Old STS exists? | New STS exists? | Matching UID | Recovery Action |
 |---|---|---|---|---|
-| `false` | yes | no | n/a | Delete has not started. Resume from `BackingUpStatefulSet`. |
-| `true` | yes | no | n/a | Delete was issued but has not completed. Wait for deletion or re-issue the orphan delete. Remain in `WaitingForStatefulSetDeletion`. |
-| `true` | no | no | n/a | Delete completed but recreation has not started. Proceed to `RecreatingStatefulSet`. |
-| `true` | no | yes | Matches `recreatedUID` | Already recreated successfully. Advance to `EvaluatingRestartRequirement`. |
+| `false` | yes | no | n/a | Delete has not started. Resume `SynchronizingStatefulSet` from the backup-and-delete portion. |
+| `true` | yes | no | n/a | Delete was issued but has not completed. Continue `SynchronizingStatefulSet` while waiting for deletion or re-issuing the orphan delete. |
+| `true` | no | no | n/a | Delete completed but recreation has not started. Continue `SynchronizingStatefulSet` with recreation. |
+| `true` | no | yes | Matches `recreatedUID` | Already recreated successfully. Advance to `RestartingPods` if restart is still required, otherwise continue to the next readiness or verification step. |
 | `true` | no | yes | Unknown UID, `recreatedUID` not set | Ambiguous: another actor created a StatefulSet with the same name. Transition to `Stalled` with reason `TemplateUpdateInterrupted`. Requires manual investigation. |
 | `false` | no | no | n/a | StatefulSet is missing but `deleteIssued` was not persisted (crash between status write and delete, or external deletion). Transition to `Stalled` with reason `TemplateUpdateInterrupted`. |
 
@@ -1302,7 +1224,7 @@ Recommended examples:
 | `StorageClassNotExpandable`  | Migrate to an expandable storage class or do not attempt resize |
 |        `PVCNotBound`         |   Wait for PVC binding or resolve storage provisioning issue    |
 |     `ResizeRateLimited`      |           Wait for provider cooldown or retry window            |
-|    `PodSchedulingFailed`     |   Resolve node capacity, affinity, taint, or topology issues    |
+|      `PodRecoveryFailed`     |   Resolve node capacity, readiness, affinity, taint, or topology issues |
 | `MarkLogicHealthCheckFailed` |   Investigate MarkLogic application health before continuing    |
 
 ### Recovery Outcome Requirements
@@ -1754,11 +1676,11 @@ Unit tests should cover transitions between:
     
 3.  `WaitingForPVCResize` and `ResizingPVCs` in sequential mode
     
-4.  `WaitingForPVCResize` and `BackingUpStatefulSet`
+4.  `WaitingForPVCResize` and `SynchronizingStatefulSet`
     
-5.  `DeletingStatefulSet` and `WaitingForStatefulSetDeletion`
+5.  Internal progression within `SynchronizingStatefulSet`
 
-6.  `RecreatingStatefulSet` and `EvaluatingRestartRequirement`
+6.  `SynchronizingStatefulSet` and `RestartingPods`
 
 7.  `RestartingPods`, `WaitingForPodsReady`, and `VerifyingResizeOutcome`
     
@@ -1936,7 +1858,7 @@ Assertions:
 
 Test scenario:
 
-1.  The workflow progresses through `BackingUpStatefulSet`
+1.  The workflow progresses into `SynchronizingStatefulSet`
     
 2.  The StatefulSet is deleted
     
@@ -2553,7 +2475,6 @@ status:
               state: Checkpointed
               checkpointType: OnlineComplete
               restartRequired: false
-        podRestartRequired: false
         retryCount: 0
         lastTransitionTime: "2026-03-31T10:27:51Z"
         firstStartedTime: "2026-03-31T10:12:34Z"
@@ -2669,15 +2590,11 @@ status:
 |  1   |         Validating          | Operator verifies request, PVC state, StorageClass prerequisites, and PVC ordering   |
 |  2   |        ResizingPVCs         | Operator submits PVC resize request or requests                                      |
 |  3   |     WaitingForPVCResize     | Operator waits for PVCs to reach the required checkpoint                             |
-|  4   |    BackingUpStatefulSet     | Operator records recovery metadata before StatefulSet mutation                       |
-|  5   |    DeletingStatefulSet      | Operator requests orphan deletion of the StatefulSet                                 |
-|  6   | WaitingForStatefulSetDeletion | Operator waits for the original StatefulSet object to disappear                   |
-|  7   |   RecreatingStatefulSet     | Operator recreates the StatefulSet with the updated template                         |
-|  8   | EvaluatingRestartRequirement | Operator determines whether remount-based filesystem expansion still requires restart |
-|  9   |       RestartingPods        | Operator restarts Pods only if required                                              |
-| 10   |      WaitingForPodsReady    | Operator waits for Pods to become healthy                                            |
-| 11   |    VerifyingResizeOutcome   | Operator verifies PVC state, StatefulSet template state, and MarkLogic health        |
-| 12   |         Completed           | Operator marks the resize as successful                                              |
+|  4   | SynchronizingStatefulSet   | Operator captures recovery metadata and reconciles the StatefulSet template          |
+|  5   |       RestartingPods        | Operator restarts Pods only if required                                              |
+|  6   |      WaitingForPodsReady    | Operator waits for Pods to become healthy                                            |
+|  7   |    VerifyingResizeOutcome   | Operator verifies PVC state, StatefulSet template state, and MarkLogic health        |
+|  8   |         Completed           | Operator marks the resize as successful                                              |
 
 ### Example Event Sequence
 
