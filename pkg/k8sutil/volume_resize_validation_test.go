@@ -723,16 +723,185 @@ func TestResizeWaitingForPodsReadyBlocksUntilReadyThenAdvances(t *testing.T) {
 	}
 
 	replacePod(t, oc, newGroupPod("dnode-1", true))
-	if _, err := oc.ReconcileVolumeResizeValidation().Output(); err != nil {
+	if err := runResizeStep(t, oc); err != nil {
 		t.Fatalf("unexpected error while resuming after pod becomes ready: %v", err)
-	}
-	if _, err := oc.ReconcileVolumeResizeValidation().Output(); err != nil {
-		t.Fatalf("unexpected error while advancing to verification: %v", err)
 	}
 
 	advanced := getUpdatedGroup(t, oc).Status.VolumeResizeStatus
 	if advanced.Phase != marklogicv1.VolumeResizePhaseVerifyingResizeOutcome {
 		t.Fatalf("expected phase VerifyingResizeOutcome after pods become ready, got %s", advanced.Phase)
+	}
+}
+
+func TestResizeVerificationTransitionsToCompleted(t *testing.T) {
+	oc := newResizeTestContext(t, resizeTestInput{desiredSize: "50Gi", currentSize: "50Gi", updateStrategy: appsv1.OnDeleteStatefulSetStrategyType})
+	seedVerificationStatus(t, oc, "verify-success", "50Gi", "")
+
+	if _, err := oc.ReconcileVolumeResizeValidation().Output(); err != nil {
+		t.Fatalf("unexpected error during verification completion pass: %v", err)
+	}
+
+	status := getUpdatedGroup(t, oc).Status.VolumeResizeStatus
+	if status.Phase != marklogicv1.VolumeResizePhaseCompleted {
+		t.Fatalf("expected Completed phase, got %s", status.Phase)
+	}
+	if status.CompletionTime == nil {
+		t.Fatalf("expected completionTime to be set")
+	}
+	if status.Reason != "" {
+		t.Fatalf("expected empty reason on successful completion, got %s", status.Reason)
+	}
+	if status.PVCsCheckpointed != status.TotalPVCs {
+		t.Fatalf("expected pvcsCheckpointed (%d) to equal totalPvcs (%d)", status.PVCsCheckpointed, status.TotalPVCs)
+	}
+}
+
+func TestResizeVerificationRetryPathStallsThenResumes(t *testing.T) {
+	oc := newResizeTestContext(t, resizeTestInput{desiredSize: "50Gi", currentSize: "20Gi", updateStrategy: appsv1.OnDeleteStatefulSetStrategyType})
+	seedVerificationStatus(t, oc, "verify-retry", "50Gi", "")
+	replacePVC(t, oc, newBoundPVC("datadir-dnode-0", "20Gi"))
+
+	if _, err := oc.ReconcileVolumeResizeValidation().Output(); err != nil {
+		t.Fatalf("unexpected error during verification stall pass: %v", err)
+	}
+
+	status := getUpdatedGroup(t, oc).Status.VolumeResizeStatus
+	if status.Phase != marklogicv1.VolumeResizePhaseStalled {
+		t.Fatalf("expected Stalled phase, got %s", status.Phase)
+	}
+	if status.Reason != marklogicv1.VolumeResizeReasonMarkLogicHealthCheckFailed {
+		t.Fatalf("expected MarkLogicHealthCheckFailed reason, got %s", status.Reason)
+	}
+
+	replacePVC(t, oc, newBoundPVC("datadir-dnode-0", "50Gi"))
+	replacePVC(t, oc, newBoundPVC("datadir-dnode-1", "50Gi"))
+	status.NextRetryTime = &metav1.Time{Time: metav1.Now().Add(-time.Second)}
+	if err := oc.patchResizeStatus(status); err != nil {
+		t.Fatalf("failed to open retry window: %v", err)
+	}
+
+	if _, err := oc.ReconcileVolumeResizeValidation().Output(); err != nil {
+		t.Fatalf("unexpected error during stalled resume pass: %v", err)
+	}
+	if _, err := oc.ReconcileVolumeResizeValidation().Output(); err != nil {
+		t.Fatalf("unexpected error during verification completion pass: %v", err)
+	}
+
+	status = getUpdatedGroup(t, oc).Status.VolumeResizeStatus
+	if status.Phase != marklogicv1.VolumeResizePhaseCompleted {
+		t.Fatalf("expected Completed phase after retry resume, got %s", status.Phase)
+	}
+}
+
+func TestResizeVerificationTerminalFailureAfterMaxRetries(t *testing.T) {
+	oc := newResizeTestContext(t, resizeTestInput{desiredSize: "50Gi", currentSize: "20Gi", updateStrategy: appsv1.OnDeleteStatefulSetStrategyType})
+	seedVerificationStatus(t, oc, "verify-max-retries", "50Gi", "")
+	replacePVC(t, oc, newBoundPVC("datadir-dnode-0", "20Gi"))
+
+	status := getUpdatedGroup(t, oc).Status.VolumeResizeStatus
+	status.RetryCount = resizeMaxRetries
+	status.NextRetryTime = &metav1.Time{Time: metav1.Now().Add(-time.Second)}
+	if err := oc.patchResizeStatus(status); err != nil {
+		t.Fatalf("failed to seed max-retry verification state: %v", err)
+	}
+
+	if _, err := oc.ReconcileVolumeResizeValidation().Output(); err != nil {
+		t.Fatalf("unexpected error during terminal verification failure pass: %v", err)
+	}
+
+	status = getUpdatedGroup(t, oc).Status.VolumeResizeStatus
+	if status.Phase != marklogicv1.VolumeResizePhaseFailed {
+		t.Fatalf("expected Failed phase, got %s", status.Phase)
+	}
+	if status.Reason != marklogicv1.VolumeResizeReasonMaxRetriesExceeded {
+		t.Fatalf("expected MaxRetriesExceeded reason, got %s", status.Reason)
+	}
+}
+
+func TestResizeDeferredTargetStartsAfterTerminalPersistence(t *testing.T) {
+	oc := newResizeTestContext(t, resizeTestInput{desiredSize: "60Gi", currentSize: "50Gi", updateStrategy: appsv1.OnDeleteStatefulSetStrategyType})
+	seedVerificationStatus(t, oc, "verify-deferred", "50Gi", "60Gi")
+
+	if _, err := oc.ReconcileVolumeResizeValidation().Output(); err != nil {
+		t.Fatalf("unexpected error during first verification completion pass: %v", err)
+	}
+
+	first := getUpdatedGroup(t, oc).Status.VolumeResizeStatus
+	if first.Phase != marklogicv1.VolumeResizePhaseCompleted {
+		t.Fatalf("expected first pass to persist Completed, got %s", first.Phase)
+	}
+	if first.DeferredTargetSize != "60Gi" {
+		t.Fatalf("expected deferred target to remain visible, got %s", first.DeferredTargetSize)
+	}
+
+	var second *marklogicv1.VolumeResizeStatus
+	for i := 0; i < 4; i++ {
+		if err := runResizeStep(t, oc); err != nil {
+			t.Fatalf("unexpected error during new deferred operation start pass: %v", err)
+		}
+		second = getUpdatedGroup(t, oc).Status.VolumeResizeStatus
+		if second != nil && second.Phase == marklogicv1.VolumeResizePhaseResizingPVCs && second.OperationID != first.OperationID {
+			break
+		}
+	}
+
+	if second == nil {
+		t.Fatalf("expected status to be present while starting deferred operation")
+	}
+	if second.Phase != marklogicv1.VolumeResizePhaseResizingPVCs {
+		t.Fatalf("expected deferred target to start new operation in ResizingPVCs, got %s", second.Phase)
+	}
+	if second.TargetSize != "60Gi" {
+		t.Fatalf("expected new operation target 60Gi, got %s", second.TargetSize)
+	}
+	if second.OperationID == first.OperationID {
+		t.Fatalf("expected a new operationID for deferred target operation")
+	}
+}
+
+func TestResizeFinalStatusFieldsConsistentOnCompletion(t *testing.T) {
+	oc := newResizeTestContext(t, resizeTestInput{desiredSize: "50Gi", currentSize: "50Gi", updateStrategy: appsv1.OnDeleteStatefulSetStrategyType})
+	seedVerificationStatus(t, oc, "verify-consistency", "50Gi", "")
+
+	status := getUpdatedGroup(t, oc).Status.VolumeResizeStatus
+	status.RetryCount = 2
+	status.NextRetryTime = &metav1.Time{Time: metav1.Now().Add(-time.Second)}
+	status.ActivePVC = "datadir-dnode-1"
+	status.FailedPVCs = []marklogicv1.FailedPVCStatus{{Name: "datadir-dnode-0", Reason: "OldError", Message: "stale"}}
+	if err := oc.patchResizeStatus(status); err != nil {
+		t.Fatalf("failed to seed inconsistent verification status: %v", err)
+	}
+
+	if _, err := oc.ReconcileVolumeResizeValidation().Output(); err != nil {
+		t.Fatalf("unexpected error during consistency verification pass: %v", err)
+	}
+
+	updated := getUpdatedGroup(t, oc).Status.VolumeResizeStatus
+	if updated.Phase != marklogicv1.VolumeResizePhaseCompleted {
+		t.Fatalf("expected Completed phase, got %s", updated.Phase)
+	}
+	if updated.CompletionTime == nil {
+		t.Fatalf("expected completionTime to be set")
+	}
+	if updated.RetryCount != 0 || updated.NextRetryTime != nil {
+		t.Fatalf("expected retry fields to be cleared, got retryCount=%d nextRetry=%v", updated.RetryCount, updated.NextRetryTime)
+	}
+	if updated.ActivePVC != "" {
+		t.Fatalf("expected activePVC to be cleared, got %s", updated.ActivePVC)
+	}
+	if len(updated.FailedPVCs) != 0 {
+		t.Fatalf("expected failedPVCs to be empty, got %d", len(updated.FailedPVCs))
+	}
+	if updated.PVCsCheckpointed != updated.TotalPVCs {
+		t.Fatalf("expected checkpoint counters to be consistent, got checkpointed=%d total=%d", updated.PVCsCheckpointed, updated.TotalPVCs)
+	}
+	for _, pvc := range updated.PVCStatuses {
+		if pvc.State == marklogicv1.PVCResizeStateRestartPending {
+			t.Fatalf("expected no RestartPending pvc status at completion")
+		}
+		if pvc.RestartRequired {
+			t.Fatalf("expected restartRequired=false at completion for pvc %s", pvc.Name)
+		}
 	}
 }
 
@@ -905,6 +1074,64 @@ func replacePod(t *testing.T, oc *OperatorContext, pod *corev1.Pod) {
 	if err := oc.Client.Create(oc.Ctx, pod); err != nil {
 		t.Fatalf("failed to create pod %s: %v", pod.Name, err)
 	}
+}
+
+func runResizeStep(t *testing.T, oc *OperatorContext) error {
+	t.Helper()
+	res := oc.ReconcileVolumeResizeValidation()
+	if !res.Completed() {
+		return nil
+	}
+	_, err := res.Output()
+	return err
+}
+
+func seedVerificationStatus(t *testing.T, oc *OperatorContext, operationID, targetSize, deferredTarget string) {
+	t.Helper()
+	now := metav1.Now()
+	status := &marklogicv1.VolumeResizeStatus{
+		OperationID:        operationID,
+		ObservedGeneration: oc.MarklogicGroup.Generation,
+		Phase:              marklogicv1.VolumeResizePhaseVerifyingResizeOutcome,
+		CurrentSize:        "20Gi",
+		TargetSize:         targetSize,
+		DeferredTargetSize: deferredTarget,
+		ResizeStrategy:     marklogicv1.VolumeResizeStrategyParallel,
+		TotalPVCs:          2,
+		FirstStartedTime:   &now,
+		LastTransitionTime: &now,
+		PVCStatuses: []marklogicv1.PVCResizeStatus{
+			{Name: "datadir-dnode-0", PodName: "dnode-0", State: marklogicv1.PVCResizeStateCheckpointed, CheckpointType: marklogicv1.PVCResizeCheckpointTypeOnlineComplete, RestartRequired: false},
+			{Name: "datadir-dnode-1", PodName: "dnode-1", State: marklogicv1.PVCResizeStateRestarted, CheckpointType: marklogicv1.PVCResizeCheckpointTypeOfflineComplete, RestartRequired: false},
+		},
+	}
+	if deferredTarget != "" {
+		status.DeferredObservedGeneration = oc.MarklogicGroup.Generation
+	}
+	if err := oc.patchResizeStatus(status); err != nil {
+		t.Fatalf("failed to seed verification status: %v", err)
+	}
+
+	if err := setStatefulSetTemplateRequest(oc, targetSize); err != nil {
+		t.Fatalf("failed to set statefulset template request: %v", err)
+	}
+	replacePVC(t, oc, newBoundPVC("datadir-dnode-0", targetSize))
+	replacePVC(t, oc, newBoundPVC("datadir-dnode-1", targetSize))
+}
+
+func setStatefulSetTemplateRequest(oc *OperatorContext, size string) error {
+	sts := &appsv1.StatefulSet{}
+	if err := oc.Client.Get(oc.Ctx, client.ObjectKey{Name: "dnode", Namespace: "testns"}, sts); err != nil {
+		return err
+	}
+	if len(sts.Spec.VolumeClaimTemplates) == 0 {
+		sts.Spec.VolumeClaimTemplates = []corev1.PersistentVolumeClaim{{ObjectMeta: metav1.ObjectMeta{Name: dataDirPVCName}}}
+	}
+	if sts.Spec.VolumeClaimTemplates[0].Spec.Resources.Requests == nil {
+		sts.Spec.VolumeClaimTemplates[0].Spec.Resources.Requests = corev1.ResourceList{}
+	}
+	sts.Spec.VolumeClaimTemplates[0].Spec.Resources.Requests[corev1.ResourceStorage] = resourceMustParse(size)
+	return oc.Client.Update(oc.Ctx, sts)
 }
 
 func findPVCStatus(status *marklogicv1.VolumeResizeStatus, name string) *marklogicv1.PVCResizeStatus {
