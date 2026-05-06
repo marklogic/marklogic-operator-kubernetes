@@ -61,7 +61,7 @@ The following Kubernetes PVC fields are authoritative for resize logic:
 | Filesystem resize pending     | `pvc.status.conditions` with type `FileSystemResizePending` and status `True` | Indicates block expansion is done but filesystem expansion requires pod remount |
 | Resizing in progress          | `pvc.status.conditions` with type `Resizing` and status `True` | Some CSI drivers emit this while expansion is in flight                        |
 
-The operator defines `currentSize` at operation start as the minimum of `pvc.status.capacity[storage]` across all target PVCs. This handles edge cases where a previous resize partially completed.
+The operator defines `currentSize` at operation start as the minimum of `pvc.status.capacity[storage]` across all target PVCs. This handles edge cases where a previous resize partially completed. A later patch to `targetSize` remains safe and idempotent even when some PVCs have already expanded beyond `currentSize` but remain below `targetSize`.
 
 StatefulSet `volumeClaimTemplates` are treated as effectively immutable for this workflow. Live PVCs can be expanded independently of the historical template, which creates a temporary mismatch between live storage state and StatefulSet template state. The operator resolves that mismatch by deleting and recreating the StatefulSet using orphan propagation so Pods and PVCs remain preserved.
 
@@ -283,10 +283,10 @@ The minimum v1 public contract is intentionally smaller than the full recovery b
 | `deferredObservedGeneration` |  integer     |    No    | Operator | Generation where the deferred target was observed                         | Helps users distinguish the active operation from a pending follow-up resize                          |
 |     `resizeStrategy`       |     string      |   Yes    | Operator | Strategy used for the active resize operation                             | Expected values: `parallel`, `sequential`                                                            |
 |        `totalPvcs`         |     integer     |   Yes    | Operator | Total number of PVCs included in the current operation                    | Denominator for progress                                                                             |
-|    `pvcsCheckpointed`      |     integer     |   Yes    | Operator | Number of PVCs that have reached the checkpoint required for advancement  | Replaces the ambiguous term `pvcsResized`                                                            |
+|    `pvcsCheckpointed`      |     integer     |   Yes    | Operator | Number of PVCs that have successfully reached the checkpoint required for advancement | Counts only PVCs that passed the checkpoint successfully; failed PVCs are excluded from this count    |
 |        `activePVC`         |     string      |    No    | Operator | Name of the PVC currently being processed                                 | Required in sequential mode                                                                          |
 |       `pvcStatuses`        |      array      |   Yes    | Operator | Per-PVC resize state for all targeted PVCs                                | Required for crash recovery, partial progress reporting, and selective Pod restart                    |
-|       `failedPVCs`         |      array      |    No    | Operator | Per-PVC failure details                                                   | Each entry includes name, reason, and message                                                        |
+|       `failedPVCs`         |      array      |    No    | Operator | Per-PVC failure details (denormalized convenience view)                    | Duplicates failure info from `pvcStatuses` entries with `state: Failed`; both must remain consistent  |
 |        `warnings`          | array of string |    No    | Operator | Non-fatal issues encountered during the operation                         | Does not imply terminal failure                                                                      |
 |       `retryCount`         |     integer     |    No    | Operator | Number of retries attempted for recoverable failures                      | Useful for debugging and support                                                                     |
 |       `nextRetryTime`      |    timestamp    |    No    | Operator | Time at which the controller plans to retry a stalled operation           | Present only for retry-eligible stalled states                                                       |
@@ -526,6 +526,8 @@ Required controller rules:
     
 5.  If the desired size changes during an active resize, the new desired size is deferred rather than executed concurrently.
 
+6.  When the active operation reaches a terminal state (`Completed` or `Failed`), the controller evaluates `deferredTargetSize` on the next reconcile cycle following the terminal status write. The terminal status is persisted and observable before a new operation begins, ensuring users can distinguish sequential operations.
+
 ### Resize Strategy
 
 The operator supports two execution strategies:
@@ -543,6 +545,16 @@ The operator supports two execution strategies:
 3.  `parallel` increases the risk of partial success and partial failure.
 
 4.  `sequential` reduces the immediate blast radius of a PVC failure, but requires stable ordering and persisted active-PVC state to remain crash-safe.
+
+### Implementation Assumptions
+
+The following compact assumptions apply to the v1 design:
+
+1.  The target PVC set is snapshotted during `Validating` from the PVCs that belong to the current group and are expected for the current replica set. PVCs created later by a separate scale workflow are not added to the active resize operation; they are handled by a later reconcile after scale and resize serialization is resolved.
+
+2.  The compare-and-swap claim on `operationID` is the explicit resize-level fence. After that point, the design relies on the controller-runtime leader election contract so that only the active leader continues reconciliation. The resize workflow does not introduce an additional custom lease or secondary fencing mechanism in v1.
+
+3.  Controller-side validation remains mandatory for shrink rejection, strategy validation, and safety checks. Admission webhook validation is recommended as a future UX improvement, but it is not required for the v1 functional contract.
 
 ## Detailed Workflow
 
@@ -610,6 +622,8 @@ Actions:
 8.  Build and persist the stable ordered PVC list that will be used for the full operation in both `parallel` and `sequential` modes.
 
 9.  Verify that the StatefulSet `updateStrategy` is `OnDelete`. If `RollingUpdate` is set, the StatefulSet controller could independently roll Pods during the resize window, creating a race condition. In v1, the operator must reject resize when `updateStrategy` is not `OnDelete` and surface `InvalidResizeRequest` rather than mutating the StatefulSet strategy implicitly.
+
+    Note: The MarkLogic Operator already sets `updateStrategy: OnDelete` as part of its standard StatefulSet reconciliation for MarkLogic groups. This validation step acts as a safety check rather than a user-facing prerequisite. If an external actor has overridden the strategy, this check prevents unsafe resize execution.
 
 10. Emit a warning event if any target PersistentVolume has `reclaimPolicy: Delete`. This does not block the operation, but surfaces the risk that accidental PVC deletion by another actor would permanently destroy data.
 
@@ -731,7 +745,7 @@ For `sequential`:
 
 Failure behavior:
 
-1.  If PVC progress stalls beyond an acceptable threshold, the operator transitions to `Stalled` or `Failed`.
+1.  If PVC progress stalls beyond an acceptable threshold, the operator transitions to `Stalled` or `Failed`. The per-phase stall threshold is governed by the global maximum retry count (default: 15 retries with exponential backoff) and maximum total operation time (default: 2 hours). No separate per-phase timeout is required because both limits apply continuously across all phases.
     
 2.  Provider rejections, quota issues, or rate limiting are surfaced through `reason`, `message`, and retry metadata.
 
@@ -793,7 +807,7 @@ Actions:
     
 2.  Restart only the Pods listed in `podsRestartPending`, whose associated PVCs required offline expansion. Pods whose PVCs completed expansion online do not need restart and should not be disrupted unnecessarily.
     
-3.  Restart Pods in a controlled sequence.
+3.  Restart Pods in reverse ordinal order (highest ordinal first). This minimizes the risk of quorum loss or primary-replica disruption during the restart window. The reverse ordinal ordering is deterministic and does not require additional persistence beyond the existing `podsRestartPending` list.
     
 4.  After each required Pod restart completes and the filesystem-resize signal is gone for the associated PVC, update that PVC status to `checkpointType: OfflineComplete`, `state: Restarted`, and `restartRequired: false`, and remove the Pod from `podsRestartPending`.
 
@@ -1099,13 +1113,21 @@ Examples:
 
 In such cases, the operator shall:
 
-1.  Record `pvcsCheckpointed` accurately.
+1.  Record `pvcsCheckpointed` accurately (counting only PVCs that successfully passed the checkpoint; failed PVCs are not counted).
     
 2.  Populate `failedPVCs` with per-PVC details.
     
 3.  Surface a user-visible `message` explaining the partial progress.
     
 4.  Transition to `Stalled` and prevent later phases from proceeding until the targeted PVC set is consistent again.
+
+Recovery from partial failure:
+
+1.  When the controller retries from `Stalled` (either automatically after backoff or after user remediation), it re-evaluates only the PVCs that have not yet reached the required checkpoint. PVCs that previously checkpointed successfully are not re-patched or re-evaluated.
+
+2.  If the underlying issue is resolved (e.g., quota increased), the controller resumes by submitting resize requests for the remaining failed or pending PVCs.
+
+3.  If after retry all PVCs reach the checkpoint, the operation advances to the next phase normally.
 
 Recommended behavior by strategy:
 
@@ -2371,9 +2393,9 @@ kind: MarklogicCluster
 metadata:
   name: cluster-sample
 spec:
-    persistence:
-        enabled: true
-        size: 100Gi
+  persistence:
+    enabled: true
+    size: 100Gi
   markLogicGroups:
     - name: dnode
       replicas: 3
