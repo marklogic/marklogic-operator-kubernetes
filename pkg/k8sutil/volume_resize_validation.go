@@ -26,11 +26,14 @@ const (
 	resizeRetryDelaySeconds  = 15
 	resizeMaxRetries         = 3
 
-	resizeMarkerSyncStarted         = "pr4.sync.started"
-	resizeMarkerTemplateSynced      = "pr4.sync.template-synced"
-	resizeMarkerRestartPlanPrepared = "pr4.sync.restart-plan-prepared"
-	resizeMarkerVerifyStarted       = "pr5.verify.started"
-	resizeMarkerVerifyCompleted     = "pr5.verify.completed"
+	resizeMarkerSyncStarted             = "pr4.sync.started"
+	resizeMarkerTemplateSynced          = "pr4.sync.template-synced"
+	resizeMarkerRestartPlanPrepared     = "pr4.sync.restart-plan-prepared"
+	resizeMarkerVerifyStarted           = "pr5.verify.started"
+	resizeMarkerVerifyCompleted         = "pr5.verify.completed"
+	resizeMarkerTemplateRecreateStarted = "pr5.1.sync.template-recreate-started"
+	resizeMarkerTemplateDeleted         = "pr5.1.sync.template-deleted"
+	resizeMarkerTemplateRecreated       = "pr5.1.sync.template-recreated"
 )
 
 type resizePVCDiscovery struct {
@@ -490,14 +493,20 @@ func (oc *OperatorContext) processStatefulSetSynchronization(status *marklogicv1
 
 	addResizeMarker(status, resizeMarkerSyncStarted)
 	if !hasResizeMarker(status, resizeMarkerTemplateSynced) {
-		synced, syncErr := oc.syncStatefulSetDataDirTemplate(currentSts, targetSize)
+		synced, syncErr := oc.syncStatefulSetDataDirTemplate(status, currentSts, targetSize)
 		if syncErr != nil {
 			return oc.scheduleSyncRetryOrFail(status, marklogicv1.VolumeResizeReasonStatefulSetSyncFailed, "Failed to synchronize StatefulSet template", syncErr)
 		}
 		if synced {
-			oc.emitResizeEvent(corev1.EventTypeNormal, "VolumeResizeProgressing", "StatefulSet template synchronized to resize target")
+			oc.emitResizeEvent(corev1.EventTypeNormal, "VolumeResizeProgressing", "StatefulSet template synchronization is progressing")
 		}
-		addResizeMarker(status, resizeMarkerTemplateSynced)
+		if !hasResizeMarker(status, resizeMarkerTemplateSynced) {
+			status.Message = "Synchronizing StatefulSet template with immutable-safe recreate flow"
+			if patchErr := oc.patchResizeStatus(status); patchErr != nil {
+				return result.Error(patchErr)
+			}
+			return result.RequeueSoon(1)
+		}
 		status.Message = "StatefulSet template synchronized; preparing restart plan"
 		if patchErr := oc.patchResizeStatus(status); patchErr != nil {
 			return result.Error(patchErr)
@@ -1007,37 +1016,54 @@ func (oc *OperatorContext) scheduleSyncRetryOrFail(status *marklogicv1.VolumeRes
 	return result.Done()
 }
 
-func (oc *OperatorContext) syncStatefulSetDataDirTemplate(currentSts *appsv1.StatefulSet, targetSize resource.Quantity) (bool, error) {
+func (oc *OperatorContext) syncStatefulSetDataDirTemplate(status *marklogicv1.VolumeResizeStatus, currentSts *appsv1.StatefulSet, targetSize resource.Quantity) (bool, error) {
 	if currentSts == nil {
 		return false, fmt.Errorf("statefulset is nil")
 	}
 
-	copySts := currentSts.DeepCopy()
-	templateUpdated := false
-	for i := range copySts.Spec.VolumeClaimTemplates {
-		pvcTemplate := &copySts.Spec.VolumeClaimTemplates[i]
+	templateFound := false
+	templateMatchesTarget := false
+	for i := range currentSts.Spec.VolumeClaimTemplates {
+		pvcTemplate := &currentSts.Spec.VolumeClaimTemplates[i]
 		if pvcTemplate.Name != dataDirPVCName {
 			continue
 		}
+		templateFound = true
 		if pvcTemplate.Spec.Resources.Requests == nil {
-			pvcTemplate.Spec.Resources.Requests = corev1.ResourceList{}
+			break
 		}
 		current := pvcTemplate.Spec.Resources.Requests[corev1.ResourceStorage]
 		if current.Cmp(targetSize) >= 0 {
-			return false, nil
+			templateMatchesTarget = true
 		}
-		pvcTemplate.Spec.Resources.Requests[corev1.ResourceStorage] = targetSize
-		templateUpdated = true
 		break
 	}
 
-	if !templateUpdated {
+	if !templateFound {
 		return false, fmt.Errorf("statefulset %s has no %s volumeClaimTemplate", currentSts.Name, dataDirPVCName)
 	}
 
-	if err := oc.Client.Update(oc.Ctx, copySts); err != nil {
+	if templateMatchesTarget {
+		addResizeMarker(status, resizeMarkerTemplateRecreated)
+		addResizeMarker(status, resizeMarkerTemplateSynced)
+		return false, nil
+	}
+
+	addResizeMarker(status, resizeMarkerTemplateRecreateStarted)
+	if hasResizeMarker(status, resizeMarkerTemplateDeleted) {
+		return true, nil
+	}
+
+	deletePolicy := metav1.DeletePropagationOrphan
+	err := oc.Client.Delete(oc.Ctx, currentSts, &client.DeleteOptions{PropagationPolicy: &deletePolicy})
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			addResizeMarker(status, resizeMarkerTemplateDeleted)
+			return true, nil
+		}
 		return false, err
 	}
+	addResizeMarker(status, resizeMarkerTemplateDeleted)
 	return true, nil
 }
 
@@ -1283,6 +1309,9 @@ func (oc *OperatorContext) validateStorageClassExpansionAllowed(foundPVCs map[st
 		if err := oc.Client.Get(oc.Ctx, client.ObjectKey{Name: scName}, sc); err != nil {
 			if apierrors.IsNotFound(err) {
 				return fmt.Errorf("StorageClass %s not found", scName)
+			}
+			if apierrors.IsForbidden(err) {
+				return fmt.Errorf("StorageClass validation requires cluster-scoped access to storageclasses (get/list/watch): %w", err)
 			}
 			return err
 		}

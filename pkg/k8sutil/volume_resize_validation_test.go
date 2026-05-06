@@ -11,9 +11,11 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	storagev1 "k8s.io/api/storage/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -905,6 +907,138 @@ func TestResizeFinalStatusFieldsConsistentOnCompletion(t *testing.T) {
 	}
 }
 
+func TestResizeSyncUsesImmutableSafeDeleteRecreateFlow(t *testing.T) {
+	oc := newResizeTestContext(t, resizeTestInput{desiredSize: "50Gi", currentSize: "20Gi", updateStrategy: appsv1.OnDeleteStatefulSetStrategyType})
+	now := metav1.Now()
+	status := &marklogicv1.VolumeResizeStatus{
+		OperationID:        "resize-immutable-sync",
+		ObservedGeneration: oc.MarklogicGroup.Generation,
+		Phase:              marklogicv1.VolumeResizePhaseSynchronizingStatefulSet,
+		CurrentSize:        "20Gi",
+		TargetSize:         "50Gi",
+		ResizeStrategy:     marklogicv1.VolumeResizeStrategyParallel,
+		TotalPVCs:          2,
+		PVCsCheckpointed:   2,
+		FirstStartedTime:   &now,
+		LastTransitionTime: &now,
+		PVCStatuses: []marklogicv1.PVCResizeStatus{
+			{Name: "datadir-dnode-0", State: marklogicv1.PVCResizeStateCheckpointed, CheckpointType: marklogicv1.PVCResizeCheckpointTypeOnlineComplete},
+			{Name: "datadir-dnode-1", State: marklogicv1.PVCResizeStateCheckpointed, CheckpointType: marklogicv1.PVCResizeCheckpointTypeOnlineComplete},
+		},
+	}
+	if err := oc.patchResizeStatus(status); err != nil {
+		t.Fatalf("failed to seed sync status: %v", err)
+	}
+
+	if err := runResizeStep(t, oc); err != nil {
+		t.Fatalf("unexpected error during delete step: %v", err)
+	}
+
+	deleted := &appsv1.StatefulSet{}
+	err := oc.Client.Get(oc.Ctx, client.ObjectKey{Name: "dnode", Namespace: "testns"}, deleted)
+	if err == nil {
+		t.Fatalf("expected statefulset to be deleted in immutable-safe flow")
+	}
+
+	updated := getUpdatedGroup(t, oc).Status.VolumeResizeStatus
+	if !containsString(updated.Warnings, resizeMarkerTemplateRecreateStarted) {
+		t.Fatalf("expected marker %q", resizeMarkerTemplateRecreateStarted)
+	}
+	if !containsString(updated.Warnings, resizeMarkerTemplateDeleted) {
+		t.Fatalf("expected marker %q", resizeMarkerTemplateDeleted)
+	}
+	if containsString(updated.Warnings, resizeMarkerTemplateSynced) {
+		t.Fatalf("did not expect sync marker before recreate")
+	}
+
+	replaceStatefulSet(t, oc, "50Gi")
+	if err := runResizeStep(t, oc); err != nil {
+		t.Fatalf("unexpected error after recreate: %v", err)
+	}
+
+	updated = getUpdatedGroup(t, oc).Status.VolumeResizeStatus
+	if !containsString(updated.Warnings, resizeMarkerTemplateRecreated) {
+		t.Fatalf("expected marker %q", resizeMarkerTemplateRecreated)
+	}
+	if !containsString(updated.Warnings, resizeMarkerTemplateSynced) {
+		t.Fatalf("expected marker %q", resizeMarkerTemplateSynced)
+	}
+}
+
+func TestResizeSyncCrashResumeBetweenDeleteAndRecreateConverges(t *testing.T) {
+	oc := newResizeTestContext(t, resizeTestInput{desiredSize: "50Gi", currentSize: "20Gi", updateStrategy: appsv1.OnDeleteStatefulSetStrategyType})
+	now := metav1.Now()
+	status := &marklogicv1.VolumeResizeStatus{
+		OperationID:        "resize-crash-resume-sync",
+		ObservedGeneration: oc.MarklogicGroup.Generation,
+		Phase:              marklogicv1.VolumeResizePhaseSynchronizingStatefulSet,
+		CurrentSize:        "20Gi",
+		TargetSize:         "50Gi",
+		ResizeStrategy:     marklogicv1.VolumeResizeStrategyParallel,
+		TotalPVCs:          2,
+		PVCsCheckpointed:   2,
+		FirstStartedTime:   &now,
+		LastTransitionTime: &now,
+		Warnings:           []string{resizeMarkerSyncStarted, resizeMarkerTemplateRecreateStarted, resizeMarkerTemplateDeleted},
+		PVCStatuses: []marklogicv1.PVCResizeStatus{
+			{Name: "datadir-dnode-0", State: marklogicv1.PVCResizeStateCheckpointed, CheckpointType: marklogicv1.PVCResizeCheckpointTypeOnlineComplete},
+			{Name: "datadir-dnode-1", State: marklogicv1.PVCResizeStateCheckpointed, CheckpointType: marklogicv1.PVCResizeCheckpointTypeOnlineComplete},
+		},
+	}
+	if err := oc.patchResizeStatus(status); err != nil {
+		t.Fatalf("failed to seed crash-resume status: %v", err)
+	}
+
+	sts := &appsv1.StatefulSet{ObjectMeta: metav1.ObjectMeta{Name: "dnode", Namespace: "testns"}}
+	if err := oc.Client.Delete(oc.Ctx, sts); err != nil {
+		t.Fatalf("failed to remove statefulset to simulate crash gap: %v", err)
+	}
+
+	if err := runResizeStep(t, oc); err != nil {
+		t.Fatalf("unexpected error while statefulset is absent during crash-resume: %v", err)
+	}
+
+	replaceStatefulSet(t, oc, "50Gi")
+	if err := runResizeStep(t, oc); err != nil {
+		t.Fatalf("unexpected error after statefulset recreate in crash-resume: %v", err)
+	}
+	if err := runResizeStep(t, oc); err != nil {
+		t.Fatalf("unexpected error while advancing from synced marker to next phase: %v", err)
+	}
+
+	updated := getUpdatedGroup(t, oc).Status.VolumeResizeStatus
+	if !containsString(updated.Warnings, resizeMarkerTemplateSynced) {
+		t.Fatalf("expected sync marker after crash-resume convergence")
+	}
+	if updated.Phase != marklogicv1.VolumeResizePhaseWaitingForPodsReady {
+		t.Fatalf("expected flow to advance after sync, got %s", updated.Phase)
+	}
+}
+
+func TestResizeValidationStorageClassForbiddenShowsNamespaceScopeMessage(t *testing.T) {
+	oc := newResizeTestContext(t, resizeTestInput{desiredSize: "50Gi", currentSize: "20Gi", updateStrategy: appsv1.OnDeleteStatefulSetStrategyType})
+	oc.Client = &forbiddenStorageClassClient{Client: oc.Client}
+
+	res := oc.ReconcileVolumeResizeValidation()
+	if !res.Completed() {
+		t.Fatalf("expected validation to complete")
+	}
+	if _, err := res.Output(); err != nil {
+		t.Fatalf("unexpected result error: %v", err)
+	}
+
+	status := getUpdatedGroup(t, oc).Status.VolumeResizeStatus
+	if status.Phase != marklogicv1.VolumeResizePhaseFailed {
+		t.Fatalf("expected Failed phase, got %s", status.Phase)
+	}
+	if status.Reason != marklogicv1.VolumeResizeReasonStorageClassNotExpandable {
+		t.Fatalf("expected StorageClassNotExpandable reason, got %s", status.Reason)
+	}
+	if !strings.Contains(status.Message, "cluster-scoped access to storageclasses") {
+		t.Fatalf("expected explicit scope/permission message, got %q", status.Message)
+	}
+}
+
 type resizeTestInput struct {
 	desiredSize    string
 	currentSize    string
@@ -1132,6 +1266,50 @@ func setStatefulSetTemplateRequest(oc *OperatorContext, size string) error {
 	}
 	sts.Spec.VolumeClaimTemplates[0].Spec.Resources.Requests[corev1.ResourceStorage] = resourceMustParse(size)
 	return oc.Client.Update(oc.Ctx, sts)
+}
+
+func replaceStatefulSet(t *testing.T, oc *OperatorContext, size string) {
+	t.Helper()
+	existing := &appsv1.StatefulSet{}
+	if err := oc.Client.Get(oc.Ctx, client.ObjectKey{Name: "dnode", Namespace: "testns"}, existing); err == nil {
+		if delErr := oc.Client.Delete(oc.Ctx, existing); delErr != nil {
+			t.Fatalf("failed to delete existing statefulset: %v", delErr)
+		}
+	}
+	replicas := int32(2)
+	if oc.MarklogicGroup.Spec.Replicas != nil {
+		replicas = *oc.MarklogicGroup.Spec.Replicas
+	}
+	sts := &appsv1.StatefulSet{
+		ObjectMeta: metav1.ObjectMeta{Name: "dnode", Namespace: "testns"},
+		Spec: appsv1.StatefulSetSpec{
+			Replicas: &replicas,
+			VolumeClaimTemplates: []corev1.PersistentVolumeClaim{
+				{
+					ObjectMeta: metav1.ObjectMeta{Name: dataDirPVCName},
+					Spec: corev1.PersistentVolumeClaimSpec{
+						Resources: corev1.VolumeResourceRequirements{
+							Requests: corev1.ResourceList{corev1.ResourceStorage: resourceMustParse(size)},
+						},
+					},
+				},
+			},
+		},
+	}
+	if err := oc.Client.Create(oc.Ctx, sts); err != nil {
+		t.Fatalf("failed to recreate statefulset: %v", err)
+	}
+}
+
+type forbiddenStorageClassClient struct {
+	client.Client
+}
+
+func (c *forbiddenStorageClassClient) Get(ctx context.Context, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+	if _, ok := obj.(*storagev1.StorageClass); ok {
+		return apierrors.NewForbidden(schema.GroupResource{Group: "storage.k8s.io", Resource: "storageclasses"}, key.Name, fmt.Errorf("forbidden for test"))
+	}
+	return c.Client.Get(ctx, key, obj, opts...)
 }
 
 func findPVCStatus(status *marklogicv1.VolumeResizeStatus, name string) *marklogicv1.PVCResizeStatus {
