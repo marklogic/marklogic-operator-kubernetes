@@ -29,6 +29,8 @@ const (
 	resizeMarkerSyncStarted         = "pr4.sync.started"
 	resizeMarkerTemplateSynced      = "pr4.sync.template-synced"
 	resizeMarkerRestartPlanPrepared = "pr4.sync.restart-plan-prepared"
+	resizeMarkerVerifyStarted       = "pr5.verify.started"
+	resizeMarkerVerifyCompleted     = "pr5.verify.completed"
 )
 
 type resizePVCDiscovery struct {
@@ -245,6 +247,8 @@ func (oc *OperatorContext) reconcileActiveResizeOperation(active *marklogicv1.Vo
 		return oc.processPodRestarts(active, currentSts)
 	case marklogicv1.VolumeResizePhaseWaitingForPodsReady:
 		return oc.processPodsReadyWait(active, currentSts)
+	case marklogicv1.VolumeResizePhaseVerifyingResizeOutcome:
+		return oc.processResizeVerification(active, currentSts)
 	case marklogicv1.VolumeResizePhaseStalled:
 		ready, requeueSecs := isRetryWindowOpen(active)
 		if !ready {
@@ -260,6 +264,10 @@ func (oc *OperatorContext) reconcileActiveResizeOperation(active *marklogicv1.Vo
 		if active.Reason == marklogicv1.VolumeResizeReasonPodRecoveryFailed {
 			retryPhase = marklogicv1.VolumeResizePhaseWaitingForPodsReady
 			retryMessage = "Retrying pod recovery and readiness checks"
+		}
+		if active.Reason == marklogicv1.VolumeResizeReasonMarkLogicHealthCheckFailed {
+			retryPhase = marklogicv1.VolumeResizePhaseVerifyingResizeOutcome
+			retryMessage = "Retrying resize outcome verification"
 		}
 		oc.transitionResizePhase(active, retryPhase, "", retryMessage)
 		oc.emitResizeEvent(corev1.EventTypeNormal, "VolumeResizeProgressing", active.Message)
@@ -629,6 +637,114 @@ func (oc *OperatorContext) processPodsReadyWait(status *marklogicv1.VolumeResize
 	if patchErr := oc.patchResizeStatus(status); patchErr != nil {
 		return result.Error(patchErr)
 	}
+	return result.RequeueSoon(1)
+}
+
+func (oc *OperatorContext) processResizeVerification(status *marklogicv1.VolumeResizeStatus, currentSts *appsv1.StatefulSet) result.ReconcileResult {
+	ready, requeueSecs := isRetryWindowOpen(status)
+	if !ready {
+		return result.RequeueSoon(requeueSecs)
+	}
+
+	targetSize, err := resource.ParseQuantity(status.TargetSize)
+	if err != nil {
+		oc.transitionResizePhase(status, marklogicv1.VolumeResizePhaseFailed, marklogicv1.VolumeResizeReasonInvalidResizeRequest, fmt.Sprintf("Invalid target size %q", status.TargetSize))
+		oc.emitResizeEvent(corev1.EventTypeWarning, "VolumeResizeFailed", status.Message)
+		if patchErr := oc.patchResizeStatus(status); patchErr != nil {
+			return result.Error(patchErr)
+		}
+		return result.Done()
+	}
+
+	if !hasResizeMarker(status, resizeMarkerVerifyStarted) {
+		addResizeMarker(status, resizeMarkerVerifyStarted)
+		oc.emitResizeEvent(corev1.EventTypeNormal, "VolumeResizeProgressing", "Starting resize outcome verification")
+	}
+
+	templateRequest, hasTemplate := getStatefulSetDataDirTemplateRequest(currentSts)
+	if !hasTemplate {
+		oc.transitionResizePhase(status, marklogicv1.VolumeResizePhaseFailed, marklogicv1.VolumeResizeReasonTemplateUpdateInterrupted, "StatefulSet datadir template is missing during verification")
+		oc.emitResizeEvent(corev1.EventTypeWarning, "VolumeResizeFailed", status.Message)
+		if patchErr := oc.patchResizeStatus(status); patchErr != nil {
+			return result.Error(patchErr)
+		}
+		return result.Done()
+	}
+	if templateRequest.Cmp(targetSize) < 0 {
+		return oc.scheduleSyncRetryOrFail(status, marklogicv1.VolumeResizeReasonMarkLogicHealthCheckFailed, fmt.Sprintf("StatefulSet datadir template request (%s) has not reached target (%s)", templateRequest.String(), targetSize.String()), fmt.Errorf("template request below target"))
+	}
+
+	notFinalPVCs := make([]string, 0)
+	for i := range status.PVCStatuses {
+		entry := &status.PVCStatuses[i]
+		pvc := &corev1.PersistentVolumeClaim{}
+		if getErr := oc.Client.Get(oc.Ctx, client.ObjectKey{Namespace: oc.MarklogicGroup.Namespace, Name: entry.Name}, pvc); getErr != nil {
+			return oc.scheduleSyncRetryOrFail(status, marklogicv1.VolumeResizeReasonMarkLogicHealthCheckFailed, "Failed to fetch PVC during verification", getErr)
+		}
+
+		requested := pvc.Spec.Resources.Requests[corev1.ResourceStorage]
+		observed := pvc.Status.Capacity[corev1.ResourceStorage]
+		if observed.IsZero() {
+			observed = requested
+		}
+
+		entry.RequestedSize = requested.String()
+		entry.ObservedCapacity = observed.String()
+
+		if requested.Cmp(targetSize) < 0 || observed.Cmp(targetSize) < 0 {
+			notFinalPVCs = append(notFinalPVCs, entry.Name)
+			continue
+		}
+
+		if hasFileSystemResizePending(pvc) {
+			notFinalPVCs = append(notFinalPVCs, entry.Name)
+			entry.CheckpointType = marklogicv1.PVCResizeCheckpointTypeOfflinePending
+			entry.RestartRequired = true
+			entry.LastReason = ""
+			entry.LastMessage = "Filesystem resize still pending"
+			continue
+		}
+
+		if entry.State == marklogicv1.PVCResizeStateRestartPending || entry.RestartRequired {
+			notFinalPVCs = append(notFinalPVCs, entry.Name)
+			entry.LastReason = ""
+			entry.LastMessage = "Awaiting restart completion"
+			continue
+		}
+
+		if entry.State == marklogicv1.PVCResizeStateRestarted || entry.CheckpointType == marklogicv1.PVCResizeCheckpointTypeOfflinePending {
+			entry.State = marklogicv1.PVCResizeStateRestarted
+			entry.CheckpointType = marklogicv1.PVCResizeCheckpointTypeOfflineComplete
+		} else {
+			entry.State = marklogicv1.PVCResizeStateCheckpointed
+			entry.CheckpointType = marklogicv1.PVCResizeCheckpointTypeOnlineComplete
+		}
+		entry.RestartRequired = false
+		entry.LastReason = ""
+		entry.LastMessage = "Verification checks passed"
+	}
+
+	oc.recalculatePVCProgress(status)
+	if len(notFinalPVCs) > 0 {
+		return oc.scheduleSyncRetryOrFail(status, marklogicv1.VolumeResizeReasonMarkLogicHealthCheckFailed, fmt.Sprintf("Verification pending for PVCs: %s", strings.Join(notFinalPVCs, ",")), fmt.Errorf("final pvc state not satisfied"))
+	}
+
+	allReady, readyErr := oc.areStatefulSetPodsReady(currentSts)
+	if readyErr != nil {
+		return oc.scheduleSyncRetryOrFail(status, marklogicv1.VolumeResizeReasonMarkLogicHealthCheckFailed, "Failed to verify pod readiness during verification", readyErr)
+	}
+	if !allReady {
+		return oc.scheduleSyncRetryOrFail(status, marklogicv1.VolumeResizeReasonMarkLogicHealthCheckFailed, "StatefulSet pods are not yet ready during verification", fmt.Errorf("pods not ready"))
+	}
+
+	oc.clearRetryState(status)
+	status.ActivePVC = ""
+	addResizeMarker(status, resizeMarkerVerifyCompleted)
+	oc.transitionResizePhase(status, marklogicv1.VolumeResizePhaseCompleted, "", "Resize operation completed successfully")
+	oc.emitResizeEvent(corev1.EventTypeNormal, "VolumeResizeProgressing", status.Message)
+	if patchErr := oc.patchResizeStatus(status); patchErr != nil {
+		return result.Error(patchErr)
+	}
 	return result.Done()
 }
 
@@ -693,14 +809,11 @@ func (oc *OperatorContext) patchResizeStatus(status *marklogicv1.VolumeResizeSta
 }
 
 func (oc *OperatorContext) claimResizeStatusCAS(status *marklogicv1.VolumeResizeStatus) (bool, error) {
-	expectedResourceVersion := oc.MarklogicGroup.ResourceVersion
 	latest := &marklogicv1.MarklogicGroup{}
 	if err := oc.Client.Get(oc.Ctx, client.ObjectKey{Name: oc.MarklogicGroup.Name, Namespace: oc.MarklogicGroup.Namespace}, latest); err != nil {
 		return false, err
 	}
-	if expectedResourceVersion == "" {
-		expectedResourceVersion = latest.ResourceVersion
-	}
+	expectedResourceVersion := latest.ResourceVersion
 
 	if isResizeOperationActive(latest.Status.VolumeResizeStatus) {
 		oc.MarklogicGroup = latest
@@ -926,6 +1039,27 @@ func (oc *OperatorContext) syncStatefulSetDataDirTemplate(currentSts *appsv1.Sta
 		return false, err
 	}
 	return true, nil
+}
+
+func getStatefulSetDataDirTemplateRequest(currentSts *appsv1.StatefulSet) (resource.Quantity, bool) {
+	if currentSts == nil {
+		return resource.Quantity{}, false
+	}
+	for i := range currentSts.Spec.VolumeClaimTemplates {
+		template := currentSts.Spec.VolumeClaimTemplates[i]
+		if template.Name != dataDirPVCName {
+			continue
+		}
+		if template.Spec.Resources.Requests == nil {
+			return resource.Quantity{}, false
+		}
+		request, ok := template.Spec.Resources.Requests[corev1.ResourceStorage]
+		if !ok {
+			return resource.Quantity{}, false
+		}
+		return request, true
+	}
+	return resource.Quantity{}, false
 }
 
 func getOfflineRestartCandidates(status *marklogicv1.VolumeResizeStatus, statefulSetName string) []string {
