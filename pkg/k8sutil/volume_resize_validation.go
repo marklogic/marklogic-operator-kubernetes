@@ -5,6 +5,7 @@ package k8sutil
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	marklogicv1 "github.com/marklogic/marklogic-operator-kubernetes/api/v1"
 	"github.com/marklogic/marklogic-operator-kubernetes/pkg/result"
@@ -20,6 +21,8 @@ import (
 const (
 	resizePauseAnnotationKey = "marklogic.progress.com/resize-paused"
 	dataDirPVCName           = "datadir"
+	resizeRetryDelaySeconds  = 15
+	resizeMaxRetries         = 3
 )
 
 type resizePVCDiscovery struct {
@@ -54,14 +57,15 @@ func (oc *OperatorContext) ReconcileVolumeResizeValidation() result.ReconcileRes
 	if err != nil {
 		return result.Error(err)
 	}
-	if pvcState.minSize == nil {
-		// No live baseline yet, continue with the existing reconcile flow.
-		return result.Continue()
-	}
 
 	active := cr.Status.VolumeResizeStatus
 	if isResizeOperationActive(active) {
-		return oc.reconcileActiveResizeOperation(active, targetSize)
+		return oc.reconcileActiveResizeOperation(active, targetSize, currentSts)
+	}
+
+	if pvcState.minSize == nil {
+		// No live baseline yet, continue with the existing reconcile flow.
+		return result.Continue()
 	}
 
 	comparison := targetSize.Cmp(*pvcState.minSize)
@@ -76,7 +80,7 @@ func (oc *OperatorContext) ReconcileVolumeResizeValidation() result.ReconcileRes
 	}
 	if !claimed {
 		if isResizeOperationActive(oc.MarklogicGroup.Status.VolumeResizeStatus) {
-			return oc.reconcileActiveResizeOperation(oc.MarklogicGroup.Status.VolumeResizeStatus, targetSize)
+			return oc.reconcileActiveResizeOperation(oc.MarklogicGroup.Status.VolumeResizeStatus, targetSize, currentSts)
 		}
 		return result.Continue()
 	}
@@ -137,12 +141,13 @@ func (oc *OperatorContext) ReconcileVolumeResizeValidation() result.ReconcileRes
 		return result.Done()
 	}
 
-	resizeStatus.Message = "Resize validation completed"
+	oc.initializePVCStatuses(resizeStatus, pvcState)
+	oc.transitionResizePhase(resizeStatus, marklogicv1.VolumeResizePhaseResizingPVCs, "", "Resize validation completed; submitting PVC resize requests")
 	oc.emitResizeEvent(corev1.EventTypeNormal, "VolumeResizeProgressing", resizeStatus.Message)
 	if err := oc.patchResizeStatus(resizeStatus); err != nil {
 		return result.Error(err)
 	}
-	return result.Done()
+	return result.RequeueSoon(1)
 }
 
 func (oc *OperatorContext) failResizeValidation(reason marklogicv1.VolumeResizeReason, message string) result.ReconcileResult {
@@ -178,7 +183,7 @@ func (oc *OperatorContext) failResizeValidation(reason marklogicv1.VolumeResizeR
 	return result.Done()
 }
 
-func (oc *OperatorContext) reconcileActiveResizeOperation(active *marklogicv1.VolumeResizeStatus, targetSize resource.Quantity) result.ReconcileResult {
+func (oc *OperatorContext) reconcileActiveResizeOperation(active *marklogicv1.VolumeResizeStatus, targetSize resource.Quantity, currentSts *appsv1.StatefulSet) result.ReconcileResult {
 	if active == nil {
 		return result.Done()
 	}
@@ -191,6 +196,12 @@ func (oc *OperatorContext) reconcileActiveResizeOperation(active *marklogicv1.Vo
 			oc.emitResizeEvent(corev1.EventTypeWarning, "VolumeResizeStalled", message)
 			updated = true
 		}
+		if updated {
+			if err := oc.patchResizeStatus(active); err != nil {
+				return result.Error(err)
+			}
+		}
+		return result.Done()
 	}
 
 	currentTarget, err := resource.ParseQuantity(active.TargetSize)
@@ -210,7 +221,229 @@ func (oc *OperatorContext) reconcileActiveResizeOperation(active *marklogicv1.Vo
 		}
 	}
 
-	return result.Done()
+	switch active.Phase {
+	case marklogicv1.VolumeResizePhaseValidating:
+		oc.transitionResizePhase(active, marklogicv1.VolumeResizePhaseResizingPVCs, "", "Submitting PVC resize requests")
+		oc.emitResizeEvent(corev1.EventTypeNormal, "VolumeResizeProgressing", active.Message)
+		if err := oc.patchResizeStatus(active); err != nil {
+			return result.Error(err)
+		}
+		return result.RequeueSoon(1)
+	case marklogicv1.VolumeResizePhaseResizingPVCs:
+		return oc.processResizeSubmission(active)
+	case marklogicv1.VolumeResizePhaseWaitingForPVCResize:
+		return oc.processResizeWaiting(active)
+	case marklogicv1.VolumeResizePhaseStalled:
+		ready, requeueSecs := isRetryWindowOpen(active)
+		if !ready {
+			return result.RequeueSoon(requeueSecs)
+		}
+		active.NextRetryTime = nil
+		oc.transitionResizePhase(active, marklogicv1.VolumeResizePhaseResizingPVCs, "", "Retrying PVC resize operation")
+		oc.emitResizeEvent(corev1.EventTypeNormal, "VolumeResizeProgressing", active.Message)
+		if err := oc.patchResizeStatus(active); err != nil {
+			return result.Error(err)
+		}
+		return result.RequeueSoon(1)
+	default:
+		_ = currentSts
+		return result.Done()
+	}
+}
+
+func (oc *OperatorContext) processResizeSubmission(status *marklogicv1.VolumeResizeStatus) result.ReconcileResult {
+	ready, requeueSecs := isRetryWindowOpen(status)
+	if !ready {
+		return result.RequeueSoon(requeueSecs)
+	}
+
+	targetSize, err := resource.ParseQuantity(status.TargetSize)
+	if err != nil {
+		oc.transitionResizePhase(status, marklogicv1.VolumeResizePhaseFailed, marklogicv1.VolumeResizeReasonInvalidResizeRequest, fmt.Sprintf("Invalid target size %q", status.TargetSize))
+		oc.emitResizeEvent(corev1.EventTypeWarning, "VolumeResizeFailed", status.Message)
+		if patchErr := oc.patchResizeStatus(status); patchErr != nil {
+			return result.Error(patchErr)
+		}
+		return result.Done()
+	}
+
+	if len(status.PVCStatuses) == 0 {
+		currentSts, stsErr := oc.GetStatefulSet(oc.MarklogicGroup.Namespace, oc.MarklogicGroup.Spec.Name)
+		if stsErr != nil {
+			return result.Error(stsErr)
+		}
+		pvcState, discoverErr := oc.discoverPrimaryPVCs(currentSts)
+		if discoverErr != nil {
+			return result.Error(discoverErr)
+		}
+		oc.initializePVCStatuses(status, pvcState)
+	}
+
+	indices := oc.getSubmissionIndices(status)
+	for _, idx := range indices {
+		entry := &status.PVCStatuses[idx]
+		if isPVCCheckpointed(entry) {
+			continue
+		}
+
+		pvc := &corev1.PersistentVolumeClaim{}
+		if getErr := oc.Client.Get(oc.Ctx, client.ObjectKey{Namespace: oc.MarklogicGroup.Namespace, Name: entry.Name}, pvc); getErr != nil {
+			oc.markPVCFailed(status, entry.Name, marklogicv1.VolumeResizeReasonResizeFailed, getErr.Error())
+			continue
+		}
+
+		requested := pvc.Spec.Resources.Requests[corev1.ResourceStorage]
+		observed := pvc.Status.Capacity[corev1.ResourceStorage]
+		if observed.IsZero() {
+			observed = requested
+		}
+		entry.RequestedSize = requested.String()
+		entry.ObservedCapacity = observed.String()
+
+		if requested.Cmp(targetSize) >= 0 {
+			entry.State = marklogicv1.PVCResizeStateWaitingForCheckpoint
+			entry.LastReason = ""
+			entry.LastMessage = "Waiting for resize checkpoint"
+			continue
+		}
+
+		patch := client.MergeFrom(pvc.DeepCopy())
+		if pvc.Spec.Resources.Requests == nil {
+			pvc.Spec.Resources.Requests = corev1.ResourceList{}
+		}
+		pvc.Spec.Resources.Requests[corev1.ResourceStorage] = targetSize
+		if patchErr := oc.Client.Patch(oc.Ctx, pvc, patch); patchErr != nil {
+			oc.markPVCFailed(status, entry.Name, marklogicv1.VolumeResizeReasonResizeFailed, patchErr.Error())
+			continue
+		}
+
+		entry.RequestedSize = targetSize.String()
+		entry.State = marklogicv1.PVCResizeStateResizeSubmitted
+		entry.LastReason = ""
+		entry.LastMessage = "Resize request submitted"
+	}
+
+	oc.updateSequentialActivePVC(status)
+	oc.recalculatePVCProgress(status)
+
+	if len(status.FailedPVCs) > 0 {
+		if oc.scheduleRetryOrFail(status, marklogicv1.VolumeResizeReasonPartialResizeFailure, "Failed to submit one or more PVC resize patches") {
+			oc.emitResizeEvent(corev1.EventTypeWarning, "VolumeResizeStalled", status.Message)
+			if patchErr := oc.patchResizeStatus(status); patchErr != nil {
+				return result.Error(patchErr)
+			}
+			return result.RequeueSoon(resizeRetryDelaySeconds)
+		}
+		oc.emitResizeEvent(corev1.EventTypeWarning, "VolumeResizeFailed", status.Message)
+		if patchErr := oc.patchResizeStatus(status); patchErr != nil {
+			return result.Error(patchErr)
+		}
+		return result.Done()
+	}
+
+	oc.clearRetryState(status)
+	oc.transitionResizePhase(status, marklogicv1.VolumeResizePhaseWaitingForPVCResize, "", "Waiting for PVC resize checkpoints")
+	oc.emitResizeEvent(corev1.EventTypeNormal, "VolumeResizeProgressing", status.Message)
+	if patchErr := oc.patchResizeStatus(status); patchErr != nil {
+		return result.Error(patchErr)
+	}
+	return result.RequeueSoon(3)
+}
+
+func (oc *OperatorContext) processResizeWaiting(status *marklogicv1.VolumeResizeStatus) result.ReconcileResult {
+	ready, requeueSecs := isRetryWindowOpen(status)
+	if !ready {
+		return result.RequeueSoon(requeueSecs)
+	}
+
+	targetSize, err := resource.ParseQuantity(status.TargetSize)
+	if err != nil {
+		oc.transitionResizePhase(status, marklogicv1.VolumeResizePhaseFailed, marklogicv1.VolumeResizeReasonInvalidResizeRequest, fmt.Sprintf("Invalid target size %q", status.TargetSize))
+		oc.emitResizeEvent(corev1.EventTypeWarning, "VolumeResizeFailed", status.Message)
+		if patchErr := oc.patchResizeStatus(status); patchErr != nil {
+			return result.Error(patchErr)
+		}
+		return result.Done()
+	}
+
+	for i := range status.PVCStatuses {
+		entry := &status.PVCStatuses[i]
+		if isPVCCheckpointed(entry) {
+			continue
+		}
+
+		pvc := &corev1.PersistentVolumeClaim{}
+		if getErr := oc.Client.Get(oc.Ctx, client.ObjectKey{Namespace: oc.MarklogicGroup.Namespace, Name: entry.Name}, pvc); getErr != nil {
+			oc.markPVCFailed(status, entry.Name, marklogicv1.VolumeResizeReasonResizeFailed, getErr.Error())
+			continue
+		}
+
+		requested := pvc.Spec.Resources.Requests[corev1.ResourceStorage]
+		observed := pvc.Status.Capacity[corev1.ResourceStorage]
+		if observed.IsZero() {
+			observed = requested
+		}
+
+		entry.RequestedSize = requested.String()
+		entry.ObservedCapacity = observed.String()
+
+		if requested.Cmp(targetSize) >= 0 && observed.Cmp(targetSize) >= 0 {
+			if hasFileSystemResizePending(pvc) {
+				entry.State = marklogicv1.PVCResizeStateCheckpointed
+				entry.CheckpointType = marklogicv1.PVCResizeCheckpointTypeOfflinePending
+				entry.RestartRequired = true
+				entry.LastReason = ""
+				entry.LastMessage = "Offline checkpoint reached"
+			} else {
+				entry.State = marklogicv1.PVCResizeStateCheckpointed
+				entry.CheckpointType = marklogicv1.PVCResizeCheckpointTypeOnlineComplete
+				entry.RestartRequired = false
+				entry.LastReason = ""
+				entry.LastMessage = "Online checkpoint reached"
+			}
+			continue
+		}
+
+		entry.State = marklogicv1.PVCResizeStateWaitingForCheckpoint
+		entry.LastReason = ""
+		entry.LastMessage = "Waiting for resize checkpoint"
+	}
+
+	oc.updateSequentialActivePVC(status)
+	oc.recalculatePVCProgress(status)
+
+	if len(status.FailedPVCs) > 0 {
+		if oc.scheduleRetryOrFail(status, marklogicv1.VolumeResizeReasonPartialResizeFailure, "Failed while waiting for PVC resize checkpoint") {
+			oc.emitResizeEvent(corev1.EventTypeWarning, "VolumeResizeStalled", status.Message)
+			if patchErr := oc.patchResizeStatus(status); patchErr != nil {
+				return result.Error(patchErr)
+			}
+			return result.RequeueSoon(resizeRetryDelaySeconds)
+		}
+		oc.emitResizeEvent(corev1.EventTypeWarning, "VolumeResizeFailed", status.Message)
+		if patchErr := oc.patchResizeStatus(status); patchErr != nil {
+			return result.Error(patchErr)
+		}
+		return result.Done()
+	}
+
+	oc.clearRetryState(status)
+	if status.PVCsCheckpointed == status.TotalPVCs && status.TotalPVCs > 0 {
+		status.ActivePVC = ""
+		status.Message = "All PVCs reached resize checkpoint"
+		oc.emitResizeEvent(corev1.EventTypeNormal, "VolumeResizeProgressing", status.Message)
+		if patchErr := oc.patchResizeStatus(status); patchErr != nil {
+			return result.Error(patchErr)
+		}
+		return result.Done()
+	}
+
+	status.Message = "Waiting for PVC resize checkpoints"
+	oc.emitResizeEvent(corev1.EventTypeNormal, "VolumeResizeProgressing", status.Message)
+	if patchErr := oc.patchResizeStatus(status); patchErr != nil {
+		return result.Error(patchErr)
+	}
+	return result.RequeueSoon(5)
 }
 
 func (oc *OperatorContext) newResizeStatus(pvcState *resizePVCDiscovery, targetSize string) *marklogicv1.VolumeResizeStatus {
@@ -227,6 +460,18 @@ func (oc *OperatorContext) newResizeStatus(pvcState *resizePVCDiscovery, targetS
 		FirstStartedTime:   &now,
 		LastTransitionTime: &now,
 	}
+}
+
+func (oc *OperatorContext) initializePVCStatuses(status *marklogicv1.VolumeResizeStatus, pvcState *resizePVCDiscovery) {
+	if status.PVCStatuses == nil || len(status.PVCStatuses) == 0 {
+		status.PVCStatuses = make([]marklogicv1.PVCResizeStatus, 0, len(pvcState.expectedNames))
+		for _, name := range pvcState.expectedNames {
+			status.PVCStatuses = append(status.PVCStatuses, marklogicv1.PVCResizeStatus{Name: name, State: marklogicv1.PVCResizeStatePending})
+		}
+	}
+	status.TotalPVCs = int32(len(status.PVCStatuses))
+	oc.updateSequentialActivePVC(status)
+	oc.recalculatePVCProgress(status)
 }
 
 func (oc *OperatorContext) transitionResizePhase(status *marklogicv1.VolumeResizeStatus, phase marklogicv1.VolumeResizePhase, reason marklogicv1.VolumeResizeReason, message string) {
@@ -317,6 +562,135 @@ func isResizeOperationActive(status *marklogicv1.VolumeResizeStatus) bool {
 		return false
 	}
 	return status.Phase != marklogicv1.VolumeResizePhaseCompleted && status.Phase != marklogicv1.VolumeResizePhaseFailed
+}
+
+func isPVCCheckpointed(status *marklogicv1.PVCResizeStatus) bool {
+	if status == nil {
+		return false
+	}
+	return status.State == marklogicv1.PVCResizeStateCheckpointed || status.State == marklogicv1.PVCResizeStateRestarted
+}
+
+func hasFileSystemResizePending(pvc *corev1.PersistentVolumeClaim) bool {
+	for _, cond := range pvc.Status.Conditions {
+		if cond.Type == corev1.PersistentVolumeClaimFileSystemResizePending && cond.Status == corev1.ConditionTrue {
+			return true
+		}
+	}
+	return false
+}
+
+func isRetryWindowOpen(status *marklogicv1.VolumeResizeStatus) (bool, int) {
+	if status == nil || status.NextRetryTime == nil {
+		return true, 0
+	}
+	d := time.Until(status.NextRetryTime.Time)
+	if d <= 0 {
+		return true, 0
+	}
+	secs := int(d.Seconds()) + 1
+	if secs < 1 {
+		secs = 1
+	}
+	return false, secs
+}
+
+func (oc *OperatorContext) getSubmissionIndices(status *marklogicv1.VolumeResizeStatus) []int {
+	indices := []int{}
+	if status.ResizeStrategy == marklogicv1.VolumeResizeStrategySequential {
+		oc.updateSequentialActivePVC(status)
+		for idx := range status.PVCStatuses {
+			if status.PVCStatuses[idx].Name == status.ActivePVC && !isPVCCheckpointed(&status.PVCStatuses[idx]) {
+				return []int{idx}
+			}
+		}
+		return indices
+	}
+
+	for idx := range status.PVCStatuses {
+		if !isPVCCheckpointed(&status.PVCStatuses[idx]) {
+			indices = append(indices, idx)
+		}
+	}
+	return indices
+}
+
+func (oc *OperatorContext) updateSequentialActivePVC(status *marklogicv1.VolumeResizeStatus) {
+	if status == nil || status.ResizeStrategy != marklogicv1.VolumeResizeStrategySequential {
+		return
+	}
+	for idx := range status.PVCStatuses {
+		if status.PVCStatuses[idx].Name == status.ActivePVC && !isPVCCheckpointed(&status.PVCStatuses[idx]) {
+			return
+		}
+	}
+	for idx := range status.PVCStatuses {
+		if !isPVCCheckpointed(&status.PVCStatuses[idx]) {
+			status.ActivePVC = status.PVCStatuses[idx].Name
+			return
+		}
+	}
+	status.ActivePVC = ""
+}
+
+func (oc *OperatorContext) markPVCFailed(status *marklogicv1.VolumeResizeStatus, pvcName string, reason marklogicv1.VolumeResizeReason, message string) {
+	for idx := range status.PVCStatuses {
+		if status.PVCStatuses[idx].Name != pvcName {
+			continue
+		}
+		status.PVCStatuses[idx].State = marklogicv1.PVCResizeStateFailed
+		status.PVCStatuses[idx].LastReason = string(reason)
+		status.PVCStatuses[idx].LastMessage = message
+		status.PVCStatuses[idx].CheckpointType = ""
+		status.PVCStatuses[idx].RestartRequired = false
+		return
+	}
+	status.PVCStatuses = append(status.PVCStatuses, marklogicv1.PVCResizeStatus{
+		Name:        pvcName,
+		State:       marklogicv1.PVCResizeStateFailed,
+		LastReason:  string(reason),
+		LastMessage: message,
+	})
+	status.TotalPVCs = int32(len(status.PVCStatuses))
+}
+
+func (oc *OperatorContext) recalculatePVCProgress(status *marklogicv1.VolumeResizeStatus) {
+	checkpointed := int32(0)
+	failed := make([]marklogicv1.FailedPVCStatus, 0)
+	for _, pvcStatus := range status.PVCStatuses {
+		if isPVCCheckpointed(&pvcStatus) {
+			checkpointed++
+		}
+		if pvcStatus.State == marklogicv1.PVCResizeStateFailed {
+			failed = append(failed, marklogicv1.FailedPVCStatus{
+				Name:    pvcStatus.Name,
+				Reason:  pvcStatus.LastReason,
+				Message: pvcStatus.LastMessage,
+			})
+		}
+	}
+	status.PVCsCheckpointed = checkpointed
+	status.TotalPVCs = int32(len(status.PVCStatuses))
+	status.FailedPVCs = failed
+}
+
+func (oc *OperatorContext) scheduleRetryOrFail(status *marklogicv1.VolumeResizeStatus, reason marklogicv1.VolumeResizeReason, message string) bool {
+	status.RetryCount++
+	if status.RetryCount > resizeMaxRetries {
+		oc.transitionResizePhase(status, marklogicv1.VolumeResizePhaseFailed, marklogicv1.VolumeResizeReasonMaxRetriesExceeded, fmt.Sprintf("%s: max retries exceeded (%d)", message, resizeMaxRetries))
+		status.NextRetryTime = nil
+		return false
+	}
+
+	nextRetry := metav1.NewTime(time.Now().Add(time.Duration(resizeRetryDelaySeconds) * time.Second))
+	status.NextRetryTime = &nextRetry
+	oc.transitionResizePhase(status, marklogicv1.VolumeResizePhaseStalled, reason, fmt.Sprintf("%s: retry %d/%d at %s", message, status.RetryCount, resizeMaxRetries, nextRetry.Format(time.RFC3339)))
+	return true
+}
+
+func (oc *OperatorContext) clearRetryState(status *marklogicv1.VolumeResizeStatus) {
+	status.RetryCount = 0
+	status.NextRetryTime = nil
 }
 
 func resolveResizeStrategy(persistence *marklogicv1.Persistence) marklogicv1.VolumeResizeStrategy {
