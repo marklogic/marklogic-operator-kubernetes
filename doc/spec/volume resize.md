@@ -61,7 +61,7 @@ The following Kubernetes PVC fields are authoritative for resize logic:
 | Filesystem resize pending     | `pvc.status.conditions` with type `FileSystemResizePending` and status `True` | Indicates block expansion is done but filesystem expansion requires pod remount |
 | Resizing in progress          | `pvc.status.conditions` with type `Resizing` and status `True` | Some CSI drivers emit this while expansion is in flight                        |
 
-The operator defines `currentSize` at operation start as the minimum of `pvc.status.capacity[storage]` across all target PVCs. This handles edge cases where a previous resize partially completed. A later patch to `targetSize` remains safe and idempotent even when some PVCs have already expanded beyond `currentSize` but remain below `targetSize`.
+The operator defines `currentSize` at operation start as the minimum of `pvc.status.capacity[storage]` across all target PVCs. This handles edge cases where a previous resize partially completed.
 
 StatefulSet `volumeClaimTemplates` are treated as effectively immutable for this workflow. Live PVCs can be expanded independently of the historical template, which creates a temporary mismatch between live storage state and StatefulSet template state. The operator resolves that mismatch by deleting and recreating the StatefulSet using orphan propagation so Pods and PVCs remain preserved.
 
@@ -89,6 +89,8 @@ Acceptance criteria:
 #### **Pre-Resize Validation**
 
 The operator must validate the request and environment before making changes.
+
+For v1, this validation is performed by the controller during reconciliation. Webhook-based admission validation or defaulting is out of scope.
 
 Acceptance criteria:
 
@@ -545,16 +547,6 @@ The operator supports two execution strategies:
 3.  `parallel` increases the risk of partial success and partial failure.
 
 4.  `sequential` reduces the immediate blast radius of a PVC failure, but requires stable ordering and persisted active-PVC state to remain crash-safe.
-
-### Implementation Assumptions
-
-The following compact assumptions apply to the v1 design:
-
-1.  The target PVC set is snapshotted during `Validating` from the PVCs that belong to the current group and are expected for the current replica set. PVCs created later by a separate scale workflow are not added to the active resize operation; they are handled by a later reconcile after scale and resize serialization is resolved.
-
-2.  The compare-and-swap claim on `operationID` is the explicit resize-level fence. After that point, the design relies on the controller-runtime leader election contract so that only the active leader continues reconciliation. The resize workflow does not introduce an additional custom lease or secondary fencing mechanism in v1.
-
-3.  Controller-side validation remains mandatory for shrink rejection, strategy validation, and safety checks. Admission webhook validation is recommended as a future UX improvement, but it is not required for the v1 functional contract.
 
 ## Detailed Workflow
 
@@ -2121,6 +2113,8 @@ Compatibility requirements:
 2.  Defaulting behavior must be stable and documented
     
 3.  Validation rules must reject invalid changes without affecting unrelated updates
+
+4.  The v1 design does not require mutating or validating admission webhooks for resize-specific behavior.
     
 
 ##### Status Additions
