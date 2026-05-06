@@ -199,7 +199,7 @@ Cloud-specific limitations such as rate limits, quota exhaustion, cooldown perio
 
 ### **Trigger Model**
 
-Users trigger resize by modifying `MarklogicCluster.spec.persistence.size` or `MarklogicCluster.spec.markLogicGroups[i].persistence.size`. The operator computes the effective desired size for each managed group and reconciles resize at the `MarklogicGroup` level, where the StatefulSet, Pods, and PVCs are managed.
+Users trigger resize by modifying the effective persistence size on `MarklogicCluster`, either through `MarklogicCluster.spec.persistence.size` or a group-specific override such as `MarklogicCluster.spec.markLogicGroups[i].persistence.size`. The operator computes the effective desired size for each managed group and reconciles resize at the `MarklogicGroup` level, where the StatefulSet, Pods, and PVCs are managed.
 
   
 Example:
@@ -609,7 +609,7 @@ Actions:
     
 8.  Build and persist the stable ordered PVC list that will be used for the full operation in both `parallel` and `sequential` modes.
 
-9.  Verify that the StatefulSet `updateStrategy` is `OnDelete`. If `RollingUpdate` is set, the StatefulSet controller could independently roll Pods during the resize window, creating a race condition. The operator should either reject resize when `updateStrategy` is not `OnDelete`, or temporarily override it.
+9.  Verify that the StatefulSet `updateStrategy` is `OnDelete`. If `RollingUpdate` is set, the StatefulSet controller could independently roll Pods during the resize window, creating a race condition. In v1, the operator must reject resize when `updateStrategy` is not `OnDelete` and surface `InvalidResizeRequest` rather than mutating the StatefulSet strategy implicitly.
 
 10. Emit a warning event if any target PersistentVolume has `reclaimPolicy: Delete`. This does not block the operation, but surfaces the risk that accidental PVC deletion by another actor would permanently destroy data.
 
@@ -1007,22 +1007,16 @@ These categories should be reflected in machine-readable `reason` values and use
 
 |                           Scenario                           |                     Expected Behavior                      | Recommended Phase |       Recommended Reason        |
 |--------------------------------------------------------------|------------------------------------------------------------|-------------------|---------------------------------|
-|         Requested size is smaller than current size          |           Reject request and do not start resize           |     `Failed`      |     `ShrinkNotSupported`        |
 |           Requested size is equal to current size            |              Treat as no-op and do not resize             |    No active op   |       n/a                       |
-|                   Persistence is disabled                    |                       Reject request                       |     `Failed`      |     `InvalidResizeRequest`      |
-|                   Target PVC is not `Bound`                  | Block until bind completes if that is still expected; otherwise stop | `Stalled` or `Failed` | `PVCNotBound` |
-|            `StorageClass` does not allow expansion           |                  Stop before PVC mutation                  |     `Failed`      |  `StorageClassNotExpandable`    |
-|               Kubernetes API rejects PVC patch               | Stop and surface the error; retry only if clearly transient | `Failed` or `Stalled` | `ResizeForbidden` or `ResizeFailed` |
-|             Provider or API rate limiting occurs             |                     Retry after backoff                    |     `Stalled`     |      `ResizeRateLimited`        |
-|                 Provider quota is exhausted                  |                Stop and require remediation                |     `Stalled`     |    `StorageQuotaExceeded`       |
+| Invalid resize request, including shrink or persistence-disabled configuration | Reject request and do not start resize | `Failed` | `ShrinkNotSupported` or `InvalidResizeRequest` |
+| Preconditions are not met before mutation, such as PVC not `Bound` or non-expandable `StorageClass` | Stop before PVC mutation or wait only when safe to do so | `Stalled` or `Failed` | `PVCNotBound` or `StorageClassNotExpandable` |
+| PVC patch submission is rejected by the API server or operator permissions | Stop and surface the error; retry only if clearly transient | `Failed` or `Stalled` | `ResizeForbidden` or `ResizeFailed` |
+| Provider-side PVC expansion is blocked by throttling, quota, or prolonged lack of progress | Retry after backoff when appropriate, otherwise require remediation | `Stalled` | `ResizeRateLimited`, `StorageQuotaExceeded`, or broader detail in `message` |
 |        Some PVCs resize successfully and others fail         |       Surface partial progress and stop later phases       |     `Stalled`     |    `PartialResizeFailure`       |
-|        StatefulSet backup metadata cannot be captured        |                 Stop before delete/recreate                |     `Failed`      |        `ResizeFailed`           |
-|               StatefulSet orphan delete fails                |                 Preserve resources and retry               |     `Stalled`     |    `StatefulSetSyncFailed`      |
-|                 StatefulSet recreation fails                 |               Preserve PVCs and retry safely              |     `Stalled`     |    `StatefulSetSyncFailed`      |
+| StatefulSet synchronization cannot be completed safely, including backup, delete, recreation, or sync wait failure | Preserve resources and retry only from a safe point | `Stalled` or `Failed` | `StatefulSetSyncFailed` or `ResizeFailed` |
+|       Operator restarts during StatefulSet transition        | Resume from persisted state and observed resources         |     `Stalled`     |  `TemplateUpdateInterrupted`    |
 |       Pods remain `Pending`, `NotReady`, or unschedulable   |              Surface workload recovery issue               |     `Stalled`     |      `PodRecoveryFailed`        |
 | MarkLogic health check fails after infrastructure is healthy |         Surface application-level problem and stop         |     `Stalled`     | `MarkLogicHealthCheckFailed`    |
-|       Operator restarts during StatefulSet transition        | Resume from persisted state and observed resources         |     `Stalled`     |  `TemplateUpdateInterrupted`    |
-|             Workflow exceeds expected wait time              |           Stop that phase and expose specific timeout      |     `Stalled`     | Broad phase reason plus timeout detail in `message` |
 
 The controller should keep timeout semantics in `message`, events, and logs rather than creating separate public reason values for each timed-out sub-step.
 
@@ -1319,7 +1313,9 @@ The current operator ClusterRole does not include permissions for PVCs, PVC stat
 
 Note: `persistentvolumes` and `storageclasses` are cluster-scoped resources. The operator already uses a `ClusterRole`, so no additional binding type is required. The `events` entry covers both the core API group and the `events.k8s.io` group for broad compatibility.
 
-This section pairs well with Section 8 on Observability, since status, events, and logs are the main tools users rely on during recovery.
+Because v1 rejects resize when the StatefulSet `updateStrategy` is not `OnDelete`, no additional StatefulSet update permission is required for strategy mutation as part of this feature.
+
+This section pairs well with Observability, since status, events, and logs are the main tools users rely on during recovery.
 
 ## Observability
 
@@ -1432,20 +1428,14 @@ Recommended events include:
 | Event Type |        Example Reason        |                  When Emitted                   |
 |------------|------------------------------|-------------------------------------------------|
 |   `Normal`   |    `VolumeResizeRequested`     |       A valid resize request is detected        |
-|   `Normal`   | `VolumeResizeValidationPassed` |        Preconditions have been validated        |
-|  `Warning`   | `VolumeResizeValidationFailed` |      Validation fails before PVC mutation       |
-|   `Normal`   |      `PVCResizeSubmitted`      |        A PVC resize request is submitted        |
-|   `Normal`   |       `PVCResizeWaiting`       | The operator is waiting for PVC resize progress |
-|  `Warning`   |       `PVCResizeStalled`       |         PVC resize progress is blocked          |
-|   `Normal`   |   `StatefulSetBackupStarted`   |         Backup metadata capture begins          |
-|   `Normal`   |   `StatefulSetDeleteIssued`    |      Orphan deletion of the StatefulSet has been requested     |
-|   `Normal`   |   `StatefulSetDeleteObserved`  |     The original StatefulSet object has been removed     |
-|   `Normal`   |     `StatefulSetRecreated`     |       The StatefulSet has been recreated        |
+|   `Normal`   |    `VolumeResizeProgressing`   | PVC resize work is underway or waiting on storage progress |
+|   `Normal`   |   `StatefulSetSyncStarted`     | StatefulSet synchronization has begun           |
 |   `Normal`   |    `PodRestartStarted`         |     Controlled Pod restart has begun            |
-|   `Normal`   |    `PodRestartSkipped`         |     Restart was not required for this environment |
-|  `Warning`   |      `PodRecoveryDelayed`      |     Pods are not returning healthy in time      |
+|  `Warning`   |      `VolumeResizeStalled`     |     The workflow is blocked but may recover     |
 |  `Warning`   |      `VolumeResizeFailed`      |    The operation has reached a failed state     |
 |   `Normal`   |    `VolumeResizeCompleted`     |      The operation completed successfully       |
+
+The event reason set should stay coarser than the full phase model. Event messages should carry the specific phase, PVC name, retry state, or timeout detail rather than expanding the public event reason list for each internal sub-step.
 
 Event guidelines:
 
@@ -2377,13 +2367,17 @@ Merge semantics for `resizeStrategy`:
 
 ```yaml
 apiVersion: marklogic.progress.com/v1
-kind: MarklogicGroup
+kind: MarklogicCluster
 metadata:
-    name: dnode
+  name: cluster-sample
 spec:
-    name: dnode
-    replicas: 3
     persistence:
+        enabled: true
+        size: 100Gi
+  markLogicGroups:
+    - name: dnode
+      replicas: 3
+      persistence:
         enabled: true
         size: 100Gi
         resizeStrategy: sequential
@@ -2403,10 +2397,6 @@ status:
         deferredTargetSize: 150Gi
         deferredObservedGeneration: 13
         resizeStrategy: sequential
-        orderedTargetPVCs:
-            - datadir-dnode-0
-            - datadir-dnode-1
-            - datadir-dnode-2
         activePVC: datadir-dnode-1
         pvcsCheckpointed: 1
         totalPvcs: 3
@@ -2447,10 +2437,6 @@ status:
         currentSize: 20Gi
         targetSize: 100Gi
         resizeStrategy: sequential
-        orderedTargetPVCs:
-            - datadir-dnode-0
-            - datadir-dnode-1
-            - datadir-dnode-2
         pvcsCheckpointed: 3
         totalPvcs: 3
         pvcStatuses:
@@ -2494,10 +2480,6 @@ status:
         currentSize: 20Gi
         targetSize: 100Gi
         resizeStrategy: parallel
-        orderedTargetPVCs:
-            - datadir-dnode-0
-            - datadir-dnode-1
-            - datadir-dnode-2
         pvcsCheckpointed: 0
         totalPvcs: 3
         pvcStatuses:
@@ -2541,10 +2523,6 @@ status:
         currentSize: 20Gi
         targetSize: 100Gi
         resizeStrategy: sequential
-        orderedTargetPVCs:
-            - datadir-dnode-0
-            - datadir-dnode-1
-            - datadir-dnode-2
         activePVC: datadir-dnode-2
         pvcsCheckpointed: 2
         totalPvcs: 3
@@ -2596,17 +2574,14 @@ status:
 |  7   |    VerifyingResizeOutcome   | Operator verifies PVC state, StatefulSet template state, and MarkLogic health        |
 |  8   |         Completed           | Operator marks the resize as successful                                              |
 
-### Example Event Sequence
+### Example Event Sequence for an Offline-Expansion Path
+
+This example shows the event trail when filesystem expansion requires Pod restart. For a fully online expansion path, `PodRestartStarted` is omitted.
 
 | Order | Event Type |         Event Reason          |                           Meaning                           |
 |-------|------------|-------------------------------|-------------------------------------------------------------|
 |   1   |   Normal   |    VolumeResizeRequested      | Resize request detected                                      |
-|   2   |   Normal   | VolumeResizeValidationPassed  | Preconditions validated successfully                         |
-|   3   |   Normal   |      PVCResizeSubmitted       | PVC resize request submitted                                 |
-|   4   |   Normal   |       PVCResizeWaiting        | Waiting for storage backend or Kubernetes progress           |
-|   5   |   Normal   |   StatefulSetBackupStarted    | StatefulSet recovery metadata capture started                |
-|   6   |   Normal   |   StatefulSetDeleteIssued     | Orphan deletion of the StatefulSet has been requested        |
-|   7   |   Normal   |  StatefulSetDeleteObserved    | The original StatefulSet object has been removed             |
-|   8   |   Normal   |     StatefulSetRecreated      | StatefulSet recreation completed                             |
-|   9   |   Normal   |      PodRestartStarted        | Controlled Pod restart started                               |
-|  10   |   Normal   |    VolumeResizeCompleted      | Resize finished successfully                                 |
+|   2   |   Normal   |    VolumeResizeProgressing    | PVC resize submission and checkpoint waiting are underway    |
+|   3   |   Normal   |   StatefulSetSyncStarted      | StatefulSet synchronization has begun                        |
+|   4   |   Normal   |      PodRestartStarted        | Controlled Pod restart started                               |
+|   5   |   Normal   |    VolumeResizeCompleted      | Resize finished successfully                                 |
