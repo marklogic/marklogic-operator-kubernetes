@@ -4054,6 +4054,14 @@ spec:
                     type: object
                   enabled:
                     type: boolean
+                  resizeStrategy:
+                    default: parallel
+                    description: VolumeResizeStrategy defines how PVC resize requests
+                      are submitted.
+                    enum:
+                    - parallel
+                    - sequential
+                    type: string
                   size:
                     type: string
                   storageClassName:
@@ -4993,6 +5001,141 @@ spec:
                 type: string
               stage:
                 type: string
+              volumeResizeStatus:
+                properties:
+                  activePVC:
+                    type: string
+                  completionTime:
+                    format: date-time
+                    type: string
+                  currentSize:
+                    type: string
+                  deferredObservedGeneration:
+                    format: int64
+                    type: integer
+                  deferredTargetSize:
+                    type: string
+                  failedPVCs:
+                    items:
+                      properties:
+                        message:
+                          type: string
+                        name:
+                          type: string
+                        reason:
+                          type: string
+                      type: object
+                    type: array
+                  firstStartedTime:
+                    format: date-time
+                    type: string
+                  lastTransitionTime:
+                    format: date-time
+                    type: string
+                  message:
+                    type: string
+                  nextRetryTime:
+                    format: date-time
+                    type: string
+                  observedGeneration:
+                    format: int64
+                    type: integer
+                  operationID:
+                    type: string
+                  phase:
+                    enum:
+                    - Validating
+                    - ResizingPVCs
+                    - WaitingForPVCResize
+                    - SynchronizingStatefulSet
+                    - RestartingPods
+                    - WaitingForPodsReady
+                    - VerifyingResizeOutcome
+                    - Completed
+                    - Stalled
+                    - Failed
+                    type: string
+                  pvcStatuses:
+                    items:
+                      properties:
+                        checkpointType:
+                          enum:
+                          - OnlineComplete
+                          - OfflinePending
+                          - OfflineComplete
+                          type: string
+                        lastMessage:
+                          type: string
+                        lastReason:
+                          type: string
+                        lastTransitionTime:
+                          format: date-time
+                          type: string
+                        name:
+                          type: string
+                        observedCapacity:
+                          type: string
+                        podName:
+                          type: string
+                        requestedSize:
+                          type: string
+                        restartRequired:
+                          type: boolean
+                        state:
+                          enum:
+                          - Pending
+                          - ResizeSubmitted
+                          - WaitingForCheckpoint
+                          - Checkpointed
+                          - RestartPending
+                          - Restarted
+                          - Failed
+                          type: string
+                      type: object
+                    type: array
+                  pvcsCheckpointed:
+                    format: int32
+                    type: integer
+                  reason:
+                    enum:
+                    - ResizeFailed
+                    - PartialResizeFailure
+                    - ResizeRateLimited
+                    - StorageQuotaExceeded
+                    - ResizeForbidden
+                    - InvalidResizeRequest
+                    - StorageClassNotExpandable
+                    - ShrinkNotSupported
+                    - PVCNotBound
+                    - ConcurrentResize
+                    - StatefulSetSyncFailed
+                    - PodRecoveryFailed
+                    - TemplateUpdateInterrupted
+                    - MarkLogicHealthCheckFailed
+                    - Paused
+                    - MaxRetriesExceeded
+                    - MaxOperationTimeExceeded
+                    type: string
+                  resizeStrategy:
+                    description: VolumeResizeStrategy defines how PVC resize requests
+                      are submitted.
+                    enum:
+                    - parallel
+                    - sequential
+                    type: string
+                  retryCount:
+                    format: int32
+                    type: integer
+                  targetSize:
+                    type: string
+                  totalPvcs:
+                    format: int32
+                    type: integer
+                  warnings:
+                    items:
+                      type: string
+                    type: array
+                type: object
             type: object
         type: object
     served: true
