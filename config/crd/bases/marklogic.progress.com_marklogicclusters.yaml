@@ -8456,6 +8456,14 @@ spec:
                           type: object
                         enabled:
                           type: boolean
+                        resizeStrategy:
+                          default: parallel
+                          description: VolumeResizeStrategy defines how PVC resize
+                            requests are submitted.
+                          enum:
+                          - parallel
+                          - sequential
+                          type: string
                         size:
                           type: string
                         storageClassName:
@@ -9325,6 +9333,14 @@ spec:
                     type: object
                   enabled:
                     type: boolean
+                  resizeStrategy:
+                    default: parallel
+                    description: VolumeResizeStrategy defines how PVC resize requests
+                      are submitted.
+                    enum:
+                    - parallel
+                    - sequential
+                    type: string
                   size:
                     type: string
                   storageClassName:
