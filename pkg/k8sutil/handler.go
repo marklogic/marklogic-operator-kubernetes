@@ -27,6 +27,10 @@ func (oc *OperatorContext) ReconsileMarklogicGroupHandler() (reconcile.Result, e
 		}
 	}
 
+	if result := oc.ReconcileVolumeResizeValidation(); result.Completed() {
+		return result.Output()
+	}
+
 	result, err := oc.ReconcileStatefulset()
 
 	return result, err
