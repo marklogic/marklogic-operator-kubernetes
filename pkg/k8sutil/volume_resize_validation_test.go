@@ -2,6 +2,7 @@ package k8sutil
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -542,10 +543,204 @@ func TestResizeWaitingFailsAfterMaxRetries(t *testing.T) {
 	}
 }
 
+func TestResizeTransitionsToStatefulSetSyncAfterAllCheckpointed(t *testing.T) {
+	oc := newResizeTestContext(t, resizeTestInput{desiredSize: "50Gi", currentSize: "20Gi", updateStrategy: appsv1.OnDeleteStatefulSetStrategyType})
+	if _, err := oc.ReconcileVolumeResizeValidation().Output(); err != nil {
+		t.Fatalf("unexpected error during validation pass: %v", err)
+	}
+	if _, err := oc.ReconcileVolumeResizeValidation().Output(); err != nil {
+		t.Fatalf("unexpected error during submission pass: %v", err)
+	}
+
+	replacePVC(t, oc, newBoundPVC("datadir-dnode-0", "50Gi"))
+	replacePVC(t, oc, newBoundPVC("datadir-dnode-1", "50Gi"))
+
+	if _, err := oc.ReconcileVolumeResizeValidation().Output(); err != nil {
+		t.Fatalf("unexpected error during waiting pass: %v", err)
+	}
+
+	status := getUpdatedGroup(t, oc).Status.VolumeResizeStatus
+	if status.Phase != marklogicv1.VolumeResizePhaseSynchronizingStatefulSet {
+		t.Fatalf("expected phase SynchronizingStatefulSet, got %s", status.Phase)
+	}
+}
+
+func TestResizeSyncMarkersPersistAndResume(t *testing.T) {
+	oc := newResizeTestContext(t, resizeTestInput{desiredSize: "50Gi", currentSize: "20Gi", updateStrategy: appsv1.OnDeleteStatefulSetStrategyType})
+	now := metav1.Now()
+	status := &marklogicv1.VolumeResizeStatus{
+		OperationID:        "resize-sync-markers",
+		ObservedGeneration: oc.MarklogicGroup.Generation,
+		Phase:              marklogicv1.VolumeResizePhaseSynchronizingStatefulSet,
+		CurrentSize:        "20Gi",
+		TargetSize:         "50Gi",
+		ResizeStrategy:     marklogicv1.VolumeResizeStrategyParallel,
+		TotalPVCs:          2,
+		PVCsCheckpointed:   2,
+		FirstStartedTime:   &now,
+		LastTransitionTime: &now,
+		Warnings:           []string{resizeMarkerSyncStarted, resizeMarkerTemplateSynced},
+		PVCStatuses: []marklogicv1.PVCResizeStatus{
+			{Name: "datadir-dnode-0", State: marklogicv1.PVCResizeStateCheckpointed, CheckpointType: marklogicv1.PVCResizeCheckpointTypeOfflinePending, RestartRequired: true},
+			{Name: "datadir-dnode-1", State: marklogicv1.PVCResizeStateCheckpointed, CheckpointType: marklogicv1.PVCResizeCheckpointTypeOnlineComplete},
+		},
+	}
+	if err := oc.patchResizeStatus(status); err != nil {
+		t.Fatalf("failed to seed sync phase status: %v", err)
+	}
+
+	if _, err := oc.ReconcileVolumeResizeValidation().Output(); err != nil {
+		t.Fatalf("unexpected error during sync resume pass: %v", err)
+	}
+
+	updated := getUpdatedGroup(t, oc).Status.VolumeResizeStatus
+	if updated.Phase != marklogicv1.VolumeResizePhaseRestartingPods {
+		t.Fatalf("expected phase RestartingPods, got %s", updated.Phase)
+	}
+	if !containsString(updated.Warnings, resizeMarkerTemplateSynced) {
+		t.Fatalf("expected sync marker %q to persist", resizeMarkerTemplateSynced)
+	}
+	if !containsString(updated.Warnings, resizeMarkerRestartPlanPrepared) {
+		t.Fatalf("expected restart-plan marker %q to be set", resizeMarkerRestartPlanPrepared)
+	}
+}
+
+func TestResizeRestartCandidatesOnlyOfflinePending(t *testing.T) {
+	oc := newResizeTestContext(t, resizeTestInput{desiredSize: "50Gi", currentSize: "20Gi", updateStrategy: appsv1.OnDeleteStatefulSetStrategyType})
+	now := metav1.Now()
+	status := &marklogicv1.VolumeResizeStatus{
+		OperationID:        "resize-sync-candidates",
+		ObservedGeneration: oc.MarklogicGroup.Generation,
+		Phase:              marklogicv1.VolumeResizePhaseSynchronizingStatefulSet,
+		CurrentSize:        "20Gi",
+		TargetSize:         "50Gi",
+		ResizeStrategy:     marklogicv1.VolumeResizeStrategyParallel,
+		TotalPVCs:          2,
+		PVCsCheckpointed:   2,
+		FirstStartedTime:   &now,
+		LastTransitionTime: &now,
+		Warnings:           []string{resizeMarkerSyncStarted, resizeMarkerTemplateSynced},
+		PVCStatuses: []marklogicv1.PVCResizeStatus{
+			{Name: "datadir-dnode-0", State: marklogicv1.PVCResizeStateCheckpointed, CheckpointType: marklogicv1.PVCResizeCheckpointTypeOfflinePending, RestartRequired: true},
+			{Name: "datadir-dnode-1", State: marklogicv1.PVCResizeStateCheckpointed, CheckpointType: marklogicv1.PVCResizeCheckpointTypeOnlineComplete},
+		},
+	}
+	if err := oc.patchResizeStatus(status); err != nil {
+		t.Fatalf("failed to seed sync phase status: %v", err)
+	}
+
+	if _, err := oc.ReconcileVolumeResizeValidation().Output(); err != nil {
+		t.Fatalf("unexpected error during sync pass: %v", err)
+	}
+
+	updated := getUpdatedGroup(t, oc).Status.VolumeResizeStatus
+	entry0 := findPVCStatus(updated, "datadir-dnode-0")
+	entry1 := findPVCStatus(updated, "datadir-dnode-1")
+	if entry0 == nil || entry1 == nil {
+		t.Fatalf("expected both pvc status entries")
+	}
+	if entry0.State != marklogicv1.PVCResizeStateRestartPending {
+		t.Fatalf("expected offline pvc to be RestartPending, got %s", entry0.State)
+	}
+	if entry1.State == marklogicv1.PVCResizeStateRestartPending {
+		t.Fatalf("expected online pvc to avoid restart queue")
+	}
+}
+
+func TestResizeRestartOrderReverseOrdinal(t *testing.T) {
+	oc := newResizeTestContext(t, resizeTestInput{desiredSize: "50Gi", currentSize: "20Gi", updateStrategy: appsv1.OnDeleteStatefulSetStrategyType, replicas: 3})
+	now := metav1.Now()
+	status := &marklogicv1.VolumeResizeStatus{
+		OperationID:        "resize-restart-order",
+		ObservedGeneration: oc.MarklogicGroup.Generation,
+		Phase:              marklogicv1.VolumeResizePhaseRestartingPods,
+		CurrentSize:        "20Gi",
+		TargetSize:         "50Gi",
+		ResizeStrategy:     marklogicv1.VolumeResizeStrategyParallel,
+		TotalPVCs:          3,
+		FirstStartedTime:   &now,
+		LastTransitionTime: &now,
+		PVCStatuses: []marklogicv1.PVCResizeStatus{
+			{Name: "datadir-dnode-0", PodName: "dnode-0", State: marklogicv1.PVCResizeStateRestartPending, CheckpointType: marklogicv1.PVCResizeCheckpointTypeOfflinePending, RestartRequired: true},
+			{Name: "datadir-dnode-1", PodName: "dnode-1", State: marklogicv1.PVCResizeStateRestartPending, CheckpointType: marklogicv1.PVCResizeCheckpointTypeOfflinePending, RestartRequired: true},
+			{Name: "datadir-dnode-2", PodName: "dnode-2", State: marklogicv1.PVCResizeStateRestartPending, CheckpointType: marklogicv1.PVCResizeCheckpointTypeOfflinePending, RestartRequired: true},
+		},
+	}
+	if err := oc.patchResizeStatus(status); err != nil {
+		t.Fatalf("failed to seed restart phase status: %v", err)
+	}
+
+	if _, err := oc.ReconcileVolumeResizeValidation().Output(); err != nil {
+		t.Fatalf("unexpected error during restart pass: %v", err)
+	}
+
+	updated := getUpdatedGroup(t, oc).Status.VolumeResizeStatus
+	if updated.ActivePVC != "datadir-dnode-2" {
+		t.Fatalf("expected highest ordinal pvc to restart first, got %s", updated.ActivePVC)
+	}
+	if updated.Phase != marklogicv1.VolumeResizePhaseWaitingForPodsReady {
+		t.Fatalf("expected WaitingForPodsReady after restart trigger, got %s", updated.Phase)
+	}
+
+	deletedPod := &corev1.Pod{}
+	err := oc.Client.Get(oc.Ctx, client.ObjectKey{Name: "dnode-2", Namespace: "testns"}, deletedPod)
+	if err == nil {
+		t.Fatalf("expected dnode-2 pod to be deleted for restart")
+	}
+}
+
+func TestResizeWaitingForPodsReadyBlocksUntilReadyThenAdvances(t *testing.T) {
+	oc := newResizeTestContext(t, resizeTestInput{desiredSize: "50Gi", currentSize: "20Gi", updateStrategy: appsv1.OnDeleteStatefulSetStrategyType})
+	now := metav1.Now()
+	status := &marklogicv1.VolumeResizeStatus{
+		OperationID:        "resize-wait-ready",
+		ObservedGeneration: oc.MarklogicGroup.Generation,
+		Phase:              marklogicv1.VolumeResizePhaseWaitingForPodsReady,
+		CurrentSize:        "20Gi",
+		TargetSize:         "50Gi",
+		ResizeStrategy:     marklogicv1.VolumeResizeStrategyParallel,
+		TotalPVCs:          2,
+		ActivePVC:          "datadir-dnode-1",
+		FirstStartedTime:   &now,
+		LastTransitionTime: &now,
+		PVCStatuses: []marklogicv1.PVCResizeStatus{
+			{Name: "datadir-dnode-0", PodName: "dnode-0", State: marklogicv1.PVCResizeStateCheckpointed, CheckpointType: marklogicv1.PVCResizeCheckpointTypeOnlineComplete},
+			{Name: "datadir-dnode-1", PodName: "dnode-1", State: marklogicv1.PVCResizeStateRestartPending, CheckpointType: marklogicv1.PVCResizeCheckpointTypeOfflinePending, RestartRequired: true},
+		},
+	}
+	if err := oc.patchResizeStatus(status); err != nil {
+		t.Fatalf("failed to seed waiting-for-ready phase status: %v", err)
+	}
+
+	replacePod(t, oc, newGroupPod("dnode-1", false))
+	if _, err := oc.ReconcileVolumeResizeValidation().Output(); err != nil {
+		t.Fatalf("unexpected error while waiting for not-ready pod: %v", err)
+	}
+
+	blocked := getUpdatedGroup(t, oc).Status.VolumeResizeStatus
+	if blocked.Phase != marklogicv1.VolumeResizePhaseWaitingForPodsReady {
+		t.Fatalf("expected phase to remain WaitingForPodsReady while pod is not ready, got %s", blocked.Phase)
+	}
+
+	replacePod(t, oc, newGroupPod("dnode-1", true))
+	if _, err := oc.ReconcileVolumeResizeValidation().Output(); err != nil {
+		t.Fatalf("unexpected error while resuming after pod becomes ready: %v", err)
+	}
+	if _, err := oc.ReconcileVolumeResizeValidation().Output(); err != nil {
+		t.Fatalf("unexpected error while advancing to verification: %v", err)
+	}
+
+	advanced := getUpdatedGroup(t, oc).Status.VolumeResizeStatus
+	if advanced.Phase != marklogicv1.VolumeResizePhaseVerifyingResizeOutcome {
+		t.Fatalf("expected phase VerifyingResizeOutcome after pods become ready, got %s", advanced.Phase)
+	}
+}
+
 type resizeTestInput struct {
 	desiredSize    string
 	currentSize    string
 	updateStrategy appsv1.StatefulSetUpdateStrategyType
+	replicas       int32
 }
 
 func newResizeTestContext(t *testing.T, in resizeTestInput) *OperatorContext {
@@ -565,7 +760,10 @@ func newResizeTestContext(t *testing.T, in resizeTestInput) *OperatorContext {
 		t.Fatalf("failed to add storage scheme: %v", err)
 	}
 
-	replicas := int32(2)
+	replicas := in.replicas
+	if replicas == 0 {
+		replicas = 2
+	}
 	group := &marklogicv1.MarklogicGroup{
 		TypeMeta: metav1.TypeMeta{APIVersion: "marklogic.progress.com/v1", Kind: "MarklogicGroup"},
 		ObjectMeta: metav1.ObjectMeta{
@@ -575,6 +773,7 @@ func newResizeTestContext(t *testing.T, in resizeTestInput) *OperatorContext {
 		},
 		Spec: marklogicv1.MarklogicGroupSpec{
 			Name:           "dnode",
+			Replicas:       &replicas,
 			UpdateStrategy: in.updateStrategy,
 			Persistence: &marklogicv1.Persistence{
 				Enabled:          true,
@@ -589,21 +788,36 @@ func newResizeTestContext(t *testing.T, in resizeTestInput) *OperatorContext {
 		ObjectMeta: metav1.ObjectMeta{Name: "dnode", Namespace: "testns"},
 		Spec: appsv1.StatefulSetSpec{
 			Replicas: &replicas,
+			VolumeClaimTemplates: []corev1.PersistentVolumeClaim{
+				{
+					ObjectMeta: metav1.ObjectMeta{Name: dataDirPVCName},
+					Spec: corev1.PersistentVolumeClaimSpec{
+						Resources: corev1.VolumeResourceRequirements{
+							Requests: corev1.ResourceList{corev1.ResourceStorage: resourceMustParse(in.currentSize)},
+						},
+					},
+				},
+			},
 		},
 	}
 
-	pvc0 := newBoundPVC("datadir-dnode-0", in.currentSize)
-	pvc1 := newBoundPVC("datadir-dnode-1", in.currentSize)
 	allowExpansion := true
 	sc := &storagev1.StorageClass{
 		ObjectMeta:           metav1.ObjectMeta{Name: "standard"},
 		AllowVolumeExpansion: &allowExpansion,
 	}
 
+	objects := []client.Object{group, sts, sc}
+	for i := int32(0); i < replicas; i++ {
+		pvcName := fmt.Sprintf("datadir-dnode-%d", i)
+		podName := fmt.Sprintf("dnode-%d", i)
+		objects = append(objects, newBoundPVC(pvcName, in.currentSize), newGroupPod(podName, true))
+	}
+
 	fakeClient := fake.NewClientBuilder().
 		WithScheme(scheme).
 		WithStatusSubresource(&marklogicv1.MarklogicGroup{}).
-		WithObjects(group, sts, pvc0, pvc1, sc).
+		WithObjects(objects...).
 		Build()
 
 	return &OperatorContext{
@@ -652,6 +866,66 @@ func replacePVC(t *testing.T, oc *OperatorContext, pvc *corev1.PersistentVolumeC
 	if err := oc.Client.Create(oc.Ctx, pvc); err != nil {
 		t.Fatalf("failed to create pvc %s: %v", pvc.Name, err)
 	}
+}
+
+func newGroupPod(name string, ready bool) *corev1.Pod {
+	readyStatus := corev1.ConditionFalse
+	phase := corev1.PodPending
+	if ready {
+		readyStatus = corev1.ConditionTrue
+		phase = corev1.PodRunning
+	}
+
+	return &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: "testns",
+			Labels: map[string]string{
+				"app.kubernetes.io/name":     "marklogic",
+				"app.kubernetes.io/instance": "dnode",
+			},
+		},
+		Status: corev1.PodStatus{
+			Phase: phase,
+			Conditions: []corev1.PodCondition{
+				{Type: corev1.PodReady, Status: readyStatus},
+			},
+		},
+	}
+}
+
+func replacePod(t *testing.T, oc *OperatorContext, pod *corev1.Pod) {
+	t.Helper()
+	existing := &corev1.Pod{}
+	if err := oc.Client.Get(oc.Ctx, client.ObjectKey{Name: pod.Name, Namespace: pod.Namespace}, existing); err == nil {
+		if delErr := oc.Client.Delete(oc.Ctx, existing); delErr != nil {
+			t.Fatalf("failed to delete existing pod %s: %v", pod.Name, delErr)
+		}
+	}
+	if err := oc.Client.Create(oc.Ctx, pod); err != nil {
+		t.Fatalf("failed to create pod %s: %v", pod.Name, err)
+	}
+}
+
+func findPVCStatus(status *marklogicv1.VolumeResizeStatus, name string) *marklogicv1.PVCResizeStatus {
+	if status == nil {
+		return nil
+	}
+	for i := range status.PVCStatuses {
+		if status.PVCStatuses[i].Name == name {
+			return &status.PVCStatuses[i]
+		}
+	}
+	return nil
+}
+
+func containsString(values []string, target string) bool {
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+	return false
 }
 
 func stringPtr(v string) *string {
