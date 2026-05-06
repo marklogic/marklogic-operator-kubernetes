@@ -4,6 +4,8 @@ package k8sutil
 
 import (
 	"fmt"
+	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -23,6 +25,10 @@ const (
 	dataDirPVCName           = "datadir"
 	resizeRetryDelaySeconds  = 15
 	resizeMaxRetries         = 3
+
+	resizeMarkerSyncStarted         = "pr4.sync.started"
+	resizeMarkerTemplateSynced      = "pr4.sync.template-synced"
+	resizeMarkerRestartPlanPrepared = "pr4.sync.restart-plan-prepared"
 )
 
 type resizePVCDiscovery struct {
@@ -233,13 +239,29 @@ func (oc *OperatorContext) reconcileActiveResizeOperation(active *marklogicv1.Vo
 		return oc.processResizeSubmission(active)
 	case marklogicv1.VolumeResizePhaseWaitingForPVCResize:
 		return oc.processResizeWaiting(active)
+	case marklogicv1.VolumeResizePhaseSynchronizingStatefulSet:
+		return oc.processStatefulSetSynchronization(active, currentSts)
+	case marklogicv1.VolumeResizePhaseRestartingPods:
+		return oc.processPodRestarts(active, currentSts)
+	case marklogicv1.VolumeResizePhaseWaitingForPodsReady:
+		return oc.processPodsReadyWait(active, currentSts)
 	case marklogicv1.VolumeResizePhaseStalled:
 		ready, requeueSecs := isRetryWindowOpen(active)
 		if !ready {
 			return result.RequeueSoon(requeueSecs)
 		}
 		active.NextRetryTime = nil
-		oc.transitionResizePhase(active, marklogicv1.VolumeResizePhaseResizingPVCs, "", "Retrying PVC resize operation")
+		retryPhase := marklogicv1.VolumeResizePhaseResizingPVCs
+		retryMessage := "Retrying PVC resize operation"
+		if active.Reason == marklogicv1.VolumeResizeReasonStatefulSetSyncFailed || active.Reason == marklogicv1.VolumeResizeReasonTemplateUpdateInterrupted {
+			retryPhase = marklogicv1.VolumeResizePhaseSynchronizingStatefulSet
+			retryMessage = "Retrying StatefulSet synchronization"
+		}
+		if active.Reason == marklogicv1.VolumeResizeReasonPodRecoveryFailed {
+			retryPhase = marklogicv1.VolumeResizePhaseWaitingForPodsReady
+			retryMessage = "Retrying pod recovery and readiness checks"
+		}
+		oc.transitionResizePhase(active, retryPhase, "", retryMessage)
 		oc.emitResizeEvent(corev1.EventTypeNormal, "VolumeResizeProgressing", active.Message)
 		if err := oc.patchResizeStatus(active); err != nil {
 			return result.Error(err)
@@ -430,12 +452,13 @@ func (oc *OperatorContext) processResizeWaiting(status *marklogicv1.VolumeResize
 	oc.clearRetryState(status)
 	if status.PVCsCheckpointed == status.TotalPVCs && status.TotalPVCs > 0 {
 		status.ActivePVC = ""
-		status.Message = "All PVCs reached resize checkpoint"
+		addResizeMarker(status, resizeMarkerSyncStarted)
+		oc.transitionResizePhase(status, marklogicv1.VolumeResizePhaseSynchronizingStatefulSet, "", "All PVC checkpoints reached; synchronizing StatefulSet template")
 		oc.emitResizeEvent(corev1.EventTypeNormal, "VolumeResizeProgressing", status.Message)
 		if patchErr := oc.patchResizeStatus(status); patchErr != nil {
 			return result.Error(patchErr)
 		}
-		return result.Done()
+		return result.RequeueSoon(1)
 	}
 
 	status.Message = "Waiting for PVC resize checkpoints"
@@ -444,6 +467,169 @@ func (oc *OperatorContext) processResizeWaiting(status *marklogicv1.VolumeResize
 		return result.Error(patchErr)
 	}
 	return result.RequeueSoon(5)
+}
+
+func (oc *OperatorContext) processStatefulSetSynchronization(status *marklogicv1.VolumeResizeStatus, currentSts *appsv1.StatefulSet) result.ReconcileResult {
+	targetSize, err := resource.ParseQuantity(status.TargetSize)
+	if err != nil {
+		oc.transitionResizePhase(status, marklogicv1.VolumeResizePhaseFailed, marklogicv1.VolumeResizeReasonInvalidResizeRequest, fmt.Sprintf("Invalid target size %q", status.TargetSize))
+		oc.emitResizeEvent(corev1.EventTypeWarning, "VolumeResizeFailed", status.Message)
+		if patchErr := oc.patchResizeStatus(status); patchErr != nil {
+			return result.Error(patchErr)
+		}
+		return result.Done()
+	}
+
+	addResizeMarker(status, resizeMarkerSyncStarted)
+	if !hasResizeMarker(status, resizeMarkerTemplateSynced) {
+		synced, syncErr := oc.syncStatefulSetDataDirTemplate(currentSts, targetSize)
+		if syncErr != nil {
+			return oc.scheduleSyncRetryOrFail(status, marklogicv1.VolumeResizeReasonStatefulSetSyncFailed, "Failed to synchronize StatefulSet template", syncErr)
+		}
+		if synced {
+			oc.emitResizeEvent(corev1.EventTypeNormal, "VolumeResizeProgressing", "StatefulSet template synchronized to resize target")
+		}
+		addResizeMarker(status, resizeMarkerTemplateSynced)
+		status.Message = "StatefulSet template synchronized; preparing restart plan"
+		if patchErr := oc.patchResizeStatus(status); patchErr != nil {
+			return result.Error(patchErr)
+		}
+		return result.RequeueSoon(1)
+	}
+
+	offlineCandidates := getOfflineRestartCandidates(status, currentSts.Name)
+	for idx := range status.PVCStatuses {
+		entry := &status.PVCStatuses[idx]
+		if containsName(offlineCandidates, entry.Name) {
+			if entry.State != marklogicv1.PVCResizeStateRestarted {
+				entry.State = marklogicv1.PVCResizeStateRestartPending
+			}
+			if entry.PodName == "" {
+				entry.PodName = derivePodNameFromPVC(currentSts.Name, entry.Name)
+			}
+			entry.LastReason = ""
+			entry.LastMessage = "Pending controlled pod restart"
+			continue
+		}
+		if entry.State == marklogicv1.PVCResizeStateRestartPending {
+			entry.State = marklogicv1.PVCResizeStateCheckpointed
+			entry.LastReason = ""
+			entry.LastMessage = "No restart required"
+		}
+	}
+	addResizeMarker(status, resizeMarkerRestartPlanPrepared)
+	if len(offlineCandidates) > 0 {
+		oc.transitionResizePhase(status, marklogicv1.VolumeResizePhaseRestartingPods, "", "Restart plan prepared; restarting offline-pending pods")
+	} else {
+		oc.transitionResizePhase(status, marklogicv1.VolumeResizePhaseWaitingForPodsReady, "", "No offline restarts required; waiting for pod readiness")
+	}
+	oc.emitResizeEvent(corev1.EventTypeNormal, "VolumeResizeProgressing", status.Message)
+	if patchErr := oc.patchResizeStatus(status); patchErr != nil {
+		return result.Error(patchErr)
+	}
+	return result.RequeueSoon(1)
+}
+
+func (oc *OperatorContext) processPodRestarts(status *marklogicv1.VolumeResizeStatus, currentSts *appsv1.StatefulSet) result.ReconcileResult {
+	next := oc.nextRestartCandidate(status, currentSts.Name)
+	if next == nil {
+		status.ActivePVC = ""
+		oc.transitionResizePhase(status, marklogicv1.VolumeResizePhaseWaitingForPodsReady, "", "Waiting for restarted pods to become ready")
+		oc.emitResizeEvent(corev1.EventTypeNormal, "VolumeResizeProgressing", status.Message)
+		if patchErr := oc.patchResizeStatus(status); patchErr != nil {
+			return result.Error(patchErr)
+		}
+		return result.RequeueSoon(2)
+	}
+
+	if next.PodName == "" {
+		next.PodName = derivePodNameFromPVC(currentSts.Name, next.Name)
+	}
+	if next.PodName == "" {
+		return oc.scheduleSyncRetryOrFail(status, marklogicv1.VolumeResizeReasonPodRecoveryFailed, "Failed to derive pod name for restart", fmt.Errorf("pvc %s has no resolvable pod", next.Name))
+	}
+
+	pod := &corev1.Pod{}
+	getErr := oc.Client.Get(oc.Ctx, client.ObjectKey{Namespace: oc.MarklogicGroup.Namespace, Name: next.PodName}, pod)
+	if getErr != nil && !apierrors.IsNotFound(getErr) {
+		return oc.scheduleSyncRetryOrFail(status, marklogicv1.VolumeResizeReasonPodRecoveryFailed, "Failed to fetch pod for restart", getErr)
+	}
+	if getErr == nil {
+		if deleteErr := oc.Client.Delete(oc.Ctx, pod); deleteErr != nil && !apierrors.IsNotFound(deleteErr) {
+			return oc.scheduleSyncRetryOrFail(status, marklogicv1.VolumeResizeReasonPodRecoveryFailed, "Failed to delete pod for restart", deleteErr)
+		}
+	}
+
+	status.ActivePVC = next.Name
+	next.State = marklogicv1.PVCResizeStateRestartPending
+	next.LastReason = ""
+	next.LastMessage = fmt.Sprintf("Restart initiated for pod %s", next.PodName)
+	oc.transitionResizePhase(status, marklogicv1.VolumeResizePhaseWaitingForPodsReady, "", fmt.Sprintf("Waiting for pod %s to become ready", next.PodName))
+	oc.emitResizeEvent(corev1.EventTypeNormal, "VolumeResizeProgressing", status.Message)
+	if patchErr := oc.patchResizeStatus(status); patchErr != nil {
+		return result.Error(patchErr)
+	}
+	return result.RequeueSoon(2)
+}
+
+func (oc *OperatorContext) processPodsReadyWait(status *marklogicv1.VolumeResizeStatus, currentSts *appsv1.StatefulSet) result.ReconcileResult {
+	if status.ActivePVC != "" {
+		activeEntry := oc.findPVCStatusByName(status, status.ActivePVC)
+		if activeEntry != nil {
+			if activeEntry.PodName == "" {
+				activeEntry.PodName = derivePodNameFromPVC(currentSts.Name, activeEntry.Name)
+			}
+			if activeEntry.PodName != "" {
+				ready, readyErr := oc.isPodReady(activeEntry.PodName)
+				if readyErr != nil {
+					return oc.scheduleSyncRetryOrFail(status, marklogicv1.VolumeResizeReasonPodRecoveryFailed, "Failed while waiting for pod readiness", readyErr)
+				}
+				if !ready {
+					status.Message = fmt.Sprintf("Waiting for pod %s to become ready", activeEntry.PodName)
+					if patchErr := oc.patchResizeStatus(status); patchErr != nil {
+						return result.Error(patchErr)
+					}
+					return result.RequeueSoon(3)
+				}
+
+				activeEntry.State = marklogicv1.PVCResizeStateRestarted
+				activeEntry.CheckpointType = marklogicv1.PVCResizeCheckpointTypeOfflineComplete
+				activeEntry.RestartRequired = false
+				activeEntry.LastReason = ""
+				activeEntry.LastMessage = "Pod restart completed"
+				status.ActivePVC = ""
+			}
+		}
+	}
+
+	next := oc.nextRestartCandidate(status, currentSts.Name)
+	if next != nil {
+		oc.transitionResizePhase(status, marklogicv1.VolumeResizePhaseRestartingPods, "", "Continuing controlled pod restarts")
+		oc.emitResizeEvent(corev1.EventTypeNormal, "VolumeResizeProgressing", status.Message)
+		if patchErr := oc.patchResizeStatus(status); patchErr != nil {
+			return result.Error(patchErr)
+		}
+		return result.RequeueSoon(1)
+	}
+
+	allReady, readyErr := oc.areStatefulSetPodsReady(currentSts)
+	if readyErr != nil {
+		return oc.scheduleSyncRetryOrFail(status, marklogicv1.VolumeResizeReasonPodRecoveryFailed, "Failed to verify StatefulSet pod readiness", readyErr)
+	}
+	if !allReady {
+		status.Message = "Waiting for StatefulSet pods to be ready"
+		if patchErr := oc.patchResizeStatus(status); patchErr != nil {
+			return result.Error(patchErr)
+		}
+		return result.RequeueSoon(5)
+	}
+
+	oc.transitionResizePhase(status, marklogicv1.VolumeResizePhaseVerifyingResizeOutcome, "", "StatefulSet synchronized and pods ready; awaiting verification")
+	oc.emitResizeEvent(corev1.EventTypeNormal, "VolumeResizeProgressing", status.Message)
+	if patchErr := oc.patchResizeStatus(status); patchErr != nil {
+		return result.Error(patchErr)
+	}
+	return result.Done()
 }
 
 func (oc *OperatorContext) newResizeStatus(pvcState *resizePVCDiscovery, targetSize string) *marklogicv1.VolumeResizeStatus {
@@ -463,7 +649,7 @@ func (oc *OperatorContext) newResizeStatus(pvcState *resizePVCDiscovery, targetS
 }
 
 func (oc *OperatorContext) initializePVCStatuses(status *marklogicv1.VolumeResizeStatus, pvcState *resizePVCDiscovery) {
-	if status.PVCStatuses == nil || len(status.PVCStatuses) == 0 {
+	if len(status.PVCStatuses) == 0 {
 		status.PVCStatuses = make([]marklogicv1.PVCResizeStatus, 0, len(pvcState.expectedNames))
 		for _, name := range pvcState.expectedNames {
 			status.PVCStatuses = append(status.PVCStatuses, marklogicv1.PVCResizeStatus{Name: name, State: marklogicv1.PVCResizeStatePending})
@@ -691,6 +877,207 @@ func (oc *OperatorContext) scheduleRetryOrFail(status *marklogicv1.VolumeResizeS
 func (oc *OperatorContext) clearRetryState(status *marklogicv1.VolumeResizeStatus) {
 	status.RetryCount = 0
 	status.NextRetryTime = nil
+}
+
+func (oc *OperatorContext) scheduleSyncRetryOrFail(status *marklogicv1.VolumeResizeStatus, reason marklogicv1.VolumeResizeReason, message string, err error) result.ReconcileResult {
+	if oc.scheduleRetryOrFail(status, reason, fmt.Sprintf("%s: %v", message, err)) {
+		oc.emitResizeEvent(corev1.EventTypeWarning, "VolumeResizeStalled", status.Message)
+		if patchErr := oc.patchResizeStatus(status); patchErr != nil {
+			return result.Error(patchErr)
+		}
+		return result.RequeueSoon(resizeRetryDelaySeconds)
+	}
+	oc.emitResizeEvent(corev1.EventTypeWarning, "VolumeResizeFailed", status.Message)
+	if patchErr := oc.patchResizeStatus(status); patchErr != nil {
+		return result.Error(patchErr)
+	}
+	return result.Done()
+}
+
+func (oc *OperatorContext) syncStatefulSetDataDirTemplate(currentSts *appsv1.StatefulSet, targetSize resource.Quantity) (bool, error) {
+	if currentSts == nil {
+		return false, fmt.Errorf("statefulset is nil")
+	}
+
+	copySts := currentSts.DeepCopy()
+	templateUpdated := false
+	for i := range copySts.Spec.VolumeClaimTemplates {
+		pvcTemplate := &copySts.Spec.VolumeClaimTemplates[i]
+		if pvcTemplate.Name != dataDirPVCName {
+			continue
+		}
+		if pvcTemplate.Spec.Resources.Requests == nil {
+			pvcTemplate.Spec.Resources.Requests = corev1.ResourceList{}
+		}
+		current := pvcTemplate.Spec.Resources.Requests[corev1.ResourceStorage]
+		if current.Cmp(targetSize) >= 0 {
+			return false, nil
+		}
+		pvcTemplate.Spec.Resources.Requests[corev1.ResourceStorage] = targetSize
+		templateUpdated = true
+		break
+	}
+
+	if !templateUpdated {
+		return false, fmt.Errorf("statefulset %s has no %s volumeClaimTemplate", currentSts.Name, dataDirPVCName)
+	}
+
+	if err := oc.Client.Update(oc.Ctx, copySts); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func getOfflineRestartCandidates(status *marklogicv1.VolumeResizeStatus, statefulSetName string) []string {
+	candidates := make([]string, 0)
+	for idx := range status.PVCStatuses {
+		entry := &status.PVCStatuses[idx]
+		if entry.CheckpointType != marklogicv1.PVCResizeCheckpointTypeOfflinePending {
+			continue
+		}
+		entry.PodName = derivePodNameFromPVC(statefulSetName, entry.Name)
+		candidates = append(candidates, entry.Name)
+	}
+	sort.SliceStable(candidates, func(i, j int) bool {
+		return parseOrdinalFromName(candidates[i]) > parseOrdinalFromName(candidates[j])
+	})
+	return candidates
+}
+
+func (oc *OperatorContext) nextRestartCandidate(status *marklogicv1.VolumeResizeStatus, statefulSetName string) *marklogicv1.PVCResizeStatus {
+	indices := make([]int, 0)
+	for idx := range status.PVCStatuses {
+		entry := &status.PVCStatuses[idx]
+		if entry.State != marklogicv1.PVCResizeStateRestartPending {
+			continue
+		}
+		if entry.PodName == "" {
+			entry.PodName = derivePodNameFromPVC(statefulSetName, entry.Name)
+		}
+		indices = append(indices, idx)
+	}
+	if len(indices) == 0 {
+		return nil
+	}
+	sort.SliceStable(indices, func(i, j int) bool {
+		return parseOrdinalFromName(status.PVCStatuses[indices[i]].Name) > parseOrdinalFromName(status.PVCStatuses[indices[j]].Name)
+	})
+	return &status.PVCStatuses[indices[0]]
+}
+
+func (oc *OperatorContext) findPVCStatusByName(status *marklogicv1.VolumeResizeStatus, pvcName string) *marklogicv1.PVCResizeStatus {
+	for idx := range status.PVCStatuses {
+		if status.PVCStatuses[idx].Name == pvcName {
+			return &status.PVCStatuses[idx]
+		}
+	}
+	return nil
+}
+
+func (oc *OperatorContext) isPodReady(podName string) (bool, error) {
+	pod := &corev1.Pod{}
+	if err := oc.Client.Get(oc.Ctx, client.ObjectKey{Namespace: oc.MarklogicGroup.Namespace, Name: podName}, pod); err != nil {
+		if apierrors.IsNotFound(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	return hasPodReadyCondition(pod), nil
+}
+
+func (oc *OperatorContext) areStatefulSetPodsReady(currentSts *appsv1.StatefulSet) (bool, error) {
+	if currentSts == nil {
+		return false, fmt.Errorf("statefulset is nil")
+	}
+
+	podList := &corev1.PodList{}
+	if err := oc.Client.List(oc.Ctx, podList, client.InNamespace(currentSts.Namespace), client.MatchingLabels(map[string]string{
+		"app.kubernetes.io/name":     "marklogic",
+		"app.kubernetes.io/instance": currentSts.Name,
+	})); err != nil {
+		return false, err
+	}
+
+	replicas := int32(1)
+	if currentSts.Spec.Replicas != nil {
+		replicas = *currentSts.Spec.Replicas
+	}
+	if int32(len(podList.Items)) < replicas {
+		return false, nil
+	}
+	for idx := range podList.Items {
+		if !hasPodReadyCondition(&podList.Items[idx]) {
+			return false, nil
+		}
+	}
+	return true, nil
+}
+
+func hasPodReadyCondition(pod *corev1.Pod) bool {
+	if pod == nil {
+		return false
+	}
+	for _, cond := range pod.Status.Conditions {
+		if cond.Type == corev1.PodReady && cond.Status == corev1.ConditionTrue {
+			return true
+		}
+	}
+	return false
+}
+
+func parseOrdinalFromName(name string) int {
+	lastDash := strings.LastIndex(name, "-")
+	if lastDash == -1 || lastDash == len(name)-1 {
+		return -1
+	}
+	ord, err := strconv.Atoi(name[lastDash+1:])
+	if err != nil {
+		return -1
+	}
+	return ord
+}
+
+func derivePodNameFromPVC(statefulSetName, pvcName string) string {
+	prefix := fmt.Sprintf("%s-%s-", dataDirPVCName, statefulSetName)
+	if !strings.HasPrefix(pvcName, prefix) {
+		return ""
+	}
+	ordinal := strings.TrimPrefix(pvcName, prefix)
+	if ordinal == "" {
+		return ""
+	}
+	return fmt.Sprintf("%s-%s", statefulSetName, ordinal)
+}
+
+func hasResizeMarker(status *marklogicv1.VolumeResizeStatus, marker string) bool {
+	if status == nil {
+		return false
+	}
+	for _, existing := range status.Warnings {
+		if existing == marker {
+			return true
+		}
+	}
+	return false
+}
+
+func addResizeMarker(status *marklogicv1.VolumeResizeStatus, marker string) {
+	if status == nil || marker == "" {
+		return
+	}
+	if hasResizeMarker(status, marker) {
+		return
+	}
+	status.Warnings = append(status.Warnings, marker)
+}
+
+func containsName(values []string, expected string) bool {
+	for _, value := range values {
+		if value == expected {
+			return true
+		}
+	}
+	return false
 }
 
 func resolveResizeStrategy(persistence *marklogicv1.Persistence) marklogicv1.VolumeResizeStrategy {
