@@ -216,4 +216,176 @@ var _ = Describe("MarkLogicGroup controller", func() {
 			}, timeout, interval).Should(BeTrue())
 		})
 	})
+
+	Context("When validating volume resize requests", func() {
+		ctx := context.Background()
+
+		It("Should initialize resize operation status for growth request", func() {
+			nsName := "resize-init-ns"
+			groupName := "resize-init"
+			nn := types.NamespacedName{Name: groupName, Namespace: nsName}
+
+			ns := corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: nsName}}
+			Expect(k8sClient.Create(ctx, &ns)).Should(Succeed())
+
+			group := newPersistentGroup(nsName, groupName, "20Gi", appsv1.OnDeleteStatefulSetStrategyType)
+			Expect(k8sClient.Create(ctx, group)).Should(Succeed())
+
+			Eventually(func() bool {
+				sts := &appsv1.StatefulSet{}
+				return k8sClient.Get(ctx, nn, sts) == nil
+			}, timeout, interval).Should(BeTrue())
+
+			pvc := newPersistentPVC(nsName, groupName, "20Gi")
+			Expect(k8sClient.Create(ctx, pvc)).Should(Succeed())
+
+			current := &marklogicv1.MarklogicGroup{}
+			Expect(k8sClient.Get(ctx, nn, current)).Should(Succeed())
+			current.Spec.Persistence.Size = "30Gi"
+			Expect(k8sClient.Update(ctx, current)).Should(Succeed())
+
+			Eventually(func() string {
+				updated := &marklogicv1.MarklogicGroup{}
+				if err := k8sClient.Get(ctx, nn, updated); err != nil || updated.Status.VolumeResizeStatus == nil {
+					return ""
+				}
+				return string(updated.Status.VolumeResizeStatus.Reason)
+			}, timeout, interval).Should(Equal(string(marklogicv1.VolumeResizeReasonPVCNotBound)))
+
+			updated := &marklogicv1.MarklogicGroup{}
+			Expect(k8sClient.Get(ctx, nn, updated)).Should(Succeed())
+			status := updated.Status.VolumeResizeStatus
+			Expect(status).ShouldNot(BeNil())
+			Expect(status.OperationID).ShouldNot(BeEmpty())
+			Expect(status.CurrentSize).Should(Equal("20Gi"))
+			Expect(status.TargetSize).Should(Equal("30Gi"))
+			Expect(status.Phase).Should(Equal(marklogicv1.VolumeResizePhaseStalled))
+			Expect(status.Reason).Should(Equal(marklogicv1.VolumeResizeReasonPVCNotBound))
+		})
+
+		It("Should reject shrink resize requests", func() {
+			nsName := "resize-shrink-ns"
+			groupName := "resize-shrink"
+			nn := types.NamespacedName{Name: groupName, Namespace: nsName}
+
+			ns := corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: nsName}}
+			Expect(k8sClient.Create(ctx, &ns)).Should(Succeed())
+
+			group := newPersistentGroup(nsName, groupName, "20Gi", appsv1.OnDeleteStatefulSetStrategyType)
+			Expect(k8sClient.Create(ctx, group)).Should(Succeed())
+
+			Eventually(func() bool {
+				sts := &appsv1.StatefulSet{}
+				return k8sClient.Get(ctx, nn, sts) == nil
+			}, timeout, interval).Should(BeTrue())
+
+			pvc := newPersistentPVC(nsName, groupName, "20Gi")
+			Expect(k8sClient.Create(ctx, pvc)).Should(Succeed())
+
+			current := &marklogicv1.MarklogicGroup{}
+			Expect(k8sClient.Get(ctx, nn, current)).Should(Succeed())
+			current.Spec.Persistence.Size = "10Gi"
+			Expect(k8sClient.Update(ctx, current)).Should(Succeed())
+
+			Eventually(func() string {
+				updated := &marklogicv1.MarklogicGroup{}
+				if err := k8sClient.Get(ctx, nn, updated); err != nil || updated.Status.VolumeResizeStatus == nil {
+					return ""
+				}
+				return string(updated.Status.VolumeResizeStatus.Reason)
+			}, timeout, interval).Should(Equal(string(marklogicv1.VolumeResizeReasonShrinkNotSupported)))
+
+			updated := &marklogicv1.MarklogicGroup{}
+			Expect(k8sClient.Get(ctx, nn, updated)).Should(Succeed())
+			status := updated.Status.VolumeResizeStatus
+			Expect(status).ShouldNot(BeNil())
+			Expect(status.Phase).Should(Equal(marklogicv1.VolumeResizePhaseFailed))
+			Expect(status.Reason).Should(Equal(marklogicv1.VolumeResizeReasonShrinkNotSupported))
+		})
+
+		It("Should reject resize when updateStrategy is not OnDelete", func() {
+			nsName := "resize-strategy-ns"
+			groupName := "resize-strategy"
+			nn := types.NamespacedName{Name: groupName, Namespace: nsName}
+
+			ns := corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: nsName}}
+			Expect(k8sClient.Create(ctx, &ns)).Should(Succeed())
+
+			group := newPersistentGroup(nsName, groupName, "20Gi", appsv1.OnDeleteStatefulSetStrategyType)
+			Expect(k8sClient.Create(ctx, group)).Should(Succeed())
+
+			Eventually(func() bool {
+				sts := &appsv1.StatefulSet{}
+				return k8sClient.Get(ctx, nn, sts) == nil
+			}, timeout, interval).Should(BeTrue())
+
+			pvc := newPersistentPVC(nsName, groupName, "20Gi")
+			Expect(k8sClient.Create(ctx, pvc)).Should(Succeed())
+
+			current := &marklogicv1.MarklogicGroup{}
+			Expect(k8sClient.Get(ctx, nn, current)).Should(Succeed())
+			current.Spec.Persistence.Size = "30Gi"
+			current.Spec.UpdateStrategy = appsv1.RollingUpdateStatefulSetStrategyType
+			Expect(k8sClient.Update(ctx, current)).Should(Succeed())
+
+			Eventually(func() string {
+				updated := &marklogicv1.MarklogicGroup{}
+				if err := k8sClient.Get(ctx, nn, updated); err != nil || updated.Status.VolumeResizeStatus == nil {
+					return ""
+				}
+				return string(updated.Status.VolumeResizeStatus.Reason)
+			}, timeout, interval).Should(Equal(string(marklogicv1.VolumeResizeReasonInvalidResizeRequest)))
+
+			updated := &marklogicv1.MarklogicGroup{}
+			Expect(k8sClient.Get(ctx, nn, updated)).Should(Succeed())
+			status := updated.Status.VolumeResizeStatus
+			Expect(status).ShouldNot(BeNil())
+			Expect(status.Phase).Should(Equal(marklogicv1.VolumeResizePhaseFailed))
+			Expect(status.Reason).Should(Equal(marklogicv1.VolumeResizeReasonInvalidResizeRequest))
+		})
+	})
 })
+
+func newPersistentGroup(namespace, name, size string, strategy appsv1.StatefulSetUpdateStrategyType) *marklogicv1.MarklogicGroup {
+	replicas := int32(1)
+	return &marklogicv1.MarklogicGroup{
+		TypeMeta: metav1.TypeMeta{
+			Kind:       "MarklogicGroup",
+			APIVersion: "marklogic.progress.com/v1",
+		},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: namespace,
+		},
+		Spec: marklogicv1.MarklogicGroupSpec{
+			Replicas:       &replicas,
+			Name:           name,
+			Image:          imageName,
+			UpdateStrategy: strategy,
+			Persistence: &marklogicv1.Persistence{
+				Enabled: true,
+				Size:    size,
+				AccessModes: []corev1.PersistentVolumeAccessMode{
+					corev1.ReadWriteOnce,
+				},
+			},
+		},
+	}
+}
+
+func newPersistentPVC(namespace, groupName, size string) *corev1.PersistentVolumeClaim {
+	return &corev1.PersistentVolumeClaim{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "datadir-" + groupName + "-0",
+			Namespace: namespace,
+		},
+		Spec: corev1.PersistentVolumeClaimSpec{
+			AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
+			Resources: corev1.VolumeResourceRequirements{
+				Requests: corev1.ResourceList{
+					corev1.ResourceStorage: resource.MustParse(size),
+				},
+			},
+		},
+	}
+}
