@@ -167,13 +167,33 @@ void runHelmNamespaceScopedE2eTests() {
     """
 }
 
+// Dynamically extracts dependent container image references from their canonical
+// sources and triggers the BlackDuck scan job with the full CONTAINER_IMAGES list.
+// PUBLISH_IMAGE=true also prepends the published operator registry image.
 void runBlackDuckScan() {
-    // Trigger BlackDuck scan job with CONTAINER_IMAGES parameter when params.PUBLISH_IMAGE is true
+    def fluentBitImage = sh(returnStdout: true, script: "grep -E '^export FLUENT_BIT_IMAGE' Makefile | cut -d'=' -f2 | tr -d ' '").trim()
+    def haProxyImage   = sh(returnStdout: true, script: "grep -oE 'haproxytech/haproxy-alpine:[0-9.]+' Makefile | head -1").trim()
+    def ubi9Image      = sh(returnStdout: true, script: "grep -oE 'redhat/ubi9:[0-9.]+' pkg/k8sutil/statefulset.go | head -1").trim()
+
+    if (!fluentBitImage) { error "runBlackDuckScan: could not resolve FLUENT_BIT_IMAGE from Makefile" }
+    if (!haProxyImage)   { error "runBlackDuckScan: could not resolve HAProxy image from Makefile" }
+    if (!ubi9Image)      { error "runBlackDuckScan: could not resolve UBI9 image from pkg/k8sutil/statefulset.go" }
+
+    def dependentImages = "${fluentBitImage},${haProxyImage},${ubi9Image},${params.E2E_MARKLOGIC_IMAGE_VERSION}"
+
+    def containerImages
     if (params.PUBLISH_IMAGE) {
-        build job: 'securityscans/Blackduck/KubeNinjas/kubernetes-operator', wait: false, parameters: [ string(name: 'branch', value: "${env.BRANCH_NAME}"), string(name: 'CONTAINER_IMAGES', value: "${operatorRegistry}/${operatorRepo}:${VERSION}-${branchNameTag}-${timeStamp}") ]
+        containerImages = "${operatorRegistry}/${operatorRepo}:${VERSION}-${branchNameTag}-${timeStamp},${dependentImages}"
     } else {
-        build job: 'securityscans/Blackduck/KubeNinjas/kubernetes-operator', wait: false, parameters: [ string(name: 'branch', value: "${env.BRANCH_NAME}") ]
+        containerImages = dependentImages
     }
+
+    build job: 'securityscans/Blackduck/KubeNinjas/kubernetes-operator',
+          wait: false,
+          parameters: [
+              string(name: 'branch',           value: "${env.BRANCH_NAME}"),
+              string(name: 'CONTAINER_IMAGES', value: containerImages)
+          ]
 }
 
 /**
