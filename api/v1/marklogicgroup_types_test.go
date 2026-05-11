@@ -46,6 +46,7 @@ func TestMarklogicGroupDeepCopyVolumeResizeStatus(t *testing.T) {
 				FailedPVCs: []FailedPVCStatus{
 					{Name: "data-1", Reason: "ResizeFailed", Message: "api rejected resize"},
 				},
+				Markers:            []string{"pr4.sync.started"},
 				Warnings:           []string{"storage provider delay"},
 				LastTransitionTime: &now,
 			},
@@ -72,6 +73,7 @@ func TestMarklogicGroupDeepCopyVolumeResizeStatus(t *testing.T) {
 	group.Spec.Persistence.ResizeStrategy = VolumeResizeStrategyParallel
 	group.Status.VolumeResizeStatus.PVCStatuses[0].Name = "data-modified"
 	group.Status.VolumeResizeStatus.FailedPVCs[0].Reason = "updated"
+	group.Status.VolumeResizeStatus.Markers[0] = "updated marker"
 	group.Status.VolumeResizeStatus.Warnings[0] = "updated warning"
 
 	if copied.Spec.Persistence.ResizeStrategy != VolumeResizeStrategySequential {
@@ -84,6 +86,10 @@ func TestMarklogicGroupDeepCopyVolumeResizeStatus(t *testing.T) {
 
 	if copied.Status.VolumeResizeStatus.FailedPVCs[0].Reason != "ResizeFailed" {
 		t.Fatalf("unexpected copied failed pvc reason: %s", copied.Status.VolumeResizeStatus.FailedPVCs[0].Reason)
+	}
+
+	if copied.Status.VolumeResizeStatus.Markers[0] != "pr4.sync.started" {
+		t.Fatalf("unexpected copied marker: %s", copied.Status.VolumeResizeStatus.Markers[0])
 	}
 
 	if copied.Status.VolumeResizeStatus.Warnings[0] != "storage provider delay" {

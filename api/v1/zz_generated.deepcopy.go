@@ -1202,6 +1202,11 @@ func (in *VolumeResizeStatus) DeepCopyInto(out *VolumeResizeStatus) {
 		*out = make([]FailedPVCStatus, len(*in))
 		copy(*out, *in)
 	}
+	if in.Markers != nil {
+		in, out := &in.Markers, &out.Markers
+		*out = make([]string, len(*in))
+		copy(*out, *in)
+	}
 	if in.Warnings != nil {
 		in, out := &in.Warnings, &out.Warnings
 		*out = make([]string, len(*in))

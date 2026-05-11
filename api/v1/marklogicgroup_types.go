@@ -175,18 +175,20 @@ type VolumeResizeStatus struct {
 	DeferredTargetSize         string             `json:"deferredTargetSize,omitempty"`
 	DeferredObservedGeneration int64              `json:"deferredObservedGeneration,omitempty"`
 	// +kubebuilder:validation:Enum=parallel;sequential
-	ResizeStrategy     VolumeResizeStrategy `json:"resizeStrategy,omitempty"`
-	TotalPVCs          int32                `json:"totalPvcs,omitempty"`
-	PVCsCheckpointed   int32                `json:"pvcsCheckpointed,omitempty"`
-	ActivePVC          string               `json:"activePVC,omitempty"`
-	PVCStatuses        []PVCResizeStatus    `json:"pvcStatuses,omitempty"`
-	FailedPVCs         []FailedPVCStatus    `json:"failedPVCs,omitempty"`
-	Warnings           []string             `json:"warnings,omitempty"`
-	RetryCount         int32                `json:"retryCount,omitempty"`
-	NextRetryTime      *metav1.Time         `json:"nextRetryTime,omitempty"`
-	LastTransitionTime *metav1.Time         `json:"lastTransitionTime,omitempty"`
-	FirstStartedTime   *metav1.Time         `json:"firstStartedTime,omitempty"`
-	CompletionTime     *metav1.Time         `json:"completionTime,omitempty"`
+	ResizeStrategy   VolumeResizeStrategy `json:"resizeStrategy,omitempty"`
+	TotalPVCs        int32                `json:"totalPvcs,omitempty"`
+	PVCsCheckpointed int32                `json:"pvcsCheckpointed,omitempty"`
+	ActivePVC        string               `json:"activePVC,omitempty"`
+	PVCStatuses      []PVCResizeStatus    `json:"pvcStatuses,omitempty"`
+	FailedPVCs       []FailedPVCStatus    `json:"failedPVCs,omitempty"`
+	// Internal crash-recovery workflow markers for resize reconciliation.
+	Markers            []string     `json:"markers,omitempty"`
+	Warnings           []string     `json:"warnings,omitempty"`
+	RetryCount         int32        `json:"retryCount,omitempty"`
+	NextRetryTime      *metav1.Time `json:"nextRetryTime,omitempty"`
+	LastTransitionTime *metav1.Time `json:"lastTransitionTime,omitempty"`
+	FirstStartedTime   *metav1.Time `json:"firstStartedTime,omitempty"`
+	CompletionTime     *metav1.Time `json:"completionTime,omitempty"`
 }
 
 // MarklogicGroupStatus defines the observed state of MarklogicGroup
