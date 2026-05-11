@@ -5131,6 +5131,11 @@ spec:
                   totalPvcs:
                     format: int32
                     type: integer
+                  markers:
+                    description: Internal crash-recovery workflow markers for resize reconciliation.
+                    items:
+                      type: string
+                    type: array
                   warnings:
                     items:
                       type: string

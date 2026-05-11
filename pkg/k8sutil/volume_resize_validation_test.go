@@ -202,8 +202,15 @@ func TestResizeValidationMissingPVCStalls(t *testing.T) {
 	if !res.Completed() {
 		t.Fatalf("expected validation to complete this reconcile step")
 	}
-	if _, err := res.Output(); err != nil {
+	output, err := res.Output()
+	if err != nil {
 		t.Fatalf("unexpected result error: %v", err)
+	}
+	if !output.Requeue {
+		t.Fatalf("expected missing PVC validation stall to requeue")
+	}
+	if output.RequeueAfter != time.Duration(resizeRetryDelaySeconds)*time.Second {
+		t.Fatalf("expected missing PVC validation requeueAfter %s, got %s", time.Duration(resizeRetryDelaySeconds)*time.Second, output.RequeueAfter)
 	}
 
 	updated := getUpdatedGroup(t, oc)
@@ -243,8 +250,15 @@ func TestResizeValidationUnboundPVCStalls(t *testing.T) {
 	if !res.Completed() {
 		t.Fatalf("expected validation to complete this reconcile step")
 	}
-	if _, err := res.Output(); err != nil {
+	output, err := res.Output()
+	if err != nil {
 		t.Fatalf("unexpected result error: %v", err)
+	}
+	if !output.Requeue {
+		t.Fatalf("expected unbound PVC validation stall to requeue")
+	}
+	if output.RequeueAfter != time.Duration(resizeRetryDelaySeconds)*time.Second {
+		t.Fatalf("expected unbound PVC validation requeueAfter %s, got %s", time.Duration(resizeRetryDelaySeconds)*time.Second, output.RequeueAfter)
 	}
 
 	updated := getUpdatedGroup(t, oc)
@@ -372,6 +386,22 @@ func TestResizeSequentialPatchesOneAndAdvancesActivePVC(t *testing.T) {
 	status := getUpdatedGroup(t, oc).Status.VolumeResizeStatus
 	if status.ActivePVC != "datadir-dnode-1" {
 		t.Fatalf("expected activePVC to advance to datadir-dnode-1, got %s", status.ActivePVC)
+	}
+	if status.Phase != marklogicv1.VolumeResizePhaseResizingPVCs {
+		t.Fatalf("expected phase to transition back to ResizingPVCs in sequential mode, got %s", status.Phase)
+	}
+
+	if _, err := oc.ReconcileVolumeResizeValidation().Output(); err != nil {
+		t.Fatalf("unexpected error during sequential submission of next pvc: %v", err)
+	}
+
+	pvc1 = &corev1.PersistentVolumeClaim{}
+	if err := oc.Client.Get(oc.Ctx, client.ObjectKey{Name: "datadir-dnode-1", Namespace: "testns"}, pvc1); err != nil {
+		t.Fatalf("failed to get pvc1 after next sequential submission: %v", err)
+	}
+	pvc1Req = pvc1.Spec.Resources.Requests[corev1.ResourceStorage]
+	if pvc1Req.Cmp(resourceMustParse("50Gi")) != 0 {
+		t.Fatalf("expected pvc1 request to become 50Gi after sequential handoff")
 	}
 }
 
@@ -581,7 +611,7 @@ func TestResizeSyncMarkersPersistAndResume(t *testing.T) {
 		PVCsCheckpointed:   2,
 		FirstStartedTime:   &now,
 		LastTransitionTime: &now,
-		Warnings:           []string{resizeMarkerSyncStarted, resizeMarkerTemplateSynced},
+		Markers:            []string{resizeMarkerSyncStarted, resizeMarkerTemplateSynced},
 		PVCStatuses: []marklogicv1.PVCResizeStatus{
 			{Name: "datadir-dnode-0", State: marklogicv1.PVCResizeStateCheckpointed, CheckpointType: marklogicv1.PVCResizeCheckpointTypeOfflinePending, RestartRequired: true},
 			{Name: "datadir-dnode-1", State: marklogicv1.PVCResizeStateCheckpointed, CheckpointType: marklogicv1.PVCResizeCheckpointTypeOnlineComplete},
@@ -599,10 +629,10 @@ func TestResizeSyncMarkersPersistAndResume(t *testing.T) {
 	if updated.Phase != marklogicv1.VolumeResizePhaseRestartingPods {
 		t.Fatalf("expected phase RestartingPods, got %s", updated.Phase)
 	}
-	if !containsString(updated.Warnings, resizeMarkerTemplateSynced) {
+	if !containsString(updated.Markers, resizeMarkerTemplateSynced) {
 		t.Fatalf("expected sync marker %q to persist", resizeMarkerTemplateSynced)
 	}
-	if !containsString(updated.Warnings, resizeMarkerRestartPlanPrepared) {
+	if !containsString(updated.Markers, resizeMarkerRestartPlanPrepared) {
 		t.Fatalf("expected restart-plan marker %q to be set", resizeMarkerRestartPlanPrepared)
 	}
 }
@@ -621,7 +651,7 @@ func TestResizeRestartCandidatesOnlyOfflinePending(t *testing.T) {
 		PVCsCheckpointed:   2,
 		FirstStartedTime:   &now,
 		LastTransitionTime: &now,
-		Warnings:           []string{resizeMarkerSyncStarted, resizeMarkerTemplateSynced},
+		Markers:            []string{resizeMarkerSyncStarted, resizeMarkerTemplateSynced},
 		PVCStatuses: []marklogicv1.PVCResizeStatus{
 			{Name: "datadir-dnode-0", State: marklogicv1.PVCResizeStateCheckpointed, CheckpointType: marklogicv1.PVCResizeCheckpointTypeOfflinePending, RestartRequired: true},
 			{Name: "datadir-dnode-1", State: marklogicv1.PVCResizeStateCheckpointed, CheckpointType: marklogicv1.PVCResizeCheckpointTypeOnlineComplete},
@@ -795,6 +825,41 @@ func TestResizeVerificationRetryPathStallsThenResumes(t *testing.T) {
 	}
 }
 
+func TestResizeVerificationTemplateLagRoutesBackToStatefulSetSync(t *testing.T) {
+	oc := newResizeTestContext(t, resizeTestInput{desiredSize: "50Gi", currentSize: "20Gi", updateStrategy: appsv1.OnDeleteStatefulSetStrategyType})
+	seedVerificationStatus(t, oc, "verify-template-lag", "50Gi", "")
+
+	if err := setStatefulSetTemplateRequest(oc, "20Gi"); err != nil {
+		t.Fatalf("failed to force template request below target: %v", err)
+	}
+
+	if _, err := oc.ReconcileVolumeResizeValidation().Output(); err != nil {
+		t.Fatalf("unexpected error during verification template-lag pass: %v", err)
+	}
+
+	status := getUpdatedGroup(t, oc).Status.VolumeResizeStatus
+	if status.Phase != marklogicv1.VolumeResizePhaseStalled {
+		t.Fatalf("expected Stalled phase, got %s", status.Phase)
+	}
+	if status.Reason != marklogicv1.VolumeResizeReasonStatefulSetSyncFailed {
+		t.Fatalf("expected StatefulSetSyncFailed reason, got %s", status.Reason)
+	}
+
+	status.NextRetryTime = &metav1.Time{Time: metav1.Now().Add(-time.Second)}
+	if err := oc.patchResizeStatus(status); err != nil {
+		t.Fatalf("failed to open retry window: %v", err)
+	}
+
+	if _, err := oc.ReconcileVolumeResizeValidation().Output(); err != nil {
+		t.Fatalf("unexpected error during stalled retry routing pass: %v", err)
+	}
+
+	status = getUpdatedGroup(t, oc).Status.VolumeResizeStatus
+	if status.Phase != marklogicv1.VolumeResizePhaseSynchronizingStatefulSet {
+		t.Fatalf("expected stalled retry to route to SynchronizingStatefulSet, got %s", status.Phase)
+	}
+}
+
 func TestResizeVerificationTerminalFailureAfterMaxRetries(t *testing.T) {
 	oc := newResizeTestContext(t, resizeTestInput{desiredSize: "50Gi", currentSize: "20Gi", updateStrategy: appsv1.OnDeleteStatefulSetStrategyType})
 	seedVerificationStatus(t, oc, "verify-max-retries", "50Gi", "")
@@ -941,13 +1006,13 @@ func TestResizeSyncUsesImmutableSafeDeleteRecreateFlow(t *testing.T) {
 	}
 
 	updated := getUpdatedGroup(t, oc).Status.VolumeResizeStatus
-	if !containsString(updated.Warnings, resizeMarkerTemplateRecreateStarted) {
+	if !containsString(updated.Markers, resizeMarkerTemplateRecreateStarted) {
 		t.Fatalf("expected marker %q", resizeMarkerTemplateRecreateStarted)
 	}
-	if !containsString(updated.Warnings, resizeMarkerTemplateDeleted) {
+	if !containsString(updated.Markers, resizeMarkerTemplateDeleted) {
 		t.Fatalf("expected marker %q", resizeMarkerTemplateDeleted)
 	}
-	if containsString(updated.Warnings, resizeMarkerTemplateSynced) {
+	if containsString(updated.Markers, resizeMarkerTemplateSynced) {
 		t.Fatalf("did not expect sync marker before recreate")
 	}
 
@@ -957,10 +1022,10 @@ func TestResizeSyncUsesImmutableSafeDeleteRecreateFlow(t *testing.T) {
 	}
 
 	updated = getUpdatedGroup(t, oc).Status.VolumeResizeStatus
-	if !containsString(updated.Warnings, resizeMarkerTemplateRecreated) {
+	if !containsString(updated.Markers, resizeMarkerTemplateRecreated) {
 		t.Fatalf("expected marker %q", resizeMarkerTemplateRecreated)
 	}
-	if !containsString(updated.Warnings, resizeMarkerTemplateSynced) {
+	if !containsString(updated.Markers, resizeMarkerTemplateSynced) {
 		t.Fatalf("expected marker %q", resizeMarkerTemplateSynced)
 	}
 }
@@ -979,7 +1044,7 @@ func TestResizeSyncCrashResumeBetweenDeleteAndRecreateConverges(t *testing.T) {
 		PVCsCheckpointed:   2,
 		FirstStartedTime:   &now,
 		LastTransitionTime: &now,
-		Warnings:           []string{resizeMarkerSyncStarted, resizeMarkerTemplateRecreateStarted, resizeMarkerTemplateDeleted},
+		Markers:            []string{resizeMarkerSyncStarted, resizeMarkerTemplateRecreateStarted, resizeMarkerTemplateDeleted},
 		PVCStatuses: []marklogicv1.PVCResizeStatus{
 			{Name: "datadir-dnode-0", State: marklogicv1.PVCResizeStateCheckpointed, CheckpointType: marklogicv1.PVCResizeCheckpointTypeOnlineComplete},
 			{Name: "datadir-dnode-1", State: marklogicv1.PVCResizeStateCheckpointed, CheckpointType: marklogicv1.PVCResizeCheckpointTypeOnlineComplete},
@@ -1007,7 +1072,7 @@ func TestResizeSyncCrashResumeBetweenDeleteAndRecreateConverges(t *testing.T) {
 	}
 
 	updated := getUpdatedGroup(t, oc).Status.VolumeResizeStatus
-	if !containsString(updated.Warnings, resizeMarkerTemplateSynced) {
+	if !containsString(updated.Markers, resizeMarkerTemplateSynced) {
 		t.Fatalf("expected sync marker after crash-resume convergence")
 	}
 	if updated.Phase != marklogicv1.VolumeResizePhaseWaitingForPodsReady {
@@ -1036,6 +1101,31 @@ func TestResizeValidationStorageClassForbiddenShowsNamespaceScopeMessage(t *test
 	}
 	if !strings.Contains(status.Message, "cluster-scoped access to storageclasses") {
 		t.Fatalf("expected explicit scope/permission message, got %q", status.Message)
+	}
+}
+
+func TestComputeResizeRetryDelaySeconds_ExponentialAndCapped(t *testing.T) {
+	tests := []struct {
+		name     string
+		retry    int32
+		expected int
+	}{
+		{name: "non-positive-retry-uses-initial", retry: 0, expected: resizeRetryDelaySeconds},
+		{name: "first-retry-uses-initial", retry: 1, expected: resizeRetryDelaySeconds},
+		{name: "second-retry-doubles", retry: 2, expected: 20},
+		{name: "third-retry-doubles-again", retry: 3, expected: 40},
+		{name: "fifth-retry-still-under-cap", retry: 5, expected: 160},
+		{name: "sixth-retry-caps-at-max", retry: 6, expected: resizeRetryMaxDelaySecs},
+		{name: "high-retry-stays-capped", retry: resizeMaxRetries, expected: resizeRetryMaxDelaySecs},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			actual := computeResizeRetryDelaySeconds(tt.retry)
+			if actual != tt.expected {
+				t.Fatalf("expected retry=%d to yield delay=%d, got %d", tt.retry, tt.expected, actual)
+			}
+		})
 	}
 }
 

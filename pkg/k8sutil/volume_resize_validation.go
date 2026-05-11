@@ -23,8 +23,9 @@ import (
 const (
 	resizePauseAnnotationKey = "marklogic.progress.com/resize-paused"
 	dataDirPVCName           = "datadir"
-	resizeRetryDelaySeconds  = 15
-	resizeMaxRetries         = 3
+	resizeRetryDelaySeconds  = 10
+	resizeRetryMaxDelaySecs  = 300
+	resizeMaxRetries         = 15
 
 	resizeMarkerSyncStarted             = "pr4.sync.started"
 	resizeMarkerTemplateSynced          = "pr4.sync.template-synced"
@@ -131,7 +132,7 @@ func (oc *OperatorContext) ReconcileVolumeResizeValidation() result.ReconcileRes
 		if err := oc.patchResizeStatus(resizeStatus); err != nil {
 			return result.Error(err)
 		}
-		return result.Done()
+		return result.RequeueSoon(resizeRetryDelaySeconds)
 	}
 
 	if len(pvcState.notBoundPVCs) > 0 {
@@ -140,7 +141,7 @@ func (oc *OperatorContext) ReconcileVolumeResizeValidation() result.ReconcileRes
 		if err := oc.patchResizeStatus(resizeStatus); err != nil {
 			return result.Error(err)
 		}
-		return result.Done()
+		return result.RequeueSoon(resizeRetryDelaySeconds)
 	}
 
 	if err := oc.validateStorageClassExpansionAllowed(pvcState.foundPVCs); err != nil {
@@ -360,12 +361,12 @@ func (oc *OperatorContext) processResizeSubmission(status *marklogicv1.VolumeRes
 	oc.recalculatePVCProgress(status)
 
 	if len(status.FailedPVCs) > 0 {
-		if oc.scheduleRetryOrFail(status, marklogicv1.VolumeResizeReasonPartialResizeFailure, "Failed to submit one or more PVC resize patches") {
+		if retryScheduled, retryDelaySecs := oc.scheduleRetryOrFail(status, marklogicv1.VolumeResizeReasonPartialResizeFailure, "Failed to submit one or more PVC resize patches"); retryScheduled {
 			oc.emitResizeEvent(corev1.EventTypeWarning, "VolumeResizeStalled", status.Message)
 			if patchErr := oc.patchResizeStatus(status); patchErr != nil {
 				return result.Error(patchErr)
 			}
-			return result.RequeueSoon(resizeRetryDelaySeconds)
+			return result.RequeueSoon(retryDelaySecs)
 		}
 		oc.emitResizeEvent(corev1.EventTypeWarning, "VolumeResizeFailed", status.Message)
 		if patchErr := oc.patchResizeStatus(status); patchErr != nil {
@@ -446,12 +447,12 @@ func (oc *OperatorContext) processResizeWaiting(status *marklogicv1.VolumeResize
 	oc.recalculatePVCProgress(status)
 
 	if len(status.FailedPVCs) > 0 {
-		if oc.scheduleRetryOrFail(status, marklogicv1.VolumeResizeReasonPartialResizeFailure, "Failed while waiting for PVC resize checkpoint") {
+		if retryScheduled, retryDelaySecs := oc.scheduleRetryOrFail(status, marklogicv1.VolumeResizeReasonPartialResizeFailure, "Failed while waiting for PVC resize checkpoint"); retryScheduled {
 			oc.emitResizeEvent(corev1.EventTypeWarning, "VolumeResizeStalled", status.Message)
 			if patchErr := oc.patchResizeStatus(status); patchErr != nil {
 				return result.Error(patchErr)
 			}
-			return result.RequeueSoon(resizeRetryDelaySeconds)
+			return result.RequeueSoon(retryDelaySecs)
 		}
 		oc.emitResizeEvent(corev1.EventTypeWarning, "VolumeResizeFailed", status.Message)
 		if patchErr := oc.patchResizeStatus(status); patchErr != nil {
@@ -465,6 +466,15 @@ func (oc *OperatorContext) processResizeWaiting(status *marklogicv1.VolumeResize
 		status.ActivePVC = ""
 		addResizeMarker(status, resizeMarkerSyncStarted)
 		oc.transitionResizePhase(status, marklogicv1.VolumeResizePhaseSynchronizingStatefulSet, "", "All PVC checkpoints reached; synchronizing StatefulSet template")
+		oc.emitResizeEvent(corev1.EventTypeNormal, "VolumeResizeProgressing", status.Message)
+		if patchErr := oc.patchResizeStatus(status); patchErr != nil {
+			return result.Error(patchErr)
+		}
+		return result.RequeueSoon(1)
+	}
+
+	if status.ResizeStrategy == marklogicv1.VolumeResizeStrategySequential && status.PVCsCheckpointed < status.TotalPVCs {
+		oc.transitionResizePhase(status, marklogicv1.VolumeResizePhaseResizingPVCs, "", "Sequential strategy advancing to next PVC resize request")
 		oc.emitResizeEvent(corev1.EventTypeNormal, "VolumeResizeProgressing", status.Message)
 		if patchErr := oc.patchResizeStatus(status); patchErr != nil {
 			return result.Error(patchErr)
@@ -680,7 +690,7 @@ func (oc *OperatorContext) processResizeVerification(status *marklogicv1.VolumeR
 		return result.Done()
 	}
 	if templateRequest.Cmp(targetSize) < 0 {
-		return oc.scheduleSyncRetryOrFail(status, marklogicv1.VolumeResizeReasonMarkLogicHealthCheckFailed, fmt.Sprintf("StatefulSet datadir template request (%s) has not reached target (%s)", templateRequest.String(), targetSize.String()), fmt.Errorf("template request below target"))
+		return oc.scheduleSyncRetryOrFail(status, marklogicv1.VolumeResizeReasonStatefulSetSyncFailed, fmt.Sprintf("StatefulSet datadir template request (%s) has not reached target (%s)", templateRequest.String(), targetSize.String()), fmt.Errorf("template request below target"))
 	}
 
 	notFinalPVCs := make([]string, 0)
@@ -982,18 +992,35 @@ func (oc *OperatorContext) recalculatePVCProgress(status *marklogicv1.VolumeResi
 	status.FailedPVCs = failed
 }
 
-func (oc *OperatorContext) scheduleRetryOrFail(status *marklogicv1.VolumeResizeStatus, reason marklogicv1.VolumeResizeReason, message string) bool {
+func (oc *OperatorContext) scheduleRetryOrFail(status *marklogicv1.VolumeResizeStatus, reason marklogicv1.VolumeResizeReason, message string) (bool, int) {
 	status.RetryCount++
 	if status.RetryCount > resizeMaxRetries {
 		oc.transitionResizePhase(status, marklogicv1.VolumeResizePhaseFailed, marklogicv1.VolumeResizeReasonMaxRetriesExceeded, fmt.Sprintf("%s: max retries exceeded (%d)", message, resizeMaxRetries))
 		status.NextRetryTime = nil
-		return false
+		return false, 0
 	}
 
-	nextRetry := metav1.NewTime(time.Now().Add(time.Duration(resizeRetryDelaySeconds) * time.Second))
+	retryDelaySecs := computeResizeRetryDelaySeconds(status.RetryCount)
+	nextRetry := metav1.NewTime(time.Now().Add(time.Duration(retryDelaySecs) * time.Second))
 	status.NextRetryTime = &nextRetry
 	oc.transitionResizePhase(status, marklogicv1.VolumeResizePhaseStalled, reason, fmt.Sprintf("%s: retry %d/%d at %s", message, status.RetryCount, resizeMaxRetries, nextRetry.Format(time.RFC3339)))
-	return true
+	return true, retryDelaySecs
+}
+
+func computeResizeRetryDelaySeconds(retryCount int32) int {
+	if retryCount <= 1 {
+		return resizeRetryDelaySeconds
+	}
+
+	delaySecs := resizeRetryDelaySeconds
+	for attempt := int32(1); attempt < retryCount; attempt++ {
+		delaySecs *= 2
+		if delaySecs >= resizeRetryMaxDelaySecs {
+			return resizeRetryMaxDelaySecs
+		}
+	}
+
+	return delaySecs
 }
 
 func (oc *OperatorContext) clearRetryState(status *marklogicv1.VolumeResizeStatus) {
@@ -1002,12 +1029,12 @@ func (oc *OperatorContext) clearRetryState(status *marklogicv1.VolumeResizeStatu
 }
 
 func (oc *OperatorContext) scheduleSyncRetryOrFail(status *marklogicv1.VolumeResizeStatus, reason marklogicv1.VolumeResizeReason, message string, err error) result.ReconcileResult {
-	if oc.scheduleRetryOrFail(status, reason, fmt.Sprintf("%s: %v", message, err)) {
+	if retryScheduled, retryDelaySecs := oc.scheduleRetryOrFail(status, reason, fmt.Sprintf("%s: %v", message, err)); retryScheduled {
 		oc.emitResizeEvent(corev1.EventTypeWarning, "VolumeResizeStalled", status.Message)
 		if patchErr := oc.patchResizeStatus(status); patchErr != nil {
 			return result.Error(patchErr)
 		}
-		return result.RequeueSoon(resizeRetryDelaySeconds)
+		return result.RequeueSoon(retryDelaySecs)
 	}
 	oc.emitResizeEvent(corev1.EventTypeWarning, "VolumeResizeFailed", status.Message)
 	if patchErr := oc.patchResizeStatus(status); patchErr != nil {
@@ -1210,10 +1237,11 @@ func derivePodNameFromPVC(statefulSetName, pvcName string) string {
 }
 
 func hasResizeMarker(status *marklogicv1.VolumeResizeStatus, marker string) bool {
-	if status == nil {
+	if status == nil || marker == "" {
 		return false
 	}
-	for _, existing := range status.Warnings {
+	normalizeResizeMarkers(status)
+	for _, existing := range status.Markers {
 		if existing == marker {
 			return true
 		}
@@ -1225,10 +1253,45 @@ func addResizeMarker(status *marklogicv1.VolumeResizeStatus, marker string) {
 	if status == nil || marker == "" {
 		return
 	}
+	normalizeResizeMarkers(status)
 	if hasResizeMarker(status, marker) {
 		return
 	}
-	status.Warnings = append(status.Warnings, marker)
+	status.Markers = append(status.Markers, marker)
+}
+
+func normalizeResizeMarkers(status *marklogicv1.VolumeResizeStatus) {
+	if status == nil || len(status.Warnings) == 0 {
+		return
+	}
+
+	cleanWarnings := make([]string, 0, len(status.Warnings))
+	for _, warning := range status.Warnings {
+		if isResizeMarker(warning) {
+			if !containsName(status.Markers, warning) {
+				status.Markers = append(status.Markers, warning)
+			}
+			continue
+		}
+		cleanWarnings = append(cleanWarnings, warning)
+	}
+	status.Warnings = cleanWarnings
+}
+
+func isResizeMarker(value string) bool {
+	switch value {
+	case resizeMarkerSyncStarted,
+		resizeMarkerTemplateSynced,
+		resizeMarkerRestartPlanPrepared,
+		resizeMarkerVerifyStarted,
+		resizeMarkerVerifyCompleted,
+		resizeMarkerTemplateRecreateStarted,
+		resizeMarkerTemplateDeleted,
+		resizeMarkerTemplateRecreated:
+		return true
+	default:
+		return false
+	}
 }
 
 func containsName(values []string, expected string) bool {
