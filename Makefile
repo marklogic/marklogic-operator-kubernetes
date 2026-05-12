@@ -203,6 +203,13 @@ e2e-setup-minikube: kustomize controller-gen build docker-build
 	minikube addons enable ingress
 	minikube addons enable storage-provisioner
 	minikube addons enable default-storageclass
+	@echo "=====Enabling CSI hostpath driver (required for PVC volume expansion tests)"
+	minikube addons enable volumesnapshots
+	minikube addons enable csi-hostpath-driver
+	@echo "=====Making csi-hostpath-sc the default StorageClass (allowVolumeExpansion=true)"
+	kubectl patch storageclass standard       -p '{"metadata":{"annotations":{"storageclass.kubernetes.io/is-default-class":"false"}}}' || true
+	kubectl patch storageclass csi-hostpath-sc -p '{"metadata":{"annotations":{"storageclass.kubernetes.io/is-default-class":"true"}}}'
+	kubectl get storageclass
 	minikube image load $(IMG)
 	minikube image load $(E2E_MARKLOGIC_IMAGE_VERSION)
 	minikube image load "docker.io/haproxytech/haproxy-alpine:3.2"
