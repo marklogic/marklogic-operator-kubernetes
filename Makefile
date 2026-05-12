@@ -185,6 +185,16 @@ e2e-test-helm-namespace:
 	@echo "=====Running namespace-scoped e2e tests via Helm chart====="
 	E2E_DOCKER_IMAGE=$(IMG) go test -v -count=1 -timeout 45m ./test/e2e-helm
 
+.PHONY: e2e-test-volume-resize  ## Run ONLY the cluster-scoped volume resize test (two namespaces in parallel)
+e2e-test-volume-resize:
+	@echo "=====Running cluster-scoped volume-resize e2e test (parallel, 2 namespaces)====="
+	go test -v -count=1 -timeout 30m ./test/e2e -run TestVolumeResizeClusterScoped
+
+.PHONY: e2e-test-helm-volume-resize  ## Run ONLY the namespace-scoped volume resize test via Helm (two watched namespaces in parallel)
+e2e-test-helm-volume-resize:
+	@echo "=====Running namespace-scoped volume-resize e2e test via Helm (parallel, 2 watched namespaces)====="
+	E2E_DOCKER_IMAGE=$(IMG) go test -v -count=1 -timeout 30m ./test/e2e-helm -run TestVolumeResizeNamespaceScoped
+
 .PHONY: e2e-setup-minikube
 e2e-setup-minikube: kustomize controller-gen build docker-build
 	minikube version

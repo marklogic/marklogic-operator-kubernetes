@@ -167,6 +167,18 @@ void runHelmNamespaceScopedE2eTests() {
     """
 }
 
+void runVolumeResizeE2eTests() {
+    sh """
+        make e2e-test-volume-resize IMG=${operatorRepo}:${VERSION}
+    """
+}
+
+void runHelmVolumeResizeE2eTests() {
+    sh """
+        make e2e-test-helm-volume-resize IMG=${operatorRepo}:${VERSION}
+    """
+}
+
 void runBlackDuckScan() {
     // Trigger BlackDuck scan job with CONTAINER_IMAGES parameter when params.PUBLISH_IMAGE is true
     if (params.PUBLISH_IMAGE) {
@@ -238,6 +250,7 @@ pipeline {
         string(name: 'emailList', defaultValue: emailList, description: 'List of email for build notification', trim: true)
         booleanParam(name: 'VERIFY_ISTIO_AMBIENT', defaultValue: true, description: 'Run Istio ambient mode e2e tests (requires fresh minikube cluster with Istio)')
         booleanParam(name: 'VERIFY_HELM_NAMESPACE_SCOPED', defaultValue: false, description: 'Run namespace-scoped e2e tests via Helm chart install (validates Role/RoleBinding, no ClusterRole)')
+        booleanParam(name: 'VERIFY_VOLUME_RESIZE', defaultValue: true, description: 'Run cluster-scoped + Helm-namespace-scoped volume-resize e2e tests (two namespaces in parallel each)')
     }
 
     stages {
@@ -321,6 +334,44 @@ pipeline {
         stage('Helm-NS-Cleanup') {
             when {
                 expression { return params.VERIFY_HELM_NAMESPACE_SCOPED != false }
+            }
+            steps {
+                catchError(buildResult: 'SUCCESS', stageResult: 'FAILURE') {
+                    runMinikubeCleanup()
+                }
+            }
+        }
+
+        stage('Volume-Resize-Minikube-Setup') {
+            when {
+                expression { return params.VERIFY_VOLUME_RESIZE }
+            }
+            steps {
+                runMinikubeSetup()
+            }
+        }
+
+        stage('Run-Volume-Resize-e2e-Tests') {
+            when {
+                expression { return params.VERIFY_VOLUME_RESIZE }
+            }
+            steps {
+                runVolumeResizeE2eTests()
+            }
+        }
+
+        stage('Run-Helm-Volume-Resize-e2e-Tests') {
+            when {
+                expression { return params.VERIFY_VOLUME_RESIZE }
+            }
+            steps {
+                runHelmVolumeResizeE2eTests()
+            }
+        }
+
+        stage('Volume-Resize-Cleanup') {
+            when {
+                expression { return params.VERIFY_VOLUME_RESIZE }
             }
             steps {
                 catchError(buildResult: 'SUCCESS', stageResult: 'FAILURE') {
