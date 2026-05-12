@@ -411,6 +411,15 @@ func AddHelmRepo(chartName, url string) error {
 		return fmt.Errorf("failed to add Helm repo: %w", err)
 	}
 	fmt.Printf("%s helm repo added successfully \n", chartName)
+
+	// Always update the specific repo so the local index is fresh.
+	// Without this, a pre-existing stale cache causes helm install to fail
+	// when the requested chart version isn't in the cached index.
+	update := exec.Command("helm", "repo", "update", chartName)
+	if err := update.Run(); err != nil {
+		return fmt.Errorf("failed to update Helm repo %s: %w", chartName, err)
+	}
+	fmt.Printf("%s helm repo updated successfully \n", chartName)
 	return nil
 }
 
