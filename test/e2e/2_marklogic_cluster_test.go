@@ -163,12 +163,20 @@ func TestMarklogicCluster(t *testing.T) {
 		lokiNs := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "loki"}}
 		client.Resources().Delete(ctx, lokiNs)
 		t.Log("Waiting for loki namespace to fully terminate...")
+		terminated := false
 		for i := 0; i < 24; i++ { // up to 120 seconds
 			existing := &corev1.Namespace{}
 			if err := client.Resources().Get(ctx, "loki", "", existing); err != nil {
-				break // namespace is gone
+				if apierrors.IsNotFound(err) {
+					terminated = true
+					break // namespace is fully gone
+				}
+				// transient API error — keep polling
 			}
 			time.Sleep(5 * time.Second)
+		}
+		if !terminated {
+			t.Fatal("Loki namespace did not terminate within 120 seconds")
 		}
 
 		err = utils.InstallHelmChart("loki", "grafana/loki", "loki", "6.6.5", "loki.yaml")

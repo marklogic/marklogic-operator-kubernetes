@@ -1,7 +1,7 @@
 # Copyright (c) 2024-2026 Progress Software Corporation and/or its subsidiaries or affiliates. All Rights Reserved.
 #
 # eksctl ClusterConfig for the Jenkins EKS test environment.
-# Used by config/eks/setup-eks.sh for initial one-time provisioning.
+# Used by test/eks-config/setup-eks.sh for initial one-time provisioning.
 #
 # To replicate this cluster in a different AWS account, update:
 #   - metadata.region

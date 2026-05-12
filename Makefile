@@ -241,7 +241,7 @@ e2e-cleanup-minikube:
 .PHONY: ecr-login
 ecr-login: ## Authenticate Docker to ECR.
 	aws ecr get-login-password --region $(EKS_REGION) | \
-	  docker login --username AWS --password-stdin $(ECR_REGISTRY)
+	  $(CONTAINER_TOOL) login --username AWS --password-stdin $(ECR_REGISTRY)
 
 # Scale EKS worker nodes up to 3 and wait for them to be Ready.
 .PHONY: eks-scale-up
@@ -282,7 +282,7 @@ eks-scale-down: ## Scale EKS worker nodes to 0.
 # Also installs a kubectl binary that matches the cluster's minor version to avoid
 # the >±1 skew warning (and potential API incompatibilities).
 .PHONY: eks-update-kubeconfig
-eks-update-kubeconfig: ## Configure kubectl for the EKS cluster.
+eks-update-kubeconfig: | $(LOCALBIN) ## Configure kubectl for the EKS cluster.
 	aws eks update-kubeconfig --name $(EKS_CLUSTER_NAME) --region $(EKS_REGION)
 	@echo "=====Installing kubectl matching cluster version====="
 	@K8S_VER=$$(aws eks describe-cluster --name $(EKS_CLUSTER_NAME) --region $(EKS_REGION) \
@@ -300,7 +300,7 @@ e2e-setup-eks: kustomize controller-gen build ecr-login eks-update-kubeconfig ek
 	@echo "=====Building operator image for EKS====="
 	$(CONTAINER_TOOL) buildx build --platform="linux/amd64" -t $(ECR_OPERATOR_IMAGE) .
 	@echo "=====Pushing operator image to ECR====="
-	docker push $(ECR_OPERATOR_IMAGE)
+	$(CONTAINER_TOOL) push $(ECR_OPERATOR_IMAGE)
 	@echo "=====Waiting for AWS Load Balancer Controller webhook to be ready====="
 	$(LOCALBIN)/kubectl wait --for=condition=Available deployment/aws-load-balancer-controller \
 	  -n kube-system --timeout=120s
@@ -316,8 +316,11 @@ e2e-test-eks: ## Run e2e tests on EKS.
 	  go test -v -count=1 -timeout 30m ./test/e2e
 
 # Scale EKS worker nodes back to 0 after a test run.
+# Note: Kubernetes resources (operator, test namespaces) are removed by the
+# test framework's teardown during the test run itself. This target only scales
+# the nodegroup to 0 to minimise cost; the EKS control plane keeps running.
 .PHONY: e2e-cleanup-eks
-e2e-cleanup-eks: eks-scale-down ## Scale down EKS workers after e2e tests.
+e2e-cleanup-eks: eks-scale-down ## Scale EKS worker nodes to 0 after e2e tests.
 	@echo "=====EKS worker nodes scaled to 0====="
 
 # Build, push, scale up, configure Istio ambient mode, ready for Istio e2e tests.
@@ -326,7 +329,7 @@ e2e-setup-eks-istio: kustomize controller-gen build istioctl ecr-login eks-updat
 	@echo "=====Building operator image for EKS====="
 	$(CONTAINER_TOOL) buildx build --platform="linux/amd64" -t $(ECR_OPERATOR_IMAGE) .
 	@echo "=====Pushing operator image to ECR====="
-	docker push $(ECR_OPERATOR_IMAGE)
+	$(CONTAINER_TOOL) push $(ECR_OPERATOR_IMAGE)
 	@echo "=====Waiting for AWS Load Balancer Controller webhook to be ready====="
 	$(LOCALBIN)/kubectl wait --for=condition=Available deployment/aws-load-balancer-controller \
 	  -n kube-system --timeout=120s

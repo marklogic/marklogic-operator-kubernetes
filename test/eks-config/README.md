@@ -212,10 +212,10 @@ is aborted after 3 hours rather than waiting indefinitely.
 |---|---|
 | **EKS-Setup** | Scales up nodes, ECR-logins, builds and pushes operator image, deploys operator |
 | **Run-EKS-e2e-Tests** | Runs `make e2e-test-eks` — full suite against EKS |
-| **EKS-Cleanup** | Tears down operator and test resources; scales nodes back to 0 (`catchError`) |
+| **EKS-Cleanup** | Scales worker nodes to 0 (test framework removes k8s resources during teardown; `catchError`) |
 | **EKS-Istio-Setup** | Installs Istio ambient mode on the existing cluster |
 | **Run-EKS-Istio-e2e-Tests** | Runs `make e2e-test-eks-istio` |
-| **EKS-Istio-Cleanup** | Removes Istio and remaining resources; scales down (`catchError`) |
+| **EKS-Istio-Cleanup** | Scales worker nodes to 0, terminating all workloads including Istio (`catchError`) |
 
 ---
 

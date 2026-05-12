@@ -26,7 +26,7 @@
 # Usage:
 #   export AWS_ACCESS_KEY_ID=...
 #   export AWS_SECRET_ACCESS_KEY=...
-#   ./config/eks/setup-eks.sh
+#   ./test/eks-config/setup-eks.sh
 
 set -euo pipefail
 
@@ -52,7 +52,7 @@ fail() { echo "[$(date '+%H:%M:%S')] ✗ $*" >&2; exit 1; }
 # 1. Prerequisites check
 # ---------------------------------------------------------------------------
 log "Checking prerequisites..."
-for tool in aws eksctl kubectl helm docker jq; do
+for tool in aws eksctl kubectl helm docker jq curl; do
   command -v "$tool" >/dev/null 2>&1 || fail "Required tool not found: $tool"
 done
 ok "All prerequisites present"
@@ -168,7 +168,7 @@ else
   helm repo update eks >/dev/null
 
   log "Applying Load Balancer Controller CRDs..."
-  kubectl apply -k "github.com/aws/eks-charts/stable/aws-load-balancer-controller/crds?ref=master"
+  kubectl apply -k "github.com/aws/eks-charts/stable/aws-load-balancer-controller/crds?ref=v2.8.3"
 
   log "Installing AWS Load Balancer Controller via Helm..."
   helm upgrade --install aws-load-balancer-controller eks/aws-load-balancer-controller \
@@ -216,6 +216,7 @@ else
 
   EBS_SA_ROLE_ARN=$(kubectl get serviceaccount -n kube-system ebs-csi-controller-sa \
     -o jsonpath='{.metadata.annotations.eks\.amazonaws\.com/role-arn}' 2>/dev/null)
+  [[ -n "${EBS_SA_ROLE_ARN}" ]] || fail "EBS CSI service account role ARN is empty — ensure the IAM service account was created successfully"
 
   log "Installing EBS CSI driver add-on (role: ${EBS_SA_ROLE_ARN})..."
   aws eks create-addon \
@@ -226,17 +227,19 @@ else
     --region "${AWS_DEFAULT_REGION}" >/dev/null
 
   log "Waiting for EBS CSI driver add-on to become ACTIVE..."
+  EBS_FINAL_STATUS=""
   for i in {1..20}; do
-    STATUS=$(aws eks describe-addon \
+    EBS_FINAL_STATUS=$(aws eks describe-addon \
       --cluster-name "${CLUSTER_NAME}" \
       --addon-name aws-ebs-csi-driver \
       --region "${AWS_DEFAULT_REGION}" \
       --query "addon.status" --output text 2>/dev/null)
-    [[ "${STATUS}" == "ACTIVE" ]] && { ok "EBS CSI driver add-on is ACTIVE"; break; }
-    [[ "${STATUS}" == "CREATE_FAILED" ]] && { echo "ERROR: EBS CSI driver add-on failed to install"; exit 1; }
-    echo "  ... status: ${STATUS} (${i}/20)"
+    [[ "${EBS_FINAL_STATUS}" == "ACTIVE" ]] && { ok "EBS CSI driver add-on is ACTIVE"; break; }
+    [[ "${EBS_FINAL_STATUS}" == "CREATE_FAILED" ]] && fail "EBS CSI driver add-on failed to install"
+    echo "  ... status: ${EBS_FINAL_STATUS} (${i}/20)"
     sleep 15
   done
+  [[ "${EBS_FINAL_STATUS}" == "ACTIVE" ]] || fail "EBS CSI driver add-on did not reach ACTIVE within timeout (last status: ${EBS_FINAL_STATUS})"
 fi
 
 # ---------------------------------------------------------------------------
@@ -276,17 +279,19 @@ else
     --region "${AWS_DEFAULT_REGION}" >/dev/null
 
   log "Waiting for Amazon EKS Pod Identity Agent add-on to become ACTIVE..."
+  PIA_FINAL_STATUS=""
   for i in {1..20}; do
-    STATUS=$(aws eks describe-addon \
+    PIA_FINAL_STATUS=$(aws eks describe-addon \
       --cluster-name "${CLUSTER_NAME}" \
       --addon-name eks-pod-identity-agent \
       --region "${AWS_DEFAULT_REGION}" \
       --query "addon.status" --output text 2>/dev/null)
-    [[ "${STATUS}" == "ACTIVE" ]] && { ok "Amazon EKS Pod Identity Agent add-on is ACTIVE"; break; }
-    [[ "${STATUS}" == "CREATE_FAILED" ]] && { echo "ERROR: EKS Pod Identity Agent add-on failed to install"; exit 1; }
-    echo "  ... status: ${STATUS} (${i}/20)"
+    [[ "${PIA_FINAL_STATUS}" == "ACTIVE" ]] && { ok "Amazon EKS Pod Identity Agent add-on is ACTIVE"; break; }
+    [[ "${PIA_FINAL_STATUS}" == "CREATE_FAILED" ]] && fail "EKS Pod Identity Agent add-on failed to install"
+    echo "  ... status: ${PIA_FINAL_STATUS} (${i}/20)"
     sleep 15
   done
+  [[ "${PIA_FINAL_STATUS}" == "ACTIVE" ]] || fail "EKS Pod Identity Agent add-on did not reach ACTIVE within timeout (last status: ${PIA_FINAL_STATUS})"
 fi
 
 # ---------------------------------------------------------------------------
