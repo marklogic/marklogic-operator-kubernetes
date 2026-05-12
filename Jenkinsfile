@@ -137,9 +137,9 @@ void runMinikubeSetup() {
     """
 }
 
-void runE2eTests() {
+void runE2eTests(String scope = 'cluster') {
     sh """
-        make e2e-test IMG=${operatorRepo}:${VERSION}
+        make e2e-test-${scope} IMG=${operatorRepo}:${VERSION}
     """
 }
 
@@ -224,13 +224,39 @@ void runEKSIstioE2eTests() {
     }
 }
 
+void runHelmNamespaceScopedE2eTests() {
+    sh """
+        make e2e-test-helm-namespace IMG=${operatorRepo}:${VERSION}
+    """
+}
+
+// Dynamically extracts dependent container image references from their canonical
+// sources and triggers the BlackDuck scan job with the full CONTAINER_IMAGES list.
+// PUBLISH_IMAGE=true also prepends the published operator registry image.
 void runBlackDuckScan() {
-    // Trigger BlackDuck scan job with CONTAINER_IMAGES parameter when params.PUBLISH_IMAGE is true
+    def fluentBitImage = sh(returnStdout: true, script: "grep -E '^export FLUENT_BIT_IMAGE' Makefile | cut -d'=' -f2 | tr -d ' '").trim()
+    def haProxyImage   = sh(returnStdout: true, script: "grep -oE 'haproxytech/haproxy-alpine:[0-9.]+' Makefile | head -1").trim()
+    def ubi9Image      = sh(returnStdout: true, script: "grep -oE 'redhat/ubi9:[0-9.]+' pkg/k8sutil/statefulset.go | head -1").trim()
+
+    if (!fluentBitImage) { error "runBlackDuckScan: could not resolve FLUENT_BIT_IMAGE from Makefile" }
+    if (!haProxyImage)   { error "runBlackDuckScan: could not resolve HAProxy image from Makefile" }
+    if (!ubi9Image)      { error "runBlackDuckScan: could not resolve UBI9 image from pkg/k8sutil/statefulset.go" }
+
+    def dependentImages = "${fluentBitImage},${haProxyImage},${ubi9Image},${params.E2E_MARKLOGIC_IMAGE_VERSION}"
+
+    def containerImages
     if (params.PUBLISH_IMAGE) {
-        build job: 'securityscans/Blackduck/KubeNinjas/kubernetes-operator', wait: false, parameters: [ string(name: 'branch', value: "${env.BRANCH_NAME}"), string(name: 'CONTAINER_IMAGES', value: "${operatorRegistry}/${operatorRepo}:${VERSION}-${branchNameTag}-${timeStamp}") ]
+        containerImages = "${operatorRegistry}/${operatorRepo}:${VERSION}-${branchNameTag}-${timeStamp},${dependentImages}"
     } else {
-        build job: 'securityscans/Blackduck/KubeNinjas/kubernetes-operator', wait: false, parameters: [ string(name: 'branch', value: "${env.BRANCH_NAME}") ]
+        containerImages = dependentImages
     }
+
+    build job: 'securityscans/Blackduck/KubeNinjas/kubernetes-operator',
+          wait: false,
+          parameters: [
+              string(name: 'branch',           value: "${env.BRANCH_NAME}"),
+              string(name: 'CONTAINER_IMAGES', value: containerImages)
+          ]
 }
 
 /**
@@ -297,6 +323,7 @@ pipeline {
         booleanParam(name: 'VERIFY_ISTIO_AMBIENT', defaultValue: true, description: 'Run Istio ambient mode e2e tests (requires fresh minikube cluster with Istio)')
         booleanParam(name: 'TEST_ON_EKS', defaultValue: false, description: 'Run e2e tests on the EKS cluster (jenkins-kube-ninjas) instead of Minikube. Requires KUBE_NINJAS_OPS_AWS_JENKINS credentials on this agent.')
         string(name: 'EKS_MARKLOGIC_IMAGE_TAG', defaultValue: 'latest-12', description: 'MarkLogic image tag to pull from the EKS ECR registry when TEST_ON_EKS=true. The full ECR URL is constructed at runtime from the AWS account ID resolved via STS.', trim: true)
+        booleanParam(name: 'VERIFY_HELM_NAMESPACE_SCOPED', defaultValue: false, description: 'Run namespace-scoped e2e tests via Helm chart install (validates Role/RoleBinding, no ClusterRole)')
     }
 
     stages {
@@ -369,6 +396,35 @@ pipeline {
                     } else {
                         testBody()
                     }
+                }
+            }
+        }
+
+        stage('Helm-NS-Minikube-Setup') {
+            when {
+                expression { return params.VERIFY_HELM_NAMESPACE_SCOPED != false }
+            }
+            steps {
+                runMinikubeSetup()
+            }
+        }
+
+        stage('Run-Helm-NS-e2e-Tests') {
+            when {
+                expression { return params.VERIFY_HELM_NAMESPACE_SCOPED != false }
+            }
+            steps {
+                runHelmNamespaceScopedE2eTests()
+            }
+        }
+
+        stage('Helm-NS-Cleanup') {
+            when {
+                expression { return params.VERIFY_HELM_NAMESPACE_SCOPED != false }
+            }
+            steps {
+                catchError(buildResult: 'SUCCESS', stageResult: 'FAILURE') {
+                    runMinikubeCleanup()
                 }
             }
         }

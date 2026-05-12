@@ -1,5 +1,5 @@
 /*
-Copyright (c) 2024-2025 Progress Software Corporation and/or its subsidiaries or affiliates. All Rights Reserved.
+Copyright (c) 2024-2026 Progress Software Corporation and/or its subsidiaries or affiliates. All Rights Reserved.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -20,6 +20,8 @@ import (
 	"crypto/tls"
 	"flag"
 	"os"
+	"sort"
+	"strings"
 
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
 	// to ensure that exec-entrypoint and run can make use of them.
@@ -29,8 +31,10 @@ import (
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
+	"sigs.k8s.io/controller-runtime/pkg/metrics/filters"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
@@ -57,22 +61,55 @@ func main() {
 	var probeAddr string
 	var secureMetrics bool
 	var enableHTTP2 bool
-	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8080", "The address the metric endpoint binds to.")
+	var watchNamespace string
+	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8080",
+		"The address the metrics endpoint binds to. Use :8443 when --metrics-secure is true.")
 	flag.StringVar(&probeAddr, "health-probe-bind-address", ":8081", "The address the probe endpoint binds to.")
 	flag.BoolVar(&enableLeaderElection, "leader-elect", false,
 		"Enable leader election for controller manager. "+
 			"Enabling this will ensure there is only one active controller manager.")
 	flag.BoolVar(&secureMetrics, "metrics-secure", false,
-		"If set the metrics endpoint is served securely")
+		"Serve metrics over HTTPS with Kubernetes TokenReview/SubjectAccessReview auth. "+
+			"When true, --metrics-bind-address should also be changed to :8443.")
 	flag.BoolVar(&enableHTTP2, "enable-http2", false,
 		"If set, HTTP/2 will be enabled for the metrics and webhook servers")
+	flag.StringVar(&watchNamespace, "watch-namespace", "",
+		"Namespace(s) to watch for resources. If empty, watches all namespaces (cluster-scoped). "+
+			"Can be a single namespace or comma-separated list of namespaces. "+
+			"Can be set via WATCH_NAMESPACE environment variable.")
 	opts := zap.Options{
 		Development: true,
 	}
 	opts.BindFlags(flag.CommandLine)
 	flag.Parse()
 
+	// Get watch namespace from environment variable if not set via flag
+	if watchNamespace == "" {
+		watchNamespace = os.Getenv("WATCH_NAMESPACE")
+	}
+
+	// Parse watch namespaces (support comma-separated list)
+	var watchNamespaces []string
+	if watchNamespace != "" {
+		for _, ns := range strings.Split(watchNamespace, ",") {
+			ns = strings.TrimSpace(ns)
+			if ns != "" {
+				watchNamespaces = append(watchNamespaces, ns)
+			}
+		}
+	}
+
 	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&opts)))
+
+	if len(watchNamespaces) > 0 {
+		if len(watchNamespaces) == 1 {
+			setupLog.Info("operator will watch resources in namespace", "namespace", watchNamespaces[0])
+		} else {
+			setupLog.Info("operator will watch resources in multiple namespaces", "namespaces", watchNamespaces)
+		}
+	} else {
+		setupLog.Info("operator will watch resources in all namespaces (cluster-scoped)")
+	}
 
 	// if the enable-http2 flag is false (the default), http/2 should be disabled
 	// due to its vulnerabilities. More specifically, disabling http/2 will
@@ -90,17 +127,71 @@ func main() {
 		tlsOpts = append(tlsOpts, disableHTTP2)
 	}
 
+	// FilterProvider is wired only when secure mode is requested.
+	// It validates every scrape via TokenReview (authn) and
+	// SubjectAccessReview (authz) against the Kubernetes API.
+	// When secureMetrics is false the field is left nil, meaning the
+	// plain-HTTP server accepts connections without any authentication.
+	metricsOpts := metricsserver.Options{
+		BindAddress:   metricsAddr,
+		SecureServing: secureMetrics,
+		TLSOpts:       tlsOpts,
+	}
+	if secureMetrics {
+		metricsOpts.FilterProvider = filters.WithAuthenticationAndAuthorization
+	}
+
 	webhookServer := webhook.NewServer(webhook.Options{
 		TLSOpts: tlsOpts,
 	})
 
+	// Build cache options: when watchNamespaces is non-empty (set via --watch-namespace flag
+	// or WATCH_NAMESPACE env var) the operator runs in namespace-scoped mode.
+	cacheOpts := cache.Options{}
+	if len(watchNamespaces) > 0 {
+		nsMap := make(map[string]cache.Config)
+		for _, ns := range watchNamespaces {
+			nsMap[ns] = cache.Config{}
+		}
+		// Always include the operator's own namespace so leader-election works.
+		podNS := strings.TrimSpace(os.Getenv("POD_NAMESPACE"))
+		if podNS == "" {
+			nsBytes, readErr := os.ReadFile("/var/run/secrets/kubernetes.io/serviceaccount/namespace")
+			if readErr != nil {
+				setupLog.Error(readErr, "unable to determine pod namespace from POD_NAMESPACE or serviceaccount namespace file")
+				os.Exit(1)
+			}
+			podNS = strings.TrimSpace(string(nsBytes))
+		}
+		if podNS == "" {
+			setupLog.Info("unable to determine pod namespace; namespace-scoped mode requires POD_NAMESPACE or the serviceaccount namespace file")
+			os.Exit(1)
+		}
+		nsMap[podNS] = cache.Config{}
+		cacheOpts.DefaultNamespaces = nsMap
+
+		// Log the effective cache namespace set, which always includes the operator's
+		// own namespace (added above for leader election) in addition to the
+		// user-requested watch namespaces.
+		cachedNamespaces := make([]string, 0, len(nsMap))
+		for ns := range nsMap {
+			cachedNamespaces = append(cachedNamespaces, ns)
+		}
+		sort.Strings(cachedNamespaces)
+		if len(watchNamespaces) == 1 && watchNamespaces[0] == podNS {
+			setupLog.Info("operator will watch resources in namespace", "namespace", podNS)
+		} else {
+			setupLog.Info("operator will watch resources in namespaces (operator namespace always included for leader election)",
+				"requested", watchNamespaces, "effective", cachedNamespaces, "operatorNamespace", podNS)
+		}
+	} else {
+		setupLog.Info("operator will watch resources in all namespaces (cluster-scoped)")
+	}
+
 	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
-		Scheme: scheme,
-		Metrics: metricsserver.Options{
-			BindAddress:   metricsAddr,
-			SecureServing: secureMetrics,
-			TLSOpts:       tlsOpts,
-		},
+		Scheme:                 scheme,
+		Cache:                  cacheOpts,
+		Metrics:                metricsOpts,
 		WebhookServer:          webhookServer,
 		HealthProbeBindAddress: probeAddr,
 		LeaderElection:         enableLeaderElection,

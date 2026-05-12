@@ -178,6 +178,24 @@ e2e-test-istio:
 	@echo "=====Running Istio ambient mode e2e tests"
 	E2E_ISTIO_AMBIENT=true go test -v -count=1 -timeout 30m ./test/e2e -run "Test(Istio|NonIstio)"
 
+# NOTE: There is intentionally no `e2e-test-namespace` target here.
+# The `test/e2e` suite always deploys the operator via `make deploy`
+# (kustomize, ClusterRole/ClusterRoleBinding, secure metrics on :8443)
+# inside its TestMain, and does not honor E2E_SCOPE_TYPE / E2E_METRICS_SECURE
+# / WATCH_NAMESPACE patching. To validate namespace-scoped RBAC and the
+# insecure HTTP metrics endpoint, use `e2e-test-helm-namespace` below,
+# which installs the operator via the Helm chart with scope.type=namespace.
+
+.PHONY: e2e-test-cluster  ## Run e2e tests against a cluster-scoped operator install (alias for `e2e-test`)
+e2e-test-cluster:
+	@echo "=====Running e2e tests in cluster-scoped mode"
+	go test -v -count=1 -timeout 30m ./test/e2e
+
+.PHONY: e2e-test-helm-namespace  ## Run namespace-scoped e2e tests via Helm chart install (validates Role/RoleBinding, no ClusterRole, insecure metrics on :8080)
+e2e-test-helm-namespace:
+	@echo "=====Running namespace-scoped e2e tests via Helm chart====="
+	E2E_DOCKER_IMAGE=$(IMG) go test -v -count=1 -timeout 45m ./test/e2e-helm
+
 .PHONY: e2e-setup-minikube
 e2e-setup-minikube: kustomize controller-gen build docker-build
 	minikube version
@@ -551,10 +569,12 @@ HELMIFY ?= $(LOCALBIN)/helmify
 helmify: $(HELMIFY) ## Download helmify locally if necessary.
 $(HELMIFY): $(LOCALBIN)
 	test -s $(LOCALBIN)/helmify || GOBIN=$(LOCALBIN) go install github.com/arttor/helmify/cmd/helmify@latest
-    
+
+.PHONY: helm
 helm: manifests kustomize helmify
 	cd config/manager && $(KUSTOMIZE) edit set image controller=$(IMG)
 	$(KUSTOMIZE) build config/default | $(HELMIFY) -image-pull-secrets -original-name charts/marklogic-operator-kubernetes
+	bash hack/helmify-post-process.sh
 
 .PHONY: image-scan
 image-scan: docker-build
