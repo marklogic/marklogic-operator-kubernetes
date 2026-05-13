@@ -74,9 +74,15 @@ func TestVolumeResizeNamespaceScoped(t *testing.T) {
 		if err := assertNSStorageClassExpandable(ctx, c.Client()); err != nil {
 			t.Fatalf("Pre-flight failed: %v", err)
 		}
-		// Sanity: both target namespaces must be in the watch list.
+		// Sanity: both target namespaces must be in the watch list. Split on
+		// comma and compare trimmed entries for exact matches — a substring
+		// check would let "ml-ns-resize-a" match "ml-ns-resize-a2".
+		watched := make(map[string]struct{})
+		for _, n := range strings.Split(watchedNamespaces, ",") {
+			watched[strings.TrimSpace(n)] = struct{}{}
+		}
 		for _, ns := range resizeNSNamespaces {
-			if !strings.Contains(watchedNamespaces, ns) {
+			if _, ok := watched[ns]; !ok {
 				t.Fatalf("namespace %s is not in watchedNamespaces (%s) — resize cannot be reconciled", ns, watchedNamespaces)
 			}
 		}
@@ -189,12 +195,38 @@ func assertNSStorageClassExpandable(ctx context.Context, client klient.Client) e
 	if err := client.Resources().List(ctx, scList); err != nil {
 		return fmt.Errorf("list StorageClasses: %w", err)
 	}
+	var defaults []storagev1.StorageClass
 	for _, sc := range scList.Items {
-		if sc.AllowVolumeExpansion != nil && *sc.AllowVolumeExpansion {
-			return nil
+		if isNSDefaultStorageClass(sc) {
+			defaults = append(defaults, sc)
 		}
 	}
-	return fmt.Errorf("no StorageClass with allowVolumeExpansion=true found; volume resize cannot be tested")
+	switch len(defaults) {
+	case 0:
+		return fmt.Errorf("no default StorageClass found (annotation storageclass.kubernetes.io/is-default-class=true); volume resize cannot be tested")
+	case 1:
+		sc := defaults[0]
+		if sc.AllowVolumeExpansion == nil || !*sc.AllowVolumeExpansion {
+			return fmt.Errorf("default StorageClass %q has allowVolumeExpansion=false; volume resize cannot succeed", sc.Name)
+		}
+		return nil
+	default:
+		names := make([]string, 0, len(defaults))
+		for _, sc := range defaults {
+			names = append(names, sc.Name)
+		}
+		return fmt.Errorf("multiple default StorageClasses found (%s); cannot determine which one PVCs will bind to", strings.Join(names, ", "))
+	}
+}
+
+// isNSDefaultStorageClass reports whether sc carries either the GA or the
+// legacy beta default-class annotation set to "true".
+func isNSDefaultStorageClass(sc storagev1.StorageClass) bool {
+	if sc.Annotations == nil {
+		return false
+	}
+	return sc.Annotations["storageclass.kubernetes.io/is-default-class"] == "true" ||
+		sc.Annotations["storageclass.beta.kubernetes.io/is-default-class"] == "true"
 }
 
 func createNSResizeCluster(ctx context.Context, client klient.Client, ns string) error {

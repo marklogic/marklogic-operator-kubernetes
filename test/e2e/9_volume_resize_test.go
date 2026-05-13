@@ -175,20 +175,48 @@ func TestVolumeResizeClusterScoped(t *testing.T) {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-// assertDefaultStorageClassExpandable returns nil if at least one StorageClass
-// in the cluster has allowVolumeExpansion=true. The test relies on the default
-// SC being expandable (the case for minikube's `standard` provisioner).
+// assertDefaultStorageClassExpandable returns nil only if the cluster's
+// **default** StorageClass exists and has allowVolumeExpansion=true. The
+// resize-test MarklogicCluster does not set spec.persistence.storageClassName,
+// so PVCs are bound through the default SC; checking any random expandable SC
+// would let the test proceed and then fail later during actual resize.
 func assertDefaultStorageClassExpandable(ctx context.Context, client klient.Client) error {
 	scList := &storagev1.StorageClassList{}
 	if err := client.Resources().List(ctx, scList); err != nil {
 		return fmt.Errorf("list StorageClasses: %w", err)
 	}
+	var defaults []storagev1.StorageClass
 	for _, sc := range scList.Items {
-		if sc.AllowVolumeExpansion != nil && *sc.AllowVolumeExpansion {
-			return nil
+		if isDefaultStorageClass(sc) {
+			defaults = append(defaults, sc)
 		}
 	}
-	return fmt.Errorf("no StorageClass with allowVolumeExpansion=true found; volume resize cannot be tested")
+	switch len(defaults) {
+	case 0:
+		return fmt.Errorf("no default StorageClass found (annotation storageclass.kubernetes.io/is-default-class=true); volume resize cannot be tested")
+	case 1:
+		sc := defaults[0]
+		if sc.AllowVolumeExpansion == nil || !*sc.AllowVolumeExpansion {
+			return fmt.Errorf("default StorageClass %q has allowVolumeExpansion=false; volume resize cannot succeed", sc.Name)
+		}
+		return nil
+	default:
+		names := make([]string, 0, len(defaults))
+		for _, sc := range defaults {
+			names = append(names, sc.Name)
+		}
+		return fmt.Errorf("multiple default StorageClasses found (%s); cannot determine which one PVCs will bind to", strings.Join(names, ", "))
+	}
+}
+
+// isDefaultStorageClass reports whether sc carries either the GA or the legacy
+// beta default-class annotation set to "true".
+func isDefaultStorageClass(sc storagev1.StorageClass) bool {
+	if sc.Annotations == nil {
+		return false
+	}
+	return sc.Annotations["storageclass.kubernetes.io/is-default-class"] == "true" ||
+		sc.Annotations["storageclass.beta.kubernetes.io/is-default-class"] == "true"
 }
 
 // createResizeNamespaceAndCluster creates the namespace and a MarklogicCluster

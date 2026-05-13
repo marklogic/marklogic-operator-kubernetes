@@ -149,7 +149,7 @@ ifeq ($(VERIFY_HUGE_PAGES), true)
 	minikube start
 
 	@echo "=====Running e2e test including hugepages test"
-	go test -v -count=1 -timeout 30m ./test/e2e -verifyHugePages
+	IMG=$(IMG) go test -v -count=1 -timeout 30m ./test/e2e -verifyHugePages
 
 	@echo "=====Resetting hugepages value to 0"
 	sudo sysctl -w vm.nr_hugepages=0
@@ -159,13 +159,13 @@ ifeq ($(VERIFY_HUGE_PAGES), true)
 	minikube start
 else
 	@echo "=====Running e2e test without hugepages test"
-	go test -v -count=1 -timeout 30m ./test/e2e
+	IMG=$(IMG) go test -v -count=1 -timeout 30m ./test/e2e
 endif
 
 .PHONY: e2e-test-istio  # Run Istio ambient mode e2e tests
 e2e-test-istio:
 	@echo "=====Running Istio ambient mode e2e tests"
-	E2E_ISTIO_AMBIENT=true go test -v -count=1 -timeout 30m ./test/e2e -run "Test(Istio|NonIstio)"
+	IMG=$(IMG) E2E_ISTIO_AMBIENT=true go test -v -count=1 -timeout 30m ./test/e2e -run "Test(Istio|NonIstio)"
 
 # NOTE: There is intentionally no `e2e-test-namespace` target here.
 # The `test/e2e` suite always deploys the operator via `make deploy`
@@ -178,7 +178,7 @@ e2e-test-istio:
 .PHONY: e2e-test-cluster  ## Run e2e tests against a cluster-scoped operator install (alias for `e2e-test`)
 e2e-test-cluster:
 	@echo "=====Running e2e tests in cluster-scoped mode"
-	go test -v -count=1 -timeout 30m ./test/e2e
+	IMG=$(IMG) go test -v -count=1 -timeout 30m ./test/e2e
 
 .PHONY: e2e-test-helm-namespace  ## Run namespace-scoped e2e tests via Helm chart install (validates Role/RoleBinding, no ClusterRole, insecure metrics on :8080)
 e2e-test-helm-namespace:
@@ -188,7 +188,7 @@ e2e-test-helm-namespace:
 .PHONY: e2e-test-volume-resize  ## Run ONLY the cluster-scoped volume resize test (two namespaces in parallel)
 e2e-test-volume-resize:
 	@echo "=====Running cluster-scoped volume-resize e2e test (parallel, 2 namespaces)====="
-	go test -v -count=1 -timeout 30m ./test/e2e -run TestVolumeResizeClusterScoped
+	IMG=$(IMG) go test -v -count=1 -timeout 30m ./test/e2e -run TestVolumeResizeClusterScoped
 
 .PHONY: e2e-test-helm-volume-resize  ## Run ONLY the namespace-scoped volume resize test via Helm (two watched namespaces in parallel)
 e2e-test-helm-volume-resize:
