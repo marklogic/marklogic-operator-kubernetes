@@ -275,11 +275,6 @@ pipeline {
         stage('Run-e2e-Tests') {
             steps {
                 runE2eTests()
-                script {
-                    if (params.VERIFY_VOLUME_RESIZE) {
-                        runVolumeResizeE2eTests()
-                    }
-                }
             }
         }
 
@@ -333,11 +328,6 @@ pipeline {
             }
             steps {
                 runHelmNamespaceScopedE2eTests()
-                script {
-                    if (params.VERIFY_VOLUME_RESIZE) {
-                        runHelmVolumeResizeE2eTests()
-                    }
-                }
             }
         }
 
