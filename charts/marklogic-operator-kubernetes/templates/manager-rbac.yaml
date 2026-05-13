@@ -23,30 +23,6 @@ rules:
   - update
   - watch
 - apiGroups:
-  - ""
-  resources:
-  - persistentvolumeclaims
-  verbs:
-  - get
-  - list
-  - patch
-  - update
-  - watch
-- apiGroups:
-  - ""
-  resources:
-  - persistentvolumeclaims/status
-  verbs:
-  - get
-- apiGroups:
-  - ""
-  resources:
-  - persistentvolumes
-  verbs:
-  - get
-  - list
-  - watch
-- apiGroups:
   - apps
   resources:
   - daemonsets
@@ -102,23 +78,6 @@ rules:
   - patch
   - update
   - watch
-- apiGroups:
-  - storage.k8s.io
-  resources:
-  - storageclasses
-  verbs:
-  - get
-  - list
-  - watch
-- apiGroups:
-  - ""
-  - events.k8s.io
-  resources:
-  - events
-  verbs:
-  - create
-  - patch
-  - update
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
@@ -188,22 +147,6 @@ rules:
   - update
   - watch
 - apiGroups:
-  - ""
-  resources:
-  - persistentvolumeclaims
-  verbs:
-  - get
-  - list
-  - patch
-  - update
-  - watch
-- apiGroups:
-  - ""
-  resources:
-  - persistentvolumeclaims/status
-  verbs:
-  - get
-- apiGroups:
   - apps
   resources:
   - daemonsets
@@ -259,15 +202,6 @@ rules:
   - patch
   - update
   - watch
-- apiGroups:
-  - ""
-  - events.k8s.io
-  resources:
-  - events
-  verbs:
-  - create
-  - patch
-  - update
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
@@ -288,38 +222,4 @@ subjects:
   name: '{{ include "marklogic-operator-kubernetes.serviceAccountName" $ }}'
   namespace: '{{ $.Release.Namespace }}'
 {{- end }}
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRole
-metadata:
-  name: marklogic-operator-storageclass-reader
-  labels:
-  {{- include "marklogic-operator-kubernetes.labels" $ | nindent 4 }}
-rules:
-- apiGroups:
-  - storage.k8s.io
-  resources:
-  - storageclasses
-  verbs:
-  - get
-  - list
-  - watch
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRoleBinding
-metadata:
-  name: marklogic-operator-storageclass-readerbinding
-  labels:
-    app.kubernetes.io/component: rbac
-    app.kubernetes.io/created-by: marklogic-operator-kubernetes
-    app.kubernetes.io/part-of: marklogic-operator-kubernetes
-  {{- include "marklogic-operator-kubernetes.labels" $ | nindent 4 }}
-roleRef:
-  apiGroup: rbac.authorization.k8s.io
-  kind: ClusterRole
-  name: marklogic-operator-storageclass-reader
-subjects:
-- kind: ServiceAccount
-  name: '{{ include "marklogic-operator-kubernetes.serviceAccountName" $ }}'
-  namespace: '{{ $.Release.Namespace }}'
 {{- end }}

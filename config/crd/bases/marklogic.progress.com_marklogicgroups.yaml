@@ -5032,6 +5032,12 @@ spec:
                   lastTransitionTime:
                     format: date-time
                     type: string
+                  markers:
+                    description: Internal crash-recovery workflow markers for resize
+                      reconciliation.
+                    items:
+                      type: string
+                    type: array
                   message:
                     type: string
                   nextRetryTime:
@@ -5131,11 +5137,6 @@ spec:
                   totalPvcs:
                     format: int32
                     type: integer
-                  markers:
-                    description: Internal crash-recovery workflow markers for resize reconciliation.
-                    items:
-                      type: string
-                    type: array
                   warnings:
                     items:
                       type: string
