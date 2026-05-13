@@ -209,6 +209,11 @@ e2e-setup-minikube: kustomize controller-gen build docker-build
 	@echo "=====Making csi-hostpath-sc the default StorageClass (allowVolumeExpansion=true)"
 	kubectl patch storageclass standard       -p '{"metadata":{"annotations":{"storageclass.kubernetes.io/is-default-class":"false"}}}' || true
 	kubectl patch storageclass csi-hostpath-sc -p '{"metadata":{"annotations":{"storageclass.kubernetes.io/is-default-class":"true"}}}'
+	@echo "=====Ensuring csi-hostpath-sc has allowVolumeExpansion=true (some minikube versions ship it disabled)"
+	kubectl patch storageclass csi-hostpath-sc -p '{"allowVolumeExpansion":true}'
+	@echo "=====Verifying allowVolumeExpansion is set on csi-hostpath-sc"
+	@test "$$(kubectl get storageclass csi-hostpath-sc -o jsonpath='{.allowVolumeExpansion}')" = "true" \
+		|| (echo "ERROR: csi-hostpath-sc.allowVolumeExpansion is not true after patch" && exit 1)
 	kubectl get storageclass
 	minikube image load $(IMG)
 	minikube image load $(E2E_MARKLOGIC_IMAGE_VERSION)
