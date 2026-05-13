@@ -158,20 +158,26 @@ func TestMarklogicCluster(t *testing.T) {
 		t.Log("Cleaning up any existing Loki installation...")
 		e2eutils.RunCommand("helm uninstall loki -n loki --ignore-not-found 2>/dev/null || true")
 
-		// Delete and recreate loki namespace to ensure clean state
+		// Delete loki namespace and wait for it to fully terminate before reinstalling
 		t.Log("Ensuring loki namespace is clean...")
 		lokiNs := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "loki"}}
 		client.Resources().Delete(ctx, lokiNs)
-		time.Sleep(5 * time.Second) // Wait for namespace deletion
-
-		// Create loki namespace
-		if err := client.Resources().Create(ctx, lokiNs); err != nil {
-			if !apierrors.IsAlreadyExists(err) {
-				t.Fatalf("Failed to create loki namespace: %v", err)
+		t.Log("Waiting for loki namespace to fully terminate...")
+		terminated := false
+		for i := 0; i < 24; i++ { // up to 120 seconds
+			existing := &corev1.Namespace{}
+			if err := client.Resources().Get(ctx, "loki", "", existing); err != nil {
+				if apierrors.IsNotFound(err) {
+					terminated = true
+					break // namespace is fully gone
+				}
+				// transient API error — keep polling
 			}
-			t.Logf("Loki namespace already exists")
+			time.Sleep(5 * time.Second)
 		}
-		time.Sleep(2 * time.Second)
+		if !terminated {
+			t.Fatal("Loki namespace did not terminate within 120 seconds")
+		}
 
 		err = utils.InstallHelmChart("loki", "grafana/loki", "loki", "6.6.5", "loki.yaml")
 		if err != nil {
@@ -242,13 +248,26 @@ func TestMarklogicCluster(t *testing.T) {
 			break
 		}
 
-		// Wait for all Loki pods to be ready
+		// Wait for all Loki pods to be ready.
+		// Skip loki-canary-* pods: they are DaemonSet pods whose names change whenever the
+		// underlying node is replaced or the pod is evicted.  Waiting by a fixed pod name is
+		// therefore unreliable.  We wait for the DaemonSet rollout status instead (below).
 		for _, pod := range lokiPodList.Items {
+			if strings.HasPrefix(pod.Name, "loki-canary-") {
+				continue
+			}
 			t.Logf("Waiting for Loki pod %s to be ready", pod.Name)
 			err = utils.WaitForPod(ctx, t, client, "loki", pod.Name, 300*time.Second, true)
 			if err != nil {
 				t.Fatalf("Failed to wait for Loki pod %s creation: %v", pod.Name, err)
 			}
+		}
+		// Wait for the loki-canary DaemonSet to finish rolling out.
+		// rollout status tracks desiredNumberScheduled vs numberReady, so it handles
+		// pod eviction and rescheduling correctly without relying on specific pod names.
+		t.Log("Waiting for loki-canary DaemonSet to be ready...")
+		if p := e2eutils.RunCommand("kubectl rollout status daemonset/loki-canary -n loki --timeout=120s"); p.Err() != nil {
+			t.Logf("Warning: loki-canary DaemonSet rollout did not complete cleanly: %v", p.Err())
 		}
 		t.Log("All Loki pods are ready")
 

@@ -405,12 +405,15 @@ func GetPodLogs(namespace, podName, containerName string) (string, error) {
 }
 
 func AddHelmRepo(chartName, url string) error {
-	cmd := exec.Command("helm", "repo", "add", chartName, url)
-	err := cmd.Run()
-	if err != nil {
+	// --force-update makes the command idempotent: if the repo already exists
+	// (common on shared CI agents) it updates the entry instead of failing,
+	// and always refreshes the local index so the requested chart version is
+	// guaranteed to be in the cache.
+	cmd := exec.Command("helm", "repo", "add", "--force-update", chartName, url)
+	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("failed to add Helm repo: %w", err)
 	}
-	fmt.Printf("%s helm repo added successfully \n", chartName)
+	fmt.Printf("%s helm repo added/updated successfully \n", chartName)
 	return nil
 }
 

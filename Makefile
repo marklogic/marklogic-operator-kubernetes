@@ -28,6 +28,17 @@ export FLUENT_BIT_IMAGE ?= fluent/fluent-bit:4.1.1
 export E2E_KUBERNETES_VERSION ?= v1.31.13
 export E2E_ISTIO_AMBIENT ?= false
 
+# EKS / ECR configuration for Jenkins EKS test environment.
+# Set AWS_ACCOUNT_ID in the environment (or pass on the make command line).
+# Example: make e2e-setup-eks AWS_ACCOUNT_ID=123456789012
+# If not set, it is auto-derived via: aws sts get-caller-identity.
+EKS_CLUSTER_NAME ?= jenkins-kube-ninjas
+EKS_NODEGROUP_NAME ?= ml-worker
+EKS_REGION ?= us-west-1
+AWS_ACCOUNT_ID ?= $(shell aws sts get-caller-identity --query Account --output text 2>/dev/null)
+ECR_REGISTRY ?= $(AWS_ACCOUNT_ID).dkr.ecr.$(EKS_REGION).amazonaws.com
+ECR_OPERATOR_IMAGE ?= $(ECR_REGISTRY)/$(EKS_CLUSTER_NAME)/marklogic-kubernetes-operator:$(VERSION)
+
 
 # CHANNELS define the bundle channels used in the bundle.
 # Add a new line here if you would like to change its default config. (E.g CHANNELS = "candidate,fast,stable")
@@ -223,7 +234,119 @@ e2e-setup-minikube-istio: kustomize controller-gen build docker-build istioctl #
 e2e-cleanup-minikube:
 	@echo "=====Delete minikube cluster"
 	minikube delete
-	
+
+##@ EKS Testing
+
+# Login to ECR. AWS_ACCOUNT_ID must be set in the environment.
+.PHONY: ecr-login
+ecr-login: ## Authenticate Docker to ECR.
+	aws ecr get-login-password --region $(EKS_REGION) | \
+	  $(CONTAINER_TOOL) login --username AWS --password-stdin $(ECR_REGISTRY)
+
+# Scale EKS worker nodes up to 3 and wait for them to be Ready.
+.PHONY: eks-scale-up
+eks-scale-up: ## Scale EKS worker nodes to 3.
+	@echo "=====Scaling EKS worker nodes to 3====="
+	eksctl scale nodegroup \
+	  --cluster $(EKS_CLUSTER_NAME) \
+	  --name $(EKS_NODEGROUP_NAME) \
+	  --nodes 3 \
+	  --nodes-min 0 \
+	  --nodes-max 6 \
+	  --region $(EKS_REGION)
+	@echo "=====Waiting for nodes to register====="
+	@until kubectl get nodes 2>/dev/null | grep -q Ready; do echo "Waiting for nodes to join..."; sleep 10; done
+	@echo "=====Waiting for terminating nodes to deregister====="
+	@until [ "$$(kubectl get nodes --no-headers 2>/dev/null | grep -c NotReady)" = "0" ]; do echo "Waiting for NotReady nodes to drain..."; sleep 10; done
+	@echo "=====Waiting for nodes to be Ready====="
+	kubectl wait --for=condition=Ready nodes --all --timeout=300s
+
+# Scale EKS worker nodes to 0 to minimise cost when the cluster is idle.
+.PHONY: eks-scale-down
+eks-scale-down: ## Scale EKS worker nodes to 0.
+	@echo "=====Scaling EKS worker nodes to 0====="
+	eksctl scale nodegroup \
+	  --cluster $(EKS_CLUSTER_NAME) \
+	  --name $(EKS_NODEGROUP_NAME) \
+	  --nodes 0 \
+	  --nodes-min 0 \
+	  --nodes-max 6 \
+	  --region $(EKS_REGION)
+	@echo "=====Waiting for all worker nodes to deregister====="
+	@until [ "$$(kubectl get nodes --no-headers 2>/dev/null | wc -l | tr -d ' ')" = "0" ]; do \
+	  echo "Waiting for nodes to terminate..."; sleep 15; \
+	done
+	@echo "=====All worker nodes terminated====="
+
+# Update the local kubeconfig to point kubectl at the EKS cluster.
+# Also installs a kubectl binary that matches the cluster's minor version to avoid
+# the >±1 skew warning (and potential API incompatibilities).
+.PHONY: eks-update-kubeconfig
+eks-update-kubeconfig: | $(LOCALBIN) ## Configure kubectl for the EKS cluster.
+	aws eks update-kubeconfig --name $(EKS_CLUSTER_NAME) --region $(EKS_REGION)
+	@echo "=====Installing kubectl matching cluster version====="
+	@K8S_VER=$$(aws eks describe-cluster --name $(EKS_CLUSTER_NAME) --region $(EKS_REGION) \
+	    --query "cluster.version" --output text); \
+	  echo "Cluster Kubernetes version: $$K8S_VER"; \
+	  curl -fsSL "https://dl.k8s.io/release/v$${K8S_VER}.0/bin/linux/amd64/kubectl" \
+	    -o $(LOCALBIN)/kubectl && chmod +x $(LOCALBIN)/kubectl; \
+	  $(LOCALBIN)/kubectl version --client
+
+# Build the operator image, push it to ECR, scale up workers, and update kubeconfig.
+# The test framework calls 'make deploy' internally, which uses IMG; we export
+# ECR_OPERATOR_IMAGE so that deployment targets the correct ECR image.
+.PHONY: e2e-setup-eks
+e2e-setup-eks: kustomize controller-gen build ecr-login eks-update-kubeconfig eks-scale-up ## Setup EKS cluster for e2e tests.
+	@echo "=====Building operator image for EKS====="
+	$(CONTAINER_TOOL) buildx build --platform="linux/amd64" -t $(ECR_OPERATOR_IMAGE) .
+	@echo "=====Pushing operator image to ECR====="
+	$(CONTAINER_TOOL) push $(ECR_OPERATOR_IMAGE)
+	@echo "=====Waiting for AWS Load Balancer Controller webhook to be ready====="
+	$(LOCALBIN)/kubectl wait --for=condition=Available deployment/aws-load-balancer-controller \
+	  -n kube-system --timeout=120s
+	@echo "=====EKS setup complete. Operator image: $(ECR_OPERATOR_IMAGE)====="
+
+# Run the standard e2e tests against the EKS cluster.
+# IMG is set to ECR_OPERATOR_IMAGE so that the test framework's internal 'make deploy'
+# deploys the correct image from ECR.
+.PHONY: e2e-test-eks
+e2e-test-eks: ## Run e2e tests on EKS.
+	@echo "=====Running e2e tests on EKS====="
+	PATH=$(LOCALBIN):$$PATH IMG=$(ECR_OPERATOR_IMAGE) E2E_DOCKER_IMAGE=$(ECR_OPERATOR_IMAGE) \
+	  go test -v -count=1 -timeout 30m ./test/e2e
+
+# Scale EKS worker nodes back to 0 after a test run.
+# Note: Kubernetes resources (operator, test namespaces) are removed by the
+# test framework's teardown during the test run itself. This target only scales
+# the nodegroup to 0 to minimise cost; the EKS control plane keeps running.
+.PHONY: e2e-cleanup-eks
+e2e-cleanup-eks: eks-scale-down ## Scale EKS worker nodes to 0 after e2e tests.
+	@echo "=====EKS worker nodes scaled to 0====="
+
+# Build, push, scale up, configure Istio ambient mode, ready for Istio e2e tests.
+.PHONY: e2e-setup-eks-istio
+e2e-setup-eks-istio: kustomize controller-gen build istioctl ecr-login eks-update-kubeconfig eks-scale-up ## Setup EKS cluster with Istio ambient mode.
+	@echo "=====Building operator image for EKS====="
+	$(CONTAINER_TOOL) buildx build --platform="linux/amd64" -t $(ECR_OPERATOR_IMAGE) .
+	@echo "=====Pushing operator image to ECR====="
+	$(CONTAINER_TOOL) push $(ECR_OPERATOR_IMAGE)
+	@echo "=====Waiting for AWS Load Balancer Controller webhook to be ready====="
+	$(LOCALBIN)/kubectl wait --for=condition=Available deployment/aws-load-balancer-controller \
+	  -n kube-system --timeout=120s
+	@echo "=====Installing Istio with ambient profile====="
+	$(ISTIOCTL) install --set profile=ambient -y
+	@echo "=====Waiting for Istio components to be ready====="
+	$(LOCALBIN)/kubectl wait --for=condition=Ready pods --all -n istio-system --timeout=120s
+	@echo "=====Istio ambient mode installed on EKS====="
+	$(LOCALBIN)/kubectl get pods -n istio-system
+
+# Run Istio ambient mode e2e tests on EKS.
+.PHONY: e2e-test-eks-istio
+e2e-test-eks-istio: ## Run Istio ambient mode e2e tests on EKS.
+	@echo "=====Running Istio ambient mode e2e tests on EKS====="
+	PATH=$(LOCALBIN):$$PATH IMG=$(ECR_OPERATOR_IMAGE) E2E_DOCKER_IMAGE=$(ECR_OPERATOR_IMAGE) E2E_ISTIO_AMBIENT=true \
+	  go test -v -count=1 -timeout 30m ./test/e2e -run "Test(Istio|NonIstio)"
+
 GOLANGCI_LINT = $(shell pwd)/bin/golangci-lint
 golangci-lint:
 	@[ -f $(GOLANGCI_LINT) ] || { \

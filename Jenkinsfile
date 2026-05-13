@@ -161,6 +161,69 @@ void runIstioE2eTests() {
     """
 }
 
+// ---------------------------------------------------------------------------
+// EKS / ECR helper functions
+// AWS credentials are bound using the 'KUBE_NINJAS_OPS_AWS_JENKINS' credential ID.
+// AWS_ACCOUNT_ID is resolved via 'aws sts get-caller-identity' inside withEksCredentials.
+// EKS_MARKLOGIC_IMAGE_VERSION is derived at runtime from AWS_ACCOUNT_ID + EKS_MARKLOGIC_IMAGE_TAG.
+// ---------------------------------------------------------------------------
+
+void withEksCredentials(Closure body) {
+    withCredentials([[$class: 'AmazonWebServicesCredentialsBinding',
+                      credentialsId: 'KUBE_NINJAS_OPS_AWS_JENKINS',
+                      accessKeyVariable: 'AWS_ACCESS_KEY_ID',
+                      secretKeyVariable: 'AWS_SECRET_ACCESS_KEY']]) {
+        // Resolve account ID via STS — no account number is hardcoded in this file.
+        env.AWS_ACCOUNT_ID = sh(returnStdout: true,
+            script: 'aws sts get-caller-identity --query Account --output text').trim()
+        // Construct the ECR image URL; tag is configurable via the EKS_MARKLOGIC_IMAGE_TAG parameter.
+        env.EKS_MARKLOGIC_IMAGE_VERSION = "${env.AWS_ACCOUNT_ID}.dkr.ecr.us-west-1.amazonaws.com/jenkins-kube-ninjas/marklogic-server-ubi-rootless:${params.EKS_MARKLOGIC_IMAGE_TAG}"
+        body()
+    }
+}
+
+void runEKSSetup() {
+    withEksCredentials {
+        sh """
+            make e2e-setup-eks \\
+              E2E_MARKLOGIC_IMAGE_VERSION=${env.EKS_MARKLOGIC_IMAGE_VERSION}
+        """
+    }
+}
+
+void runEKSE2eTests() {
+    withEksCredentials {
+        sh """
+            make e2e-test-eks \\
+              E2E_MARKLOGIC_IMAGE_VERSION=${env.EKS_MARKLOGIC_IMAGE_VERSION}
+        """
+    }
+}
+
+void runEKSCleanup() {
+    withEksCredentials {
+        sh 'make e2e-cleanup-eks'
+    }
+}
+
+void runEKSIstioSetup() {
+    withEksCredentials {
+        sh """
+            make e2e-setup-eks-istio \\
+              E2E_MARKLOGIC_IMAGE_VERSION=${env.EKS_MARKLOGIC_IMAGE_VERSION}
+        """
+    }
+}
+
+void runEKSIstioE2eTests() {
+    withEksCredentials {
+        sh """
+            make e2e-test-eks-istio \\
+              E2E_MARKLOGIC_IMAGE_VERSION=${env.EKS_MARKLOGIC_IMAGE_VERSION}
+        """
+    }
+}
+
 void runHelmNamespaceScopedE2eTests() {
     sh """
         make e2e-test-helm-namespace IMG=${operatorRepo}:${VERSION}
@@ -238,9 +301,10 @@ pipeline {
     
     triggers {
         // Trigger nightly builds on the develop branch
-        parameterizedCron( env.BRANCH_NAME == 'develop' ? '''00 05 * * * % E2E_MARKLOGIC_IMAGE_VERSION=ml-docker-db-dev-tierpoint.bed-artifactory.bedford.progress.com/marklogic/marklogic-server-ubi-rootless:latest-12; VERIFY_HELM_NAMESPACE_SCOPED=true
-                                                             00 05 * * * % E2E_MARKLOGIC_IMAGE_VERSION=ml-docker-db-dev-tierpoint.bed-artifactory.bedford.progress.com/marklogic/marklogic-server-ubi-rootless:latest-11; PUBLISH_IMAGE=false; VERIFY_HELM_NAMESPACE_SCOPED=true
-                                                             00 07 * * * % E2E_MARKLOGIC_IMAGE_VERSION=ml-docker-db-dev-tierpoint.bed-artifactory.bedford.progress.com/marklogic/marklogic-server-ubi-rootless:latest-12; VERIFY_ISTIO_AMBIENT=true; VERIFY_HELM_NAMESPACE_SCOPED=true''' : '')
+        parameterizedCron( env.BRANCH_NAME == 'develop' ? '''00 05 * * * % E2E_MARKLOGIC_IMAGE_VERSION=ml-docker-db-dev-tierpoint.bed-artifactory.bedford.progress.com/marklogic/marklogic-server-ubi-rootless:latest-12
+                                                             00 05 * * * % E2E_MARKLOGIC_IMAGE_VERSION=ml-docker-db-dev-tierpoint.bed-artifactory.bedford.progress.com/marklogic/marklogic-server-ubi-rootless:latest-11; PUBLISH_IMAGE=false
+                                                             00 07 * * * % E2E_MARKLOGIC_IMAGE_VERSION=ml-docker-db-dev-tierpoint.bed-artifactory.bedford.progress.com/marklogic/marklogic-server-ubi-rootless:latest-12; VERIFY_ISTIO_AMBIENT=true
+                                                             30 05 * * * % TEST_ON_EKS=true; VERIFY_ISTIO_AMBIENT=true''' : '')
     }
 
     environment {
@@ -257,6 +321,8 @@ pipeline {
         booleanParam(name: 'PUBLISH_IMAGE', defaultValue: false, description: 'Publish image to internal registry')
         string(name: 'emailList', defaultValue: emailList, description: 'List of email for build notification', trim: true)
         booleanParam(name: 'VERIFY_ISTIO_AMBIENT', defaultValue: true, description: 'Run Istio ambient mode e2e tests (requires fresh minikube cluster with Istio)')
+        booleanParam(name: 'TEST_ON_EKS', defaultValue: false, description: 'Run e2e tests on the EKS cluster (jenkins-kube-ninjas) instead of Minikube. Requires KUBE_NINJAS_OPS_AWS_JENKINS credentials on this agent.')
+        string(name: 'EKS_MARKLOGIC_IMAGE_TAG', defaultValue: 'latest-12', description: 'MarkLogic image tag to pull from the EKS ECR registry when TEST_ON_EKS=true. The full ECR URL is constructed at runtime from the AWS account ID resolved via STS.', trim: true)
         booleanParam(name: 'VERIFY_HELM_NAMESPACE_SCOPED', defaultValue: false, description: 'Run namespace-scoped e2e tests via Helm chart install (validates Role/RoleBinding, no ClusterRole)')
     }
 
@@ -273,50 +339,64 @@ pipeline {
             }
         }
 
-        stage('Run-Minikube-Setup') {
+        // -----------------------------------------------------------------------
+        // E2E Tests — runs on Minikube (default) or the shared EKS cluster.
+        // Minikube and EKS paths are unified into the same named stages.
+        // The EKS cluster lock is acquired only for EKS builds, so unrelated
+        // Minikube builds are never blocked. Cleanup is guaranteed via
+        // try/finally even when earlier stages throw.
+        // -----------------------------------------------------------------------
+        stage('E2E Tests') {
             steps {
-                runMinikubeSetup()
-            }
-        }
+                script {
+                    def doSetup    = { params.TEST_ON_EKS ? runEKSSetup()          : runMinikubeSetup() }
+                    def doTests    = { params.TEST_ON_EKS ? runEKSE2eTests()        : runE2eTests() }
+                    def doCleanup  = {
+                        catchError(buildResult: 'SUCCESS', stageResult: 'FAILURE') {
+                            if (params.TEST_ON_EKS) { runEKSCleanup() } else { runMinikubeCleanup() }
+                        }
+                    }
+                    def doIstioSetup  = { params.TEST_ON_EKS ? runEKSIstioSetup()      : runIstioMinikubeSetup() }
+                    def doIstioTests  = { params.TEST_ON_EKS ? runEKSIstioE2eTests()   : runIstioE2eTests() }
 
-        stage('Run-e2e-Tests') {
-            steps {
-                runE2eTests()
-            }
-        }
+                    def testBody = {
+                        try {
+                            stage('Setup')         { doSetup() }
+                            stage('Run e2e Tests') { doTests() }
+                        } finally {
+                            stage('Cleanup')       { doCleanup() }
+                        }
+                        // Istio stages are always declared so that Jenkins Stage View
+                        // shows a consistent set of columns across all run types.
+                        // When VERIFY_ISTIO_AMBIENT is false the stages are entered but
+                        // immediately skipped, preserving their position in the view.
+                        try {
+                            stage('Istio Setup') {
+                                if (params.VERIFY_ISTIO_AMBIENT) { doIstioSetup() }
+                                else { echo 'Istio tests skipped (VERIFY_ISTIO_AMBIENT=false)' }
+                            }
+                            stage('Run Istio e2e Tests') {
+                                if (params.VERIFY_ISTIO_AMBIENT) { doIstioTests() }
+                                else { echo 'Istio tests skipped (VERIFY_ISTIO_AMBIENT=false)' }
+                            }
+                        } finally {
+                            stage('Istio Cleanup') {
+                                if (params.VERIFY_ISTIO_AMBIENT) { doCleanup() }
+                                else { echo 'Istio tests skipped (VERIFY_ISTIO_AMBIENT=false)' }
+                            }
+                        }
+                    }
 
-        stage('Cleanup Environment') {
-            steps {
-                catchError(buildResult: 'SUCCESS', stageResult: 'FAILURE') {
-                    runMinikubeCleanup()
+                    if (params.TEST_ON_EKS) {
+                        lock(resource: 'jenkinsKubeNinjasEksCluster', inversePrecedence: true) {
+                            timeout(time: 3, unit: 'HOURS') {
+                                testBody()
+                            }
+                        }
+                    } else {
+                        testBody()
+                    }
                 }
-            }
-        }
-
-        stage('Istio-Minikube-Setup') {
-            when {
-                expression { return params.VERIFY_ISTIO_AMBIENT }
-            }
-            steps {
-                runIstioMinikubeSetup()
-            }
-        }
-
-        stage('Run-Istio-e2e-Tests') {
-            when {
-                expression { return params.VERIFY_ISTIO_AMBIENT }
-            }
-            steps {
-                runIstioE2eTests()
-            }
-        }
-
-        stage('Istio-Cleanup') {
-            when {
-                expression { return params.VERIFY_ISTIO_AMBIENT }
-            }
-            steps {
-                runMinikubeCleanup()
             }
         }
 
