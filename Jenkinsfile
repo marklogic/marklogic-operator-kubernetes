@@ -275,6 +275,11 @@ pipeline {
         stage('Run-e2e-Tests') {
             steps {
                 runE2eTests()
+                script {
+                    if (params.VERIFY_VOLUME_RESIZE) {
+                        runVolumeResizeE2eTests()
+                    }
+                }
             }
         }
 
@@ -328,50 +333,17 @@ pipeline {
             }
             steps {
                 runHelmNamespaceScopedE2eTests()
+                script {
+                    if (params.VERIFY_VOLUME_RESIZE) {
+                        runHelmVolumeResizeE2eTests()
+                    }
+                }
             }
         }
 
         stage('Helm-NS-Cleanup') {
             when {
                 expression { return params.VERIFY_HELM_NAMESPACE_SCOPED != false }
-            }
-            steps {
-                catchError(buildResult: 'SUCCESS', stageResult: 'FAILURE') {
-                    runMinikubeCleanup()
-                }
-            }
-        }
-
-        stage('Volume-Resize-Minikube-Setup') {
-            when {
-                expression { return params.VERIFY_VOLUME_RESIZE }
-            }
-            steps {
-                runMinikubeSetup()
-            }
-        }
-
-        stage('Run-Volume-Resize-e2e-Tests') {
-            when {
-                expression { return params.VERIFY_VOLUME_RESIZE }
-            }
-            steps {
-                runVolumeResizeE2eTests()
-            }
-        }
-
-        stage('Run-Helm-Volume-Resize-e2e-Tests') {
-            when {
-                expression { return params.VERIFY_VOLUME_RESIZE }
-            }
-            steps {
-                runHelmVolumeResizeE2eTests()
-            }
-        }
-
-        stage('Volume-Resize-Cleanup') {
-            when {
-                expression { return params.VERIFY_VOLUME_RESIZE }
             }
             steps {
                 catchError(buildResult: 'SUCCESS', stageResult: 'FAILURE') {
