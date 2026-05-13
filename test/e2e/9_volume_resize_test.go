@@ -66,6 +66,7 @@ type resizeOutcome struct {
 // TestVolumeResizeClusterScoped resizes PVCs in two namespaces concurrently
 // against the cluster-scoped operator and prints a clear pass/fail summary.
 func TestVolumeResizeClusterScoped(t *testing.T) {
+	trackTest(t)
 	feature := features.New("Volume Resize — Cluster-Scoped, Multi-Namespace").
 		WithLabel("type", "volume-resize")
 

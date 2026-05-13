@@ -22,6 +22,7 @@ import (
 )
 
 func TestHAPorxyPathBaseEnabled(t *testing.T) {
+	trackTest(t)
 	feature := features.New("HAProxy Test with Pathbased Routing Enabled").WithLabel("type", "haproxy-pathbased-enabled")
 	namespace := "haproxy-pathbased"
 	releaseName := "ml"
@@ -154,6 +155,7 @@ func TestHAPorxyPathBaseEnabled(t *testing.T) {
 }
 
 func TestHAPorxWithNoPathBasedDisabled(t *testing.T) {
+	trackTest(t)
 	feature := features.New("HAProxy Test with Pathbased Routing Disabled").WithLabel("type", "haproxy-pathbased-disabled")
 	namespace := "haproxy-test"
 	releaseName := "ml"

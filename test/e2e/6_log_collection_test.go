@@ -28,6 +28,7 @@ const (
 
 // TestLogCollectionDisabled tests that fluent-bit is NOT created when LogCollection.Enabled is false
 func TestLogCollectionDisabled(t *testing.T) {
+	trackTest(t)
 	feature := features.New("Log Collection Disabled Test").WithLabel("type", "log-collection-disabled")
 
 	replicas := int32(1)
@@ -169,6 +170,7 @@ func TestLogCollectionDisabled(t *testing.T) {
 
 // TestLogCollectionPartialLogs tests selective log file collection
 func TestLogCollectionPartialLogs(t *testing.T) {
+	trackTest(t)
 	feature := features.New("Log Collection Partial Logs Test").WithLabel("type", "log-collection-partial")
 
 	replicas := int32(1)
@@ -338,6 +340,7 @@ func TestLogCollectionPartialLogs(t *testing.T) {
 
 // TestLogCollectionCustomResources tests custom resource configuration for fluent-bit
 func TestLogCollectionCustomResources(t *testing.T) {
+	trackTest(t)
 	feature := features.New("Log Collection Custom Resources Test").WithLabel("type", "log-collection-resources")
 
 	replicas := int32(1)
@@ -521,6 +524,7 @@ func TestLogCollectionCustomResources(t *testing.T) {
 
 // TestLogCollectionCustomFilters tests custom filters configuration
 func TestLogCollectionCustomFilters(t *testing.T) {
+	trackTest(t)
 	feature := features.New("Log Collection Custom Filters Test").WithLabel("type", "log-collection-filters")
 
 	replicas := int32(1)
