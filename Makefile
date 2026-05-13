@@ -160,7 +160,7 @@ ifeq ($(VERIFY_HUGE_PAGES), true)
 	minikube start
 
 	@echo "=====Running e2e test including hugepages test"
-	go test -v -count=1 -timeout 30m ./test/e2e -verifyHugePages
+	IMG=$(IMG) go test -v -count=1 -timeout 30m ./test/e2e -verifyHugePages
 
 	@echo "=====Resetting hugepages value to 0"
 	sudo sysctl -w vm.nr_hugepages=0
@@ -170,13 +170,13 @@ ifeq ($(VERIFY_HUGE_PAGES), true)
 	minikube start
 else
 	@echo "=====Running e2e test without hugepages test"
-	go test -v -count=1 -timeout 30m ./test/e2e
+	IMG=$(IMG) go test -v -count=1 -timeout 30m ./test/e2e
 endif
 
 .PHONY: e2e-test-istio  # Run Istio ambient mode e2e tests
 e2e-test-istio:
 	@echo "=====Running Istio ambient mode e2e tests"
-	E2E_ISTIO_AMBIENT=true go test -v -count=1 -timeout 30m ./test/e2e -run "Test(Istio|NonIstio)"
+	IMG=$(IMG) E2E_ISTIO_AMBIENT=true go test -v -count=1 -timeout 30m ./test/e2e -run "Test(Istio|NonIstio)"
 
 # NOTE: There is intentionally no `e2e-test-namespace` target here.
 # The `test/e2e` suite always deploys the operator via `make deploy`
@@ -189,12 +189,22 @@ e2e-test-istio:
 .PHONY: e2e-test-cluster  ## Run e2e tests against a cluster-scoped operator install (alias for `e2e-test`)
 e2e-test-cluster:
 	@echo "=====Running e2e tests in cluster-scoped mode"
-	go test -v -count=1 -timeout 30m ./test/e2e
+	IMG=$(IMG) go test -v -count=1 -timeout 30m ./test/e2e
 
 .PHONY: e2e-test-helm-namespace  ## Run namespace-scoped e2e tests via Helm chart install (validates Role/RoleBinding, no ClusterRole, insecure metrics on :8080)
 e2e-test-helm-namespace:
 	@echo "=====Running namespace-scoped e2e tests via Helm chart====="
 	E2E_DOCKER_IMAGE=$(IMG) go test -v -count=1 -timeout 45m ./test/e2e-helm
+
+.PHONY: e2e-test-volume-resize  ## Run ONLY the cluster-scoped volume resize test (two namespaces in parallel)
+e2e-test-volume-resize:
+	@echo "=====Running cluster-scoped volume-resize e2e test (parallel, 2 namespaces)====="
+	IMG=$(IMG) go test -v -count=1 -timeout 30m ./test/e2e -run TestVolumeResizeClusterScoped
+
+.PHONY: e2e-test-helm-volume-resize  ## Run ONLY the namespace-scoped volume resize test via Helm (two watched namespaces in parallel)
+e2e-test-helm-volume-resize:
+	@echo "=====Running namespace-scoped volume-resize e2e test via Helm (parallel, 2 watched namespaces)====="
+	E2E_DOCKER_IMAGE=$(IMG) go test -v -count=1 -timeout 30m ./test/e2e-helm -run TestVolumeResizeNamespaceScoped
 
 .PHONY: e2e-setup-minikube
 e2e-setup-minikube: kustomize controller-gen build docker-build
@@ -204,6 +214,18 @@ e2e-setup-minikube: kustomize controller-gen build docker-build
 	minikube addons enable ingress
 	minikube addons enable storage-provisioner
 	minikube addons enable default-storageclass
+	@echo "=====Enabling CSI hostpath driver (required for PVC volume expansion tests)"
+	minikube addons enable volumesnapshots
+	minikube addons enable csi-hostpath-driver
+	@echo "=====Making csi-hostpath-sc the default StorageClass (allowVolumeExpansion=true)"
+	kubectl patch storageclass standard       -p '{"metadata":{"annotations":{"storageclass.kubernetes.io/is-default-class":"false"}}}' || true
+	kubectl patch storageclass csi-hostpath-sc -p '{"metadata":{"annotations":{"storageclass.kubernetes.io/is-default-class":"true"}}}'
+	@echo "=====Ensuring csi-hostpath-sc has allowVolumeExpansion=true (some minikube versions ship it disabled)"
+	kubectl patch storageclass csi-hostpath-sc -p '{"allowVolumeExpansion":true}'
+	@echo "=====Verifying allowVolumeExpansion is set on csi-hostpath-sc"
+	@test "$$(kubectl get storageclass csi-hostpath-sc -o jsonpath='{.allowVolumeExpansion}')" = "true" \
+		|| (echo "ERROR: csi-hostpath-sc.allowVolumeExpansion is not true after patch" && exit 1)
+	kubectl get storageclass
 	minikube image load $(IMG)
 	minikube image load $(E2E_MARKLOGIC_IMAGE_VERSION)
 	minikube image load "docker.io/haproxytech/haproxy-alpine:3.2"
