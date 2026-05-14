@@ -214,21 +214,24 @@ var _ = Describe("MarklogicCluster Controller", func() {
 							Name:        "bootstrap-static",
 							Replicas:    &dynamicBootstrapReplicas,
 							IsBootstrap: true,
+							GroupConfig: &marklogicv1.GroupConfig{Name: "bootstrap-static", EnableXdqpSsl: true},
 							Service:     marklogicv1.Service{Type: corev1.ServiceTypeClusterIP},
 						},
 						{
-							Name:      "dynamic-no-persistence",
-							Replicas:  &dynamicPoolReplicas,
-							IsDynamic: true,
+							Name:        "dynamic-no-persistence",
+							Replicas:    &dynamicPoolReplicas,
+							IsDynamic:   true,
+							GroupConfig: &marklogicv1.GroupConfig{Name: "dynamic-no-persistence", EnableXdqpSsl: true},
 							Dynamic: &marklogicv1.DynamicGroupConfig{
 								TokenDuration: "PT20M",
 							},
 							Service: marklogicv1.Service{Type: corev1.ServiceTypeClusterIP},
 						},
 						{
-							Name:      "dynamic-with-persistence",
-							Replicas:  &dynamicPersistentReplicas,
-							IsDynamic: true,
+							Name:        "dynamic-with-persistence",
+							Replicas:    &dynamicPersistentReplicas,
+							IsDynamic:   true,
+							GroupConfig: &marklogicv1.GroupConfig{Name: "dynamic-with-persistence", EnableXdqpSsl: true},
 							Persistence: &marklogicv1.Persistence{
 								Enabled: true,
 								Size:    "5Gi",
@@ -251,8 +254,7 @@ var _ = Describe("MarklogicCluster Controller", func() {
 			Expect(dynamicNoPersistence.Spec.Dynamic).ShouldNot(BeNil())
 			Expect(dynamicNoPersistence.Spec.Dynamic.TokenDuration).Should(Equal("PT20M"))
 			Expect(dynamicNoPersistence.Spec.UpdateStrategy).Should(Equal(appsv1.RollingUpdateStatefulSetStrategyType))
-			Expect(dynamicNoPersistence.Spec.Persistence).ShouldNot(BeNil())
-			Expect(dynamicNoPersistence.Spec.Persistence.Enabled).Should(BeFalse())
+			Expect(dynamicNoPersistence.Spec.Persistence).Should(BeNil())
 
 			dynamicWithPersistence := &marklogicv1.MarklogicGroup{}
 			Eventually(func() bool {

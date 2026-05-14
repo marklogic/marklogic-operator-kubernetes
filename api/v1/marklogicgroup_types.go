@@ -72,7 +72,6 @@ type MarklogicGroupSpec struct {
 	// +kubebuilder:default:=false
 	IsDynamic bool `json:"isDynamic,omitempty"`
 	// +optional
-	// +kubebuilder:default:={tokenDuration: "PT15M"}
 	Dynamic                        *DynamicGroupConfig             `json:"dynamic,omitempty"`
 	License                        *License                        `json:"license,omitempty"`
 	EnableConverters               bool                            `json:"enableConverters,omitempty"`

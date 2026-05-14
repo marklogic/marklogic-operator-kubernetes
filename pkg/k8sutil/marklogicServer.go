@@ -328,7 +328,7 @@ func generateMarkLogicGroupParams(cr *marklogicv1.MarklogicCluster, index int, c
 		if cr.Spec.MarkLogicGroups[index].Persistence != nil {
 			markLogicGroupParameters.Persistence = cr.Spec.MarkLogicGroups[index].Persistence
 		} else {
-			markLogicGroupParameters.Persistence = &marklogicv1.Persistence{Enabled: false}
+			markLogicGroupParameters.Persistence = nil
 		}
 	}
 
