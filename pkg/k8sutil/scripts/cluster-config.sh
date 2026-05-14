@@ -11,6 +11,11 @@ HOSTNAME=$(cat /etc/hostname)
 HOST_FQDN="${HOSTNAME}.${MARKLOGIC_FQDN_SUFFIX}"
 ML_KUBERNETES_FILE_PATH="/var/opt/MarkLogic/Kubernetes"
 
+if [[ "${MARKLOGIC_DYNAMIC_HOST}" == "true" ]]; then
+    echo "$(date +"%Y-%m-%d %T.%3N") [cluster-config] Info: Dynamic host mode enabled. Skipping static bootstrap/join path."
+    exit 0
+fi
+
 # HTTP_PROTOCOL could be http or https 
 HTTP_PROTOCOL="http"
 HTTPS_OPTION=""

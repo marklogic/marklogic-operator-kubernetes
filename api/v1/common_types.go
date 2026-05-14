@@ -30,6 +30,11 @@ const (
 	VolumeResizeStrategySequential VolumeResizeStrategy = "sequential"
 )
 
+type DynamicGroupConfig struct {
+	// +kubebuilder:default:="PT15M"
+	TokenDuration string `json:"tokenDuration,omitempty"`
+}
+
 // Storage is the inteface to add pvc and pv support in marklogic
 type Persistence struct {
 	Enabled bool `json:"enabled,omitempty"`

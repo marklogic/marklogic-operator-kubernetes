@@ -89,6 +89,8 @@ type MarklogicClusterSpec struct {
 	MarkLogicGroups []*MarklogicGroups `json:"markLogicGroups,omitempty"`
 }
 
+// +kubebuilder:validation:XValidation:rule="!has(self.dynamic) || self.isDynamic == true", message="dynamic can only be set when isDynamic is true"
+// +kubebuilder:validation:XValidation:rule="!(self.isDynamic == true && self.isBootstrap == true)", message="isDynamic cannot be set when isBootstrap is true"
 type MarklogicGroups struct {
 	// +kubebuilder:default:=1
 	Replicas *int32 `json:"replicas,omitempty"`
@@ -116,7 +118,12 @@ type MarklogicGroups struct {
 	LogCollection  *LogCollection `json:"logCollection,omitempty"`
 	HAProxy        *HAProxyGroup  `json:"haproxy,omitempty"`
 	// +kubebuilder:default:=false
-	IsBootstrap                    bool                            `json:"isBootstrap,omitempty"`
+	IsBootstrap bool `json:"isBootstrap,omitempty"`
+	// +kubebuilder:default:=false
+	IsDynamic bool `json:"isDynamic,omitempty"`
+	// +optional
+	// +kubebuilder:default:={tokenDuration: "PT15M"}
+	Dynamic                        *DynamicGroupConfig             `json:"dynamic,omitempty"`
 	Tls                            *Tls                            `json:"tls,omitempty"`
 	AdditionalVolumes              *[]corev1.Volume                `json:"additionalVolumes,omitempty"`
 	AdditionalVolumeMounts         *[]corev1.VolumeMount           `json:"additionalVolumeMounts,omitempty"`

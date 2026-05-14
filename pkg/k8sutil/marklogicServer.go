@@ -47,6 +47,8 @@ type MarkLogicGroupParameters struct {
 	PodSecurityContext             *corev1.PodSecurityContext
 	ContainerSecurityContext       *corev1.SecurityContext
 	IsBootstrap                    bool
+	IsDynamic                      bool
+	Dynamic                        *marklogicv1.DynamicGroupConfig
 	LogCollection                  *marklogicv1.LogCollection
 	PathBasedRouting               bool
 	Tls                            *marklogicv1.Tls
@@ -61,6 +63,7 @@ type MarkLogicClusterParameters struct {
 	Replicas                       *int32
 	Name                           string
 	ServiceAccountName             string
+	UpdateStrategy                 appsv1.StatefulSetUpdateStrategyType
 	Image                          string
 	ImagePullPolicy                string
 	ImagePullSecrets               []corev1.LocalObjectReference
@@ -108,6 +111,7 @@ func (cc *ClusterContext) GenerateMarkLogicGroupDef(cr *marklogicv1.MarklogicClu
 			annotations[key] = value
 		}
 	}
+	labels["app.kubernetes.io/component"] = getMarkLogicComponentLabel(params.IsDynamic)
 	objectMeta := generateObjectMeta(cr.Spec.MarkLogicGroups[index].Name, cr.Namespace, labels, annotations)
 	bootStrapHostName := ""
 	bootStrapName := ""
@@ -141,6 +145,8 @@ func (cc *ClusterContext) GenerateMarkLogicGroupDef(cr *marklogicv1.MarklogicClu
 			BootstrapHost:                  bootStrapHostName,
 			Resources:                      params.Resources,
 			EnableConverters:               params.EnableConverters,
+			IsDynamic:                      params.IsDynamic,
+			Dynamic:                        params.Dynamic,
 			PriorityClassName:              params.PriorityClassName,
 			ClusterDomain:                  params.ClusterDomain,
 			UpdateStrategy:                 params.UpdateStrategy,
@@ -237,6 +243,7 @@ func (cc *ClusterContext) ReconsileMarklogicCluster() (reconcile.Result, error) 
 func generateMarkLogicClusterParams(cr *marklogicv1.MarklogicCluster) *MarkLogicClusterParameters {
 	markLogicClusterParameters := &MarkLogicClusterParameters{
 		Name:                           cr.ObjectMeta.Name,
+		UpdateStrategy:                 cr.Spec.UpdateStrategy,
 		Image:                          cr.Spec.Image,
 		ImagePullPolicy:                cr.Spec.ImagePullPolicy,
 		ImagePullSecrets:               cr.Spec.ImagePullSecrets,
@@ -295,6 +302,7 @@ func generateMarkLogicGroupParams(cr *marklogicv1.MarklogicCluster, index int, c
 		TerminationGracePeriodSeconds:  clusterParams.TerminationGracePeriodSeconds,
 		Resources:                      clusterParams.Resources,
 		EnableConverters:               clusterParams.EnableConverters,
+		UpdateStrategy:                 clusterParams.UpdateStrategy,
 		PriorityClassName:              clusterParams.PriorityClassName,
 		ClusterDomain:                  clusterParams.ClusterDomain,
 		Affinity:                       clusterParams.Affinity,
@@ -306,12 +314,22 @@ func generateMarkLogicGroupParams(cr *marklogicv1.MarklogicCluster, index int, c
 		PodSecurityContext:             clusterParams.PodSecurityContext,
 		ContainerSecurityContext:       clusterParams.ContainerSecurityContext,
 		IsBootstrap:                    cr.Spec.MarkLogicGroups[index].IsBootstrap,
+		IsDynamic:                      cr.Spec.MarkLogicGroups[index].IsDynamic,
+		Dynamic:                        cr.Spec.MarkLogicGroups[index].Dynamic,
 		LogCollection:                  clusterParams.LogCollection,
 		PathBasedRouting:               clusterParams.PathBasedRouting,
 		Tls:                            clusterParams.Tls,
 		AdditionalVolumeMounts:         clusterParams.AdditionalVolumeMounts,
 		AdditionalVolumes:              clusterParams.AdditionalVolumes,
 		AdditionalVolumeClaimTemplates: clusterParams.AdditionalVolumeClaimTemplates,
+	}
+	if markLogicGroupParameters.IsDynamic {
+		markLogicGroupParameters.UpdateStrategy = appsv1.RollingUpdateStatefulSetStrategyType
+		if cr.Spec.MarkLogicGroups[index].Persistence != nil {
+			markLogicGroupParameters.Persistence = cr.Spec.MarkLogicGroups[index].Persistence
+		} else {
+			markLogicGroupParameters.Persistence = &marklogicv1.Persistence{Enabled: false}
+		}
 	}
 
 	if cr.Spec.MarkLogicGroups[index].AdditionalVolumeClaimTemplates != nil {

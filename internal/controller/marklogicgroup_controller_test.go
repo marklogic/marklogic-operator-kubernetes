@@ -168,6 +168,11 @@ var _ = Describe("MarkLogicGroup controller", func() {
 			Expect(sts.Spec.Replicas).Should(Equal(&replicas))
 			Expect(sts.Name).Should(Equal(Name))
 			Expect(sts.Spec.PodManagementPolicy).Should(Equal(appsv1.ParallelPodManagement))
+			Expect(sts.Spec.Selector.MatchLabels["app.kubernetes.io/component"]).Should(Equal("database"))
+			Expect(sts.Spec.Template.Labels["app.kubernetes.io/component"]).Should(Equal("database"))
+			Expect(sts.Spec.Template.Spec.Containers[0].ReadinessProbe.Exec).ShouldNot(BeNil())
+			Expect(sts.Spec.Template.Spec.Containers[0].ReadinessProbe.TCPSocket).Should(BeNil())
+			Expect(findEnvVar(sts.Spec.Template.Spec.Containers[0].Env, "MARKLOGIC_DYNAMIC_HOST")).Should(BeNil())
 
 			// Validating if headless Service is created successfully
 			createdSrv := &corev1.Service{}
@@ -176,6 +181,8 @@ var _ = Describe("MarkLogicGroup controller", func() {
 				return err == nil
 			}, timeout, interval).Should(BeTrue())
 			Expect(createdSrv.Spec.Ports[0].TargetPort).Should(Equal(intstr.FromInt(int(7997))))
+			Expect(createdSrv.Spec.Selector["app.kubernetes.io/component"]).Should(Equal("database"))
+			Expect(createdSrv.Labels["app.kubernetes.io/component"]).Should(Equal("database"))
 
 			// Validating if Service is created successfully
 			createdClusterSrv := &corev1.Service{}
@@ -186,7 +193,74 @@ var _ = Describe("MarkLogicGroup controller", func() {
 			}, timeout, interval).Should(BeTrue())
 			Expect(createdClusterSrv.Name).Should(Equal(svcName))
 			Expect(createdClusterSrv.Spec.Type).Should(Equal(corev1.ServiceTypeClusterIP))
+			Expect(createdClusterSrv.Spec.Selector["app.kubernetes.io/component"]).Should(Equal("database"))
+			Expect(createdClusterSrv.Labels["app.kubernetes.io/component"]).Should(Equal("database"))
 
+		})
+
+		It("Should render dynamic group StatefulSet and Services with dynamic-host identity", func() {
+			dynamicNamespace := "testns-dynamic"
+			dynamicName := "dynamic-group"
+			dynamicTypeNamespaceName := types.NamespacedName{Name: dynamicName, Namespace: dynamicNamespace}
+			dynamicClusterServiceName := dynamicName + "-cluster"
+			dynamicClusterServiceNsName := types.NamespacedName{Name: dynamicClusterServiceName, Namespace: dynamicNamespace}
+
+			ns := corev1.Namespace{
+				ObjectMeta: metav1.ObjectMeta{Name: dynamicNamespace},
+			}
+			Expect(k8sClient.Create(ctx, &ns)).Should(Succeed())
+
+			mlGroup := &marklogicv1.MarklogicGroup{
+				TypeMeta: metav1.TypeMeta{
+					Kind:       "MarklogicGroup",
+					APIVersion: "marklogic.progress.com/v1",
+				},
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      dynamicName,
+					Namespace: dynamicNamespace,
+				},
+				Spec: marklogicv1.MarklogicGroupSpec{
+					Replicas:       &replicas,
+					Name:           dynamicName,
+					Image:          imageName,
+					ClusterDomain:  "cluster.local",
+					GroupConfig:    groupConfig,
+					IsDynamic:      true,
+					UpdateStrategy: appsv1.RollingUpdateStatefulSetStrategyType,
+					Service:        marklogicv1.Service{Type: corev1.ServiceTypeClusterIP},
+				},
+			}
+			Expect(k8sClient.Create(ctx, mlGroup)).Should(Succeed())
+
+			dynamicSts := &appsv1.StatefulSet{}
+			Eventually(func() bool {
+				err := k8sClient.Get(ctx, dynamicTypeNamespaceName, dynamicSts)
+				return err == nil
+			}, timeout, interval).Should(BeTrue())
+			Expect(dynamicSts.Spec.Selector.MatchLabels["app.kubernetes.io/component"]).Should(Equal("dynamic-host"))
+			Expect(dynamicSts.Spec.Template.Labels["app.kubernetes.io/component"]).Should(Equal("dynamic-host"))
+			Expect(dynamicSts.Spec.Template.Spec.Containers[0].ReadinessProbe.TCPSocket).ShouldNot(BeNil())
+			Expect(dynamicSts.Spec.Template.Spec.Containers[0].ReadinessProbe.Exec).Should(BeNil())
+			Expect(dynamicSts.Spec.Template.Spec.Containers[0].ReadinessProbe.TCPSocket.Port.IntVal).Should(Equal(int32(8001)))
+			dynamicEnv := findEnvVar(dynamicSts.Spec.Template.Spec.Containers[0].Env, "MARKLOGIC_DYNAMIC_HOST")
+			Expect(dynamicEnv).ShouldNot(BeNil())
+			Expect(dynamicEnv.Value).Should(Equal("true"))
+
+			dynamicHeadlessService := &corev1.Service{}
+			Eventually(func() bool {
+				err := k8sClient.Get(ctx, dynamicTypeNamespaceName, dynamicHeadlessService)
+				return err == nil
+			}, timeout, interval).Should(BeTrue())
+			Expect(dynamicHeadlessService.Spec.Selector["app.kubernetes.io/component"]).Should(Equal("dynamic-host"))
+			Expect(dynamicHeadlessService.Labels["app.kubernetes.io/component"]).Should(Equal("dynamic-host"))
+
+			dynamicClusterService := &corev1.Service{}
+			Eventually(func() bool {
+				err := k8sClient.Get(ctx, dynamicClusterServiceNsName, dynamicClusterService)
+				return err == nil
+			}, timeout, interval).Should(BeTrue())
+			Expect(dynamicClusterService.Spec.Selector["app.kubernetes.io/component"]).Should(Equal("dynamic-host"))
+			Expect(dynamicClusterService.Labels["app.kubernetes.io/component"]).Should(Equal("dynamic-host"))
 		})
 
 		It("Should create configmap for MarkLogic scripts", func() {
@@ -388,4 +462,13 @@ func newPersistentPVC(namespace, groupName, size string) *corev1.PersistentVolum
 			},
 		},
 	}
+}
+
+func findEnvVar(envVars []corev1.EnvVar, envName string) *corev1.EnvVar {
+	for i := range envVars {
+		if envVars[i].Name == envName {
+			return &envVars[i]
+		}
+	}
+	return nil
 }

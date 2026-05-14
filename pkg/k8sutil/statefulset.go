@@ -23,6 +23,7 @@ import (
 type statefulSetParameters struct {
 	Replicas                       *int32
 	Name                           string
+	IsDynamic                      bool
 	PersistentVolumeClaim          corev1.PersistentVolumeClaim
 	ServiceName                    string
 	TerminationGracePeriodSeconds  *int64
@@ -63,6 +64,7 @@ type containerParameters struct {
 	AdditionalVolumes      *[]corev1.Volume
 	AdditionalVolumeMounts *[]corev1.VolumeMount
 	SecretName             string
+	IsDynamic              bool
 }
 
 func (oc *OperatorContext) ReconcileStatefulset() (reconcile.Result, error) {
@@ -70,9 +72,10 @@ func (oc *OperatorContext) ReconcileStatefulset() (reconcile.Result, error) {
 	logger := oc.ReqLogger
 	groupLabels := cr.Labels
 	if groupLabels == nil {
-		groupLabels = getSelectorLabels(cr.Spec.Name)
+		groupLabels = getSelectorLabelsByComponent(cr.Spec.Name, cr.Spec.IsDynamic)
 	}
 	groupLabels["app.kubernetes.io/instance"] = cr.Spec.Name
+	groupLabels["app.kubernetes.io/component"] = getMarkLogicComponentLabel(cr.Spec.IsDynamic)
 	groupAnnotations := cr.GetAnnotations()
 	delete(groupAnnotations, "banzaicloud.com/last-applied")
 	objectMeta := generateObjectMeta(cr.Spec.Name, cr.Namespace, groupLabels, groupAnnotations)
@@ -206,7 +209,7 @@ func generateStatefulSetsDef(stsMeta metav1.ObjectMeta, params statefulSetParame
 		TypeMeta:   generateTypeMeta("StatefulSet", "apps/v1"),
 		ObjectMeta: stsMeta,
 		Spec: appsv1.StatefulSetSpec{
-			Selector:            LabelSelectors(getSelectorLabels(params.Name)),
+			Selector:            LabelSelectors(getSelectorLabelsByComponent(params.Name, params.IsDynamic)),
 			ServiceName:         stsMeta.Name,
 			Replicas:            params.Replicas,
 			PodManagementPolicy: appsv1.ParallelPodManagement,
@@ -340,7 +343,11 @@ func generateContainerDef(name string, containerParams containerParameters) []co
 	}
 
 	if containerParams.ReadinessProbe.Enabled {
-		containerDef[0].ReadinessProbe = getReadinessProbe(containerParams.ReadinessProbe)
+		if containerParams.IsDynamic {
+			containerDef[0].ReadinessProbe = getReadinessTCPProbe(containerParams.ReadinessProbe)
+		} else {
+			containerDef[0].ReadinessProbe = getReadinessProbe(containerParams.ReadinessProbe)
+		}
 	}
 
 	if containerParams.LogCollection != nil && containerParams.LogCollection.Enabled {
@@ -369,6 +376,7 @@ func generateStatefulSetsParams(cr *marklogicv1.MarklogicGroup) statefulSetParam
 	params := statefulSetParameters{
 		Replicas:                       cr.Spec.Replicas,
 		Name:                           cr.Spec.Name,
+		IsDynamic:                      cr.Spec.IsDynamic,
 		ServiceAccountName:             cr.Spec.ServiceAccountName,
 		AutomountServiceAccountToken:   &falseValue, // Always false for security
 		TerminationGracePeriodSeconds:  cr.Spec.TerminationGracePeriodSeconds,
@@ -406,6 +414,7 @@ func generateContainerParams(cr *marklogicv1.MarklogicGroup) containerParameters
 		AdditionalVolumes:      cr.Spec.AdditionalVolumes,
 		AdditionalVolumeMounts: cr.Spec.AdditionalVolumeMounts,
 		Persistence:            cr.Spec.Persistence,
+		IsDynamic:              cr.Spec.IsDynamic,
 	}
 
 	// Set SecretName with fallback to default if not specified
@@ -641,6 +650,13 @@ func getEnvironmentVariables(containerParams containerParameters) []corev1.EnvVa
 		})
 	}
 
+	if containerParams.IsDynamic {
+		envVars = append(envVars, corev1.EnvVar{
+			Name:  "MARKLOGIC_DYNAMIC_HOST",
+			Value: "true",
+		})
+	}
+
 	if containerParams.Tls != nil && containerParams.Tls.EnableOnDefaultAppServers {
 		envVars = append(envVars, corev1.EnvVar{
 			Name:  "MARKLOGIC_JOIN_TLS_ENABLED",
@@ -775,6 +791,24 @@ func getReadinessProbe(probe marklogicv1.ContainerProbe) *corev1.Probe {
 					// Only pass if MarkLogic is healthy AND the Wrapper finished successfully
 					// curl -f
 					"test -f /tmp/marklogic_ready && curl -s -f http://localhost:7997/",
+				},
+			},
+		},
+	}
+}
+
+func getReadinessTCPProbe(probe marklogicv1.ContainerProbe) *corev1.Probe {
+	return &corev1.Probe{
+		InitialDelaySeconds: probe.InitialDelaySeconds,
+		PeriodSeconds:       probe.PeriodSeconds,
+		FailureThreshold:    probe.FailureThreshold,
+		TimeoutSeconds:      probe.TimeoutSeconds,
+		SuccessThreshold:    probe.SuccessThreshold,
+		ProbeHandler: corev1.ProbeHandler{
+			TCPSocket: &corev1.TCPSocketAction{
+				Port: intstr.IntOrString{
+					Type:   intstr.Int,
+					IntVal: 8001,
 				},
 			},
 		},

@@ -25,6 +25,7 @@ import (
 // EDIT THIS FILE!  THIS IS SCAFFOLDING FOR YOU TO OWN!
 // NOTE: json tags are required.  Any new fields you add must have json tags for the fields to be serialized.
 
+// +kubebuilder:validation:XValidation:rule="!has(self.dynamic) || self.isDynamic == true", message="dynamic can only be set when isDynamic is true"
 // MarklogicGroupSpec defines the desired state of MarklogicGroup
 type MarklogicGroupSpec struct {
 	// +kubebuilder:default:=1
@@ -67,7 +68,12 @@ type MarklogicGroupSpec struct {
 	// +kubebuilder:default:={enabled: false, image: "fluent/fluent-bit:4.1.1", resources: {requests: {cpu: "100m", memory: "200Mi"}, limits: {cpu: "200m", memory: "500Mi"}}, files: {errorLogs: true, accessLogs: true, requestLogs: true}, outputs: "stdout"}
 	LogCollection *LogCollection `json:"logCollection,omitempty"`
 	// +kubebuilder:default:={name: "Default", enableXdqpSsl: true}
-	GroupConfig                    *GroupConfig                    `json:"groupConfig,omitempty"`
+	GroupConfig *GroupConfig `json:"groupConfig,omitempty"`
+	// +kubebuilder:default:=false
+	IsDynamic bool `json:"isDynamic,omitempty"`
+	// +optional
+	// +kubebuilder:default:={tokenDuration: "PT15M"}
+	Dynamic                        *DynamicGroupConfig             `json:"dynamic,omitempty"`
 	License                        *License                        `json:"license,omitempty"`
 	EnableConverters               bool                            `json:"enableConverters,omitempty"`
 	BootstrapHost                  string                          `json:"bootstrapHost,omitempty"`
@@ -202,6 +208,17 @@ type MarklogicGroupStatus struct {
 
 	// +optional
 	MarklogicGroupStatus InternalState `json:"markLogicGroupStatus,omitempty"`
+	// +optional
+	Dynamic *DynamicGroupStatus `json:"dynamic,omitempty"`
+}
+
+type DynamicGroupStatus struct {
+	Hosts []DynamicHostStatus `json:"hosts,omitempty"`
+}
+
+type DynamicHostStatus struct {
+	Name  string `json:"name,omitempty"`
+	Ready bool   `json:"ready,omitempty"`
 }
 
 func (status *MarklogicGroupStatus) SetCondition(condition metav1.Condition) {

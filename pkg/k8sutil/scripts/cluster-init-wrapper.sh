@@ -140,14 +140,18 @@ fi
 
 # --- Phase 5: Cluster Initialization ---
 echo "[Wrapper] Executing Cluster Init/Join Logic..."
-if [ -f "/tmp/helm-scripts/cluster-config.sh" ]; then
-    /bin/bash /tmp/helm-scripts/cluster-config.sh
-    if [ $? -ne 0 ]; then
-        echo "[Wrapper] ERROR: Initialization failed!"
-        exit 1
-    fi
+if [[ "${MARKLOGIC_DYNAMIC_HOST}" == "true" ]]; then
+    echo "[Wrapper] Dynamic host mode enabled; skipping static cluster init/join script."
 else
-    echo "[Wrapper] No init script found. Skipping."
+    if [ -f "/tmp/helm-scripts/cluster-config.sh" ]; then
+        /bin/bash /tmp/helm-scripts/cluster-config.sh
+        if [ $? -ne 0 ]; then
+            echo "[Wrapper] ERROR: Initialization failed!"
+            exit 1
+        fi
+    else
+        echo "[Wrapper] No init script found. Skipping."
+    fi
 fi
 
 # --- Phase 5.5: Stability Monitor ---

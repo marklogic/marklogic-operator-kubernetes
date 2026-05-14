@@ -48,12 +48,28 @@ func LabelSelectors(labels map[string]string) *metav1.LabelSelector {
 	return &metav1.LabelSelector{MatchLabels: labels}
 }
 
+const (
+	marklogicComponentDatabase    = "database"
+	marklogicComponentDynamicHost = "dynamic-host"
+)
+
+func getMarkLogicComponentLabel(isDynamic bool) string {
+	if isDynamic {
+		return marklogicComponentDynamicHost
+	}
+	return marklogicComponentDatabase
+}
+
 func getSelectorLabels(name string) map[string]string {
+	return getSelectorLabelsByComponent(name, false)
+}
+
+func getSelectorLabelsByComponent(name string, isDynamic bool) map[string]string {
 	selectorLabels := map[string]string{
 		"app.kubernetes.io/name":       "marklogic",
 		"app.kubernetes.io/instance":   name,
 		"app.kubernetes.io/managed-by": "marklogic-operator",
-		"app.kubernetes.io/component":  "database",
+		"app.kubernetes.io/component":  getMarkLogicComponentLabel(isDynamic),
 	}
 	return selectorLabels
 }

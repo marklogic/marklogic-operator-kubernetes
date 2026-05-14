@@ -8185,6 +8185,14 @@ spec:
                       additionalProperties:
                         type: string
                       type: object
+                    dynamic:
+                      default:
+                        tokenDuration: PT15M
+                      properties:
+                        tokenDuration:
+                          default: PT15M
+                          type: string
+                      type: object
                     groupConfig:
                       default:
                         enableXdqpSsl: true
@@ -8274,6 +8282,9 @@ spec:
                         x-kubernetes-map-type: atomic
                       type: array
                     isBootstrap:
+                      default: false
+                      type: boolean
+                    isDynamic:
                       default: false
                       type: boolean
                     labels:
@@ -8842,6 +8853,11 @@ spec:
                   required:
                   - name
                   type: object
+                  x-kubernetes-validations:
+                  - message: dynamic can only be set when isDynamic is true
+                    rule: '!has(self.dynamic) || self.isDynamic == true'
+                  - message: isDynamic cannot be set when isBootstrap is true
+                    rule: '!(self.isDynamic == true && self.isBootstrap == true)'
                 maxItems: 100
                 minItems: 1
                 type: array

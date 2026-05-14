@@ -3364,6 +3364,14 @@ spec:
                 type: string
               doNotDelete:
                 type: boolean
+              dynamic:
+                default:
+                  tokenDuration: PT15M
+                properties:
+                  tokenDuration:
+                    default: PT15M
+                    type: string
+                type: object
               enableConverters:
                 type: boolean
               groupConfig:
@@ -3413,6 +3421,9 @@ spec:
                   type: object
                   x-kubernetes-map-type: atomic
                 type: array
+              isDynamic:
+                default: false
+                type: boolean
               labels:
                 additionalProperties:
                   type: string
@@ -4888,6 +4899,9 @@ spec:
             required:
             - image
             type: object
+            x-kubernetes-validations:
+            - message: dynamic can only be set when isDynamic is true
+              rule: '!has(self.dynamic) || self.isDynamic == true'
           status:
             description: MarklogicGroupStatus defines the observed state of MarklogicGroup
             properties:
@@ -4996,6 +5010,18 @@ spec:
                   - type
                   type: object
                 type: array
+              dynamic:
+                properties:
+                  hosts:
+                    items:
+                      properties:
+                        name:
+                          type: string
+                        ready:
+                          type: boolean
+                      type: object
+                    type: array
+                type: object
               markLogicGroupStatus:
                 description: InternalState defines the observed state of MarklogicGroup
                 type: string
