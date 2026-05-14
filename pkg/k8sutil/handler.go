@@ -32,6 +32,15 @@ func (oc *OperatorContext) ReconsileMarklogicGroupHandler() (reconcile.Result, e
 	}
 
 	result, err := oc.ReconcileStatefulset()
+	if err != nil {
+		return result, err
+	}
+
+	if oc.MarklogicGroup.Spec.IsDynamic {
+		if dynamicResult := oc.ReconcileDynamicGroupConfig(); dynamicResult.Completed() {
+			return dynamicResult.Output()
+		}
+	}
 
 	return result, err
 }

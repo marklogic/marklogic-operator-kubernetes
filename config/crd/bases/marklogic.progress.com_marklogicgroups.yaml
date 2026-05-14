@@ -3365,6 +3365,8 @@ spec:
               doNotDelete:
                 type: boolean
               dynamic:
+                default:
+                  tokenDuration: PT15M
                 properties:
                   tokenDuration:
                     default: PT15M
@@ -5010,6 +5012,12 @@ spec:
                 type: array
               dynamic:
                 properties:
+                  bootstrapReady:
+                    type: boolean
+                  configured:
+                    type: boolean
+                  dynamicHostsEnabled:
+                    type: boolean
                   hosts:
                     items:
                       properties:
@@ -5019,6 +5027,12 @@ spec:
                           type: boolean
                       type: object
                     type: array
+                  message:
+                    type: string
+                  phase:
+                    type: string
+                  reason:
+                    type: string
                 type: object
               markLogicGroupStatus:
                 description: InternalState defines the observed state of MarklogicGroup

@@ -18,9 +18,14 @@ package controller
 
 import (
 	"context"
+	"errors"
+	"strings"
+	"sync"
 	"time"
 
 	marklogicv1 "github.com/marklogic/marklogic-operator-kubernetes/api/v1"
+	"github.com/marklogic/marklogic-operator-kubernetes/pkg/k8sutil"
+	"github.com/marklogic/marklogic-operator-kubernetes/pkg/mlmanage"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	appsv1 "k8s.io/api/apps/v1"
@@ -98,11 +103,11 @@ var _ = Describe("MarkLogicGroup controller", func() {
 					Replicas:                  &replicas,
 					Name:                      Name,
 					Image:                     imageName,
+					ReadinessProbe:            marklogicv1.ContainerProbe{Enabled: true},
 					GroupConfig:               groupConfig,
 					EnableConverters:          true,
 					HugePages:                 &hugePages,
 					UpdateStrategy:            "OnDelete",
-					ReadinessProbe:            marklogicv1.ContainerProbe{Enabled: true, InitialDelaySeconds: 10, TimeoutSeconds: 5, PeriodSeconds: 30, SuccessThreshold: 1, FailureThreshold: 3},
 					Resources:                 &corev1.ResourceRequirements{Requests: corev1.ResourceList{"cpu": resource.MustParse("100m"), "memory": resource.MustParse("256Mi"), "hugepages-2Mi": resource.MustParse("100Mi")}, Limits: corev1.ResourceList{"cpu": resource.MustParse("100m"), "memory": resource.MustParse("256Mi"), "hugepages-2Mi": resource.MustParse("100Mi")}},
 					PriorityClassName:         "high-priority",
 					ClusterDomain:             "cluster.local",
@@ -171,8 +176,10 @@ var _ = Describe("MarkLogicGroup controller", func() {
 			Expect(sts.Spec.PodManagementPolicy).Should(Equal(appsv1.ParallelPodManagement))
 			Expect(sts.Spec.Selector.MatchLabels["app.kubernetes.io/component"]).Should(Equal("database"))
 			Expect(sts.Spec.Template.Labels["app.kubernetes.io/component"]).Should(Equal("database"))
-			Expect(sts.Spec.Template.Spec.Containers[0].ReadinessProbe.Exec).ShouldNot(BeNil())
-			Expect(sts.Spec.Template.Spec.Containers[0].ReadinessProbe.TCPSocket).Should(BeNil())
+			staticReadinessProbe := sts.Spec.Template.Spec.Containers[0].ReadinessProbe
+			Expect(staticReadinessProbe).ShouldNot(BeNil())
+			Expect(staticReadinessProbe.Exec).ShouldNot(BeNil())
+			Expect(staticReadinessProbe.TCPSocket).Should(BeNil())
 			Expect(findEnvVar(sts.Spec.Template.Spec.Containers[0].Env, "MARKLOGIC_DYNAMIC_HOST")).Should(BeNil())
 
 			// Validating if headless Service is created successfully
@@ -224,10 +231,10 @@ var _ = Describe("MarkLogicGroup controller", func() {
 					Replicas:       &replicas,
 					Name:           dynamicName,
 					Image:          imageName,
+					ReadinessProbe: marklogicv1.ContainerProbe{Enabled: true},
 					ClusterDomain:  "cluster.local",
 					GroupConfig:    groupConfig,
 					IsDynamic:      true,
-					ReadinessProbe: marklogicv1.ContainerProbe{Enabled: true, InitialDelaySeconds: 10, TimeoutSeconds: 5, PeriodSeconds: 30, SuccessThreshold: 1, FailureThreshold: 3},
 					UpdateStrategy: appsv1.RollingUpdateStatefulSetStrategyType,
 					Service:        marklogicv1.Service{Type: corev1.ServiceTypeClusterIP},
 				},
@@ -241,9 +248,11 @@ var _ = Describe("MarkLogicGroup controller", func() {
 			}, timeout, interval).Should(BeTrue())
 			Expect(dynamicSts.Spec.Selector.MatchLabels["app.kubernetes.io/component"]).Should(Equal("dynamic-host"))
 			Expect(dynamicSts.Spec.Template.Labels["app.kubernetes.io/component"]).Should(Equal("dynamic-host"))
-			Expect(dynamicSts.Spec.Template.Spec.Containers[0].ReadinessProbe.TCPSocket).ShouldNot(BeNil())
-			Expect(dynamicSts.Spec.Template.Spec.Containers[0].ReadinessProbe.Exec).Should(BeNil())
-			Expect(dynamicSts.Spec.Template.Spec.Containers[0].ReadinessProbe.TCPSocket.Port.IntVal).Should(Equal(int32(8001)))
+			dynamicReadinessProbe := dynamicSts.Spec.Template.Spec.Containers[0].ReadinessProbe
+			Expect(dynamicReadinessProbe).ShouldNot(BeNil())
+			Expect(dynamicReadinessProbe.TCPSocket).ShouldNot(BeNil())
+			Expect(dynamicReadinessProbe.Exec).Should(BeNil())
+			Expect(dynamicReadinessProbe.TCPSocket.Port.IntVal).Should(Equal(int32(8001)))
 			dynamicEnv := findEnvVar(dynamicSts.Spec.Template.Spec.Containers[0].Env, "MARKLOGIC_DYNAMIC_HOST")
 			Expect(dynamicEnv).ShouldNot(BeNil())
 			Expect(dynamicEnv.Value).Should(Equal("true"))
@@ -263,6 +272,206 @@ var _ = Describe("MarkLogicGroup controller", func() {
 			}, timeout, interval).Should(BeTrue())
 			Expect(dynamicClusterService.Spec.Selector["app.kubernetes.io/component"]).Should(Equal("dynamic-host"))
 			Expect(dynamicClusterService.Labels["app.kubernetes.io/component"]).Should(Equal("dynamic-host"))
+		})
+
+		It("Should keep static groups on static reconcile path", func() {
+			staticNamespace := "testns-static-branch"
+			staticName := "static-branch-group"
+			staticNsName := types.NamespacedName{Name: staticName, Namespace: staticNamespace}
+
+			factoryCallCount := 0
+			originalFactory := k8sutil.NewDynamicManagementClient
+			k8sutil.NewDynamicManagementClient = func(opts mlmanage.ClientOptions) mlmanage.Client {
+				if strings.Contains(opts.Host, staticName) {
+					factoryCallCount++
+				}
+				return &fakeDynamicManagementClient{}
+			}
+			defer func() { k8sutil.NewDynamicManagementClient = originalFactory }()
+
+			ns := corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: staticNamespace}}
+			Expect(k8sClient.Create(ctx, &ns)).Should(Succeed())
+
+			mlGroup := &marklogicv1.MarklogicGroup{
+				TypeMeta:   metav1.TypeMeta{Kind: "MarklogicGroup", APIVersion: "marklogic.progress.com/v1"},
+				ObjectMeta: metav1.ObjectMeta{Name: staticName, Namespace: staticNamespace},
+				Spec: marklogicv1.MarklogicGroupSpec{
+					Replicas: &replicas,
+					Name:     staticName,
+					Image:    imageName,
+				},
+			}
+			Expect(k8sClient.Create(ctx, mlGroup)).Should(Succeed())
+
+			sts := &appsv1.StatefulSet{}
+			Eventually(func() bool {
+				err := k8sClient.Get(ctx, staticNsName, sts)
+				return err == nil
+			}, timeout, interval).Should(BeTrue())
+			Expect(factoryCallCount).Should(Equal(0))
+		})
+
+		It("Should transition dynamic group to degraded when bootstrap is not ready", func() {
+			dynamicNamespace := "testns-dynamic-bootstrap-degraded"
+			dynamicName := "dynamic-bootstrap-degraded"
+			clusterName := "cluster-bootstrap-degraded"
+			adminSecretName := clusterName + "-admin"
+			dynamicNsName := types.NamespacedName{Name: dynamicName, Namespace: dynamicNamespace}
+
+			behavior := &fakeDynamicManagementBehavior{listHostsErr: errors.New("connection refused")}
+			originalFactory := k8sutil.NewDynamicManagementClient
+			k8sutil.NewDynamicManagementClient = func(opts mlmanage.ClientOptions) mlmanage.Client {
+				return &fakeDynamicManagementClient{behavior: behavior}
+			}
+			defer func() { k8sutil.NewDynamicManagementClient = originalFactory }()
+
+			ns := corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: dynamicNamespace}}
+			Expect(k8sClient.Create(ctx, &ns)).Should(Succeed())
+			adminSecret := &corev1.Secret{
+				ObjectMeta: metav1.ObjectMeta{Name: adminSecretName, Namespace: dynamicNamespace},
+				Data:       map[string][]byte{"username": []byte("admin"), "password": []byte("admin-password")},
+			}
+			Expect(k8sClient.Create(ctx, adminSecret)).Should(Succeed())
+
+			mlGroup := &marklogicv1.MarklogicGroup{
+				TypeMeta:   metav1.TypeMeta{Kind: "MarklogicGroup", APIVersion: "marklogic.progress.com/v1"},
+				ObjectMeta: metav1.ObjectMeta{Name: dynamicName, Namespace: dynamicNamespace},
+				Spec: marklogicv1.MarklogicGroupSpec{
+					Replicas:      &replicas,
+					Name:          dynamicName,
+					Image:         imageName,
+					ClusterDomain: "cluster.local",
+					GroupConfig:   &marklogicv1.GroupConfig{Name: "DynamicEval", EnableXdqpSsl: true},
+					IsDynamic:     true,
+					BootstrapHost: "bootstrap-0.bootstrap.svc.cluster.local",
+					SecretName:    adminSecretName,
+				},
+			}
+			Expect(k8sClient.Create(ctx, mlGroup)).Should(Succeed())
+
+			createdCR := &marklogicv1.MarklogicGroup{}
+			Eventually(func() bool {
+				err := k8sClient.Get(ctx, dynamicNsName, createdCR)
+				if err != nil || createdCR.Status.Dynamic == nil {
+					return false
+				}
+				return createdCR.Status.Dynamic.Phase == "degraded" && createdCR.Status.Dynamic.Reason == "BootstrapNotReady"
+			}, timeout, interval).Should(BeTrue())
+		})
+
+		It("Should transition dynamic group to failed for unsupported bootstrap version", func() {
+			dynamicNamespace := "testns-dynamic-version-failed"
+			dynamicName := "dynamic-version-failed"
+			clusterName := "cluster-version-failed"
+			adminSecretName := clusterName + "-admin"
+			dynamicNsName := types.NamespacedName{Name: dynamicName, Namespace: dynamicNamespace}
+
+			behavior := &fakeDynamicManagementBehavior{hosts: []mlmanage.HostStatus{{Name: "bootstrap", Online: true, Version: "11.0-1"}}}
+			originalFactory := k8sutil.NewDynamicManagementClient
+			k8sutil.NewDynamicManagementClient = func(opts mlmanage.ClientOptions) mlmanage.Client {
+				return &fakeDynamicManagementClient{behavior: behavior}
+			}
+			defer func() { k8sutil.NewDynamicManagementClient = originalFactory }()
+
+			ns := corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: dynamicNamespace}}
+			Expect(k8sClient.Create(ctx, &ns)).Should(Succeed())
+			adminSecret := &corev1.Secret{
+				ObjectMeta: metav1.ObjectMeta{Name: adminSecretName, Namespace: dynamicNamespace},
+				Data:       map[string][]byte{"username": []byte("admin"), "password": []byte("admin-password")},
+			}
+			Expect(k8sClient.Create(ctx, adminSecret)).Should(Succeed())
+
+			mlGroup := &marklogicv1.MarklogicGroup{
+				TypeMeta:   metav1.TypeMeta{Kind: "MarklogicGroup", APIVersion: "marklogic.progress.com/v1"},
+				ObjectMeta: metav1.ObjectMeta{Name: dynamicName, Namespace: dynamicNamespace},
+				Spec: marklogicv1.MarklogicGroupSpec{
+					Replicas:      &replicas,
+					Name:          dynamicName,
+					Image:         imageName,
+					ClusterDomain: "cluster.local",
+					GroupConfig:   &marklogicv1.GroupConfig{Name: "DynamicEval", EnableXdqpSsl: true},
+					IsDynamic:     true,
+					BootstrapHost: "bootstrap-0.bootstrap.svc.cluster.local",
+					SecretName:    adminSecretName,
+				},
+			}
+			Expect(k8sClient.Create(ctx, mlGroup)).Should(Succeed())
+
+			createdCR := &marklogicv1.MarklogicGroup{}
+			Eventually(func() bool {
+				err := k8sClient.Get(ctx, dynamicNsName, createdCR)
+				if err != nil || createdCR.Status.Dynamic == nil {
+					return false
+				}
+				return createdCR.Status.Dynamic.Phase == "failed" && createdCR.Status.Dynamic.Reason == "InvalidConfiguration"
+			}, timeout, interval).Should(BeTrue())
+		})
+
+		It("Should configure dynamic group and record management call order", func() {
+			dynamicNamespace := "testns-dynamic-configured"
+			dynamicName := "dynamic-configured"
+			clusterName := "cluster-configured"
+			adminSecretName := clusterName + "-admin"
+			dynamicSecretName := clusterName + "-manage-admin"
+			dynamicNsName := types.NamespacedName{Name: dynamicName, Namespace: dynamicNamespace}
+
+			calls := []string{}
+			callsMu := &sync.Mutex{}
+			behavior := &fakeDynamicManagementBehavior{
+				hosts:     []mlmanage.HostStatus{{Name: "bootstrap", Online: true, Version: "12.0-1"}},
+				groupInfo: mlmanage.GroupInfo{Exists: false},
+			}
+			originalFactory := k8sutil.NewDynamicManagementClient
+			k8sutil.NewDynamicManagementClient = func(opts mlmanage.ClientOptions) mlmanage.Client {
+				return &fakeDynamicManagementClient{behavior: behavior, calls: &calls, callsMu: callsMu}
+			}
+			defer func() { k8sutil.NewDynamicManagementClient = originalFactory }()
+
+			ns := corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: dynamicNamespace}}
+			Expect(k8sClient.Create(ctx, &ns)).Should(Succeed())
+			adminSecret := &corev1.Secret{
+				ObjectMeta: metav1.ObjectMeta{Name: adminSecretName, Namespace: dynamicNamespace},
+				Data:       map[string][]byte{"username": []byte("admin"), "password": []byte("admin-password")},
+			}
+			Expect(k8sClient.Create(ctx, adminSecret)).Should(Succeed())
+
+			mlGroup := &marklogicv1.MarklogicGroup{
+				TypeMeta:   metav1.TypeMeta{Kind: "MarklogicGroup", APIVersion: "marklogic.progress.com/v1"},
+				ObjectMeta: metav1.ObjectMeta{Name: dynamicName, Namespace: dynamicNamespace},
+				Spec: marklogicv1.MarklogicGroupSpec{
+					Replicas:      &replicas,
+					Name:          dynamicName,
+					Image:         imageName,
+					ClusterDomain: "cluster.local",
+					GroupConfig:   &marklogicv1.GroupConfig{Name: "DynamicEval", EnableXdqpSsl: true},
+					IsDynamic:     true,
+					BootstrapHost: "bootstrap-0.bootstrap.svc.cluster.local",
+					SecretName:    adminSecretName,
+				},
+			}
+			Expect(k8sClient.Create(ctx, mlGroup)).Should(Succeed())
+
+			createdCR := &marklogicv1.MarklogicGroup{}
+			Eventually(func() bool {
+				err := k8sClient.Get(ctx, dynamicNsName, createdCR)
+				if err != nil || createdCR.Status.Dynamic == nil {
+					return false
+				}
+				return createdCR.Status.Dynamic.Phase == "configured" && createdCR.Status.Dynamic.DynamicHostsEnabled && createdCR.Status.Dynamic.Configured
+			}, timeout, interval).Should(BeTrue())
+
+			dynamicSecret := &corev1.Secret{}
+			Eventually(func() bool {
+				err := k8sClient.Get(ctx, types.NamespacedName{Name: dynamicSecretName, Namespace: dynamicNamespace}, dynamicSecret)
+				return err == nil
+			}, timeout, interval).Should(BeTrue())
+
+			Eventually(func() bool {
+				callsMu.Lock()
+				defer callsMu.Unlock()
+				expected := []string{"ListHostsStatus", "EnsureManageAdminUser", "GetGroup", "CreateGroup", "EnableDynamicHosts", "EnableAdminAPITokenAuthentication"}
+				return hasOrderedSubsequence(calls, expected)
+			}, timeout, interval).Should(BeTrue())
 		})
 
 		It("Should create configmap for MarkLogic scripts", func() {
@@ -473,4 +682,94 @@ func findEnvVar(envVars []corev1.EnvVar, envName string) *corev1.EnvVar {
 		}
 	}
 	return nil
+}
+
+type fakeDynamicManagementBehavior struct {
+	hosts            []mlmanage.HostStatus
+	listHostsErr     error
+	groupInfo        mlmanage.GroupInfo
+	getGroupErr      error
+	createGroupErr   error
+	enableDynamicErr error
+	enableTokenErr   error
+	ensureUserErr    error
+}
+
+type fakeDynamicManagementClient struct {
+	behavior *fakeDynamicManagementBehavior
+	calls    *[]string
+	callsMu  *sync.Mutex
+}
+
+func (f *fakeDynamicManagementClient) record(name string) {
+	if f.calls == nil || f.callsMu == nil {
+		return
+	}
+	f.callsMu.Lock()
+	defer f.callsMu.Unlock()
+	*f.calls = append(*f.calls, name)
+}
+
+func (f *fakeDynamicManagementClient) ListHostsStatus(ctx context.Context) ([]mlmanage.HostStatus, error) {
+	f.record("ListHostsStatus")
+	if f.behavior == nil {
+		return nil, nil
+	}
+	return f.behavior.hosts, f.behavior.listHostsErr
+}
+
+func (f *fakeDynamicManagementClient) GetGroup(ctx context.Context, groupName string) (mlmanage.GroupInfo, error) {
+	f.record("GetGroup")
+	if f.behavior == nil {
+		return mlmanage.GroupInfo{Exists: false}, nil
+	}
+	return f.behavior.groupInfo, f.behavior.getGroupErr
+}
+
+func (f *fakeDynamicManagementClient) CreateGroup(ctx context.Context, groupName string) error {
+	f.record("CreateGroup")
+	if f.behavior == nil {
+		return nil
+	}
+	return f.behavior.createGroupErr
+}
+
+func (f *fakeDynamicManagementClient) EnableDynamicHosts(ctx context.Context, groupName string) error {
+	f.record("EnableDynamicHosts")
+	if f.behavior == nil {
+		return nil
+	}
+	return f.behavior.enableDynamicErr
+}
+
+func (f *fakeDynamicManagementClient) EnableAdminAPITokenAuthentication(ctx context.Context, groupName string) error {
+	f.record("EnableAdminAPITokenAuthentication")
+	if f.behavior == nil {
+		return nil
+	}
+	return f.behavior.enableTokenErr
+}
+
+func (f *fakeDynamicManagementClient) EnsureManageAdminUser(ctx context.Context, username, password string) error {
+	f.record("EnsureManageAdminUser")
+	if f.behavior == nil {
+		return nil
+	}
+	return f.behavior.ensureUserErr
+}
+
+func hasOrderedSubsequence(calls []string, expected []string) bool {
+	if len(expected) == 0 {
+		return true
+	}
+	idx := 0
+	for _, call := range calls {
+		if call == expected[idx] {
+			idx++
+			if idx == len(expected) {
+				return true
+			}
+		}
+	}
+	return false
 }

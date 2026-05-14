@@ -3,12 +3,15 @@
 package k8sutil
 
 import (
+	marklogicv1 "github.com/marklogic/marklogic-operator-kubernetes/api/v1"
 	"github.com/marklogic/marklogic-operator-kubernetes/pkg/result"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 )
+
+const dynamicCredentialSecretSuffix = "-manage-admin"
 
 func (cc *ClusterContext) ReconcileSecret() result.ReconcileResult {
 	logger := cc.ReqLogger
@@ -46,6 +49,68 @@ func (cc *ClusterContext) ReconcileSecret() result.ReconcileResult {
 		}
 	}
 
+	if hasDynamicGroups(mlc.Spec.MarkLogicGroups) {
+		if dynamicSecretResult := cc.reconcileDynamicCredentialSecret(mlc.ObjectMeta.Name); dynamicSecretResult.Completed() {
+			return dynamicSecretResult
+		}
+	}
+
+	return result.Continue()
+}
+
+func hasDynamicGroups(groups []*marklogicv1.MarklogicGroups) bool {
+	for _, group := range groups {
+		if group != nil && group.IsDynamic {
+			return true
+		}
+	}
+	return false
+}
+
+func dynamicCredentialSecretName(clusterName string) string {
+	return clusterName + dynamicCredentialSecretSuffix
+}
+
+func manageAdminUsername(clusterName string) string {
+	return clusterName + "-manage-admin"
+}
+
+func generateDynamicSecretData(clusterName string) map[string][]byte {
+	return map[string][]byte{
+		"username": []byte(manageAdminUsername(clusterName)),
+		"password": []byte(generateRandomAlphaNumeric(16)),
+	}
+}
+
+func (cc *ClusterContext) reconcileDynamicCredentialSecret(clusterName string) result.ReconcileResult {
+	logger := cc.ReqLogger
+	client := cc.Client
+
+	secretName := dynamicCredentialSecretName(clusterName)
+	labels := cc.GetClusterLabels(clusterName)
+	annotations := cc.GetClusterAnnotations()
+	objectMeta := generateObjectMeta(secretName, cc.MarklogicCluster.Namespace, labels, annotations)
+	nsName := types.NamespacedName{Name: objectMeta.Name, Namespace: objectMeta.Namespace}
+
+	secret := &corev1.Secret{}
+	err := client.Get(cc.Ctx, nsName, secret)
+	if err == nil {
+		return result.Continue()
+	}
+	if !errors.IsNotFound(err) {
+		logger.Error(err, "MarkLogic manage-admin Secret reconcile failed")
+		return result.Error(err)
+	}
+
+	logger.Info("MarkLogic manage-admin Secret is not found, creating a new one")
+	secretData := generateDynamicSecretData(clusterName)
+	secretDef := generateSecretDef(objectMeta, marklogicClusterAsOwner(cc.MarklogicCluster), secretData)
+	if err := cc.createSecret(secretDef); err != nil {
+		logger.Error(err, "MarkLogic manage-admin Secret creation failed")
+		return result.Error(err)
+	}
+
+	logger.Info("MarkLogic manage-admin Secret creation is successful")
 	return result.Continue()
 }
 

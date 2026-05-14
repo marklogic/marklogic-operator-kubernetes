@@ -72,6 +72,7 @@ type MarklogicGroupSpec struct {
 	// +kubebuilder:default:=false
 	IsDynamic bool `json:"isDynamic,omitempty"`
 	// +optional
+	// +kubebuilder:default:={tokenDuration: "PT15M"}
 	Dynamic                        *DynamicGroupConfig             `json:"dynamic,omitempty"`
 	License                        *License                        `json:"license,omitempty"`
 	EnableConverters               bool                            `json:"enableConverters,omitempty"`
@@ -212,7 +213,13 @@ type MarklogicGroupStatus struct {
 }
 
 type DynamicGroupStatus struct {
-	Hosts []DynamicHostStatus `json:"hosts,omitempty"`
+	Phase               string              `json:"phase,omitempty"`
+	Reason              string              `json:"reason,omitempty"`
+	Message             string              `json:"message,omitempty"`
+	BootstrapReady      bool                `json:"bootstrapReady,omitempty"`
+	Configured          bool                `json:"configured,omitempty"`
+	DynamicHostsEnabled bool                `json:"dynamicHostsEnabled,omitempty"`
+	Hosts               []DynamicHostStatus `json:"hosts,omitempty"`
 }
 
 type DynamicHostStatus struct {

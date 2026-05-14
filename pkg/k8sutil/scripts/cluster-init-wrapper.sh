@@ -115,12 +115,6 @@ until ml_port_open; do
 done
 echo "[Wrapper] Localhost is UP."
 
-# Dynamic hosts stop here for cluster-scoped coordination. They should only
-# start MarkLogic locally and wait for the controller-managed join flow.
-if [[ "${MARKLOGIC_DYNAMIC_HOST}" == "true" ]]; then
-    echo "[Wrapper] Dynamic host mode enabled; skipping bootstrap network gate and static cluster init/join script."
-else
-
 # --- Phase 4: Istio Ambient Network Gatekeeper ---
 # Skip mesh connectivity gate on the bootstrap pod
 if [[ "$MARKLOGIC_CLUSTER_TYPE" == "non-bootstrap" ]]; then
@@ -146,15 +140,18 @@ fi
 
 # --- Phase 5: Cluster Initialization ---
 echo "[Wrapper] Executing Cluster Init/Join Logic..."
-if [ -f "/tmp/helm-scripts/cluster-config.sh" ]; then
-    /bin/bash /tmp/helm-scripts/cluster-config.sh
-    if [ $? -ne 0 ]; then
-        echo "[Wrapper] ERROR: Initialization failed!"
-        exit 1
-    fi
+if [[ "${MARKLOGIC_DYNAMIC_HOST}" == "true" ]]; then
+    echo "[Wrapper] Dynamic host mode enabled; skipping static cluster init/join script."
 else
-    echo "[Wrapper] No init script found. Skipping."
-fi
+    if [ -f "/tmp/helm-scripts/cluster-config.sh" ]; then
+        /bin/bash /tmp/helm-scripts/cluster-config.sh
+        if [ $? -ne 0 ]; then
+            echo "[Wrapper] ERROR: Initialization failed!"
+            exit 1
+        fi
+    else
+        echo "[Wrapper] No init script found. Skipping."
+    fi
 fi
 
 # --- Phase 5.5: Stability Monitor ---

@@ -8186,6 +8186,8 @@ spec:
                         type: string
                       type: object
                     dynamic:
+                      default:
+                        tokenDuration: PT15M
                       properties:
                         tokenDuration:
                           default: PT15M
