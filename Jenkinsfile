@@ -242,7 +242,7 @@ void runBlackDuckScan() {
     if (!haProxyImage)   { error "runBlackDuckScan: could not resolve HAProxy image from Makefile" }
     if (!ubi9Image)      { error "runBlackDuckScan: could not resolve UBI9 image from pkg/k8sutil/statefulset.go" }
 
-    def dependentImages = "${fluentBitImage},${haProxyImage},${ubi9Image},${params.E2E_MARKLOGIC_IMAGE_VERSION}"
+    def dependentImages = "${fluentBitImage},${haProxyImage},${ubi9Image}"
 
     def containerImages
     if (params.PUBLISH_IMAGE) {
