@@ -122,7 +122,6 @@ type MarklogicGroups struct {
 	// +kubebuilder:default:=false
 	IsDynamic bool `json:"isDynamic,omitempty"`
 	// +optional
-	// +kubebuilder:default:={tokenDuration: "PT15M"}
 	Dynamic                        *DynamicGroupConfig             `json:"dynamic,omitempty"`
 	Tls                            *Tls                            `json:"tls,omitempty"`
 	AdditionalVolumes              *[]corev1.Volume                `json:"additionalVolumes,omitempty"`

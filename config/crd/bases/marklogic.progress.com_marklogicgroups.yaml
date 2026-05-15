@@ -3365,8 +3365,6 @@ spec:
               doNotDelete:
                 type: boolean
               dynamic:
-                default:
-                  tokenDuration: PT15M
                 properties:
                   tokenDuration:
                     default: PT15M
@@ -5016,21 +5014,39 @@ spec:
                     type: boolean
                   configured:
                     type: boolean
+                  desiredReplicas:
+                    format: int32
+                    type: integer
                   dynamicHostsEnabled:
                     type: boolean
                   hosts:
                     items:
                       properties:
-                        name:
+                        attempts:
+                          format: int32
+                          type: integer
+                        hostId:
                           type: string
-                        ready:
-                          type: boolean
+                        hostname:
+                          type: string
+                        message:
+                          type: string
+                        podName:
+                          type: string
+                        state:
+                          type: string
                       type: object
                     type: array
+                  localReadyReplicas:
+                    format: int32
+                    type: integer
                   message:
                     type: string
                   phase:
                     type: string
+                  readyReplicas:
+                    format: int32
+                    type: integer
                   reason:
                     type: string
                 type: object

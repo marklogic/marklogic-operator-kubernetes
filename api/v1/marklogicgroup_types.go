@@ -72,7 +72,6 @@ type MarklogicGroupSpec struct {
 	// +kubebuilder:default:=false
 	IsDynamic bool `json:"isDynamic,omitempty"`
 	// +optional
-	// +kubebuilder:default:={tokenDuration: "PT15M"}
 	Dynamic                        *DynamicGroupConfig             `json:"dynamic,omitempty"`
 	License                        *License                        `json:"license,omitempty"`
 	EnableConverters               bool                            `json:"enableConverters,omitempty"`
@@ -219,12 +218,19 @@ type DynamicGroupStatus struct {
 	BootstrapReady      bool                `json:"bootstrapReady,omitempty"`
 	Configured          bool                `json:"configured,omitempty"`
 	DynamicHostsEnabled bool                `json:"dynamicHostsEnabled,omitempty"`
+	DesiredReplicas     int32               `json:"desiredReplicas,omitempty"`
+	LocalReadyReplicas  int32               `json:"localReadyReplicas,omitempty"`
+	ReadyReplicas       int32               `json:"readyReplicas,omitempty"`
 	Hosts               []DynamicHostStatus `json:"hosts,omitempty"`
 }
 
 type DynamicHostStatus struct {
-	Name  string `json:"name,omitempty"`
-	Ready bool   `json:"ready,omitempty"`
+	PodName  string `json:"podName,omitempty"`
+	Hostname string `json:"hostname,omitempty"`
+	HostID   string `json:"hostId,omitempty"`
+	State    string `json:"state,omitempty"`
+	Message  string `json:"message,omitempty"`
+	Attempts int32  `json:"attempts,omitempty"`
 }
 
 func (status *MarklogicGroupStatus) SetCondition(condition metav1.Condition) {

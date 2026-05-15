@@ -23,6 +23,9 @@ type Client interface {
 	EnableDynamicHosts(ctx context.Context, groupName string) error
 	EnableAdminAPITokenAuthentication(ctx context.Context, groupName string) error
 	EnsureManageAdminUser(ctx context.Context, username, password string) error
+	RequestDynamicHostToken(ctx context.Context, clusterName, groupName, hostFQDN, duration string) (string, error)
+	JoinDynamicHost(ctx context.Context, hostFQDN, token string) error
+	ListGroupHosts(ctx context.Context, groupName string) ([]GroupHost, error)
 }
 
 type ClientOptions struct {
@@ -43,6 +46,12 @@ type HostStatus struct {
 type GroupInfo struct {
 	Exists      bool
 	ForestCount int
+}
+
+type GroupHost struct {
+	Name   string
+	HostID string
+	Online bool
 }
 
 type managementClient struct {
@@ -197,6 +206,102 @@ func (c *managementClient) EnsureManageAdminUser(ctx context.Context, username, 
 	return err
 }
 
+func (c *managementClient) RequestDynamicHostToken(ctx context.Context, clusterName, groupName, hostFQDN, duration string) (string, error) {
+	if strings.TrimSpace(duration) == "" {
+		duration = "PT15M"
+	}
+	payload := map[string]any{
+		"dynamic-host-token": map[string]any{
+			"group":    groupName,
+			"host":     hostFQDN,
+			"port":     8001,
+			"duration": duration,
+			"comment":  "operator-managed",
+		},
+	}
+	data, _, err := c.doJSON(ctx, http.MethodPost, "/manage/v2/clusters/"+url.PathEscape(clusterName)+"/dynamic-host-token", nil, payload, http.StatusCreated, http.StatusOK)
+	if err != nil {
+		return "", err
+	}
+
+	var body any
+	if err := json.Unmarshal(data, &body); err != nil {
+		return "", err
+	}
+	token := extractDynamicHostToken(body)
+	if token == "" {
+		return "", fmt.Errorf("dynamic host token was not present in response")
+	}
+	return token, nil
+}
+
+func (c *managementClient) JoinDynamicHost(ctx context.Context, hostFQDN, token string) error {
+	scheme := "http"
+	if strings.HasPrefix(c.baseURL, "https://") {
+		scheme = "https"
+	}
+	host := hostFQDN
+	if parsedHost, _, err := net.SplitHostPort(hostFQDN); err == nil {
+		host = parsedHost
+	}
+	joinURL := fmt.Sprintf("%s://%s:8001/admin/v1/init", scheme, host)
+	body := fmt.Sprintf("<init xmlns=\"http://marklogic.com/manage\"><dynamic-host-token>%s</dynamic-host-token></init>", token)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, joinURL, strings.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/xml")
+	req.Header.Set("Accept", "application/xml")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return err
+	}
+	if resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusAccepted || resp.StatusCode == http.StatusNoContent {
+		return nil
+	}
+
+	return fmt.Errorf("dynamic host init POST /admin/v1/init returned status %d: %s", resp.StatusCode, string(respBody))
+}
+
+func (c *managementClient) ListGroupHosts(ctx context.Context, groupName string) ([]GroupHost, error) {
+	query := url.Values{}
+	query.Set("group-id", groupName)
+	query.Set("view", "status")
+	query.Set("format", "json")
+	data, _, err := c.doJSON(ctx, http.MethodGet, "/manage/v2/hosts", query, nil, http.StatusOK)
+	if err != nil {
+		return nil, err
+	}
+
+	var payload any
+	if err := json.Unmarshal(data, &payload); err != nil {
+		return nil, err
+	}
+	items := extractHostItems(payload)
+	hosts := make([]GroupHost, 0, len(items))
+	for _, item := range items {
+		name := firstString(item, "nameref", "host-name", "name")
+		if name == "" {
+			continue
+		}
+		status := strings.ToLower(firstString(item, "status", "host-status"))
+		hosts = append(hosts, GroupHost{
+			Name:   name,
+			HostID: firstString(item, "id", "idref", "host-id"),
+			Online: status == "online",
+		})
+	}
+	return hosts, nil
+}
+
 func (c *managementClient) fetchClusterVersion(ctx context.Context) (string, error) {
 	query := url.Values{}
 	query.Set("format", "json")
@@ -348,4 +453,50 @@ func toString(value any) string {
 	default:
 		return ""
 	}
+}
+
+func extractDynamicHostToken(payload any) string {
+	root, ok := payload.(map[string]any)
+	if ok {
+		if tokenValue, exists := root["dynamic-host-token"]; exists {
+			switch t := tokenValue.(type) {
+			case string:
+				return t
+			case map[string]any:
+				if token := firstString(t, "token", "dynamic-host-token", "value"); token != "" {
+					return token
+				}
+			}
+		}
+	}
+
+	if token := findFirstStringByKeys(payload, "token", "dynamic-host-token"); token != "" {
+		return token
+	}
+	return ""
+}
+
+func findFirstStringByKeys(payload any, keys ...string) string {
+	switch current := payload.(type) {
+	case map[string]any:
+		for _, key := range keys {
+			if value, ok := current[key]; ok {
+				if str := toString(value); str != "" {
+					return str
+				}
+			}
+		}
+		for _, value := range current {
+			if found := findFirstStringByKeys(value, keys...); found != "" {
+				return found
+			}
+		}
+	case []any:
+		for _, value := range current {
+			if found := findFirstStringByKeys(value, keys...); found != "" {
+				return found
+			}
+		}
+	}
+	return ""
 }
