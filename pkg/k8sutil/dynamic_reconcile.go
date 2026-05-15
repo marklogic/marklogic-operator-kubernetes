@@ -17,6 +17,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 )
 
 var NewDynamicManagementClient = func(opts mlmanage.ClientOptions) mlmanage.Client {
@@ -26,6 +27,7 @@ var NewDynamicManagementClient = func(opts mlmanage.ClientOptions) mlmanage.Clie
 const (
 	dynamicPhasePending    = "pending"
 	dynamicPhaseReconciling = "reconciling"
+	dynamicPhaseDeleting   = "deleting"
 	dynamicPhaseDegraded   = "degraded"
 	dynamicPhaseFailed     = "failed"
 	dynamicPhaseConfigured = "configured"
@@ -34,15 +36,23 @@ const (
 	dynamicReasonInvalidConfig       = "InvalidConfiguration"
 	dynamicReasonGroupConfigFailed   = "GroupConfigFailed"
 	dynamicReasonJoinFailed          = "JoinFailed"
+	dynamicReasonRemoveFailed        = "RemoveFailed"
 	dynamicReasonRetryBudgetExceeded = "RetryBudgetExhausted"
 
 	dynamicHostStatePending = "pending"
 	dynamicHostStateJoining = "joining"
 	dynamicHostStateJoined  = "joined"
+	dynamicHostStateRetained = "retained"
+	dynamicHostStateRemoving = "removing"
+	dynamicHostStateRemoved  = "removed"
 	dynamicHostStateFailed  = "failed"
+
+	dynamicHostCleanupFinalizer  = "marklogic.progress.com/dynamic-host-cleanup"
+	dynamicGroupCleanupFinalizer = "marklogic.progress.com/dynamic-group-cleanup"
 
 	minimumSupportedMarkLogicVersion = 12
 	dynamicJoinRetryBudget           = int32(3)
+	dynamicRemoveRetryBudget         = int32(3)
 	dynamicJoinRequeueSeconds        = 2
 )
 
@@ -53,18 +63,42 @@ func (oc *OperatorContext) ReconcileDynamicGroupConfig() result.ReconcileResult 
 		return result.Continue()
 	}
 
+	if oc.MarklogicGroup.DeletionTimestamp == nil {
+		added, err := oc.ensureDynamicGroupFinalizer()
+		if err != nil {
+			return result.Error(err)
+		}
+		if added {
+			return result.RequeueSoon(dynamicJoinRequeueSeconds)
+		}
+	}
+
 	if oc.MarklogicGroup.Status.Dynamic == nil {
-		if err := oc.setDynamicStatus(dynamicPhasePending, "", "waiting for bootstrap readiness", false, false, false); err != nil {
+		phase := dynamicPhasePending
+		message := "waiting for bootstrap readiness"
+		if oc.MarklogicGroup.DeletionTimestamp != nil {
+			phase = dynamicPhaseDeleting
+			message = "dynamic group deletion cleanup is pending"
+		}
+		if err := oc.setDynamicStatus(phase, "", message, false, false, false); err != nil {
 			return result.Error(err)
 		}
 	}
 
 	clusterName, err := oc.getOwningClusterName()
 	if err != nil {
+		if oc.MarklogicGroup.DeletionTimestamp != nil {
+			clusterName = ""
+		} else {
 		if err := oc.setDynamicStatus(dynamicPhaseFailed, dynamicReasonInvalidConfig, err.Error(), false, false, false); err != nil {
 			return result.Error(err)
 		}
 		return result.Done()
+		}
+	}
+
+	if oc.MarklogicGroup.DeletionTimestamp != nil && oc.isOwningClusterDeletingOrGone() {
+		return oc.releaseDynamicFinalizersWithoutBootstrap()
 	}
 
 	bootstrapHost := strings.TrimSpace(oc.MarklogicGroup.Spec.BootstrapHost)
@@ -224,7 +258,272 @@ func (oc *OperatorContext) ReconcileDynamicGroupConfig() result.ReconcileResult 
 
 	desiredReplicas := desiredDynamicReplicas(oc.MarklogicGroup)
 	tokenDuration := dynamicTokenDuration(oc.MarklogicGroup)
-	return oc.reconcileDynamicScaleUp(groupClient, clusterName, groupName, tokenDuration, desiredReplicas)
+	return oc.reconcileDynamicLifecycle(groupClient, clusterName, groupName, tokenDuration, desiredReplicas)
+}
+
+func (oc *OperatorContext) reconcileDynamicLifecycle(groupClient mlmanage.Client, clusterName, groupName, tokenDuration string, desiredReplicas int32) result.ReconcileResult {
+	pods, err := oc.listDynamicPods()
+	if err != nil {
+		if statusErr := oc.setDynamicStatus(dynamicPhaseDegraded, dynamicReasonJoinFailed, fmt.Sprintf("failed to list dynamic pods: %v", err), true, true, true); statusErr != nil {
+			return result.Error(statusErr)
+		}
+		return result.RequeueSoon(dynamicJoinRequeueSeconds)
+	}
+
+	if oc.MarklogicGroup.DeletionTimestamp != nil {
+		return oc.reconcileDynamicDeletionLifecycle(groupClient, clusterName, groupName, desiredReplicas, pods)
+	}
+
+	if err := oc.ensureDynamicPodFinalizers(pods); err != nil {
+		if statusErr := oc.setDynamicStatus(dynamicPhaseDegraded, dynamicReasonJoinFailed, fmt.Sprintf("failed to ensure pod cleanup finalizers: %v", err), true, true, true); statusErr != nil {
+			return result.Error(statusErr)
+		}
+		return result.RequeueSoon(dynamicJoinRequeueSeconds)
+	}
+
+	members, err := groupClient.ListGroupHosts(oc.Ctx, groupName)
+	if err != nil {
+		localReadyReplicas := countLocalReadyPods(pods)
+		currentReadyReplicas := int32(0)
+		hosts := []marklogicv1.DynamicHostStatus{}
+		if oc.MarklogicGroup.Status.Dynamic != nil {
+			currentReadyReplicas = oc.MarklogicGroup.Status.Dynamic.ReadyReplicas
+			hosts = oc.MarklogicGroup.Status.Dynamic.Hosts
+		}
+		phase := dynamicPhaseDegraded
+		reason := dynamicReasonBootstrapNotReady
+		if isPermanentAuthError(err) {
+			phase = dynamicPhaseFailed
+		}
+		if statusErr := oc.setDynamicStatusDetailed(phase, reason, fmt.Sprintf("failed to query dynamic group membership: %v", err), true, true, true, desiredReplicas, localReadyReplicas, currentReadyReplicas, hosts); statusErr != nil {
+			return result.Error(statusErr)
+		}
+		if phase == dynamicPhaseFailed {
+			return result.Done()
+		}
+		return result.RequeueSoon(dynamicJoinRequeueSeconds)
+	}
+
+	previousHosts := []marklogicv1.DynamicHostStatus{}
+	if oc.MarklogicGroup.Status.Dynamic != nil {
+		previousHosts = oc.MarklogicGroup.Status.Dynamic.Hosts
+	}
+	hostStatuses, localReadyReplicas, readyReplicas, joinCandidates := oc.buildDynamicHostStatuses(pods, members, previousHosts)
+	hostStatuses = pruneRemovedHostStatuses(hostStatuses, pods, members)
+
+	if desiredReplicas < int32(len(members)) || hasPodsAboveDesiredOrdinal(pods, desiredReplicas) {
+		return oc.reconcileDynamicScaleDown(groupClient, clusterName, groupName, desiredReplicas, false, pods, members, hostStatuses, localReadyReplicas, readyReplicas)
+	}
+
+	if desiredReplicas <= readyReplicas {
+		phase := dynamicPhaseConfigured
+		reason := ""
+		message := "dynamic hosts are configured and at desired joined replicas"
+		if hasFailedDynamicHost(hostStatuses) {
+			phase = dynamicPhaseDegraded
+			reason = dynamicReasonJoinFailed
+			message = "one or more dynamic hosts failed and require intervention"
+		}
+		if err := oc.setDynamicStatusDetailed(phase, reason, message, true, true, true, desiredReplicas, localReadyReplicas, readyReplicas, hostStatuses); err != nil {
+			return result.Error(err)
+		}
+		return result.Continue()
+	}
+
+	if len(joinCandidates) == 0 {
+		phase := dynamicPhaseReconciling
+		reason := ""
+		message := fmt.Sprintf("waiting for local-ready pods to join MarkLogic (%d/%d)", readyReplicas, desiredReplicas)
+		if hasFailedDynamicHost(hostStatuses) {
+			phase = dynamicPhaseDegraded
+			reason = dynamicReasonJoinFailed
+			message = fmt.Sprintf("one or more hosts failed to join MarkLogic (%d/%d)", readyReplicas, desiredReplicas)
+		}
+		if err := oc.setDynamicStatusDetailed(phase, reason, message, true, true, true, desiredReplicas, localReadyReplicas, readyReplicas, hostStatuses); err != nil {
+			return result.Error(err)
+		}
+		return result.RequeueSoon(dynamicJoinRequeueSeconds)
+	}
+
+	pod := joinCandidates[0]
+	hostFQDN := dynamicPodFQDN(oc.MarklogicGroup, pod.Name)
+	currentAttempts := incrementDynamicHostAttempts(hostStatuses, pod.Name)
+	hostStatuses = setDynamicHostStatus(hostStatuses, pod.Name, hostFQDN, dynamicHostStateJoining, "joining host with dynamic token", "", currentAttempts)
+	if err := oc.setDynamicStatusDetailed(dynamicPhaseReconciling, "", fmt.Sprintf("joining %s into dynamic group", pod.Name), true, true, true, desiredReplicas, localReadyReplicas, readyReplicas, hostStatuses); err != nil {
+		return result.Error(err)
+	}
+
+	joinedHost, err := oc.joinDynamicPod(groupClient, clusterName, groupName, hostFQDN, tokenDuration)
+	if err != nil {
+		return oc.handleDynamicJoinFailure(hostStatuses, pod.Name, hostFQDN, desiredReplicas, localReadyReplicas, readyReplicas, err)
+	}
+
+	members, err = groupClient.ListGroupHosts(oc.Ctx, groupName)
+	if err != nil {
+		return oc.handleDynamicJoinFailure(hostStatuses, pod.Name, hostFQDN, desiredReplicas, localReadyReplicas, readyReplicas, err)
+	}
+
+	member, found := findGroupHostForPod(pod.Name, hostFQDN, members)
+	if !found {
+		if joinedHost.Name != "" {
+			member = joinedHost
+			found = true
+		} else {
+			return oc.handleDynamicJoinFailure(hostStatuses, pod.Name, hostFQDN, desiredReplicas, localReadyReplicas, readyReplicas, fmt.Errorf("host %s is not yet registered in MarkLogic", hostFQDN))
+		}
+	}
+
+	hostStatuses, localReadyReplicas, readyReplicas, joinCandidates = oc.buildDynamicHostStatuses(pods, members, hostStatuses)
+	hostStatuses = setDynamicHostStatus(hostStatuses, pod.Name, hostFQDN, dynamicHostStateJoined, "", member.HostID, 0)
+
+	if desiredReplicas <= readyReplicas {
+		if err := oc.setDynamicStatusDetailed(dynamicPhaseConfigured, "", "dynamic hosts are configured and at desired joined replicas", true, true, true, desiredReplicas, localReadyReplicas, readyReplicas, hostStatuses); err != nil {
+			return result.Error(err)
+		}
+		return result.Continue()
+	}
+
+	if err := oc.setDynamicStatusDetailed(dynamicPhaseReconciling, "", fmt.Sprintf("joined %s, continuing scale-up (%d/%d)", pod.Name, readyReplicas, desiredReplicas), true, true, true, desiredReplicas, localReadyReplicas, readyReplicas, hostStatuses); err != nil {
+		return result.Error(err)
+	}
+	return result.RequeueSoon(dynamicJoinRequeueSeconds)
+}
+
+func (oc *OperatorContext) reconcileDynamicDeletionLifecycle(groupClient mlmanage.Client, clusterName, groupName string, desiredReplicas int32, pods []corev1.Pod) result.ReconcileResult {
+	if oc.isOwningClusterDeletingOrGone() {
+		return oc.releaseDynamicFinalizersWithoutBootstrap()
+	}
+
+	members, err := groupClient.ListGroupHosts(oc.Ctx, groupName)
+	if err != nil {
+		if statusErr := oc.setDynamicStatus(dynamicPhaseDegraded, dynamicReasonBootstrapNotReady, fmt.Sprintf("failed to query dynamic group membership during deletion cleanup: %v", err), true, true, true); statusErr != nil {
+			return result.Error(statusErr)
+		}
+		return result.RequeueSoon(dynamicJoinRequeueSeconds)
+	}
+
+	previousHosts := []marklogicv1.DynamicHostStatus{}
+	if oc.MarklogicGroup.Status.Dynamic != nil {
+		previousHosts = oc.MarklogicGroup.Status.Dynamic.Hosts
+	}
+	hostStatuses, localReadyReplicas, readyReplicas, _ := oc.buildDynamicHostStatuses(pods, members, previousHosts)
+	hostStatuses = pruneRemovedHostStatuses(hostStatuses, pods, members)
+
+	if len(members) > 0 {
+		return oc.reconcileDynamicScaleDown(groupClient, clusterName, groupName, desiredReplicas, true, pods, members, hostStatuses, localReadyReplicas, readyReplicas)
+	}
+
+	if err := oc.releaseDynamicPodFinalizers(pods); err != nil {
+		if statusErr := oc.setDynamicStatusDetailed(dynamicPhaseDegraded, dynamicReasonRemoveFailed, fmt.Sprintf("failed to release dynamic pod finalizers: %v", err), true, true, true, 0, localReadyReplicas, readyReplicas, hostStatuses); statusErr != nil {
+			return result.Error(statusErr)
+		}
+		return result.RequeueSoon(dynamicJoinRequeueSeconds)
+	}
+
+	if err := oc.setDynamicStatusDetailed(dynamicPhaseDeleting, "", "dynamic cleanup completed; releasing group finalizer", true, true, true, 0, localReadyReplicas, readyReplicas, hostStatuses); err != nil {
+		return result.Error(err)
+	}
+
+	removed, err := oc.removeDynamicGroupFinalizer()
+	if err != nil {
+		return result.Error(err)
+	}
+	if removed {
+		return result.Done()
+	}
+	return result.Done()
+}
+
+func (oc *OperatorContext) reconcileDynamicScaleDown(groupClient mlmanage.Client, clusterName, groupName string, desiredReplicas int32, deleting bool, pods []corev1.Pod, members []mlmanage.GroupHost, hostStatuses []marklogicv1.DynamicHostStatus, localReadyReplicas, readyReplicas int32) result.ReconcileResult {
+	storageRequiresRemove := deleting || !isDynamicPVCBacked(oc.MarklogicGroup)
+	candidates := hostsAboveDesiredOrdinal(hostStatuses, desiredReplicas)
+
+	if len(candidates) == 0 {
+		phase := dynamicPhaseConfigured
+		reason := ""
+		message := "dynamic scale-down cleanup is complete"
+		if deleting {
+			phase = dynamicPhaseDeleting
+			message = "deletion cleanup in progress"
+		}
+		if hasFailedDynamicHost(hostStatuses) {
+			phase = dynamicPhaseDegraded
+			reason = dynamicReasonRemoveFailed
+			message = "one or more dynamic hosts failed cleanup"
+		}
+		if err := oc.setDynamicStatusDetailed(phase, reason, message, true, true, true, desiredReplicas, localReadyReplicas, readyReplicas, hostStatuses); err != nil {
+			return result.Error(err)
+		}
+		return result.Continue()
+	}
+
+	for _, candidate := range candidates {
+		pod := findDynamicPodByName(pods, candidate.PodName)
+		member, memberFound := findGroupHostForPod(candidate.PodName, candidate.Hostname, members)
+		hostID := candidate.HostID
+		if hostID == "" && memberFound {
+			hostID = member.HostID
+		}
+
+		if storageRequiresRemove {
+			if memberFound {
+				hostStatuses = setDynamicHostStatus(hostStatuses, candidate.PodName, candidate.Hostname, dynamicHostStateRemoving, "removing dynamic host from MarkLogic", hostID, incrementDynamicHostAttempts(hostStatuses, candidate.PodName))
+				if err := oc.setDynamicStatusDetailed(dynamicPhaseReconciling, "", fmt.Sprintf("removing dynamic host %s", candidate.PodName), true, true, true, desiredReplicas, localReadyReplicas, readyReplicas, hostStatuses); err != nil {
+					return result.Error(err)
+				}
+
+				if removeErr := groupClient.RemoveDynamicHost(oc.Ctx, clusterName, hostID); removeErr != nil {
+					return oc.handleDynamicRemoveFailure(hostStatuses, candidate.PodName, candidate.Hostname, hostID, desiredReplicas, localReadyReplicas, readyReplicas, removeErr, deleting)
+				}
+				hostStatuses = setDynamicHostStatus(hostStatuses, candidate.PodName, candidate.Hostname, dynamicHostStateRemoved, "host removed from MarkLogic; waiting for pod deletion", hostID, 0)
+			}
+
+			if pod != nil {
+				if err := oc.releaseDynamicPodFinalizer(pod); err != nil {
+					if statusErr := oc.setDynamicStatusDetailed(dynamicPhaseDegraded, dynamicReasonRemoveFailed, fmt.Sprintf("failed to release pod finalizer for %s: %v", candidate.PodName, err), true, true, true, desiredReplicas, localReadyReplicas, readyReplicas, hostStatuses); statusErr != nil {
+						return result.Error(statusErr)
+					}
+					return result.RequeueSoon(dynamicJoinRequeueSeconds)
+				}
+
+				phase := dynamicPhaseReconciling
+				if deleting {
+					phase = dynamicPhaseDeleting
+				}
+				if err := oc.setDynamicStatusDetailed(phase, "", fmt.Sprintf("waiting for pod %s deletion after cleanup", candidate.PodName), true, true, true, desiredReplicas, localReadyReplicas, readyReplicas, hostStatuses); err != nil {
+					return result.Error(err)
+				}
+				return result.RequeueSoon(dynamicJoinRequeueSeconds)
+			}
+
+			if err := oc.setDynamicStatusDetailed(dynamicPhaseReconciling, "", fmt.Sprintf("cleanup complete for host %s", candidate.PodName), true, true, true, desiredReplicas, localReadyReplicas, readyReplicas, hostStatuses); err != nil {
+				return result.Error(err)
+			}
+			return result.RequeueSoon(dynamicJoinRequeueSeconds)
+		}
+
+		hostStatuses = setDynamicHostStatus(hostStatuses, candidate.PodName, candidate.Hostname, dynamicHostStateRetained, "retaining host membership for pvc-backed scale-down", hostID, 0)
+		if pod != nil {
+			if err := oc.releaseDynamicPodFinalizer(pod); err != nil {
+				if statusErr := oc.setDynamicStatusDetailed(dynamicPhaseDegraded, dynamicReasonRemoveFailed, fmt.Sprintf("failed to release pod finalizer for %s: %v", candidate.PodName, err), true, true, true, desiredReplicas, localReadyReplicas, readyReplicas, hostStatuses); statusErr != nil {
+					return result.Error(statusErr)
+				}
+				return result.RequeueSoon(dynamicJoinRequeueSeconds)
+			}
+
+			if err := oc.setDynamicStatusDetailed(dynamicPhaseReconciling, "", fmt.Sprintf("retaining pvc-backed host %s while waiting for pod deletion", candidate.PodName), true, true, true, desiredReplicas, localReadyReplicas, readyReplicas, hostStatuses); err != nil {
+				return result.Error(err)
+			}
+			return result.RequeueSoon(dynamicJoinRequeueSeconds)
+		}
+
+		if err := oc.setDynamicStatusDetailed(dynamicPhaseConfigured, "", "pvc-backed dynamic hosts retained after scale-down", true, true, true, desiredReplicas, localReadyReplicas, readyReplicas, hostStatuses); err != nil {
+			return result.Error(err)
+		}
+		return result.Continue()
+	}
+
+	return result.Continue()
 }
 
 func (oc *OperatorContext) setDynamicStatus(phase, reason, message string, bootstrapReady, configured, dynamicHostsEnabled bool) error {
@@ -548,6 +847,46 @@ func (oc *OperatorContext) handleDynamicJoinFailure(hostStatuses []marklogicv1.D
 	return result.Done()
 }
 
+func (oc *OperatorContext) handleDynamicRemoveFailure(hostStatuses []marklogicv1.DynamicHostStatus, podName, hostFQDN, hostID string, desiredReplicas, localReadyReplicas, readyReplicas int32, removeErr error, deleting bool) result.ReconcileResult {
+	attempts := incrementDynamicHostAttempts(hostStatuses, podName) + 1
+	message := fmt.Sprintf("remove failed for %s: %v", podName, removeErr)
+
+	phase := dynamicPhaseDegraded
+	if deleting {
+		phase = dynamicPhaseDeleting
+	}
+
+	if isPermanentAuthError(removeErr) {
+		hostStatuses = setDynamicHostStatus(hostStatuses, podName, hostFQDN, dynamicHostStateFailed, message, hostID, attempts)
+		if err := oc.setDynamicStatusDetailed(dynamicPhaseFailed, dynamicReasonRemoveFailed, message, true, true, true, desiredReplicas, localReadyReplicas, readyReplicas, hostStatuses); err != nil {
+			return result.Error(err)
+		}
+		return result.Done()
+	}
+
+	if isTransientManagementError(removeErr) {
+		if attempts >= dynamicRemoveRetryBudget {
+			hostStatuses = setDynamicHostStatus(hostStatuses, podName, hostFQDN, dynamicHostStateFailed, fmt.Sprintf("retry budget exhausted for %s: %v", podName, removeErr), hostID, attempts)
+			if err := oc.setDynamicStatusDetailed(dynamicPhaseDegraded, dynamicReasonRetryBudgetExceeded, fmt.Sprintf("retry budget exhausted while removing %s", podName), true, true, true, desiredReplicas, localReadyReplicas, readyReplicas, hostStatuses); err != nil {
+				return result.Error(err)
+			}
+			return result.RequeueSoon(dynamicJoinRequeueSeconds)
+		}
+
+		hostStatuses = setDynamicHostStatus(hostStatuses, podName, hostFQDN, dynamicHostStateRemoving, message, hostID, attempts)
+		if err := oc.setDynamicStatusDetailed(phase, dynamicReasonRemoveFailed, message, true, true, true, desiredReplicas, localReadyReplicas, readyReplicas, hostStatuses); err != nil {
+			return result.Error(err)
+		}
+		return result.RequeueSoon(dynamicJoinRequeueSeconds)
+	}
+
+	hostStatuses = setDynamicHostStatus(hostStatuses, podName, hostFQDN, dynamicHostStateFailed, message, hostID, attempts)
+	if err := oc.setDynamicStatusDetailed(dynamicPhaseFailed, dynamicReasonRemoveFailed, message, true, true, true, desiredReplicas, localReadyReplicas, readyReplicas, hostStatuses); err != nil {
+		return result.Error(err)
+	}
+	return result.Done()
+}
+
 func (oc *OperatorContext) joinDynamicPod(groupClient mlmanage.Client, clusterName, groupName, hostFQDN, tokenDuration string) (mlmanage.GroupHost, error) {
 	token, err := groupClient.RequestDynamicHostToken(oc.Ctx, clusterName, groupName, hostFQDN, tokenDuration)
 	if err != nil {
@@ -610,15 +949,13 @@ func (oc *OperatorContext) buildDynamicHostStatuses(pods []corev1.Pod, members [
 		}
 	}
 
-	statuses := make([]marklogicv1.DynamicHostStatus, 0, len(pods))
+	statuses := make([]marklogicv1.DynamicHostStatus, 0, len(pods)+len(members))
+	statusSeen := map[string]bool{}
 	joinCandidates := []corev1.Pod{}
 	localReadyReplicas := int32(0)
 	readyReplicas := int32(0)
 
 	for _, pod := range pods {
-		if pod.DeletionTimestamp != nil {
-			continue
-		}
 		fqdn := dynamicPodFQDN(oc.MarklogicGroup, pod.Name)
 		previousStatus, hasPrevious := statusByPod[pod.Name]
 		member, memberFound := findGroupHostForPod(pod.Name, fqdn, members)
@@ -643,6 +980,17 @@ func (oc *OperatorContext) buildDynamicHostStatuses(pods []corev1.Pod, members [
 			hostStatus.HostID = member.HostID
 			hostStatus.Attempts = 0
 			hostStatus.Message = ""
+			if hasPrevious {
+				if hostStatus.HostID == "" {
+					hostStatus.HostID = previousStatus.HostID
+				}
+				switch previousStatus.State {
+				case dynamicHostStateRetained, dynamicHostStateRemoving, dynamicHostStateFailed, dynamicHostStateRemoved:
+					hostStatus.State = previousStatus.State
+					hostStatus.Attempts = previousStatus.Attempts
+					hostStatus.Message = previousStatus.Message
+				}
+			}
 			if locallyReady {
 				readyReplicas++
 			}
@@ -656,16 +1004,208 @@ func (oc *OperatorContext) buildDynamicHostStatuses(pods []corev1.Pod, members [
 			if hostStatus.Message == "" {
 				hostStatus.Message = "waiting for pod local readiness"
 			}
-		} else {
+		} else if pod.DeletionTimestamp == nil {
 			hostStatus.State = dynamicHostStatePending
 			hostStatus.Message = ""
 			joinCandidates = append(joinCandidates, pod)
+		} else {
+			hostStatus.State = dynamicHostStatePending
+			if hostStatus.Message == "" {
+				hostStatus.Message = "waiting for pod deletion to complete"
+			}
 		}
 
 		statuses = append(statuses, hostStatus)
+		statusSeen[pod.Name] = true
+	}
+
+	for _, member := range members {
+		podName := hostnameToPodName(member.Name)
+		if podName == "" || statusSeen[podName] {
+			continue
+		}
+		if previousStatus, hasPrevious := statusByPod[podName]; hasPrevious && previousStatus.State == dynamicHostStateRetained {
+			statuses = append(statuses, marklogicv1.DynamicHostStatus{PodName: podName, Hostname: member.Name, HostID: member.HostID, State: dynamicHostStateRetained, Message: previousStatus.Message, Attempts: previousStatus.Attempts})
+		} else {
+			statuses = append(statuses, marklogicv1.DynamicHostStatus{PodName: podName, Hostname: member.Name, HostID: member.HostID, State: dynamicHostStateJoined})
+		}
+		statusSeen[podName] = true
+	}
+
+	for _, previousStatus := range previous {
+		podName := previousStatus.PodName
+		if podName == "" {
+			podName = hostnameToPodName(previousStatus.Hostname)
+		}
+		if podName == "" || statusSeen[podName] {
+			continue
+		}
+		if previousStatus.State == dynamicHostStateRetained || previousStatus.State == dynamicHostStateFailed || previousStatus.State == dynamicHostStateRemoving || previousStatus.State == dynamicHostStateRemoved {
+			statuses = append(statuses, previousStatus)
+			statusSeen[podName] = true
+		}
 	}
 
 	return statuses, localReadyReplicas, readyReplicas, joinCandidates
+}
+
+func pruneRemovedHostStatuses(hosts []marklogicv1.DynamicHostStatus, pods []corev1.Pod, members []mlmanage.GroupHost) []marklogicv1.DynamicHostStatus {
+	memberByPod := map[string]bool{}
+	for _, member := range members {
+		memberByPod[hostnameToPodName(member.Name)] = true
+	}
+	podByName := map[string]bool{}
+	for _, pod := range pods {
+		podByName[pod.Name] = true
+	}
+
+	filtered := make([]marklogicv1.DynamicHostStatus, 0, len(hosts))
+	for _, host := range hosts {
+		if host.State == dynamicHostStateRemoved && !podByName[host.PodName] && !memberByPod[host.PodName] {
+			continue
+		}
+		filtered = append(filtered, host)
+	}
+	return filtered
+}
+
+func hostsAboveDesiredOrdinal(hosts []marklogicv1.DynamicHostStatus, desiredReplicas int32) []marklogicv1.DynamicHostStatus {
+	candidates := make([]marklogicv1.DynamicHostStatus, 0, len(hosts))
+	for _, host := range hosts {
+		if int32(podOrdinal(host.PodName)) >= desiredReplicas {
+			candidates = append(candidates, host)
+		}
+	}
+	sort.SliceStable(candidates, func(i, j int) bool {
+		left := podOrdinal(candidates[i].PodName)
+		right := podOrdinal(candidates[j].PodName)
+		if left == right {
+			return candidates[i].PodName > candidates[j].PodName
+		}
+		return left > right
+	})
+	return candidates
+}
+
+func hasPodsAboveDesiredOrdinal(pods []corev1.Pod, desiredReplicas int32) bool {
+	for _, pod := range pods {
+		if int32(podOrdinal(pod.Name)) >= desiredReplicas {
+			return true
+		}
+	}
+	return false
+}
+
+func findDynamicPodByName(pods []corev1.Pod, podName string) *corev1.Pod {
+	for i := range pods {
+		if pods[i].Name == podName {
+			return &pods[i]
+		}
+	}
+	return nil
+}
+
+func isDynamicPVCBacked(group *marklogicv1.MarklogicGroup) bool {
+	if group == nil || group.Spec.Persistence == nil {
+		return false
+	}
+	return group.Spec.Persistence.Enabled
+}
+
+func (oc *OperatorContext) ensureDynamicGroupFinalizer() (bool, error) {
+	if controllerutil.ContainsFinalizer(oc.MarklogicGroup, dynamicGroupCleanupFinalizer) {
+		return false, nil
+	}
+	patch := client.MergeFrom(oc.MarklogicGroup.DeepCopy())
+	controllerutil.AddFinalizer(oc.MarklogicGroup, dynamicGroupCleanupFinalizer)
+	if err := oc.Client.Patch(oc.Ctx, oc.MarklogicGroup, patch); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func (oc *OperatorContext) removeDynamicGroupFinalizer() (bool, error) {
+	if !controllerutil.ContainsFinalizer(oc.MarklogicGroup, dynamicGroupCleanupFinalizer) {
+		return false, nil
+	}
+	patch := client.MergeFrom(oc.MarklogicGroup.DeepCopy())
+	controllerutil.RemoveFinalizer(oc.MarklogicGroup, dynamicGroupCleanupFinalizer)
+	if err := oc.Client.Patch(oc.Ctx, oc.MarklogicGroup, patch); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func (oc *OperatorContext) ensureDynamicPodFinalizers(pods []corev1.Pod) error {
+	for i := range pods {
+		pod := pods[i].DeepCopy()
+		if pod.DeletionTimestamp != nil || controllerutil.ContainsFinalizer(pod, dynamicHostCleanupFinalizer) {
+			continue
+		}
+		patch := client.MergeFrom(pod.DeepCopy())
+		controllerutil.AddFinalizer(pod, dynamicHostCleanupFinalizer)
+		if err := oc.Client.Patch(oc.Ctx, pod, patch); err != nil && !apierrors.IsNotFound(err) {
+			return err
+		}
+	}
+	return nil
+}
+
+func (oc *OperatorContext) releaseDynamicPodFinalizer(pod *corev1.Pod) error {
+	if pod == nil || !controllerutil.ContainsFinalizer(pod, dynamicHostCleanupFinalizer) {
+		return nil
+	}
+	mutablePod := pod.DeepCopy()
+	patch := client.MergeFrom(mutablePod.DeepCopy())
+	controllerutil.RemoveFinalizer(mutablePod, dynamicHostCleanupFinalizer)
+	if err := oc.Client.Patch(oc.Ctx, mutablePod, patch); err != nil && !apierrors.IsNotFound(err) {
+		return err
+	}
+	return nil
+}
+
+func (oc *OperatorContext) releaseDynamicPodFinalizers(pods []corev1.Pod) error {
+	for i := range pods {
+		if err := oc.releaseDynamicPodFinalizer(&pods[i]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (oc *OperatorContext) isOwningClusterDeletingOrGone() bool {
+	for _, ownerRef := range oc.MarklogicGroup.OwnerReferences {
+		if ownerRef.Kind != "MarklogicCluster" {
+			continue
+		}
+		cluster := &marklogicv1.MarklogicCluster{}
+		err := oc.Client.Get(oc.Ctx, types.NamespacedName{Name: ownerRef.Name, Namespace: oc.MarklogicGroup.Namespace}, cluster)
+		if apierrors.IsNotFound(err) {
+			return true
+		}
+		if err != nil {
+			return false
+		}
+		return cluster.DeletionTimestamp != nil
+	}
+	return false
+}
+
+func (oc *OperatorContext) releaseDynamicFinalizersWithoutBootstrap() result.ReconcileResult {
+	pods, err := oc.listDynamicPods()
+	if err != nil {
+		return result.Error(err)
+	}
+	if err := oc.releaseDynamicPodFinalizers(pods); err != nil {
+		return result.Error(err)
+	}
+	if err := oc.setDynamicStatus(dynamicPhaseDeleting, dynamicReasonBootstrapNotReady, "bootstrap infrastructure is unavailable during teardown; releasing dynamic finalizers", false, true, true); err != nil {
+		return result.Error(err)
+	}
+	if _, err := oc.removeDynamicGroupFinalizer(); err != nil {
+		return result.Error(err)
+	}
+	return result.Done()
 }
 
 func setDynamicHostStatus(hosts []marklogicv1.DynamicHostStatus, podName, hostFQDN, state, message, hostID string, attempts int32) []marklogicv1.DynamicHostStatus {

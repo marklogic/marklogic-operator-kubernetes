@@ -26,6 +26,7 @@ type Client interface {
 	RequestDynamicHostToken(ctx context.Context, clusterName, groupName, hostFQDN, duration string) (string, error)
 	JoinDynamicHost(ctx context.Context, hostFQDN, token string) error
 	ListGroupHosts(ctx context.Context, groupName string) ([]GroupHost, error)
+	RemoveDynamicHost(ctx context.Context, clusterName, hostID string) error
 }
 
 type ClientOptions struct {
@@ -300,6 +301,19 @@ func (c *managementClient) ListGroupHosts(ctx context.Context, groupName string)
 		})
 	}
 	return hosts, nil
+}
+
+func (c *managementClient) RemoveDynamicHost(ctx context.Context, clusterName, hostID string) error {
+	if strings.TrimSpace(clusterName) == "" {
+		return fmt.Errorf("cluster name is required for dynamic host removal")
+	}
+	if strings.TrimSpace(hostID) == "" {
+		return fmt.Errorf("host ID is required for dynamic host removal")
+	}
+	query := url.Values{}
+	query.Set("host-id", hostID)
+	_, _, err := c.doJSON(ctx, http.MethodDelete, "/manage/v2/clusters/"+url.PathEscape(clusterName)+"/dynamic-hosts", query, nil, http.StatusAccepted, http.StatusNoContent, http.StatusOK)
+	return err
 }
 
 func (c *managementClient) fetchClusterVersion(ctx context.Context) (string, error) {

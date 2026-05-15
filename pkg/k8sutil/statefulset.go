@@ -101,6 +101,13 @@ func (oc *OperatorContext) ReconcileStatefulset() (reconcile.Result, error) {
 		patch.IgnoreStatusFields(),
 		patch.IgnoreVolumeClaimTemplateTypeMetaAndStatus(),
 		patch.IgnoreField("kind"))
+	if shouldDelayDynamicEmptyDirScaleDown(cr, currentSts) {
+		statefulSetDef.Spec.Replicas = currentSts.Spec.Replicas
+		patchDiff, err = patch.DefaultPatchMaker.Calculate(currentSts, statefulSetDef,
+			patch.IgnoreStatusFields(),
+			patch.IgnoreVolumeClaimTemplateTypeMetaAndStatus(),
+			patch.IgnoreField("kind"))
+	}
 	logger.Info("Patch Diff:", "Diff", patchDiff.String())
 	logger.Info("statefulSetDef Spec:", "Spec", statefulSetDef.Spec.Replicas)
 	if err != nil {
@@ -167,6 +174,27 @@ func (oc *OperatorContext) ReconcileStatefulset() (reconcile.Result, error) {
 	}
 
 	return result.Done().Output()
+}
+
+func shouldDelayDynamicEmptyDirScaleDown(cr *marklogicv1.MarklogicGroup, currentSts *appsv1.StatefulSet) bool {
+	if cr == nil || currentSts == nil || !cr.Spec.IsDynamic {
+		return false
+	}
+	if cr.Spec.Persistence != nil && cr.Spec.Persistence.Enabled {
+		return false
+	}
+	if cr.Spec.Replicas == nil || currentSts.Spec.Replicas == nil {
+		return false
+	}
+	desiredReplicas := *cr.Spec.Replicas
+	currentReplicas := *currentSts.Spec.Replicas
+	if desiredReplicas >= currentReplicas {
+		return false
+	}
+	if cr.Status.Dynamic == nil {
+		return true
+	}
+	return cr.Status.Dynamic.ReadyReplicas > desiredReplicas
 }
 
 func (oc *OperatorContext) setCondition(condition *metav1.Condition) bool {

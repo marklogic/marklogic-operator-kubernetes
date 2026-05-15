@@ -137,6 +137,8 @@ func markLogicGroupCreateUpdateDeletePredicate() predicate.Predicate {
 					return true // Reconcile if the spec has changed
 				}
 				return false // Reconcile on update of Service
+			case *corev1.Pod:
+				return true // Reconcile on pod updates for dynamic host finalizer lifecycle
 			default:
 				return false // Ignore updates for other types
 			}
@@ -158,7 +160,8 @@ func (r *MarklogicGroupReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		For(&marklogicv1.MarklogicGroup{}).
 		WithEventFilter(markLogicGroupCreateUpdateDeletePredicate()).
 		Owns(&appsv1.StatefulSet{}).
-		Owns(&corev1.Service{})
+		Owns(&corev1.Service{}).
+		Owns(&corev1.Pod{})
 
 	return builder.Complete(r)
 }
