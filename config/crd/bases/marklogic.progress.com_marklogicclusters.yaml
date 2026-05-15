@@ -10033,7 +10033,7 @@ spec:
             x-kubernetes-validations:
             - message: HAProxy and Pathbased Routing is enabled. PathBasedRouting
                 is only supported for MarkLogic 11.1 and above
-              rule: '!(self.haproxy.enabled == true && self.haproxy.pathBasedRouting
+              rule: '!has(self.haproxy) || !(self.haproxy.enabled == true && self.haproxy.pathBasedRouting
                 == true) || self.image.split('':'')[1].matches(''.*latest.*'') ||
                 int(self.image.split('':'')[1].split(''.'')[0] + self.image.split('':'')[1].split(''.'')[1])
                 >= 111'

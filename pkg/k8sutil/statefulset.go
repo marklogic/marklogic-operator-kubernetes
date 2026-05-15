@@ -276,7 +276,7 @@ func generateStatefulSetsDef(stsMeta metav1.ObjectMeta, params statefulSetParame
 		statefulSet.Spec.Template.Spec.InitContainers = []corev1.Container{
 			{
 				Name:            "copy-certs",
-				Image:           "redhat/ubi9:9.4",
+				Image:           "redhat/ubi9:9.7",
 				ImagePullPolicy: "IfNotPresent",
 				Command:         []string{"/bin/sh", "/tmp/helm-scripts/copy-certs.sh"},
 				VolumeMounts:    copyCertsVM,
