@@ -13,8 +13,10 @@ import (
 	marklogicv1 "github.com/marklogic/marklogic-operator-kubernetes/api/v1"
 	"github.com/marklogic/marklogic-operator-kubernetes/pkg/mlmanage"
 	"github.com/marklogic/marklogic-operator-kubernetes/pkg/result"
+	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -24,13 +26,17 @@ var NewDynamicManagementClient = func(opts mlmanage.ClientOptions) mlmanage.Clie
 	return mlmanage.NewClient(opts)
 }
 
+type DynamicPVCRestartCleanupFunc func(oc *OperatorContext, pod *corev1.Pod) (bool, error)
+
+var DynamicPVCRestartCleanup DynamicPVCRestartCleanupFunc = defaultDynamicPVCRestartCleanup
+
 const (
-	dynamicPhasePending    = "pending"
+	dynamicPhasePending     = "pending"
 	dynamicPhaseReconciling = "reconciling"
-	dynamicPhaseDeleting   = "deleting"
-	dynamicPhaseDegraded   = "degraded"
-	dynamicPhaseFailed     = "failed"
-	dynamicPhaseConfigured = "configured"
+	dynamicPhaseDeleting    = "deleting"
+	dynamicPhaseDegraded    = "degraded"
+	dynamicPhaseFailed      = "failed"
+	dynamicPhaseConfigured  = "configured"
 
 	dynamicReasonBootstrapNotReady   = "BootstrapNotReady"
 	dynamicReasonInvalidConfig       = "InvalidConfiguration"
@@ -38,14 +44,18 @@ const (
 	dynamicReasonJoinFailed          = "JoinFailed"
 	dynamicReasonRemoveFailed        = "RemoveFailed"
 	dynamicReasonRetryBudgetExceeded = "RetryBudgetExhausted"
+	dynamicReasonClusterRestart      = "ClusterRestartDetected"
 
-	dynamicHostStatePending = "pending"
-	dynamicHostStateJoining = "joining"
-	dynamicHostStateJoined  = "joined"
-	dynamicHostStateRetained = "retained"
-	dynamicHostStateRemoving = "removing"
-	dynamicHostStateRemoved  = "removed"
-	dynamicHostStateFailed  = "failed"
+	dynamicHostStatePending       = "pending"
+	dynamicHostStateJoining       = "joining"
+	dynamicHostStateJoined        = "joined"
+	dynamicHostStateRejoinPending = "rejoin-pending"
+	dynamicHostStateRejoining     = "rejoining"
+	dynamicHostStateRejoined      = "rejoined"
+	dynamicHostStateRetained      = "retained"
+	dynamicHostStateRemoving      = "removing"
+	dynamicHostStateRemoved       = "removed"
+	dynamicHostStateFailed        = "failed"
 
 	dynamicHostCleanupFinalizer  = "marklogic.progress.com/dynamic-host-cleanup"
 	dynamicGroupCleanupFinalizer = "marklogic.progress.com/dynamic-group-cleanup"
@@ -53,6 +63,7 @@ const (
 	minimumSupportedMarkLogicVersion = 12
 	dynamicJoinRetryBudget           = int32(3)
 	dynamicRemoveRetryBudget         = int32(3)
+	dynamicRestartCleanupRetryBudget = int32(3)
 	dynamicJoinRequeueSeconds        = 2
 )
 
@@ -90,10 +101,10 @@ func (oc *OperatorContext) ReconcileDynamicGroupConfig() result.ReconcileResult 
 		if oc.MarklogicGroup.DeletionTimestamp != nil {
 			clusterName = ""
 		} else {
-		if err := oc.setDynamicStatus(dynamicPhaseFailed, dynamicReasonInvalidConfig, err.Error(), false, false, false); err != nil {
-			return result.Error(err)
-		}
-		return result.Done()
+			if err := oc.setDynamicStatus(dynamicPhaseFailed, dynamicReasonInvalidConfig, err.Error(), false, false, false); err != nil {
+				return result.Error(err)
+			}
+			return result.Done()
 		}
 	}
 
@@ -315,6 +326,11 @@ func (oc *OperatorContext) reconcileDynamicLifecycle(groupClient mlmanage.Client
 		return oc.reconcileDynamicScaleDown(groupClient, clusterName, groupName, desiredReplicas, false, pods, members, hostStatuses, localReadyReplicas, readyReplicas)
 	}
 
+	restartRecoveryCandidates := oc.dynamicRestartRecoveryCandidates(pods, members, hostStatuses)
+	if len(restartRecoveryCandidates) > 0 {
+		return oc.reconcileDynamicRestartRecovery(groupClient, clusterName, groupName, tokenDuration, desiredReplicas, pods, members, hostStatuses, localReadyReplicas, readyReplicas, restartRecoveryCandidates)
+	}
+
 	if desiredReplicas <= readyReplicas {
 		phase := dynamicPhaseConfigured
 		reason := ""
@@ -323,6 +339,10 @@ func (oc *OperatorContext) reconcileDynamicLifecycle(groupClient mlmanage.Client
 			phase = dynamicPhaseDegraded
 			reason = dynamicReasonJoinFailed
 			message = "one or more dynamic hosts failed and require intervention"
+			if hasRestartRecoverySignals(hostStatuses) {
+				reason = dynamicReasonClusterRestart
+				message = "restart recovery is degraded; one or more hosts require intervention"
+			}
 		}
 		if err := oc.setDynamicStatusDetailed(phase, reason, message, true, true, true, desiredReplicas, localReadyReplicas, readyReplicas, hostStatuses); err != nil {
 			return result.Error(err)
@@ -334,10 +354,18 @@ func (oc *OperatorContext) reconcileDynamicLifecycle(groupClient mlmanage.Client
 		phase := dynamicPhaseReconciling
 		reason := ""
 		message := fmt.Sprintf("waiting for local-ready pods to join MarkLogic (%d/%d)", readyReplicas, desiredReplicas)
+		if hasRestartRecoverySignals(hostStatuses) {
+			reason = dynamicReasonClusterRestart
+			message = fmt.Sprintf("restart recovery is waiting for local-ready pods (%d/%d)", readyReplicas, desiredReplicas)
+		}
 		if hasFailedDynamicHost(hostStatuses) {
 			phase = dynamicPhaseDegraded
 			reason = dynamicReasonJoinFailed
 			message = fmt.Sprintf("one or more hosts failed to join MarkLogic (%d/%d)", readyReplicas, desiredReplicas)
+			if hasRestartRecoverySignals(hostStatuses) {
+				reason = dynamicReasonClusterRestart
+				message = fmt.Sprintf("restart recovery is degraded for one or more hosts (%d/%d)", readyReplicas, desiredReplicas)
+			}
 		}
 		if err := oc.setDynamicStatusDetailed(phase, reason, message, true, true, true, desiredReplicas, localReadyReplicas, readyReplicas, hostStatuses); err != nil {
 			return result.Error(err)
@@ -524,6 +552,183 @@ func (oc *OperatorContext) reconcileDynamicScaleDown(groupClient mlmanage.Client
 	}
 
 	return result.Continue()
+}
+
+func (oc *OperatorContext) dynamicRestartRecoveryCandidates(pods []corev1.Pod, members []mlmanage.GroupHost, hostStatuses []marklogicv1.DynamicHostStatus) []corev1.Pod {
+	hostStatusByPod := map[string]marklogicv1.DynamicHostStatus{}
+	for _, host := range hostStatuses {
+		hostStatusByPod[host.PodName] = host
+	}
+
+	candidates := make([]corev1.Pod, 0)
+	for _, pod := range pods {
+		if pod.DeletionTimestamp != nil || !isPodLocallyReady(&pod) {
+			continue
+		}
+		hostFQDN := dynamicPodFQDN(oc.MarklogicGroup, pod.Name)
+		if _, found := findGroupHostForPod(pod.Name, hostFQDN, members); found {
+			continue
+		}
+		hostStatus, hasStatus := hostStatusByPod[pod.Name]
+		if !hasStatus || !isDynamicRestartRecoveryExpectedHost(hostStatus) {
+			continue
+		}
+		if hostStatus.State == dynamicHostStateFailed && hostStatus.Attempts >= dynamicJoinRetryBudget {
+			continue
+		}
+		candidates = append(candidates, pod)
+	}
+
+	return candidates
+}
+
+func isDynamicRestartRecoveryExpectedHost(host marklogicv1.DynamicHostStatus) bool {
+	if strings.TrimSpace(host.HostID) != "" {
+		return true
+	}
+	switch host.State {
+	case dynamicHostStateJoined, dynamicHostStateRetained, dynamicHostStateRejoinPending, dynamicHostStateRejoining, dynamicHostStateRejoined:
+		return true
+	default:
+		return false
+	}
+}
+
+func (oc *OperatorContext) reconcileDynamicRestartRecovery(groupClient mlmanage.Client, clusterName, groupName, tokenDuration string, desiredReplicas int32, pods []corev1.Pod, members []mlmanage.GroupHost, hostStatuses []marklogicv1.DynamicHostStatus, localReadyReplicas, readyReplicas int32, restartCandidates []corev1.Pod) result.ReconcileResult {
+	for _, candidate := range restartCandidates {
+		hostFQDN := dynamicPodFQDN(oc.MarklogicGroup, candidate.Name)
+		hostID := dynamicHostID(hostStatuses, candidate.Name)
+		attempts := incrementDynamicHostAttempts(hostStatuses, candidate.Name)
+		hostStatuses = setDynamicHostStatus(hostStatuses, candidate.Name, hostFQDN, dynamicHostStateRejoinPending, "membership lost; restart recovery rejoin pending", hostID, attempts)
+	}
+
+	pod := restartCandidates[0]
+	hostFQDN := dynamicPodFQDN(oc.MarklogicGroup, pod.Name)
+	hostID := dynamicHostID(hostStatuses, pod.Name)
+
+	if isDynamicPVCBacked(oc.MarklogicGroup) {
+		hostStatuses = setDynamicHostStatus(hostStatuses, pod.Name, hostFQDN, dynamicHostStateRejoinPending, "clearing retained dynamic host state before restart recovery rejoin", hostID, incrementDynamicHostAttempts(hostStatuses, pod.Name))
+		if err := oc.setDynamicStatusDetailed(dynamicPhaseReconciling, dynamicReasonClusterRestart, fmt.Sprintf("clearing retained pvc state for %s before restart recovery rejoin", pod.Name), true, true, true, desiredReplicas, localReadyReplicas, readyReplicas, hostStatuses); err != nil {
+			return result.Error(err)
+		}
+
+		cleaned, cleanupErr := DynamicPVCRestartCleanup(oc, &pod)
+		if cleanupErr != nil {
+			return oc.handleDynamicRestartCleanupFailure(hostStatuses, pod.Name, hostFQDN, hostID, desiredReplicas, localReadyReplicas, readyReplicas, cleanupErr)
+		}
+		if !cleaned {
+			if err := oc.setDynamicStatusDetailed(dynamicPhaseReconciling, dynamicReasonClusterRestart, fmt.Sprintf("waiting for retained pvc cleanup for %s", pod.Name), true, true, true, desiredReplicas, localReadyReplicas, readyReplicas, hostStatuses); err != nil {
+				return result.Error(err)
+			}
+			return result.RequeueSoon(dynamicJoinRequeueSeconds)
+		}
+	}
+
+	currentAttempts := incrementDynamicHostAttempts(hostStatuses, pod.Name) + 1
+	hostStatuses = setDynamicHostStatus(hostStatuses, pod.Name, hostFQDN, dynamicHostStateRejoining, "rejoining host after restart membership loss", hostID, currentAttempts)
+	if err := oc.setDynamicStatusDetailed(dynamicPhaseReconciling, dynamicReasonClusterRestart, fmt.Sprintf("rejoining %s after restart membership loss", pod.Name), true, true, true, desiredReplicas, localReadyReplicas, readyReplicas, hostStatuses); err != nil {
+		return result.Error(err)
+	}
+
+	joinedHost, err := oc.joinDynamicPod(groupClient, clusterName, groupName, hostFQDN, tokenDuration)
+	if err != nil {
+		return oc.handleDynamicRestartJoinFailure(hostStatuses, pod.Name, hostFQDN, hostID, desiredReplicas, localReadyReplicas, readyReplicas, err)
+	}
+
+	members, err = groupClient.ListGroupHosts(oc.Ctx, groupName)
+	if err != nil {
+		return oc.handleDynamicRestartJoinFailure(hostStatuses, pod.Name, hostFQDN, hostID, desiredReplicas, localReadyReplicas, readyReplicas, err)
+	}
+
+	member, found := findGroupHostForPod(pod.Name, hostFQDN, members)
+	if !found {
+		if joinedHost.Name != "" {
+			member = joinedHost
+		} else {
+			return oc.handleDynamicRestartJoinFailure(hostStatuses, pod.Name, hostFQDN, hostID, desiredReplicas, localReadyReplicas, readyReplicas, fmt.Errorf("host %s is not yet registered in MarkLogic after restart recovery join", hostFQDN))
+		}
+	}
+
+	hostStatuses, localReadyReplicas, readyReplicas, _ = oc.buildDynamicHostStatuses(pods, members, hostStatuses)
+	hostStatuses = setDynamicHostStatus(hostStatuses, pod.Name, hostFQDN, dynamicHostStateRejoined, "", member.HostID, 0)
+
+	remainingRestartCandidates := oc.dynamicRestartRecoveryCandidates(pods, members, hostStatuses)
+	if len(remainingRestartCandidates) == 0 && desiredReplicas <= readyReplicas {
+		phase := dynamicPhaseConfigured
+		reason := ""
+		message := "restart recovery completed; dynamic hosts are configured"
+		if hasFailedDynamicHost(hostStatuses) {
+			phase = dynamicPhaseDegraded
+			reason = dynamicReasonClusterRestart
+			message = "restart recovery completed with failed hosts requiring intervention"
+		}
+		if err := oc.setDynamicStatusDetailed(phase, reason, message, true, true, true, desiredReplicas, localReadyReplicas, readyReplicas, hostStatuses); err != nil {
+			return result.Error(err)
+		}
+		if phase == dynamicPhaseConfigured {
+			return result.Continue()
+		}
+		return result.RequeueSoon(dynamicJoinRequeueSeconds)
+	}
+
+	if err := oc.setDynamicStatusDetailed(dynamicPhaseReconciling, dynamicReasonClusterRestart, fmt.Sprintf("rejoined %s, continuing restart recovery (%d/%d)", pod.Name, readyReplicas, desiredReplicas), true, true, true, desiredReplicas, localReadyReplicas, readyReplicas, hostStatuses); err != nil {
+		return result.Error(err)
+	}
+	return result.RequeueSoon(dynamicJoinRequeueSeconds)
+}
+
+func (oc *OperatorContext) handleDynamicRestartCleanupFailure(hostStatuses []marklogicv1.DynamicHostStatus, podName, hostFQDN, hostID string, desiredReplicas, localReadyReplicas, readyReplicas int32, cleanupErr error) result.ReconcileResult {
+	attempts := incrementDynamicHostAttempts(hostStatuses, podName) + 1
+	message := fmt.Sprintf("restart recovery pvc cleanup failed for %s: %v", podName, cleanupErr)
+
+	if attempts >= dynamicRestartCleanupRetryBudget {
+		hostStatuses = setDynamicHostStatus(hostStatuses, podName, hostFQDN, dynamicHostStateFailed, fmt.Sprintf("retry budget exhausted while cleaning retained pvc state for %s: %v", podName, cleanupErr), hostID, attempts)
+		if err := oc.setDynamicStatusDetailed(dynamicPhaseDegraded, dynamicReasonRetryBudgetExceeded, fmt.Sprintf("retry budget exhausted while cleaning retained pvc state for %s", podName), true, true, true, desiredReplicas, localReadyReplicas, readyReplicas, hostStatuses); err != nil {
+			return result.Error(err)
+		}
+		return result.RequeueSoon(dynamicJoinRequeueSeconds)
+	}
+
+	hostStatuses = setDynamicHostStatus(hostStatuses, podName, hostFQDN, dynamicHostStateRejoinPending, message, hostID, attempts)
+	if err := oc.setDynamicStatusDetailed(dynamicPhaseDegraded, dynamicReasonClusterRestart, message, true, true, true, desiredReplicas, localReadyReplicas, readyReplicas, hostStatuses); err != nil {
+		return result.Error(err)
+	}
+	return result.RequeueSoon(dynamicJoinRequeueSeconds)
+}
+
+func (oc *OperatorContext) handleDynamicRestartJoinFailure(hostStatuses []marklogicv1.DynamicHostStatus, podName, hostFQDN, hostID string, desiredReplicas, localReadyReplicas, readyReplicas int32, joinErr error) result.ReconcileResult {
+	attempts := incrementDynamicHostAttempts(hostStatuses, podName) + 1
+	message := fmt.Sprintf("restart recovery rejoin failed for %s: %v", podName, joinErr)
+
+	if isPermanentAuthError(joinErr) {
+		hostStatuses = setDynamicHostStatus(hostStatuses, podName, hostFQDN, dynamicHostStateFailed, message, hostID, attempts)
+		if err := oc.setDynamicStatusDetailed(dynamicPhaseFailed, dynamicReasonJoinFailed, message, true, true, true, desiredReplicas, localReadyReplicas, readyReplicas, hostStatuses); err != nil {
+			return result.Error(err)
+		}
+		return result.Done()
+	}
+
+	if isTransientManagementError(joinErr) || isTokenExpiredError(joinErr) {
+		if attempts >= dynamicJoinRetryBudget {
+			hostStatuses = setDynamicHostStatus(hostStatuses, podName, hostFQDN, dynamicHostStateFailed, fmt.Sprintf("retry budget exhausted for restart recovery rejoin of %s: %v", podName, joinErr), hostID, attempts)
+			if err := oc.setDynamicStatusDetailed(dynamicPhaseDegraded, dynamicReasonRetryBudgetExceeded, fmt.Sprintf("retry budget exhausted while rejoining %s after restart membership loss", podName), true, true, true, desiredReplicas, localReadyReplicas, readyReplicas, hostStatuses); err != nil {
+				return result.Error(err)
+			}
+			return result.RequeueSoon(dynamicJoinRequeueSeconds)
+		}
+
+		hostStatuses = setDynamicHostStatus(hostStatuses, podName, hostFQDN, dynamicHostStateRejoinPending, message, hostID, attempts)
+		if err := oc.setDynamicStatusDetailed(dynamicPhaseDegraded, dynamicReasonClusterRestart, message, true, true, true, desiredReplicas, localReadyReplicas, readyReplicas, hostStatuses); err != nil {
+			return result.Error(err)
+		}
+		return result.RequeueSoon(dynamicJoinRequeueSeconds)
+	}
+
+	hostStatuses = setDynamicHostStatus(hostStatuses, podName, hostFQDN, dynamicHostStateFailed, message, hostID, attempts)
+	if err := oc.setDynamicStatusDetailed(dynamicPhaseFailed, dynamicReasonJoinFailed, message, true, true, true, desiredReplicas, localReadyReplicas, readyReplicas, hostStatuses); err != nil {
+		return result.Error(err)
+	}
+	return result.Done()
 }
 
 func (oc *OperatorContext) setDynamicStatus(phase, reason, message string, bootstrapReady, configured, dynamicHostsEnabled bool) error {
@@ -985,7 +1190,7 @@ func (oc *OperatorContext) buildDynamicHostStatuses(pods []corev1.Pod, members [
 					hostStatus.HostID = previousStatus.HostID
 				}
 				switch previousStatus.State {
-				case dynamicHostStateRetained, dynamicHostStateRemoving, dynamicHostStateFailed, dynamicHostStateRemoved:
+				case dynamicHostStateRetained, dynamicHostStateRemoving, dynamicHostStateFailed, dynamicHostStateRemoved, dynamicHostStateRejoined:
 					hostStatus.State = previousStatus.State
 					hostStatus.Attempts = previousStatus.Attempts
 					hostStatus.Message = previousStatus.Message
@@ -1240,6 +1445,121 @@ func hasFailedDynamicHost(hosts []marklogicv1.DynamicHostStatus) bool {
 		}
 	}
 	return false
+}
+
+func hasRestartRecoverySignals(hosts []marklogicv1.DynamicHostStatus) bool {
+	for _, host := range hosts {
+		switch host.State {
+		case dynamicHostStateRejoinPending, dynamicHostStateRejoining, dynamicHostStateRejoined:
+			return true
+		case dynamicHostStateFailed:
+			if strings.TrimSpace(host.HostID) != "" && strings.Contains(strings.ToLower(host.Message), "restart recovery") {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func dynamicHostID(hosts []marklogicv1.DynamicHostStatus, podName string) string {
+	for _, host := range hosts {
+		if host.PodName == podName {
+			return host.HostID
+		}
+	}
+	return ""
+}
+
+func defaultDynamicPVCRestartCleanup(oc *OperatorContext, pod *corev1.Pod) (bool, error) {
+	if oc == nil || pod == nil {
+		return false, fmt.Errorf("operator context and pod are required for pvc restart cleanup")
+	}
+	ordinal := podOrdinal(pod.Name)
+	if ordinal < 0 || ordinal == int(^uint(0)>>1) {
+		return false, fmt.Errorf("failed to resolve pod ordinal for pvc restart cleanup: %s", pod.Name)
+	}
+
+	claimName := fmt.Sprintf("datadir-%s-%d", oc.MarklogicGroup.Spec.Name, ordinal)
+	jobName := dynamicPVCRestartCleanupJobName(oc.MarklogicGroup.Spec.Name, pod.Name)
+	nsName := types.NamespacedName{Name: jobName, Namespace: pod.Namespace}
+
+	cleanupJob := &batchv1.Job{}
+	err := oc.Client.Get(oc.Ctx, nsName, cleanupJob)
+	if err == nil {
+		if cleanupJob.Status.Succeeded > 0 {
+			return true, nil
+		}
+		if cleanupJob.Status.Failed > 0 {
+			return false, fmt.Errorf("pvc restart cleanup job %s failed", jobName)
+		}
+		return false, nil
+	}
+	if !apierrors.IsNotFound(err) {
+		return false, err
+	}
+
+	backoffLimit := int32(0)
+	ttlSeconds := int32(300)
+	cleanupCommand := "set -euo pipefail; find /var/opt/MarkLogic -mindepth 1 -maxdepth 1 ! -name Logs -exec rm -rf {} +"
+	cleanupJob = &batchv1.Job{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      jobName,
+			Namespace: pod.Namespace,
+			Labels: map[string]string{
+				"app.kubernetes.io/name":      "marklogic",
+				"app.kubernetes.io/instance":  oc.MarklogicGroup.Spec.Name,
+				"app.kubernetes.io/component": "dynamic-host",
+				"marklogic.progress.com/task": "dynamic-restart-recovery-cleanup",
+			},
+		},
+		Spec: batchv1.JobSpec{
+			BackoffLimit:            &backoffLimit,
+			TTLSecondsAfterFinished: &ttlSeconds,
+			Template: corev1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{
+					Labels: map[string]string{
+						"app.kubernetes.io/name":      "marklogic",
+						"app.kubernetes.io/instance":  oc.MarklogicGroup.Spec.Name,
+						"app.kubernetes.io/component": "dynamic-host",
+					},
+				},
+				Spec: corev1.PodSpec{
+					RestartPolicy: corev1.RestartPolicyNever,
+					Containers: []corev1.Container{{
+						Name:    "cleanup",
+						Image:   oc.MarklogicGroup.Spec.Image,
+						Command: []string{"/bin/bash", "-c", cleanupCommand},
+						VolumeMounts: []corev1.VolumeMount{{
+							Name:      "datadir",
+							MountPath: "/var/opt/MarkLogic",
+						}},
+					}},
+					Volumes: []corev1.Volume{{
+						Name:         "datadir",
+						VolumeSource: corev1.VolumeSource{PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: claimName}},
+					}},
+				},
+			},
+		},
+	}
+
+	if err := controllerutil.SetControllerReference(oc.MarklogicGroup, cleanupJob, oc.Scheme); err != nil {
+		return false, err
+	}
+	if err := oc.Client.Create(oc.Ctx, cleanupJob); err != nil && !apierrors.IsAlreadyExists(err) {
+		return false, err
+	}
+	return false, nil
+}
+
+func dynamicPVCRestartCleanupJobName(groupName, podName string) string {
+	base := fmt.Sprintf("%s-restart-clean-%s", groupName, podName)
+	name := strings.ToLower(base)
+	name = strings.ReplaceAll(name, ".", "-")
+	if len(name) <= 63 {
+		return name
+	}
+	return name[:63]
 }
 
 func countLocalReadyPods(pods []corev1.Pod) int32 {
