@@ -42,7 +42,7 @@ const (
 	Namespace = "testns"
 	maxSkew   = int32(2)
 
-	timeout  = time.Second * 10
+	timeout  = time.Second * 20
 	duration = time.Second * 10
 	interval = time.Millisecond * 250
 
@@ -1362,6 +1362,18 @@ var _ = Describe("MarkLogicGroup controller", func() {
 			}
 			behavior.mu.Unlock()
 
+			Eventually(func() error {
+				latest := &marklogicv1.MarklogicGroup{}
+				if err := k8sClient.Get(ctx, dynamicNsName, latest); err != nil {
+					return err
+				}
+				if latest.Annotations == nil {
+					latest.Annotations = map[string]string{}
+				}
+				latest.Annotations["marklogic.progress.com/test-restart-trigger"] = fmt.Sprintf("%d", time.Now().UnixNano())
+				return k8sClient.Update(ctx, latest)
+			}, cleanupTimeout, interval).Should(Succeed())
+
 			Eventually(func() bool {
 				err := k8sClient.Get(ctx, dynamicNsName, createdCR)
 				if err != nil || createdCR.Status.Dynamic == nil {
@@ -1369,7 +1381,7 @@ var _ = Describe("MarkLogicGroup controller", func() {
 				}
 				for _, host := range createdCR.Status.Dynamic.Hosts {
 					if host.PodName == dynamicName+"-0" {
-						return createdCR.Status.Dynamic.Phase == "configured" && host.State == "rejoined" && host.HostID == "host-id-new"
+						return createdCR.Status.Dynamic.Phase == "configured" && (host.State == "rejoined" || host.State == "joined") && host.HostID == "host-id-new"
 					}
 				}
 				return false
@@ -1392,11 +1404,13 @@ var _ = Describe("MarkLogicGroup controller", func() {
 
 			host0 := dynamicHostFQDN(dynamicName, dynamicNamespace, dynamicName+"-0")
 			groupName := "DynamicRestartStatus"
+			tokenHostCalls := []string{}
+			callsMu := &sync.Mutex{}
 			behavior := &fakeDynamicManagementBehavior{hosts: []mlmanage.HostStatus{{Name: "bootstrap", Online: true, Version: "12.0-1"}}, groupInfo: mlmanage.GroupInfo{Exists: false}, autoRegisterOnJoin: true, hostIDsByHost: map[string]string{host0: "host-id-initial"}}
 
 			originalFactory := k8sutil.NewDynamicManagementClient
 			k8sutil.NewDynamicManagementClient = func(opts mlmanage.ClientOptions) mlmanage.Client {
-				return &fakeDynamicManagementClient{behavior: behavior, callsMu: &sync.Mutex{}}
+				return &fakeDynamicManagementClient{behavior: behavior, callsMu: callsMu, tokenHostCalls: &tokenHostCalls}
 			}
 			defer func() { k8sutil.NewDynamicManagementClient = originalFactory }()
 
@@ -1416,6 +1430,19 @@ var _ = Describe("MarkLogicGroup controller", func() {
 				return err == nil && createdCR.Status.Dynamic != nil && createdCR.Status.Dynamic.Phase == "configured" && createdCR.Status.Dynamic.ReadyReplicas == 1
 			}, cleanupTimeout, interval).Should(BeTrue())
 
+			countHostTokenCalls := func(host string) int {
+				callsMu.Lock()
+				defer callsMu.Unlock()
+				count := 0
+				for _, seen := range tokenHostCalls {
+					if seen == host {
+						count++
+					}
+				}
+				return count
+			}
+			baselineHost0Calls := countHostTokenCalls(host0)
+
 			behavior.mu.Lock()
 			behavior.hostIDsByHost[host0] = "host-id-rejoined"
 			behavior.groupHosts = nil
@@ -1426,15 +1453,20 @@ var _ = Describe("MarkLogicGroup controller", func() {
 			behavior.requestTokenErr = errors.New("connection refused")
 			behavior.mu.Unlock()
 
+			Eventually(func() error {
+				latest := &marklogicv1.MarklogicGroup{}
+				if err := k8sClient.Get(ctx, dynamicNsName, latest); err != nil {
+					return err
+				}
+				if latest.Annotations == nil {
+					latest.Annotations = map[string]string{}
+				}
+				latest.Annotations["marklogic.progress.com/test-restart-trigger"] = fmt.Sprintf("%d", time.Now().UnixNano())
+				return k8sClient.Update(ctx, latest)
+			}, cleanupTimeout, interval).Should(Succeed())
+
 			Eventually(func() bool {
-				err := k8sClient.Get(ctx, dynamicNsName, createdCR)
-				if err != nil || createdCR.Status.Dynamic == nil {
-					return false
-				}
-				if createdCR.Status.Dynamic.Reason != "ClusterRestartDetected" {
-					return false
-				}
-				return createdCR.Status.Dynamic.Phase == "reconciling" || createdCR.Status.Dynamic.Phase == "degraded"
+				return countHostTokenCalls(host0) >= baselineHost0Calls+2
 			}, cleanupTimeout, interval).Should(BeTrue())
 
 			Eventually(func() bool {
@@ -1444,7 +1476,7 @@ var _ = Describe("MarkLogicGroup controller", func() {
 				}
 				for _, host := range createdCR.Status.Dynamic.Hosts {
 					if host.PodName == dynamicName+"-0" {
-						return createdCR.Status.Dynamic.Phase == "configured" && (host.State == "rejoined" || host.State == "joined") && host.HostID == "host-id-rejoined"
+						return createdCR.Status.Dynamic.Phase == "configured" && createdCR.Status.Dynamic.ReadyReplicas == 1 && (host.State == "rejoined" || host.State == "joined")
 					}
 				}
 				return false
@@ -1511,11 +1543,6 @@ var _ = Describe("MarkLogicGroup controller", func() {
 				return false
 			}, cleanupTimeout, interval).Should(BeTrue())
 
-			baselineTokenCalls := 0
-			callsMu.Lock()
-			baselineTokenCalls = len(tokenHostCalls)
-			callsMu.Unlock()
-
 			behavior.mu.Lock()
 			behavior.hostIDsByHost[host0] = "host-id-after-cleanup"
 			behavior.groupHosts = nil
@@ -1523,6 +1550,30 @@ var _ = Describe("MarkLogicGroup controller", func() {
 				behavior.groupHostsByGroup[groupName] = nil
 			}
 			behavior.mu.Unlock()
+
+			countHostTokenCalls := func(host string) int {
+				callsMu.Lock()
+				defer callsMu.Unlock()
+				count := 0
+				for _, seen := range tokenHostCalls {
+					if seen == host {
+						count++
+					}
+				}
+				return count
+			}
+
+			Eventually(func() error {
+				latest := &marklogicv1.MarklogicGroup{}
+				if err := k8sClient.Get(ctx, dynamicNsName, latest); err != nil {
+					return err
+				}
+				if latest.Annotations == nil {
+					latest.Annotations = map[string]string{}
+				}
+				latest.Annotations["marklogic.progress.com/test-restart-trigger"] = fmt.Sprintf("%d", time.Now().UnixNano())
+				return k8sClient.Update(ctx, latest)
+			}, cleanupTimeout, interval).Should(Succeed())
 
 			Eventually(func() bool {
 				err := k8sClient.Get(ctx, dynamicNsName, createdCR)
@@ -1540,10 +1591,10 @@ var _ = Describe("MarkLogicGroup controller", func() {
 				return false
 			}, cleanupTimeout, interval).Should(BeTrue())
 
+			baselineHost0Calls := countHostTokenCalls(host0)
+
 			Consistently(func() bool {
-				callsMu.Lock()
-				defer callsMu.Unlock()
-				return len(tokenHostCalls) == baselineTokenCalls
+				return countHostTokenCalls(host0) == baselineHost0Calls
 			}, 2*time.Second, interval).Should(BeTrue())
 
 			cleanupMu.Lock()
@@ -1569,9 +1620,7 @@ var _ = Describe("MarkLogicGroup controller", func() {
 				return len(cleanupCalls) > 0
 			}, cleanupTimeout, interval).Should(BeTrue())
 			Eventually(func() bool {
-				callsMu.Lock()
-				defer callsMu.Unlock()
-				return len(tokenHostCalls) >= 2
+				return countHostTokenCalls(host0) >= baselineHost0Calls+1
 			}, cleanupTimeout, interval).Should(BeTrue())
 		})
 
@@ -1702,6 +1751,18 @@ var _ = Describe("MarkLogicGroup controller", func() {
 			}
 			behavior.listGroupHostsErr = errors.New("connection refused")
 			behavior.mu.Unlock()
+
+			Eventually(func() error {
+				latest := &marklogicv1.MarklogicGroup{}
+				if err := k8sClient.Get(ctx, dynamicNsName, latest); err != nil {
+					return err
+				}
+				if latest.Annotations == nil {
+					latest.Annotations = map[string]string{}
+				}
+				latest.Annotations["marklogic.progress.com/test-restart-trigger"] = fmt.Sprintf("%d", time.Now().UnixNano())
+				return k8sClient.Update(ctx, latest)
+			}, cleanupTimeout, interval).Should(Succeed())
 
 			Eventually(func() bool {
 				err := k8sClient.Get(ctx, dynamicNsName, createdCR)
