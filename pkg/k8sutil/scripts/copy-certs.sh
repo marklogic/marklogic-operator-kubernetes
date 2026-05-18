@@ -20,7 +20,7 @@ if [[ "$certType" == "named" ]]; then
     cp -f /tmp/ca-cert-secret/* /run/secrets/marklogic-certs/;
     cert_paths=$(find /tmp/server-cert-secrets/tls_*.crt)
     for cert_path in $cert_paths; do
-    cert_cn=$(openssl x509 -noout -subject -in $cert_path | sed -n 's/.*CN = \([^,]*\).*/\1/p')
+    cert_cn=$(openssl x509 -noout -subject -nameopt multiline -in $cert_path | grep 'commonName' | sed 's/.*= *//')
     log "Info: [copy-certs] FQDN for the certificate: $cert_cn"
     if [[ "$host_FQDN" == "$cert_cn" ]]; then
         log "Info: [copy-certs] found certificate for the server"
