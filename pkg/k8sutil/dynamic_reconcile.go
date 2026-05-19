@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	marklogicv1 "github.com/marklogic/marklogic-operator-kubernetes/api/v1"
 	"github.com/marklogic/marklogic-operator-kubernetes/pkg/mlmanage"
@@ -36,13 +37,14 @@ const (
 	dynamicPhaseDeleting    = "deleting"
 	dynamicPhaseDegraded    = "degraded"
 	dynamicPhaseFailed      = "failed"
-	dynamicPhaseConfigured  = "configured"
+	dynamicPhaseIdle        = "idle"
 
 	dynamicReasonBootstrapNotReady   = "BootstrapNotReady"
 	dynamicReasonInvalidConfig       = "InvalidConfiguration"
 	dynamicReasonGroupConfigFailed   = "GroupConfigFailed"
 	dynamicReasonJoinFailed          = "JoinFailed"
 	dynamicReasonRemoveFailed        = "RemoveFailed"
+	dynamicReasonPodStartupTimeout   = "PodStartupTimeout"
 	dynamicReasonRetryBudgetExceeded = "RetryBudgetExhausted"
 	dynamicReasonClusterRestart      = "ClusterRestartDetected"
 
@@ -60,12 +62,17 @@ const (
 	dynamicHostCleanupFinalizer  = "marklogic.progress.com/dynamic-host-cleanup"
 	dynamicGroupCleanupFinalizer = "marklogic.progress.com/dynamic-group-cleanup"
 
+	dynamicHostsReadyConditionType = "DynamicHostsReady"
+
 	minimumSupportedMarkLogicVersion = 12
 	dynamicJoinRetryBudget           = int32(3)
 	dynamicRemoveRetryBudget         = int32(3)
 	dynamicRestartCleanupRetryBudget = int32(3)
 	dynamicJoinRequeueSeconds        = 2
+	dynamicPodStartupTimeoutMessage  = "pod did not reach local readiness before startup timeout"
 )
+
+var DynamicPodStartupTimeout = 5 * time.Minute
 
 var statusCodeRegex = regexp.MustCompile(`status\s+(\d{3})`)
 
@@ -321,6 +328,7 @@ func (oc *OperatorContext) reconcileDynamicLifecycle(groupClient mlmanage.Client
 	}
 	hostStatuses, localReadyReplicas, readyReplicas, joinCandidates := oc.buildDynamicHostStatuses(pods, members, previousHosts)
 	hostStatuses = pruneRemovedHostStatuses(hostStatuses, pods, members)
+	hostStatuses = markDynamicPodStartupTimeouts(oc.MarklogicGroup, pods, hostStatuses, time.Now())
 
 	if desiredReplicas < int32(len(members)) || hasPodsAboveDesiredOrdinal(pods, desiredReplicas) {
 		return oc.reconcileDynamicScaleDown(groupClient, clusterName, groupName, desiredReplicas, false, pods, members, hostStatuses, localReadyReplicas, readyReplicas)
@@ -332,14 +340,17 @@ func (oc *OperatorContext) reconcileDynamicLifecycle(groupClient mlmanage.Client
 	}
 
 	if desiredReplicas <= readyReplicas {
-		phase := dynamicPhaseConfigured
+		phase := dynamicPhaseIdle
 		reason := ""
 		message := "dynamic hosts are configured and at desired joined replicas"
 		if hasFailedDynamicHost(hostStatuses) {
 			phase = dynamicPhaseDegraded
 			reason = dynamicReasonJoinFailed
 			message = "one or more dynamic hosts failed and require intervention"
-			if hasRestartRecoverySignals(hostStatuses) {
+			if hasPodStartupTimeoutFailure(hostStatuses) {
+				reason = dynamicReasonPodStartupTimeout
+				message = "one or more dynamic pods did not reach local readiness before startup timeout"
+			} else if hasRestartRecoverySignals(hostStatuses) {
 				reason = dynamicReasonClusterRestart
 				message = "restart recovery is degraded; one or more hosts require intervention"
 			}
@@ -358,7 +369,11 @@ func (oc *OperatorContext) reconcileDynamicLifecycle(groupClient mlmanage.Client
 			reason = dynamicReasonClusterRestart
 			message = fmt.Sprintf("restart recovery is waiting for local-ready pods (%d/%d)", readyReplicas, desiredReplicas)
 		}
-		if hasFailedDynamicHost(hostStatuses) {
+		if hasPodStartupTimeoutFailure(hostStatuses) {
+			phase = dynamicPhaseDegraded
+			reason = dynamicReasonPodStartupTimeout
+			message = fmt.Sprintf("one or more dynamic pods did not reach local readiness before startup timeout (%d/%d)", readyReplicas, desiredReplicas)
+		} else if hasFailedDynamicHost(hostStatuses) {
 			phase = dynamicPhaseDegraded
 			reason = dynamicReasonJoinFailed
 			message = fmt.Sprintf("one or more hosts failed to join MarkLogic (%d/%d)", readyReplicas, desiredReplicas)
@@ -405,7 +420,7 @@ func (oc *OperatorContext) reconcileDynamicLifecycle(groupClient mlmanage.Client
 	hostStatuses = setDynamicHostStatus(hostStatuses, pod.Name, hostFQDN, dynamicHostStateJoined, "", member.HostID, 0)
 
 	if desiredReplicas <= readyReplicas {
-		if err := oc.setDynamicStatusDetailed(dynamicPhaseConfigured, "", "dynamic hosts are configured and at desired joined replicas", true, true, true, desiredReplicas, localReadyReplicas, readyReplicas, hostStatuses); err != nil {
+		if err := oc.setDynamicStatusDetailed(dynamicPhaseIdle, "", "dynamic hosts are configured and at desired joined replicas", true, true, true, desiredReplicas, localReadyReplicas, readyReplicas, hostStatuses); err != nil {
 			return result.Error(err)
 		}
 		return result.Continue()
@@ -467,7 +482,7 @@ func (oc *OperatorContext) reconcileDynamicScaleDown(groupClient mlmanage.Client
 	candidates := hostsAboveDesiredOrdinal(hostStatuses, desiredReplicas)
 
 	if len(candidates) == 0 {
-		phase := dynamicPhaseConfigured
+		phase := dynamicPhaseIdle
 		reason := ""
 		message := "dynamic scale-down cleanup is complete"
 		if deleting {
@@ -545,7 +560,7 @@ func (oc *OperatorContext) reconcileDynamicScaleDown(groupClient mlmanage.Client
 			return result.RequeueSoon(dynamicJoinRequeueSeconds)
 		}
 
-		if err := oc.setDynamicStatusDetailed(dynamicPhaseConfigured, "", "pvc-backed dynamic hosts retained after scale-down", true, true, true, desiredReplicas, localReadyReplicas, readyReplicas, hostStatuses); err != nil {
+		if err := oc.setDynamicStatusDetailed(dynamicPhaseIdle, "", "pvc-backed dynamic hosts retained after scale-down", true, true, true, desiredReplicas, localReadyReplicas, readyReplicas, hostStatuses); err != nil {
 			return result.Error(err)
 		}
 		return result.Continue()
@@ -654,7 +669,7 @@ func (oc *OperatorContext) reconcileDynamicRestartRecovery(groupClient mlmanage.
 
 	remainingRestartCandidates := oc.dynamicRestartRecoveryCandidates(pods, members, hostStatuses)
 	if len(remainingRestartCandidates) == 0 && desiredReplicas <= readyReplicas {
-		phase := dynamicPhaseConfigured
+		phase := dynamicPhaseIdle
 		reason := ""
 		message := "restart recovery completed; dynamic hosts are configured"
 		if hasFailedDynamicHost(hostStatuses) {
@@ -665,7 +680,7 @@ func (oc *OperatorContext) reconcileDynamicRestartRecovery(groupClient mlmanage.
 		if err := oc.setDynamicStatusDetailed(phase, reason, message, true, true, true, desiredReplicas, localReadyReplicas, readyReplicas, hostStatuses); err != nil {
 			return result.Error(err)
 		}
-		if phase == dynamicPhaseConfigured {
+		if phase == dynamicPhaseIdle {
 			return result.Continue()
 		}
 		return result.RequeueSoon(dynamicJoinRequeueSeconds)
@@ -748,10 +763,23 @@ func (oc *OperatorContext) setDynamicStatus(phase, reason, message string, boots
 
 func (oc *OperatorContext) setDynamicStatusDetailed(phase, reason, message string, bootstrapReady, configured, dynamicHostsEnabled bool, desiredReplicas, localReadyReplicas, readyReplicas int32, hosts []marklogicv1.DynamicHostStatus) error {
 	current := oc.MarklogicGroup.Status.Dynamic
+	now := metav1.Now()
+
+	lastTransitionTime := now.DeepCopy()
+	if current != nil && current.LastTransitionTime != nil {
+		lastTransitionTime = current.LastTransitionTime.DeepCopy()
+	}
+	if current == nil || current.Phase != phase || current.Reason != reason || current.Message != message {
+		lastTransitionTime = now.DeepCopy()
+	}
+
+	hosts = reconcileDynamicHostLastUpdated(current, hosts, now)
+
 	next := &marklogicv1.DynamicGroupStatus{
 		Phase:               phase,
 		Reason:              reason,
 		Message:             message,
+		LastTransitionTime:  lastTransitionTime,
 		BootstrapReady:      bootstrapReady,
 		Configured:          configured,
 		DynamicHostsEnabled: dynamicHostsEnabled,
@@ -760,13 +788,202 @@ func (oc *OperatorContext) setDynamicStatusDetailed(phase, reason, message strin
 		ReadyReplicas:       readyReplicas,
 		Hosts:               hosts,
 	}
-	if current != nil && current.Phase == next.Phase && current.Reason == next.Reason && current.Message == next.Message && current.BootstrapReady == next.BootstrapReady && current.Configured == next.Configured && current.DynamicHostsEnabled == next.DynamicHostsEnabled && current.DesiredReplicas == next.DesiredReplicas && current.LocalReadyReplicas == next.LocalReadyReplicas && current.ReadyReplicas == next.ReadyReplicas && reflect.DeepEqual(current.Hosts, next.Hosts) {
+	dynamicUnchanged := current != nil && current.Phase == next.Phase && current.Reason == next.Reason && current.Message == next.Message && dynamicTimestampEqual(current.LastTransitionTime, next.LastTransitionTime) && current.BootstrapReady == next.BootstrapReady && current.Configured == next.Configured && current.DynamicHostsEnabled == next.DynamicHostsEnabled && current.DesiredReplicas == next.DesiredReplicas && current.LocalReadyReplicas == next.LocalReadyReplicas && current.ReadyReplicas == next.ReadyReplicas && reflect.DeepEqual(current.Hosts, next.Hosts)
+
+	patch := client.MergeFrom(oc.MarklogicGroup.DeepCopy())
+	conditionChanged := oc.upsertDynamicHostsReadyCondition(next, now)
+	if dynamicUnchanged && !conditionChanged {
 		return nil
 	}
 
-	patch := client.MergeFrom(oc.MarklogicGroup.DeepCopy())
 	oc.MarklogicGroup.Status.Dynamic = next
-	return oc.Client.Status().Patch(oc.Ctx, oc.MarklogicGroup, patch)
+	if err := oc.Client.Status().Patch(oc.Ctx, oc.MarklogicGroup, patch); err != nil {
+		return err
+	}
+	oc.emitDynamicLifecycleEvent(current, next)
+	return nil
+}
+
+func (oc *OperatorContext) upsertDynamicHostsReadyCondition(next *marklogicv1.DynamicGroupStatus, now metav1.Time) bool {
+	if next == nil {
+		return false
+	}
+
+	status := dynamicHostsReadyConditionStatus(next)
+	reason := dynamicHostsReadyConditionReason(next, status)
+	message := strings.TrimSpace(next.Message)
+	if message == "" {
+		message = "dynamic host status updated"
+	}
+
+	newCondition := metav1.Condition{
+		Type:               dynamicHostsReadyConditionType,
+		Status:             status,
+		Reason:             reason,
+		Message:            message,
+		ObservedGeneration: oc.MarklogicGroup.Generation,
+		LastTransitionTime: now,
+	}
+
+	conditions := oc.MarklogicGroup.Status.Conditions
+	for i := range conditions {
+		if conditions[i].Type != dynamicHostsReadyConditionType {
+			continue
+		}
+
+		existing := conditions[i]
+		if existing.Status == newCondition.Status {
+			newCondition.LastTransitionTime = existing.LastTransitionTime
+		}
+		if existing.Status == newCondition.Status && existing.Reason == newCondition.Reason && existing.Message == newCondition.Message && existing.ObservedGeneration == newCondition.ObservedGeneration {
+			return false
+		}
+		conditions[i] = newCondition
+		oc.MarklogicGroup.Status.Conditions = conditions
+		return true
+	}
+
+	oc.MarklogicGroup.Status.Conditions = append(conditions, newCondition)
+	return true
+}
+
+func dynamicHostsReadyConditionStatus(next *marklogicv1.DynamicGroupStatus) metav1.ConditionStatus {
+	if next != nil && next.Phase == dynamicPhaseIdle && next.ReadyReplicas >= next.DesiredReplicas && !hasFailedDynamicHost(next.Hosts) {
+		return metav1.ConditionTrue
+	}
+	return metav1.ConditionFalse
+}
+
+func dynamicHostsReadyConditionReason(next *marklogicv1.DynamicGroupStatus, status metav1.ConditionStatus) string {
+	if status == metav1.ConditionTrue {
+		return "DynamicHostsReady"
+	}
+	if next != nil && strings.TrimSpace(next.Reason) != "" {
+		return strings.TrimSpace(next.Reason)
+	}
+	if next == nil {
+		return "Unknown"
+	}
+	return dynamicPhaseEventReason(next.Phase)
+}
+
+func (oc *OperatorContext) emitDynamicLifecycleEvent(current, next *marklogicv1.DynamicGroupStatus) {
+	if oc.Recorder == nil || next == nil {
+		return
+	}
+	if current != nil && current.Phase == next.Phase && current.Reason == next.Reason {
+		return
+	}
+
+	eventType := corev1.EventTypeNormal
+	if next.Phase == dynamicPhaseDegraded || next.Phase == dynamicPhaseFailed {
+		eventType = corev1.EventTypeWarning
+	}
+
+	reason := strings.TrimSpace(next.Reason)
+	if reason == "" {
+		reason = dynamicPhaseEventReason(next.Phase)
+	}
+
+	oc.Recorder.Eventf(
+		oc.MarklogicGroup,
+		eventType,
+		reason,
+		"dynamic lifecycle transitioned from phase=%s reason=%s to phase=%s reason=%s: %s",
+		dynamicStatusValue(current, "phase"),
+		dynamicStatusValue(current, "reason"),
+		next.Phase,
+		strings.TrimSpace(next.Reason),
+		next.Message,
+	)
+}
+
+func dynamicPhaseEventReason(phase string) string {
+	switch strings.TrimSpace(phase) {
+	case dynamicPhasePending:
+		return "DynamicPending"
+	case dynamicPhaseReconciling:
+		return "DynamicReconciling"
+	case dynamicPhaseIdle:
+		return "DynamicIdle"
+	case dynamicPhaseDeleting:
+		return "DynamicDeleting"
+	case dynamicPhaseDegraded:
+		return "DynamicDegraded"
+	case dynamicPhaseFailed:
+		return "DynamicFailed"
+	default:
+		return "DynamicStatusUpdated"
+	}
+}
+
+func dynamicStatusValue(status *marklogicv1.DynamicGroupStatus, field string) string {
+	if status == nil {
+		return ""
+	}
+	if field == "reason" {
+		return strings.TrimSpace(status.Reason)
+	}
+	return strings.TrimSpace(status.Phase)
+}
+
+func dynamicTimestampEqual(left, right *metav1.Time) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	return left.Equal(right)
+}
+
+func reconcileDynamicHostLastUpdated(current *marklogicv1.DynamicGroupStatus, hosts []marklogicv1.DynamicHostStatus, now metav1.Time) []marklogicv1.DynamicHostStatus {
+	if len(hosts) == 0 {
+		return hosts
+	}
+
+	previousByKey := map[string]marklogicv1.DynamicHostStatus{}
+	if current != nil {
+		for _, host := range current.Hosts {
+			key := dynamicHostStatusKey(host)
+			if key != "" {
+				previousByKey[key] = host
+			}
+		}
+	}
+
+	updatedHosts := make([]marklogicv1.DynamicHostStatus, 0, len(hosts))
+	for _, host := range hosts {
+		updated := host
+		key := dynamicHostStatusKey(host)
+		if previous, found := previousByKey[key]; found && dynamicHostEquivalentWithoutTimestamp(previous, host) && previous.LastUpdated != nil {
+			updated.LastUpdated = previous.LastUpdated.DeepCopy()
+		} else {
+			updated.LastUpdated = now.DeepCopy()
+		}
+		updatedHosts = append(updatedHosts, updated)
+	}
+
+	return updatedHosts
+}
+
+func dynamicHostStatusKey(host marklogicv1.DynamicHostStatus) string {
+	if host.PodName != "" {
+		return "pod:" + host.PodName
+	}
+	if host.Hostname != "" {
+		return "host:" + host.Hostname
+	}
+	if host.HostID != "" {
+		return "id:" + host.HostID
+	}
+	return ""
+}
+
+func dynamicHostEquivalentWithoutTimestamp(left, right marklogicv1.DynamicHostStatus) bool {
+	return left.PodName == right.PodName &&
+		left.Hostname == right.Hostname &&
+		left.HostID == right.HostID &&
+		left.State == right.State &&
+		left.Message == right.Message &&
+		left.Attempts == right.Attempts
 }
 
 func (oc *OperatorContext) getOwningClusterName() (string, error) {
@@ -950,19 +1167,39 @@ func (oc *OperatorContext) reconcileDynamicScaleUp(groupClient mlmanage.Client, 
 		previousHosts = oc.MarklogicGroup.Status.Dynamic.Hosts
 	}
 	hostStatuses, localReadyReplicas, readyReplicas, joinCandidates := oc.buildDynamicHostStatuses(pods, members, previousHosts)
+	hostStatuses = markDynamicPodStartupTimeouts(oc.MarklogicGroup, pods, hostStatuses, time.Now())
 
 	if desiredReplicas <= readyReplicas {
-		if err := oc.setDynamicStatusDetailed(dynamicPhaseConfigured, "", "dynamic hosts are configured and at desired joined replicas", true, true, true, desiredReplicas, localReadyReplicas, readyReplicas, hostStatuses); err != nil {
+		phase := dynamicPhaseIdle
+		reason := ""
+		message := "dynamic hosts are configured and at desired joined replicas"
+		if hasFailedDynamicHost(hostStatuses) {
+			phase = dynamicPhaseDegraded
+			reason = dynamicReasonJoinFailed
+			message = "one or more dynamic hosts failed and require intervention"
+			if hasPodStartupTimeoutFailure(hostStatuses) {
+				reason = dynamicReasonPodStartupTimeout
+				message = "one or more dynamic pods did not reach local readiness before startup timeout"
+			}
+		}
+		if err := oc.setDynamicStatusDetailed(phase, reason, message, true, true, true, desiredReplicas, localReadyReplicas, readyReplicas, hostStatuses); err != nil {
 			return result.Error(err)
 		}
-		return result.Continue()
+		if phase == dynamicPhaseIdle {
+			return result.Continue()
+		}
+		return result.RequeueSoon(dynamicJoinRequeueSeconds)
 	}
 
 	if len(joinCandidates) == 0 {
 		phase := dynamicPhaseReconciling
 		reason := ""
 		message := fmt.Sprintf("waiting for local-ready pods to join MarkLogic (%d/%d)", readyReplicas, desiredReplicas)
-		if hasFailedDynamicHost(hostStatuses) {
+		if hasPodStartupTimeoutFailure(hostStatuses) {
+			phase = dynamicPhaseDegraded
+			reason = dynamicReasonPodStartupTimeout
+			message = fmt.Sprintf("one or more dynamic pods did not reach local readiness before startup timeout (%d/%d)", readyReplicas, desiredReplicas)
+		} else if hasFailedDynamicHost(hostStatuses) {
 			phase = dynamicPhaseDegraded
 			reason = dynamicReasonJoinFailed
 			message = fmt.Sprintf("one or more hosts failed to join MarkLogic (%d/%d)", readyReplicas, desiredReplicas)
@@ -1005,7 +1242,7 @@ func (oc *OperatorContext) reconcileDynamicScaleUp(groupClient mlmanage.Client, 
 	hostStatuses = setDynamicHostStatus(hostStatuses, pod.Name, hostFQDN, dynamicHostStateJoined, "", member.HostID, 0)
 
 	if desiredReplicas <= readyReplicas {
-		if err := oc.setDynamicStatusDetailed(dynamicPhaseConfigured, "", "dynamic hosts are configured and at desired joined replicas", true, true, true, desiredReplicas, localReadyReplicas, readyReplicas, hostStatuses); err != nil {
+		if err := oc.setDynamicStatusDetailed(dynamicPhaseIdle, "", "dynamic hosts are configured and at desired joined replicas", true, true, true, desiredReplicas, localReadyReplicas, readyReplicas, hostStatuses); err != nil {
 			return result.Error(err)
 		}
 		return result.Continue()
@@ -1445,6 +1682,38 @@ func hasFailedDynamicHost(hosts []marklogicv1.DynamicHostStatus) bool {
 		}
 	}
 	return false
+}
+
+func hasPodStartupTimeoutFailure(hosts []marklogicv1.DynamicHostStatus) bool {
+	for _, host := range hosts {
+		if host.State == dynamicHostStateFailed && strings.Contains(strings.ToLower(host.Message), dynamicPodStartupTimeoutMessage) {
+			return true
+		}
+	}
+	return false
+}
+
+func markDynamicPodStartupTimeouts(group *marklogicv1.MarklogicGroup, pods []corev1.Pod, hosts []marklogicv1.DynamicHostStatus, now time.Time) []marklogicv1.DynamicHostStatus {
+	if group == nil || DynamicPodStartupTimeout <= 0 {
+		return hosts
+	}
+
+	for _, pod := range pods {
+		if pod.DeletionTimestamp != nil || isPodLocallyReady(&pod) || pod.CreationTimestamp.IsZero() {
+			continue
+		}
+
+		if now.Sub(pod.CreationTimestamp.Time) < DynamicPodStartupTimeout {
+			continue
+		}
+
+		hostFQDN := dynamicPodFQDN(group, pod.Name)
+		hostID := dynamicHostID(hosts, pod.Name)
+		message := fmt.Sprintf("%s: %s (%s)", dynamicPodStartupTimeoutMessage, pod.Name, DynamicPodStartupTimeout.String())
+		hosts = setDynamicHostStatus(hosts, pod.Name, hostFQDN, dynamicHostStateFailed, message, hostID, incrementDynamicHostAttempts(hosts, pod.Name))
+	}
+
+	return hosts
 }
 
 func hasRestartRecoverySignals(hosts []marklogicv1.DynamicHostStatus) bool {

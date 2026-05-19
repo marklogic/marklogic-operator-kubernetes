@@ -215,6 +215,7 @@ type DynamicGroupStatus struct {
 	Phase               string              `json:"phase,omitempty"`
 	Reason              string              `json:"reason,omitempty"`
 	Message             string              `json:"message,omitempty"`
+	LastTransitionTime  *metav1.Time        `json:"lastTransitionTime,omitempty"`
 	BootstrapReady      bool                `json:"bootstrapReady,omitempty"`
 	Configured          bool                `json:"configured,omitempty"`
 	DynamicHostsEnabled bool                `json:"dynamicHostsEnabled,omitempty"`
@@ -225,12 +226,13 @@ type DynamicGroupStatus struct {
 }
 
 type DynamicHostStatus struct {
-	PodName  string `json:"podName,omitempty"`
-	Hostname string `json:"hostname,omitempty"`
-	HostID   string `json:"hostId,omitempty"`
-	State    string `json:"state,omitempty"`
-	Message  string `json:"message,omitempty"`
-	Attempts int32  `json:"attempts,omitempty"`
+	PodName     string       `json:"podName,omitempty"`
+	Hostname    string       `json:"hostname,omitempty"`
+	HostID      string       `json:"hostId,omitempty"`
+	State       string       `json:"state,omitempty"`
+	Message     string       `json:"message,omitempty"`
+	Attempts    int32        `json:"attempts,omitempty"`
+	LastUpdated *metav1.Time `json:"lastUpdated,omitempty"`
 }
 
 func (status *MarklogicGroupStatus) SetCondition(condition metav1.Condition) {

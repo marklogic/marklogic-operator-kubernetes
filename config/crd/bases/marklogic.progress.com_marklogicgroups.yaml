@@ -5029,6 +5029,9 @@ spec:
                           type: string
                         hostname:
                           type: string
+                        lastUpdated:
+                          format: date-time
+                          type: string
                         message:
                           type: string
                         podName:
@@ -5037,6 +5040,9 @@ spec:
                           type: string
                       type: object
                     type: array
+                  lastTransitionTime:
+                    format: date-time
+                    type: string
                   localReadyReplicas:
                     format: int32
                     type: integer
