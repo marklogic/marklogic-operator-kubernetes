@@ -109,6 +109,94 @@ func TestResizeValidationRequiresOnDelete(t *testing.T) {
 	}
 }
 
+func TestTerminalFailedStatusForCurrentSpecDoesNotRestart(t *testing.T) {
+	oc := newResizeTestContext(t, resizeTestInput{desiredSize: "50Gi", currentSize: "20Gi", updateStrategy: appsv1.OnDeleteStatefulSetStrategyType})
+	now := metav1.Now()
+	terminal := &marklogicv1.VolumeResizeStatus{
+		OperationID:        "resize-terminal-failed",
+		ObservedGeneration: oc.MarklogicGroup.Generation,
+		Phase:              marklogicv1.VolumeResizePhaseFailed,
+		Reason:             marklogicv1.VolumeResizeReasonMaxRetriesExceeded,
+		Message:            "Terminal failure for current resize request",
+		CurrentSize:        "20Gi",
+		TargetSize:         "50Gi",
+		FirstStartedTime:   &now,
+		LastTransitionTime: &now,
+		CompletionTime:     &now,
+	}
+	if err := oc.patchResizeStatus(terminal); err != nil {
+		t.Fatalf("failed to seed terminal failed status: %v", err)
+	}
+
+	res := oc.ReconcileVolumeResizeValidation()
+	if res.Completed() {
+		t.Fatalf("expected terminal failed status for unchanged spec to continue without restart")
+	}
+
+	updated := getUpdatedGroup(t, oc)
+	status := updated.Status.VolumeResizeStatus
+	if status == nil {
+		t.Fatalf("expected terminal failed status to remain set")
+	}
+	if status.OperationID != terminal.OperationID {
+		t.Fatalf("expected operationID %s to remain unchanged, got %s", terminal.OperationID, status.OperationID)
+	}
+	if status.Phase != marklogicv1.VolumeResizePhaseFailed {
+		t.Fatalf("expected phase Failed to persist, got %s", status.Phase)
+	}
+}
+
+func TestTerminalFailedStatusRestartsWhenSpecGenerationChanges(t *testing.T) {
+	oc := newResizeTestContext(t, resizeTestInput{desiredSize: "50Gi", currentSize: "20Gi", updateStrategy: appsv1.OnDeleteStatefulSetStrategyType})
+	now := metav1.Now()
+	terminal := &marklogicv1.VolumeResizeStatus{
+		OperationID:        "resize-terminal-failed",
+		ObservedGeneration: oc.MarklogicGroup.Generation,
+		Phase:              marklogicv1.VolumeResizePhaseFailed,
+		Reason:             marklogicv1.VolumeResizeReasonMaxRetriesExceeded,
+		Message:            "Terminal failure for previous resize request",
+		CurrentSize:        "20Gi",
+		TargetSize:         "50Gi",
+		FirstStartedTime:   &now,
+		LastTransitionTime: &now,
+		CompletionTime:     &now,
+	}
+	if err := oc.patchResizeStatus(terminal); err != nil {
+		t.Fatalf("failed to seed terminal failed status: %v", err)
+	}
+
+	latest := getUpdatedGroup(t, oc)
+	latest.Spec.Persistence.Size = "60Gi"
+	latest.Generation++
+	if err := oc.Client.Update(oc.Ctx, latest); err != nil {
+		t.Fatalf("failed to update group with new resize request: %v", err)
+	}
+	oc.MarklogicGroup = getUpdatedGroup(t, oc)
+
+	res := oc.ReconcileVolumeResizeValidation()
+	if !res.Completed() {
+		t.Fatalf("expected new generation resize request to start a new operation")
+	}
+	if _, err := res.Output(); err != nil {
+		t.Fatalf("unexpected result error: %v", err)
+	}
+
+	updated := getUpdatedGroup(t, oc)
+	status := updated.Status.VolumeResizeStatus
+	if status == nil {
+		t.Fatalf("expected resize status to be present")
+	}
+	if status.Phase != marklogicv1.VolumeResizePhaseResizingPVCs {
+		t.Fatalf("expected new operation to reach ResizingPVCs, got %s", status.Phase)
+	}
+	if status.OperationID == terminal.OperationID {
+		t.Fatalf("expected a new operationID when generation changes")
+	}
+	if status.TargetSize != "60Gi" {
+		t.Fatalf("expected targetSize 60Gi for restarted operation, got %s", status.TargetSize)
+	}
+}
+
 func TestActiveOperationDefersNewerTarget(t *testing.T) {
 	oc := newResizeTestContext(t, resizeTestInput{desiredSize: "50Gi", currentSize: "20Gi", updateStrategy: appsv1.OnDeleteStatefulSetStrategyType})
 	now := metav1.Now()
@@ -149,7 +237,7 @@ func TestActiveOperationDefersNewerTarget(t *testing.T) {
 	}
 }
 
-func TestPausedAnnotationStallsResize(t *testing.T) {
+func TestPausedAnnotationPreservesPhaseAndResumes(t *testing.T) {
 	oc := newResizeTestContext(t, resizeTestInput{desiredSize: "50Gi", currentSize: "20Gi", updateStrategy: appsv1.OnDeleteStatefulSetStrategyType})
 	oc.MarklogicGroup.Annotations = map[string]string{resizePauseAnnotationKey: "true"}
 	if err := oc.Client.Update(oc.Ctx, oc.MarklogicGroup); err != nil {
@@ -169,8 +257,76 @@ func TestPausedAnnotationStallsResize(t *testing.T) {
 	if status == nil {
 		t.Fatalf("expected volumeResizeStatus to be set")
 	}
-	if status.Phase != marklogicv1.VolumeResizePhaseStalled {
-		t.Fatalf("expected phase Stalled, got %s", status.Phase)
+	if status.Phase != marklogicv1.VolumeResizePhaseValidating {
+		t.Fatalf("expected phase Validating to be preserved while paused, got %s", status.Phase)
+	}
+	if status.Reason != marklogicv1.VolumeResizeReasonPaused {
+		t.Fatalf("expected reason Paused, got %s", status.Reason)
+	}
+
+	updated.Annotations = map[string]string{}
+	if err := oc.Client.Update(oc.Ctx, updated); err != nil {
+		t.Fatalf("failed to remove paused annotation: %v", err)
+	}
+	oc.MarklogicGroup = getUpdatedGroup(t, oc)
+
+	res = oc.ReconcileVolumeResizeValidation()
+	if !res.Completed() {
+		t.Fatalf("expected resume reconcile to complete")
+	}
+	if _, err := res.Output(); err != nil {
+		t.Fatalf("unexpected result error on resume: %v", err)
+	}
+
+	resumed := getUpdatedGroup(t, oc).Status.VolumeResizeStatus
+	if resumed == nil {
+		t.Fatalf("expected volumeResizeStatus after resume")
+	}
+	if resumed.Phase != marklogicv1.VolumeResizePhaseResizingPVCs {
+		t.Fatalf("expected phase ResizingPVCs after resume, got %s", resumed.Phase)
+	}
+	if resumed.Reason != "" {
+		t.Fatalf("expected paused reason to be cleared on resume, got %s", resumed.Reason)
+	}
+}
+
+func TestPausedActiveOperationPreservesCurrentPhase(t *testing.T) {
+	oc := newResizeTestContext(t, resizeTestInput{desiredSize: "50Gi", currentSize: "20Gi", updateStrategy: appsv1.OnDeleteStatefulSetStrategyType})
+	now := metav1.Now()
+	oc.MarklogicGroup.Status.VolumeResizeStatus = &marklogicv1.VolumeResizeStatus{
+		OperationID:        "resize-paused-active",
+		ObservedGeneration: oc.MarklogicGroup.Generation,
+		Phase:              marklogicv1.VolumeResizePhaseWaitingForPVCResize,
+		CurrentSize:        "20Gi",
+		TargetSize:         "50Gi",
+		FirstStartedTime:   &now,
+		LastTransitionTime: &now,
+	}
+	if err := oc.Client.Status().Update(oc.Ctx, oc.MarklogicGroup); err != nil {
+		t.Fatalf("failed to seed active status: %v", err)
+	}
+
+	latest := getUpdatedGroup(t, oc)
+	latest.Annotations = map[string]string{resizePauseAnnotationKey: "true"}
+	if err := oc.Client.Update(oc.Ctx, latest); err != nil {
+		t.Fatalf("failed to set paused annotation: %v", err)
+	}
+	oc.MarklogicGroup = getUpdatedGroup(t, oc)
+
+	res := oc.ReconcileVolumeResizeValidation()
+	if !res.Completed() {
+		t.Fatalf("expected paused active reconcile to complete")
+	}
+	if _, err := res.Output(); err != nil {
+		t.Fatalf("unexpected result error: %v", err)
+	}
+
+	status := getUpdatedGroup(t, oc).Status.VolumeResizeStatus
+	if status == nil {
+		t.Fatalf("expected volumeResizeStatus to be present")
+	}
+	if status.Phase != marklogicv1.VolumeResizePhaseWaitingForPVCResize {
+		t.Fatalf("expected phase WaitingForPVCResize to be preserved, got %s", status.Phase)
 	}
 	if status.Reason != marklogicv1.VolumeResizeReasonPaused {
 		t.Fatalf("expected reason Paused, got %s", status.Reason)
@@ -1104,7 +1260,7 @@ func TestResizeValidationStorageClassForbiddenShowsNamespaceScopeMessage(t *test
 	}
 }
 
-func TestComputeResizeRetryDelaySeconds_ExponentialAndCapped(t *testing.T) {
+func TestComputeResizeRetryBaseDelaySeconds_ExponentialAndCapped(t *testing.T) {
 	tests := []struct {
 		name     string
 		retry    int32
@@ -1121,11 +1277,57 @@ func TestComputeResizeRetryDelaySeconds_ExponentialAndCapped(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			actual := computeResizeRetryDelaySeconds(tt.retry)
+			actual := computeResizeRetryBaseDelaySeconds(tt.retry)
 			if actual != tt.expected {
 				t.Fatalf("expected retry=%d to yield delay=%d, got %d", tt.retry, tt.expected, actual)
 			}
 		})
+	}
+}
+
+func TestJitteredResizeRetryDelaySeconds_BoundedByConfiguredRange(t *testing.T) {
+	base := computeResizeRetryBaseDelaySeconds(3)
+	minExpected := base - ((base * resizeRetryJitterPercent) / 100)
+	maxExpected := base + ((base * resizeRetryJitterPercent) / 100)
+
+	minDelay := jitteredResizeRetryDelaySeconds(base, func(n int) int {
+		if n <= 0 {
+			return 0
+		}
+		return 0
+	})
+	if minDelay != minExpected {
+		t.Fatalf("expected minimum jittered delay %d, got %d", minExpected, minDelay)
+	}
+
+	maxDelay := jitteredResizeRetryDelaySeconds(base, func(n int) int {
+		if n <= 0 {
+			return 0
+		}
+		return n - 1
+	})
+	if maxDelay != maxExpected {
+		t.Fatalf("expected maximum jittered delay %d, got %d", maxExpected, maxDelay)
+	}
+}
+
+func TestJitteredResizeRetryDelaySeconds_CappedAtMax(t *testing.T) {
+	base := computeResizeRetryBaseDelaySeconds(6)
+	if base != resizeRetryMaxDelaySecs {
+		t.Fatalf("expected base delay to be capped at %d, got %d", resizeRetryMaxDelaySecs, base)
+	}
+
+	delay := jitteredResizeRetryDelaySeconds(base, func(n int) int {
+		if n <= 0 {
+			return 0
+		}
+		return n - 1
+	})
+	if delay > resizeRetryMaxDelaySecs {
+		t.Fatalf("expected jittered delay to stay <= %d, got %d", resizeRetryMaxDelaySecs, delay)
+	}
+	if delay < resizeRetryMaxDelaySecs-((resizeRetryMaxDelaySecs*resizeRetryJitterPercent)/100) {
+		t.Fatalf("expected jittered capped delay to stay within lower bound, got %d", delay)
 	}
 }
 

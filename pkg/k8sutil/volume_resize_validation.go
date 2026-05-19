@@ -4,6 +4,7 @@ package k8sutil
 
 import (
 	"fmt"
+	"math/rand"
 	"sort"
 	"strconv"
 	"strings"
@@ -22,9 +23,11 @@ import (
 
 const (
 	resizePauseAnnotationKey = "marklogic.progress.com/resize-paused"
+	resizePausedMessage      = "Resize is paused by annotation marklogic.progress.com/resize-paused"
 	dataDirPVCName           = "datadir"
 	resizeRetryDelaySeconds  = 10
 	resizeRetryMaxDelaySecs  = 300
+	resizeRetryJitterPercent = 20
 	resizeMaxRetries         = 15
 
 	resizeMarkerSyncStarted             = "pr4.sync.started"
@@ -85,6 +88,10 @@ func (oc *OperatorContext) ReconcileVolumeResizeValidation() result.ReconcileRes
 		return result.Continue()
 	}
 
+	if shouldIgnoreTerminalResizeRestart(cr.Status.VolumeResizeStatus, cr.Spec.Persistence.Size, cr.Generation) {
+		return result.Continue()
+	}
+
 	resizeStatus := oc.newResizeStatus(pvcState, targetSize.String())
 	claimed, err := oc.claimResizeStatusCAS(resizeStatus)
 	if err != nil {
@@ -109,8 +116,9 @@ func (oc *OperatorContext) ReconcileVolumeResizeValidation() result.ReconcileRes
 	oc.emitResizeEvent(corev1.EventTypeNormal, "VolumeResizeRequested", fmt.Sprintf("Resize requested from %s to %s", resizeStatus.CurrentSize, resizeStatus.TargetSize))
 
 	if isResizePaused(cr) {
-		oc.transitionResizePhase(resizeStatus, marklogicv1.VolumeResizePhaseStalled, marklogicv1.VolumeResizeReasonPaused, "Resize is paused by annotation marklogic.progress.com/resize-paused")
-		oc.emitResizeEvent(corev1.EventTypeWarning, "VolumeResizeStalled", resizeStatus.Message)
+		if setResizePausedStatus(resizeStatus, resizePausedMessage) {
+			oc.emitResizeEvent(corev1.EventTypeWarning, "VolumeResizeStalled", resizeStatus.Message)
+		}
 		if err := oc.patchResizeStatus(resizeStatus); err != nil {
 			return result.Error(err)
 		}
@@ -202,10 +210,8 @@ func (oc *OperatorContext) reconcileActiveResizeOperation(active *marklogicv1.Vo
 
 	updated := false
 	if isResizePaused(oc.MarklogicGroup) {
-		message := "Resize is paused by annotation marklogic.progress.com/resize-paused"
-		if active.Phase != marklogicv1.VolumeResizePhaseStalled || active.Reason != marklogicv1.VolumeResizeReasonPaused || active.Message != message {
-			oc.transitionResizePhase(active, marklogicv1.VolumeResizePhaseStalled, marklogicv1.VolumeResizeReasonPaused, message)
-			oc.emitResizeEvent(corev1.EventTypeWarning, "VolumeResizeStalled", message)
+		if setResizePausedStatus(active, resizePausedMessage) {
+			oc.emitResizeEvent(corev1.EventTypeWarning, "VolumeResizeStalled", resizePausedMessage)
 			updated = true
 		}
 		if updated {
@@ -214,6 +220,10 @@ func (oc *OperatorContext) reconcileActiveResizeOperation(active *marklogicv1.Vo
 			}
 		}
 		return result.Done()
+	}
+
+	if clearResizePausedStatus(active, resizePausedMessage) {
+		updated = true
 	}
 
 	currentTarget, err := resource.ParseQuantity(active.TargetSize)
@@ -882,6 +892,70 @@ func isResizeOperationActive(status *marklogicv1.VolumeResizeStatus) bool {
 	return status.Phase != marklogicv1.VolumeResizePhaseCompleted && status.Phase != marklogicv1.VolumeResizePhaseFailed
 }
 
+func setResizePausedStatus(status *marklogicv1.VolumeResizeStatus, message string) bool {
+	if status == nil {
+		return false
+	}
+
+	changed := false
+	if status.Reason != marklogicv1.VolumeResizeReasonPaused {
+		status.Reason = marklogicv1.VolumeResizeReasonPaused
+		changed = true
+	}
+	if status.Message != message {
+		status.Message = message
+		changed = true
+	}
+	if status.LastTransitionTime == nil {
+		now := metav1.Now()
+		status.LastTransitionTime = &now
+		changed = true
+	}
+
+	return changed
+}
+
+func clearResizePausedStatus(status *marklogicv1.VolumeResizeStatus, pausedMessage string) bool {
+	if status == nil || status.Reason != marklogicv1.VolumeResizeReasonPaused {
+		return false
+	}
+
+	status.Reason = ""
+	if status.Message == pausedMessage {
+		status.Message = ""
+	}
+	return true
+}
+
+func shouldIgnoreTerminalResizeRestart(status *marklogicv1.VolumeResizeStatus, specTargetSize string, generation int64) bool {
+	if status == nil || isResizeOperationActive(status) {
+		return false
+	}
+
+	if status.ObservedGeneration != generation {
+		return false
+	}
+
+	if !resizeTargetsEqual(status.TargetSize, specTargetSize) {
+		return false
+	}
+
+	if status.DeferredObservedGeneration == generation && resizeTargetsEqual(status.DeferredTargetSize, specTargetSize) {
+		return false
+	}
+
+	return true
+}
+
+func resizeTargetsEqual(left, right string) bool {
+	leftQty, leftErr := resource.ParseQuantity(left)
+	rightQty, rightErr := resource.ParseQuantity(right)
+	if leftErr == nil && rightErr == nil {
+		return leftQty.Cmp(rightQty) == 0
+	}
+	return left == right
+}
+
 func isPVCCheckpointed(status *marklogicv1.PVCResizeStatus) bool {
 	if status == nil {
 		return false
@@ -1008,6 +1082,11 @@ func (oc *OperatorContext) scheduleRetryOrFail(status *marklogicv1.VolumeResizeS
 }
 
 func computeResizeRetryDelaySeconds(retryCount int32) int {
+	baseDelaySecs := computeResizeRetryBaseDelaySeconds(retryCount)
+	return jitteredResizeRetryDelaySeconds(baseDelaySecs, rand.Intn)
+}
+
+func computeResizeRetryBaseDelaySeconds(retryCount int32) int {
 	if retryCount <= 1 {
 		return resizeRetryDelaySeconds
 	}
@@ -1021,6 +1100,38 @@ func computeResizeRetryDelaySeconds(retryCount int32) int {
 	}
 
 	return delaySecs
+}
+
+func jitteredResizeRetryDelaySeconds(baseDelaySecs int, intnFn func(int) int) int {
+	if baseDelaySecs <= 0 {
+		return resizeRetryDelaySeconds
+	}
+
+	// Jitter avoids synchronized retries when multiple controllers fail at the same time.
+	jitterRange := (baseDelaySecs * resizeRetryJitterPercent) / 100
+	if jitterRange < 1 || intnFn == nil {
+		if baseDelaySecs > resizeRetryMaxDelaySecs {
+			return resizeRetryMaxDelaySecs
+		}
+		return baseDelaySecs
+	}
+
+	minDelay := baseDelaySecs - jitterRange
+	if minDelay < 1 {
+		minDelay = 1
+	}
+
+	maxDelay := baseDelaySecs + jitterRange
+	if maxDelay > resizeRetryMaxDelaySecs {
+		maxDelay = resizeRetryMaxDelaySecs
+	}
+
+	rangeSize := (maxDelay - minDelay) + 1
+	if rangeSize <= 1 {
+		return minDelay
+	}
+
+	return minDelay + intnFn(rangeSize)
 }
 
 func (oc *OperatorContext) clearRetryState(status *marklogicv1.VolumeResizeStatus) {
