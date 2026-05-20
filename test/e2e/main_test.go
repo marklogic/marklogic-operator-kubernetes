@@ -53,8 +53,9 @@ func namespaceLabels() map[string]string {
 // ── Test summary tracker ──────────────────────────────────────────────────────
 
 type testResult struct {
-	name   string
-	passed bool
+	name    string
+	passed  bool
+	skipped bool
 }
 
 var (
@@ -63,12 +64,16 @@ var (
 )
 
 // trackTest registers t in the global summary. Call it at the top of each Test* function.
-// t.Cleanup runs after the test (and all its sub-tests) complete, so t.Failed() is final.
+// t.Cleanup runs after the test (and all its sub-tests) complete, so t.Failed()/t.Skipped() are final.
 func trackTest(t *testing.T) {
 	t.Helper()
 	t.Cleanup(func() {
 		trackMu.Lock()
-		trackedTests = append(trackedTests, testResult{name: t.Name(), passed: !t.Failed()})
+		trackedTests = append(trackedTests, testResult{
+			name:    t.Name(),
+			passed:  !t.Failed() && !t.Skipped(),
+			skipped: t.Skipped(),
+		})
 		trackMu.Unlock()
 	})
 }
@@ -83,8 +88,11 @@ func printTestSummary() {
 	total := len(results)
 	passed := 0
 	var failed []string
+	var skipped []string
 	for _, r := range results {
-		if r.passed {
+		if r.skipped {
+			skipped = append(skipped, r.name)
+		} else if r.passed {
 			passed++
 		} else {
 			failed = append(failed, r.name)
@@ -95,9 +103,10 @@ func printTestSummary() {
 	fmt.Println("╔══════════════════════════════════════════════════════════════╗")
 	fmt.Println("║              E2E (CLUSTER-SCOPED) TEST SUITE SUMMARY         ║")
 	fmt.Println("╠══════════════════════════════════════════════════════════════╣")
-	fmt.Printf("║  Total  : %-51d║\n", total)
-	fmt.Printf("║  Passed : %-51d║\n", passed)
-	fmt.Printf("║  Failed : %-51d║\n", len(failed))
+	fmt.Printf("║  Total   : %-50d║\n", total)
+	fmt.Printf("║  Passed  : %-50d║\n", passed)
+	fmt.Printf("║  Skipped : %-50d║\n", len(skipped))
+	fmt.Printf("║  Failed  : %-50d║\n", len(failed))
 	if len(failed) > 0 {
 		fmt.Println("╠══════════════════════════════════════════════════════════════╣")
 		fmt.Println("║  Failed tests:                                               ║")
