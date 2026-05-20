@@ -27,12 +27,15 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/event"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
 
 // MarklogicGroupReconciler reconciles a MarklogicGroup object
@@ -161,7 +164,43 @@ func (r *MarklogicGroupReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		WithEventFilter(markLogicGroupCreateUpdateDeletePredicate()).
 		Owns(&appsv1.StatefulSet{}).
 		Owns(&corev1.Service{}).
-		Owns(&corev1.Pod{})
+		Watches(&corev1.Pod{}, handler.EnqueueRequestsFromMapFunc(r.podToMarklogicGroup))
 
 	return builder.Complete(r)
+}
+
+// podToMarklogicGroup maps a Pod to its owning MarklogicGroup by traversing
+// the ownership chain: Pod -> StatefulSet -> MarklogicGroup.
+func (r *MarklogicGroupReconciler) podToMarklogicGroup(ctx context.Context, obj client.Object) []reconcile.Request {
+	pod, ok := obj.(*corev1.Pod)
+	if !ok {
+		return nil
+	}
+
+	// Find the StatefulSet that owns this pod
+	for _, ownerRef := range pod.GetOwnerReferences() {
+		if ownerRef.Kind != "StatefulSet" {
+			continue
+		}
+
+		// Get the StatefulSet
+		var sts appsv1.StatefulSet
+		if err := r.Get(ctx, types.NamespacedName{Name: ownerRef.Name, Namespace: pod.Namespace}, &sts); err != nil {
+			return nil
+		}
+
+		// Find the MarklogicGroup that owns the StatefulSet
+		for _, stsOwnerRef := range sts.GetOwnerReferences() {
+			if stsOwnerRef.Kind == "MarklogicGroup" {
+				return []reconcile.Request{
+					{NamespacedName: types.NamespacedName{
+						Name:      stsOwnerRef.Name,
+						Namespace: pod.Namespace,
+					}},
+				}
+			}
+		}
+	}
+
+	return nil
 }
