@@ -3,8 +3,9 @@
 package k8sutil
 
 import (
+	cryptorand "crypto/rand"
 	"fmt"
-	"math/rand"
+	"math/big"
 	"sort"
 	"strconv"
 	"strings"
@@ -1083,7 +1084,18 @@ func (oc *OperatorContext) scheduleRetryOrFail(status *marklogicv1.VolumeResizeS
 
 func computeResizeRetryDelaySeconds(retryCount int32) int {
 	baseDelaySecs := computeResizeRetryBaseDelaySeconds(retryCount)
-	return jitteredResizeRetryDelaySeconds(baseDelaySecs, rand.Intn)
+	return jitteredResizeRetryDelaySeconds(baseDelaySecs, resizeRetryJitterIntn)
+}
+
+func resizeRetryJitterIntn(n int) int {
+	if n <= 0 {
+		return 0
+	}
+	randomValue, err := cryptorand.Int(cryptorand.Reader, big.NewInt(int64(n)))
+	if err != nil {
+		return int(time.Now().UnixNano() % int64(n))
+	}
+	return int(randomValue.Int64())
 }
 
 func computeResizeRetryBaseDelaySeconds(retryCount int32) int {
