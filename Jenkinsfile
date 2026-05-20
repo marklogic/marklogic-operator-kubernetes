@@ -324,7 +324,6 @@ pipeline {
         booleanParam(name: 'TEST_ON_EKS', defaultValue: false, description: 'Run e2e tests on the EKS cluster (jenkins-kube-ninjas) instead of Minikube. Requires KUBE_NINJAS_OPS_AWS_JENKINS credentials on this agent.')
         string(name: 'EKS_MARKLOGIC_IMAGE_TAG', defaultValue: 'latest-12', description: 'MarkLogic image tag to pull from the EKS ECR registry when TEST_ON_EKS=true. The full ECR URL is constructed at runtime from the AWS account ID resolved via STS.', trim: true)
         booleanParam(name: 'VERIFY_HELM_NAMESPACE_SCOPED', defaultValue: false, description: 'Run namespace-scoped e2e tests via Helm chart install (validates Role/RoleBinding, no ClusterRole)')
-        booleanParam(name: 'VERIFY_VOLUME_RESIZE', defaultValue: true, description: 'Run cluster-scoped + Helm-namespace-scoped volume-resize e2e tests (two namespaces in parallel each)')
     }
 
     stages {
