@@ -38,14 +38,6 @@ rules:
   - get
 - apiGroups:
   - ""
-  resources:
-  - persistentvolumes
-  verbs:
-  - get
-  - list
-  - watch
-- apiGroups:
-  - ""
   - events.k8s.io
   resources:
   - events
