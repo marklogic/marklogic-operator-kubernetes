@@ -412,7 +412,6 @@ func (c *managementClient) doRequestWithAuth(ctx context.Context, method, endpoi
 	if err != nil {
 		return nil, err
 	}
-	req.SetBasicAuth(c.username, c.password)
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {

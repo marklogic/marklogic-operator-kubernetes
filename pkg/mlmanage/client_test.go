@@ -33,11 +33,6 @@ func TestRemoveDynamicHostUsesXMLBodyContract(t *testing.T) {
 		gotAccept = r.Header.Get("Accept")
 		gotBody = string(data)
 
-		username, password, ok := r.BasicAuth()
-		if !ok || username != "user" || password != "password" {
-			t.Fatalf("expected basic auth user/password, got %q/%q", username, password)
-		}
-
 		w.WriteHeader(http.StatusAccepted)
 	}))
 	defer server.Close()
@@ -171,13 +166,13 @@ func TestDoJSONRetriesWithDigestAuthChallenge(t *testing.T) {
 	}
 
 	if calls != 2 {
-		t.Fatalf("expected 2 calls (basic then digest), got %d", calls)
+		t.Fatalf("expected 2 calls (no-auth then digest), got %d", calls)
 	}
 	if len(authHeaders) != 2 {
 		t.Fatalf("expected 2 auth headers, got %d", len(authHeaders))
 	}
-	if !strings.HasPrefix(authHeaders[0], "Basic ") {
-		t.Fatalf("expected first request to use basic auth, got %q", authHeaders[0])
+	if authHeaders[0] != "" {
+		t.Fatalf("expected first request to have no Authorization header, got %q", authHeaders[0])
 	}
 	if !strings.HasPrefix(authHeaders[1], "Digest ") {
 		t.Fatalf("expected second request to use digest auth, got %q", authHeaders[1])
