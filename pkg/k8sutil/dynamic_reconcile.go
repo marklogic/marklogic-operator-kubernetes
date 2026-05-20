@@ -146,12 +146,17 @@ func (oc *OperatorContext) ReconcileDynamicGroupConfig() result.ReconcileResult 
 	}
 
 	useTLS := oc.MarklogicGroup.Spec.Tls != nil && oc.MarklogicGroup.Spec.Tls.EnableOnDefaultAppServers
+	// Dynamic reconcile connects to MarkLogic management endpoints that may be
+	// secured with operator-managed or self-signed certificates. Until a CA
+	// bundle is explicitly loaded into the client, keep TLS behavior consistent
+	// with that deployment model by skipping verification when TLS is enabled.
+	insecureSkipVerify := useTLS
 	adminClient := NewDynamicManagementClient(mlmanage.ClientOptions{
 		Host:               bootstrapHost,
 		Username:           adminUser,
 		Password:           adminPass,
 		UseTLS:             useTLS,
-		InsecureSkipVerify: false,
+		InsecureSkipVerify: insecureSkipVerify,
 	})
 
 	hosts, err := adminClient.ListHostsStatus(oc.Ctx)
