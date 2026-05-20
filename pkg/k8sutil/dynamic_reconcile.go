@@ -4,6 +4,7 @@ package k8sutil
 
 import (
 	"fmt"
+	"hash/fnv"
 	"reflect"
 	"regexp"
 	"sort"
@@ -32,12 +33,12 @@ type DynamicPVCRestartCleanupFunc func(oc *OperatorContext, pod *corev1.Pod) (bo
 var DynamicPVCRestartCleanup DynamicPVCRestartCleanupFunc = defaultDynamicPVCRestartCleanup
 
 const (
-	dynamicPhasePending     = "pending"
-	dynamicPhaseReconciling = "reconciling"
-	dynamicPhaseDeleting    = "deleting"
-	dynamicPhaseDegraded    = "degraded"
-	dynamicPhaseFailed      = "failed"
-	dynamicPhaseIdle        = "idle"
+	dynamicPhasePending     = "Pending"
+	dynamicPhaseReconciling = "Reconciling"
+	dynamicPhaseDeleting    = "Deleting"
+	dynamicPhaseDegraded    = "Degraded"
+	dynamicPhaseFailed      = "Failed"
+	dynamicPhaseIdle        = "Idle"
 
 	dynamicReasonBootstrapNotReady   = "BootstrapNotReady"
 	dynamicReasonInvalidConfig       = "InvalidConfiguration"
@@ -75,6 +76,7 @@ const (
 var DynamicPodStartupTimeout = 5 * time.Minute
 
 var statusCodeRegex = regexp.MustCompile(`status\s+(\d{3})`)
+var iso8601DurationRegex = regexp.MustCompile(`^P(?:[0-9]+Y)?(?:[0-9]+M)?(?:[0-9]+W)?(?:[0-9]+D)?(?:T(?:[0-9]+H)?(?:[0-9]+M)?(?:[0-9]+(?:\.[0-9]+)?S)?)?$`)
 
 func (oc *OperatorContext) ReconcileDynamicGroupConfig() result.ReconcileResult {
 	if !oc.MarklogicGroup.Spec.IsDynamic {
@@ -276,6 +278,12 @@ func (oc *OperatorContext) ReconcileDynamicGroupConfig() result.ReconcileResult 
 
 	desiredReplicas := desiredDynamicReplicas(oc.MarklogicGroup)
 	tokenDuration := dynamicTokenDuration(oc.MarklogicGroup)
+	if !isValidDynamicTokenDuration(tokenDuration) {
+		if err := oc.setDynamicStatus(dynamicPhaseFailed, dynamicReasonInvalidConfig, fmt.Sprintf("invalid dynamic tokenDuration %q: must be an ISO 8601 duration", tokenDuration), true, true, true); err != nil {
+			return result.Error(err)
+		}
+		return result.Done()
+	}
 	return oc.reconcileDynamicLifecycle(groupClient, clusterName, groupName, tokenDuration, desiredReplicas)
 }
 
@@ -332,6 +340,11 @@ func (oc *OperatorContext) reconcileDynamicLifecycle(groupClient mlmanage.Client
 
 	if desiredReplicas < int32(len(members)) || hasPodsAboveDesiredOrdinal(pods, desiredReplicas) {
 		return oc.reconcileDynamicScaleDown(groupClient, clusterName, groupName, desiredReplicas, false, pods, members, hostStatuses, localReadyReplicas, readyReplicas)
+	}
+
+	staleReplacementCandidates := oc.staleEmptyDirReplacementCandidates(pods, members, previousHosts)
+	if len(staleReplacementCandidates) > 0 {
+		return oc.reconcileDynamicStaleReplacement(groupClient, clusterName, desiredReplicas, hostStatuses, localReadyReplicas, readyReplicas, staleReplacementCandidates)
 	}
 
 	restartRecoveryCandidates := oc.dynamicRestartRecoveryCandidates(pods, members, hostStatuses)
@@ -567,6 +580,98 @@ func (oc *OperatorContext) reconcileDynamicScaleDown(groupClient mlmanage.Client
 	}
 
 	return result.Continue()
+}
+
+func (oc *OperatorContext) reconcileDynamicStaleReplacement(groupClient mlmanage.Client, clusterName string, desiredReplicas int32, hostStatuses []marklogicv1.DynamicHostStatus, localReadyReplicas, readyReplicas int32, staleCandidates []marklogicv1.DynamicHostStatus) result.ReconcileResult {
+	candidate := staleCandidates[0]
+	hostStatuses = setDynamicHostStatus(hostStatuses, candidate.PodName, candidate.Hostname, dynamicHostStateRemoving, "removing stale host membership before rejoin", candidate.HostID, incrementDynamicHostAttempts(hostStatuses, candidate.PodName))
+	if err := oc.setDynamicStatusDetailed(dynamicPhaseReconciling, "", fmt.Sprintf("removing stale dynamic host entry for %s", candidate.PodName), true, true, true, desiredReplicas, localReadyReplicas, readyReplicas, hostStatuses); err != nil {
+		return result.Error(err)
+	}
+
+	if removeErr := groupClient.RemoveDynamicHost(oc.Ctx, clusterName, candidate.HostID); removeErr != nil {
+		return oc.handleDynamicRemoveFailure(hostStatuses, candidate.PodName, candidate.Hostname, candidate.HostID, desiredReplicas, localReadyReplicas, readyReplicas, removeErr, false)
+	}
+
+	hostStatuses = setDynamicHostStatus(hostStatuses, candidate.PodName, candidate.Hostname, dynamicHostStatePending, "stale host membership removed; waiting for token-based rejoin", "", 0)
+	if err := oc.setDynamicStatusDetailed(dynamicPhaseReconciling, "", fmt.Sprintf("stale host cleanup complete for %s; waiting for rejoin", candidate.PodName), true, true, true, desiredReplicas, localReadyReplicas, readyReplicas, hostStatuses); err != nil {
+		return result.Error(err)
+	}
+
+	return result.RequeueSoon(dynamicJoinRequeueSeconds)
+}
+
+func (oc *OperatorContext) staleEmptyDirReplacementCandidates(pods []corev1.Pod, members []mlmanage.GroupHost, previous []marklogicv1.DynamicHostStatus) []marklogicv1.DynamicHostStatus {
+	if isDynamicPVCBacked(oc.MarklogicGroup) {
+		return nil
+	}
+
+	statusByPod := map[string]marklogicv1.DynamicHostStatus{}
+	for _, host := range previous {
+		key := host.PodName
+		if key == "" {
+			key = hostnameToPodName(host.Hostname)
+		}
+		if key != "" {
+			statusByPod[key] = host
+		}
+	}
+
+	candidates := make([]marklogicv1.DynamicHostStatus, 0)
+	for _, pod := range pods {
+		if pod.DeletionTimestamp != nil {
+			continue
+		}
+		fqdn := dynamicPodFQDN(oc.MarklogicGroup, pod.Name)
+		previousStatus, hasPrevious := statusByPod[pod.Name]
+		member, memberFound := findGroupHostForPod(pod.Name, fqdn, members)
+		if !isStaleEmptyDirReplacementMember(oc.MarklogicGroup, pod, previousStatus, hasPrevious, member, memberFound) {
+			continue
+		}
+		candidates = append(candidates, marklogicv1.DynamicHostStatus{PodName: pod.Name, Hostname: fqdn, HostID: member.HostID, State: dynamicHostStateRejoinPending, Message: "stale host membership detected for recreated EmptyDir pod; removing stale host before rejoin", Attempts: previousStatus.Attempts})
+	}
+
+	sort.SliceStable(candidates, func(i, j int) bool {
+		left := podOrdinal(candidates[i].PodName)
+		right := podOrdinal(candidates[j].PodName)
+		if left == right {
+			return candidates[i].PodName < candidates[j].PodName
+		}
+		return left < right
+	})
+
+	return candidates
+}
+
+func isStaleEmptyDirReplacementMember(group *marklogicv1.MarklogicGroup, pod corev1.Pod, previousStatus marklogicv1.DynamicHostStatus, hasPrevious bool, member mlmanage.GroupHost, memberFound bool) bool {
+	if group == nil || isDynamicPVCBacked(group) || !memberFound || !hasPrevious {
+		return false
+	}
+	if pod.DeletionTimestamp != nil || !isPodLocallyReady(&pod) || pod.CreationTimestamp.IsZero() || previousStatus.LastUpdated == nil {
+		return false
+	}
+	if !isDynamicHostMembershipState(previousStatus.State) {
+		return false
+	}
+	if !pod.CreationTimestamp.Time.After(previousStatus.LastUpdated.Time) {
+		return false
+	}
+	if strings.TrimSpace(member.HostID) == "" {
+		return false
+	}
+	if strings.TrimSpace(previousStatus.HostID) != "" && strings.TrimSpace(previousStatus.HostID) != strings.TrimSpace(member.HostID) {
+		return false
+	}
+	return true
+}
+
+func isDynamicHostMembershipState(state string) bool {
+	switch strings.TrimSpace(state) {
+	case dynamicHostStateJoined, dynamicHostStateRejoined, dynamicHostStateRetained:
+		return true
+	default:
+		return false
+	}
 }
 
 func (oc *OperatorContext) dynamicRestartRecoveryCandidates(pods []corev1.Pod, members []mlmanage.GroupHost, hostStatuses []marklogicv1.DynamicHostStatus) []corev1.Pod {
@@ -1001,8 +1106,16 @@ func (oc *OperatorContext) getOwningClusterName() (string, error) {
 func (oc *OperatorContext) ensureDynamicCredentialSecret(clusterName string) (*corev1.Secret, error) {
 	secretName := dynamicCredentialSecretName(clusterName)
 	nsName := types.NamespacedName{Name: secretName, Namespace: oc.MarklogicGroup.Namespace}
+	desiredOwnerRef, hasDesiredOwnerRef := oc.dynamicCredentialSecretClusterOwnerRef()
 	secret := &corev1.Secret{}
 	if err := oc.Client.Get(oc.Ctx, nsName, secret); err == nil {
+		reconciledOwnerRefs := reconcileDynamicCredentialSecretOwnerRefs(secret.GetOwnerReferences(), desiredOwnerRef, hasDesiredOwnerRef)
+		if !reflect.DeepEqual(secret.GetOwnerReferences(), reconciledOwnerRefs) {
+			secret.SetOwnerReferences(reconciledOwnerRefs)
+			if err := oc.Client.Update(oc.Ctx, secret); err != nil {
+				return nil, err
+			}
+		}
 		return secret, nil
 	} else if !apierrors.IsNotFound(err) {
 		return nil, err
@@ -1012,7 +1125,18 @@ func (oc *OperatorContext) ensureDynamicCredentialSecret(clusterName string) (*c
 	annotations := oc.GetOperatorAnnotations()
 	secretMeta := generateObjectMeta(secretName, oc.MarklogicGroup.Namespace, labels, annotations)
 	secretData := generateDynamicSecretData(clusterName)
-	secretDef := generateSecretDef(secretMeta, marklogicServerAsOwner(oc.MarklogicGroup), secretData)
+	secretDef := &corev1.Secret{
+		TypeMeta: metav1.TypeMeta{
+			Kind:       "Secret",
+			APIVersion: "v1",
+		},
+		ObjectMeta: secretMeta,
+		Type:       corev1.SecretTypeOpaque,
+		Data:       secretData,
+	}
+	if hasDesiredOwnerRef {
+		secretDef.SetOwnerReferences([]metav1.OwnerReference{desiredOwnerRef})
+	}
 
 	if err := oc.Client.Create(oc.Ctx, secretDef); err != nil && !apierrors.IsAlreadyExists(err) {
 		return nil, err
@@ -1022,6 +1146,36 @@ func (oc *OperatorContext) ensureDynamicCredentialSecret(clusterName string) (*c
 		return nil, err
 	}
 	return secret, nil
+}
+
+func (oc *OperatorContext) dynamicCredentialSecretClusterOwnerRef() (metav1.OwnerReference, bool) {
+	for _, ownerRef := range oc.MarklogicGroup.OwnerReferences {
+		if ownerRef.Kind != "MarklogicCluster" {
+			continue
+		}
+		clusterOwnerRef := ownerRef
+		controller := true
+		clusterOwnerRef.Controller = &controller
+		return clusterOwnerRef, true
+	}
+	return metav1.OwnerReference{}, false
+}
+
+func reconcileDynamicCredentialSecretOwnerRefs(currentOwnerRefs []metav1.OwnerReference, desiredClusterOwnerRef metav1.OwnerReference, hasDesiredClusterOwnerRef bool) []metav1.OwnerReference {
+	reconciled := make([]metav1.OwnerReference, 0, len(currentOwnerRefs)+1)
+	for _, ownerRef := range currentOwnerRefs {
+		if ownerRef.Kind == "MarklogicGroup" {
+			continue
+		}
+		if hasDesiredClusterOwnerRef && ownerRef.Kind == "MarklogicCluster" {
+			continue
+		}
+		reconciled = append(reconciled, ownerRef)
+	}
+	if hasDesiredClusterOwnerRef {
+		reconciled = append(reconciled, desiredClusterOwnerRef)
+	}
+	return reconciled
 }
 
 func (oc *OperatorContext) readCredentialSecret(secretName string) (string, string, error) {
@@ -1128,6 +1282,17 @@ func dynamicTokenDuration(group *marklogicv1.MarklogicGroup) string {
 		return strings.TrimSpace(group.Spec.Dynamic.TokenDuration)
 	}
 	return "PT15M"
+}
+
+func isValidDynamicTokenDuration(value string) bool {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return false
+	}
+	if trimmed == "P" || trimmed == "PT" {
+		return false
+	}
+	return iso8601DurationRegex.MatchString(trimmed)
 }
 
 func (oc *OperatorContext) reconcileDynamicScaleUp(groupClient mlmanage.Client, clusterName, groupName, tokenDuration string, desiredReplicas int32) result.ReconcileResult {
@@ -1401,6 +1566,7 @@ func (oc *OperatorContext) buildDynamicHostStatuses(pods []corev1.Pod, members [
 		fqdn := dynamicPodFQDN(oc.MarklogicGroup, pod.Name)
 		previousStatus, hasPrevious := statusByPod[pod.Name]
 		member, memberFound := findGroupHostForPod(pod.Name, fqdn, members)
+		staleEmptyDirMember := isStaleEmptyDirReplacementMember(oc.MarklogicGroup, pod, previousStatus, hasPrevious, member, memberFound)
 		locallyReady := isPodLocallyReady(&pod)
 		if locallyReady {
 			localReadyReplicas++
@@ -1417,7 +1583,7 @@ func (oc *OperatorContext) buildDynamicHostStatuses(pods []corev1.Pod, members [
 			hostStatus.HostID = previousStatus.HostID
 		}
 
-		if memberFound {
+		if memberFound && !staleEmptyDirMember {
 			hostStatus.State = dynamicHostStateJoined
 			hostStatus.HostID = member.HostID
 			hostStatus.Attempts = 0
@@ -1436,6 +1602,10 @@ func (oc *OperatorContext) buildDynamicHostStatuses(pods []corev1.Pod, members [
 			if locallyReady {
 				readyReplicas++
 			}
+		} else if staleEmptyDirMember {
+			hostStatus.State = dynamicHostStateRejoinPending
+			hostStatus.HostID = member.HostID
+			hostStatus.Message = "stale host membership detected for recreated EmptyDir pod; removing stale host before rejoin"
 		} else if hasPrevious && previousStatus.State == dynamicHostStateFailed && previousStatus.Attempts >= dynamicJoinRetryBudget {
 			hostStatus.State = dynamicHostStateFailed
 			if hostStatus.Message == "" {
@@ -1828,7 +1998,31 @@ func dynamicPVCRestartCleanupJobName(groupName, podName string) string {
 	if len(name) <= 63 {
 		return name
 	}
-	return name[:63]
+	suffix := dynamicPVCRestartCleanupJobSuffix(name, podName)
+	prefixLen := 63 - len(suffix)
+	if prefixLen <= 0 {
+		return name[:63]
+	}
+	prefix := strings.TrimSuffix(name[:prefixLen], "-")
+	if prefix == "" {
+		prefix = "cleanup"
+		if len(prefix)+len(suffix) > 63 {
+			prefix = prefix[:63-len(suffix)]
+		}
+	}
+	return prefix + suffix
+}
+
+func dynamicPVCRestartCleanupJobSuffix(name, podName string) string {
+	hasher := fnv.New32a()
+	_, _ = hasher.Write([]byte(name))
+	hash := fmt.Sprintf("%08x", hasher.Sum32())
+
+	ordinal := podOrdinal(podName)
+	if ordinal >= 0 && ordinal != int(^uint(0)>>1) {
+		return fmt.Sprintf("-%d-%s", ordinal, hash)
+	}
+	return "-" + hash
 }
 
 func countLocalReadyPods(pods []corev1.Pod) int32 {

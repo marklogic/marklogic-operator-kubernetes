@@ -7,6 +7,7 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/json"
+	"encoding/xml"
 	"fmt"
 	"io"
 	"net"
@@ -310,9 +311,8 @@ func (c *managementClient) RemoveDynamicHost(ctx context.Context, clusterName, h
 	if strings.TrimSpace(hostID) == "" {
 		return fmt.Errorf("host ID is required for dynamic host removal")
 	}
-	query := url.Values{}
-	query.Set("host-id", hostID)
-	_, _, err := c.doJSON(ctx, http.MethodDelete, "/manage/v2/clusters/"+url.PathEscape(clusterName)+"/dynamic-hosts", query, nil, http.StatusAccepted, http.StatusNoContent, http.StatusOK)
+	body := fmt.Sprintf("<dynamic-hosts><dynamic-host>%s</dynamic-host></dynamic-hosts>", escapeXMLText(hostID))
+	_, _, err := c.doXML(ctx, http.MethodDelete, "/manage/v2/clusters/"+url.PathEscape(clusterName)+"/dynamic-hosts", nil, body, http.StatusAccepted, http.StatusNoContent, http.StatusOK)
 	return err
 }
 
@@ -372,6 +372,54 @@ func (c *managementClient) doJSON(ctx context.Context, method, path string, quer
 		}
 	}
 	return data, resp.StatusCode, fmt.Errorf("management api %s %s returned status %d: %s", method, path, resp.StatusCode, string(data))
+}
+
+func (c *managementClient) doXML(ctx context.Context, method, path string, query url.Values, body string, expectedStatus ...int) ([]byte, int, error) {
+	endpoint := c.baseURL + path
+	if len(query) > 0 {
+		endpoint = endpoint + "?" + query.Encode()
+	}
+
+	var bodyReader io.Reader
+	if strings.TrimSpace(body) != "" {
+		bodyReader = strings.NewReader(body)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, method, endpoint, bodyReader)
+	if err != nil {
+		return nil, 0, err
+	}
+	req.Header.Set("Accept", "application/xml")
+	if bodyReader != nil {
+		req.Header.Set("Content-Type", "application/xml")
+	}
+	req.SetBasicAuth(c.username, c.password)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer resp.Body.Close()
+
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, resp.StatusCode, err
+	}
+
+	for _, code := range expectedStatus {
+		if resp.StatusCode == code {
+			return data, resp.StatusCode, nil
+		}
+	}
+	return data, resp.StatusCode, fmt.Errorf("management api %s %s returned status %d: %s", method, path, resp.StatusCode, string(data))
+}
+
+func escapeXMLText(value string) string {
+	var buf bytes.Buffer
+	if err := xml.EscapeText(&buf, []byte(value)); err != nil {
+		return value
+	}
+	return buf.String()
 }
 
 func extractHostItems(payload any) []map[string]any {

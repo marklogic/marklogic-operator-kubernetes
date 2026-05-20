@@ -357,7 +357,7 @@ var _ = Describe("MarkLogicGroup controller", func() {
 				if err != nil || createdCR.Status.Dynamic == nil {
 					return false
 				}
-				return createdCR.Status.Dynamic.Phase == "degraded" && createdCR.Status.Dynamic.Reason == "BootstrapNotReady"
+				return createdCR.Status.Dynamic.Phase == "Degraded" && createdCR.Status.Dynamic.Reason == "BootstrapNotReady"
 			}, timeout, interval).Should(BeTrue())
 		})
 
@@ -405,8 +405,59 @@ var _ = Describe("MarkLogicGroup controller", func() {
 				if err != nil || createdCR.Status.Dynamic == nil {
 					return false
 				}
-				return createdCR.Status.Dynamic.Phase == "failed" && createdCR.Status.Dynamic.Reason == "InvalidConfiguration"
+				return createdCR.Status.Dynamic.Phase == "Failed" && createdCR.Status.Dynamic.Reason == "InvalidConfiguration"
 			}, timeout, interval).Should(BeTrue())
+		})
+
+		It("Should fail early when dynamic tokenDuration is invalid", func() {
+			dynamicNamespace := "testns-dynamic-invalid-token-duration"
+			dynamicName := "dynamic-invalid-token-duration"
+			clusterName := "cluster-invalid-token-duration"
+			adminSecretName := clusterName + "-admin"
+
+			host0 := dynamicHostFQDN(dynamicName, dynamicNamespace, dynamicName+"-0")
+			tokenHostCalls := []string{}
+			callsMu := &sync.Mutex{}
+			behavior := &fakeDynamicManagementBehavior{hosts: []mlmanage.HostStatus{{Name: "bootstrap", Online: true, Version: "12.0-1"}}, groupInfo: mlmanage.GroupInfo{Exists: false}, autoRegisterOnJoin: true, hostIDsByHost: map[string]string{host0: "host-id-0"}}
+			originalFactory := k8sutil.NewDynamicManagementClient
+			k8sutil.NewDynamicManagementClient = func(opts mlmanage.ClientOptions) mlmanage.Client {
+				return &fakeDynamicManagementClient{behavior: behavior, callsMu: callsMu, tokenHostCalls: &tokenHostCalls}
+			}
+			defer func() { k8sutil.NewDynamicManagementClient = originalFactory }()
+
+			ns := corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: dynamicNamespace}}
+			Expect(k8sClient.Create(ctx, &ns)).Should(Succeed())
+			adminSecret := &corev1.Secret{
+				ObjectMeta: metav1.ObjectMeta{Name: adminSecretName, Namespace: dynamicNamespace},
+				Data:       map[string][]byte{"username": []byte("admin"), "password": []byte("admin-password")},
+			}
+			Expect(k8sClient.Create(ctx, adminSecret)).Should(Succeed())
+
+			oneReplica := int32(1)
+			mlGroup := &marklogicv1.MarklogicGroup{
+				TypeMeta:   metav1.TypeMeta{Kind: "MarklogicGroup", APIVersion: "marklogic.progress.com/v1"},
+				ObjectMeta: metav1.ObjectMeta{Name: dynamicName, Namespace: dynamicNamespace},
+				Spec: marklogicv1.MarklogicGroupSpec{
+					Replicas:      &oneReplica,
+					Name:          dynamicName,
+					Image:         imageName,
+					ClusterDomain: "cluster.local",
+					GroupConfig:   &marklogicv1.GroupConfig{Name: "DynamicInvalidTokenDuration", EnableXdqpSsl: true},
+					IsDynamic:     true,
+					Dynamic:       &marklogicv1.DynamicGroupConfig{TokenDuration: "not-a-duration"},
+					BootstrapHost: "bootstrap-0.bootstrap.svc.cluster.local",
+					SecretName:    adminSecretName,
+				},
+			}
+			err := k8sClient.Create(ctx, mlGroup)
+			Expect(err).Should(HaveOccurred())
+			Expect(err.Error()).Should(ContainSubstring("tokenDuration"))
+
+			Consistently(func() int {
+				callsMu.Lock()
+				defer callsMu.Unlock()
+				return len(tokenHostCalls)
+			}, duration, interval).Should(Equal(0))
 		})
 
 		It("Should configure dynamic group and record management call order", func() {
@@ -460,7 +511,7 @@ var _ = Describe("MarkLogicGroup controller", func() {
 				if err != nil || createdCR.Status.Dynamic == nil {
 					return false
 				}
-				return createdCR.Status.Dynamic.Phase == "idle" && createdCR.Status.Dynamic.DynamicHostsEnabled && createdCR.Status.Dynamic.Configured
+				return createdCR.Status.Dynamic.Phase == "Idle" && createdCR.Status.Dynamic.DynamicHostsEnabled && createdCR.Status.Dynamic.Configured
 			}, timeout, interval).Should(BeTrue())
 
 			dynamicSecret := &corev1.Secret{}
@@ -474,6 +525,98 @@ var _ = Describe("MarkLogicGroup controller", func() {
 				defer callsMu.Unlock()
 				expected := []string{"ListHostsStatus", "EnsureManageAdminUser", "GetGroup", "CreateGroup", "EnableDynamicHosts", "EnableAdminAPITokenAuthentication", "ListGroupHosts"}
 				return hasOrderedSubsequence(calls, expected)
+			}, timeout, interval).Should(BeTrue())
+		})
+
+		It("Should reconcile shared dynamic secret ownership to cluster owner", func() {
+			dynamicNamespace := "testns-dynamic-secret-owner"
+			dynamicName := "dynamic-secret-owner"
+			clusterName := "cluster-secret-owner"
+			adminSecretName := clusterName + "-admin"
+			dynamicSecretName := clusterName + "-manage-admin"
+			dynamicNsName := types.NamespacedName{Name: dynamicName, Namespace: dynamicNamespace}
+			zeroReplicas := int32(0)
+
+			behavior := &fakeDynamicManagementBehavior{
+				hosts:     []mlmanage.HostStatus{{Name: "bootstrap", Online: true, Version: "12.0-1"}},
+				groupInfo: mlmanage.GroupInfo{Exists: false},
+			}
+			originalFactory := k8sutil.NewDynamicManagementClient
+			k8sutil.NewDynamicManagementClient = func(opts mlmanage.ClientOptions) mlmanage.Client {
+				return &fakeDynamicManagementClient{behavior: behavior, callsMu: &sync.Mutex{}}
+			}
+			defer func() { k8sutil.NewDynamicManagementClient = originalFactory }()
+
+			ns := corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: dynamicNamespace}}
+			Expect(k8sClient.Create(ctx, &ns)).Should(Succeed())
+			adminSecret := &corev1.Secret{
+				ObjectMeta: metav1.ObjectMeta{Name: adminSecretName, Namespace: dynamicNamespace},
+				Data:       map[string][]byte{"username": []byte("admin"), "password": []byte("admin-password")},
+			}
+			Expect(k8sClient.Create(ctx, adminSecret)).Should(Succeed())
+
+			groupController := true
+			legacyOwnerRef := metav1.OwnerReference{APIVersion: "marklogic.progress.com/v1", Kind: "MarklogicGroup", Name: "legacy-owner-group", UID: types.UID("legacy-owner-group-uid"), Controller: &groupController}
+			legacyDynamicSecret := &corev1.Secret{
+				TypeMeta: metav1.TypeMeta{Kind: "Secret", APIVersion: "v1"},
+				ObjectMeta: metav1.ObjectMeta{
+					Name:            dynamicSecretName,
+					Namespace:       dynamicNamespace,
+					OwnerReferences: []metav1.OwnerReference{legacyOwnerRef},
+				},
+				Type: corev1.SecretTypeOpaque,
+				Data: map[string][]byte{"username": []byte(clusterName + "-manage-admin"), "password": []byte("legacy-password")},
+			}
+			Expect(k8sClient.Create(ctx, legacyDynamicSecret)).Should(Succeed())
+
+			clusterController := true
+			clusterOwnerRef := metav1.OwnerReference{APIVersion: "marklogic.progress.com/v1", Kind: "MarklogicCluster", Name: clusterName, UID: types.UID("cluster-secret-owner-uid"), Controller: &clusterController}
+			mlGroup := &marklogicv1.MarklogicGroup{
+				TypeMeta: metav1.TypeMeta{Kind: "MarklogicGroup", APIVersion: "marklogic.progress.com/v1"},
+				ObjectMeta: metav1.ObjectMeta{
+					Name:            dynamicName,
+					Namespace:       dynamicNamespace,
+					OwnerReferences: []metav1.OwnerReference{clusterOwnerRef},
+				},
+				Spec: marklogicv1.MarklogicGroupSpec{
+					Replicas:      &zeroReplicas,
+					Name:          dynamicName,
+					Image:         imageName,
+					ClusterDomain: "cluster.local",
+					GroupConfig:   &marklogicv1.GroupConfig{Name: "DynamicOwnerRef", EnableXdqpSsl: true},
+					IsDynamic:     true,
+					BootstrapHost: "bootstrap-0.bootstrap.svc.cluster.local",
+					SecretName:    adminSecretName,
+				},
+			}
+			Expect(k8sClient.Create(ctx, mlGroup)).Should(Succeed())
+
+			createdCR := &marklogicv1.MarklogicGroup{}
+			Eventually(func() bool {
+				err := k8sClient.Get(ctx, dynamicNsName, createdCR)
+				if err != nil || createdCR.Status.Dynamic == nil {
+					return false
+				}
+				return createdCR.Status.Dynamic.Configured && createdCR.Status.Dynamic.DynamicHostsEnabled
+			}, timeout, interval).Should(BeTrue())
+
+			reconciledSecret := &corev1.Secret{}
+			Eventually(func() bool {
+				err := k8sClient.Get(ctx, types.NamespacedName{Name: dynamicSecretName, Namespace: dynamicNamespace}, reconciledSecret)
+				if err != nil {
+					return false
+				}
+				hasClusterOwner := false
+				hasGroupOwner := false
+				for _, ownerRef := range reconciledSecret.OwnerReferences {
+					if ownerRef.Kind == "MarklogicCluster" && ownerRef.Name == clusterName {
+						hasClusterOwner = true
+					}
+					if ownerRef.Kind == "MarklogicGroup" {
+						hasGroupOwner = true
+					}
+				}
+				return hasClusterOwner && !hasGroupOwner
 			}, timeout, interval).Should(BeTrue())
 		})
 
@@ -538,7 +681,7 @@ var _ = Describe("MarkLogicGroup controller", func() {
 				if err != nil || createdCR.Status.Dynamic == nil {
 					return false
 				}
-				return createdCR.Status.Dynamic.Phase == "idle" && createdCR.Status.Dynamic.ReadyReplicas == 2 && createdCR.Status.Dynamic.DesiredReplicas == 2
+				return createdCR.Status.Dynamic.Phase == "Idle" && createdCR.Status.Dynamic.ReadyReplicas == 2 && createdCR.Status.Dynamic.DesiredReplicas == 2
 			}, timeout, interval).Should(BeTrue())
 
 			dynamicReadyCondition := findCondition(createdCR.Status.Conditions, "DynamicHostsReady")
@@ -623,7 +766,7 @@ var _ = Describe("MarkLogicGroup controller", func() {
 				if err != nil || createdCR.Status.Dynamic == nil {
 					return false
 				}
-				return createdCR.Status.Dynamic.Phase == "idle" && createdCR.Status.Dynamic.ReadyReplicas == 1
+				return createdCR.Status.Dynamic.Phase == "Idle" && createdCR.Status.Dynamic.ReadyReplicas == 1
 			}, joinFlowTimeout, interval).Should(BeTrue())
 
 			Eventually(func() bool {
@@ -685,7 +828,7 @@ var _ = Describe("MarkLogicGroup controller", func() {
 				if err != nil || createdCR.Status.Dynamic == nil {
 					return false
 				}
-				if createdCR.Status.Dynamic.Phase != "failed" || createdCR.Status.Dynamic.Reason != "JoinFailed" {
+				if createdCR.Status.Dynamic.Phase != "Failed" || createdCR.Status.Dynamic.Reason != "JoinFailed" {
 					return false
 				}
 				if len(createdCR.Status.Dynamic.Hosts) == 0 {
@@ -751,7 +894,7 @@ var _ = Describe("MarkLogicGroup controller", func() {
 				if err != nil || createdCR.Status.Dynamic == nil {
 					return false
 				}
-				if createdCR.Status.Dynamic.Phase != "degraded" {
+				if createdCR.Status.Dynamic.Phase != "Degraded" {
 					return false
 				}
 				hostStates := map[string]marklogicv1.DynamicHostStatus{}
@@ -899,7 +1042,7 @@ var _ = Describe("MarkLogicGroup controller", func() {
 				if err != nil || createdCR.Status.Dynamic == nil {
 					return false
 				}
-				if createdCR.Status.Dynamic.Phase != "degraded" || createdCR.Status.Dynamic.Reason != "PodStartupTimeout" {
+				if createdCR.Status.Dynamic.Phase != "Degraded" || createdCR.Status.Dynamic.Reason != "PodStartupTimeout" {
 					return false
 				}
 				dynamicReadyCondition := findCondition(createdCR.Status.Conditions, "DynamicHostsReady")
@@ -987,7 +1130,7 @@ var _ = Describe("MarkLogicGroup controller", func() {
 			createdCR := &marklogicv1.MarklogicGroup{}
 			Eventually(func() bool {
 				err := k8sClient.Get(ctx, dynamicNsName, createdCR)
-				return err == nil && createdCR.Status.Dynamic != nil && createdCR.Status.Dynamic.Phase == "idle" && createdCR.Status.Dynamic.ReadyReplicas == 2
+				return err == nil && createdCR.Status.Dynamic != nil && createdCR.Status.Dynamic.Phase == "Idle" && createdCR.Status.Dynamic.ReadyReplicas == 2
 			}, cleanupTimeout, interval).Should(BeTrue())
 
 			oneReplica := int32(1)
@@ -1067,7 +1210,7 @@ var _ = Describe("MarkLogicGroup controller", func() {
 			createdCR := &marklogicv1.MarklogicGroup{}
 			Eventually(func() bool {
 				err := k8sClient.Get(ctx, dynamicNsName, createdCR)
-				return err == nil && createdCR.Status.Dynamic != nil && createdCR.Status.Dynamic.Phase == "idle" && createdCR.Status.Dynamic.ReadyReplicas == 2
+				return err == nil && createdCR.Status.Dynamic != nil && createdCR.Status.Dynamic.Phase == "Idle" && createdCR.Status.Dynamic.ReadyReplicas == 2
 			}, cleanupTimeout, interval).Should(BeTrue())
 
 			oneReplica := int32(1)
@@ -1325,7 +1468,7 @@ var _ = Describe("MarkLogicGroup controller", func() {
 				if err != nil || createdCR.Status.Dynamic == nil {
 					return false
 				}
-				return createdCR.Status.Dynamic.Phase == "degraded" && createdCR.Status.Dynamic.Reason == "BootstrapNotReady"
+				return createdCR.Status.Dynamic.Phase == "Degraded" && createdCR.Status.Dynamic.Reason == "BootstrapNotReady"
 			}, cleanupTimeout, interval).Should(BeTrue())
 
 			Consistently(func() bool {
@@ -1442,7 +1585,7 @@ var _ = Describe("MarkLogicGroup controller", func() {
 				}
 				for _, host := range createdCR.Status.Dynamic.Hosts {
 					if host.PodName == dynamicName+"-0" {
-						return createdCR.Status.Dynamic.Phase == "idle" && host.State == "joined" && host.HostID == "host-id-old"
+						return createdCR.Status.Dynamic.Phase == "Idle" && host.State == "joined" && host.HostID == "host-id-old"
 					}
 				}
 				return false
@@ -1475,7 +1618,7 @@ var _ = Describe("MarkLogicGroup controller", func() {
 				}
 				for _, host := range createdCR.Status.Dynamic.Hosts {
 					if host.PodName == dynamicName+"-0" {
-						return createdCR.Status.Dynamic.Phase == "idle" && (host.State == "rejoined" || host.State == "joined") && host.HostID == "host-id-new"
+						return createdCR.Status.Dynamic.Phase == "Idle" && (host.State == "rejoined" || host.State == "joined") && host.HostID == "host-id-new"
 					}
 				}
 				return false
@@ -1521,7 +1664,7 @@ var _ = Describe("MarkLogicGroup controller", func() {
 			createdCR := &marklogicv1.MarklogicGroup{}
 			Eventually(func() bool {
 				err := k8sClient.Get(ctx, dynamicNsName, createdCR)
-				return err == nil && createdCR.Status.Dynamic != nil && createdCR.Status.Dynamic.Phase == "idle" && createdCR.Status.Dynamic.ReadyReplicas == 1
+				return err == nil && createdCR.Status.Dynamic != nil && createdCR.Status.Dynamic.Phase == "Idle" && createdCR.Status.Dynamic.ReadyReplicas == 1
 			}, cleanupTimeout, interval).Should(BeTrue())
 
 			countHostTokenCalls := func(host string) int {
@@ -1570,10 +1713,165 @@ var _ = Describe("MarkLogicGroup controller", func() {
 				}
 				for _, host := range createdCR.Status.Dynamic.Hosts {
 					if host.PodName == dynamicName+"-0" {
-						return createdCR.Status.Dynamic.Phase == "idle" && createdCR.Status.Dynamic.ReadyReplicas == 1 && (host.State == "rejoined" || host.State == "joined")
+						return createdCR.Status.Dynamic.Phase == "Idle" && createdCR.Status.Dynamic.ReadyReplicas == 1 && (host.State == "rejoined" || host.State == "joined")
 					}
 				}
 				return false
+			}, cleanupTimeout, interval).Should(BeTrue())
+		})
+
+		It("Should remove stale EmptyDir host entry before rejoining a recreated pod", func() {
+			cleanupTimeout := 45 * time.Second
+			dynamicNamespace := "testns-dynamic-emptydir-recreate"
+			dynamicName := "dynamic-emptydir-recreate"
+			clusterName := "cluster-emptydir-recreate"
+			adminSecretName := clusterName + "-admin"
+			dynamicNsName := types.NamespacedName{Name: dynamicName, Namespace: dynamicNamespace}
+
+			host0 := dynamicHostFQDN(dynamicName, dynamicNamespace, dynamicName+"-0")
+			groupName := "DynamicEmptyDirRecreate"
+			oldHostID := "host-id-old"
+			newHostID := "host-id-new"
+			calls := []string{}
+			tokenHostCalls := []string{}
+			removeHostCalls := []string{}
+			callsMu := &sync.Mutex{}
+			behavior := &fakeDynamicManagementBehavior{hosts: []mlmanage.HostStatus{{Name: "bootstrap", Online: true, Version: "12.0-1"}}, groupInfo: mlmanage.GroupInfo{Exists: false}, autoRegisterOnJoin: true, hostIDsByHost: map[string]string{host0: oldHostID}}
+
+			originalFactory := k8sutil.NewDynamicManagementClient
+			k8sutil.NewDynamicManagementClient = func(opts mlmanage.ClientOptions) mlmanage.Client {
+				return &fakeDynamicManagementClient{behavior: behavior, callsMu: callsMu, calls: &calls, tokenHostCalls: &tokenHostCalls, removeHostCalls: &removeHostCalls}
+			}
+			defer func() { k8sutil.NewDynamicManagementClient = originalFactory }()
+
+			ns := corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: dynamicNamespace}}
+			Expect(k8sClient.Create(ctx, &ns)).Should(Succeed())
+			adminSecret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: adminSecretName, Namespace: dynamicNamespace}, Data: map[string][]byte{"username": []byte("admin"), "password": []byte("admin-password")}}
+			Expect(k8sClient.Create(ctx, adminSecret)).Should(Succeed())
+
+			oneReplica := int32(1)
+			dynamicGroup := &marklogicv1.MarklogicGroup{TypeMeta: metav1.TypeMeta{Kind: "MarklogicGroup", APIVersion: "marklogic.progress.com/v1"}, ObjectMeta: metav1.ObjectMeta{Name: dynamicName, Namespace: dynamicNamespace}, Spec: marklogicv1.MarklogicGroupSpec{Replicas: &oneReplica, Name: dynamicName, Image: imageName, ClusterDomain: "cluster.local", GroupConfig: &marklogicv1.GroupConfig{Name: groupName, EnableXdqpSsl: true}, IsDynamic: true, BootstrapHost: "bootstrap-0.bootstrap.svc.cluster.local", SecretName: adminSecretName}}
+			Expect(k8sClient.Create(ctx, dynamicGroup)).Should(Succeed())
+			createReadyDynamicPod(ctx, dynamicNamespace, dynamicName, dynamicName+"-0")
+
+			createdCR := &marklogicv1.MarklogicGroup{}
+			Eventually(func() bool {
+				err := k8sClient.Get(ctx, dynamicNsName, createdCR)
+				if err != nil || createdCR.Status.Dynamic == nil {
+					return false
+				}
+				for _, host := range createdCR.Status.Dynamic.Hosts {
+					if host.PodName == dynamicName+"-0" {
+						return createdCR.Status.Dynamic.Phase == "Idle" && host.State == "joined" && host.HostID == oldHostID
+					}
+				}
+				return false
+			}, cleanupTimeout, interval).Should(BeTrue())
+
+			Eventually(func() error {
+				latest := &marklogicv1.MarklogicGroup{}
+				if err := k8sClient.Get(ctx, dynamicNsName, latest); err != nil {
+					return err
+				}
+				if latest.Status.Dynamic == nil {
+					return fmt.Errorf("dynamic status is not initialized")
+				}
+				updated := false
+				for i := range latest.Status.Dynamic.Hosts {
+					if latest.Status.Dynamic.Hosts[i].PodName == dynamicName+"-0" {
+						staleTime := metav1.NewTime(time.Now().Add(-2 * time.Hour))
+						latest.Status.Dynamic.Hosts[i].LastUpdated = &staleTime
+						updated = true
+						break
+					}
+				}
+				if !updated {
+					return fmt.Errorf("dynamic host status for %s-0 not found", dynamicName)
+				}
+				return k8sClient.Status().Update(ctx, latest)
+			}, cleanupTimeout, interval).Should(Succeed())
+
+			Eventually(func() error {
+				pod := &corev1.Pod{}
+				nsName := types.NamespacedName{Name: dynamicName + "-0", Namespace: dynamicNamespace}
+				if err := k8sClient.Get(ctx, nsName, pod); err != nil {
+					return err
+				}
+				if len(pod.Finalizers) == 0 {
+					return nil
+				}
+				pod.Finalizers = nil
+				return k8sClient.Update(ctx, pod)
+			}, cleanupTimeout, interval).Should(Succeed())
+
+			podToDelete := &corev1.Pod{}
+			podNsName := types.NamespacedName{Name: dynamicName + "-0", Namespace: dynamicNamespace}
+			Expect(k8sClient.Get(ctx, podNsName, podToDelete)).Should(Succeed())
+			Expect(k8sClient.Delete(ctx, podToDelete)).Should(Succeed())
+			Eventually(func() bool {
+				pod := &corev1.Pod{}
+				err := k8sClient.Get(ctx, podNsName, pod)
+				return err != nil
+			}, cleanupTimeout, interval).Should(BeTrue())
+
+			createReadyDynamicPod(ctx, dynamicNamespace, dynamicName, dynamicName+"-0")
+
+			behavior.mu.Lock()
+			behavior.hostIDsByHost[host0] = newHostID
+			behavior.mu.Unlock()
+
+			Eventually(func() error {
+				latest := &marklogicv1.MarklogicGroup{}
+				if err := k8sClient.Get(ctx, dynamicNsName, latest); err != nil {
+					return err
+				}
+				if latest.Annotations == nil {
+					latest.Annotations = map[string]string{}
+				}
+				latest.Annotations["marklogic.progress.com/test-emptydir-recreate-trigger"] = fmt.Sprintf("%d", time.Now().UnixNano())
+				return k8sClient.Update(ctx, latest)
+			}, cleanupTimeout, interval).Should(Succeed())
+
+			Eventually(func() bool {
+				callsMu.Lock()
+				defer callsMu.Unlock()
+				for _, hostID := range removeHostCalls {
+					if hostID == oldHostID {
+						return true
+					}
+				}
+				return false
+			}, cleanupTimeout, interval).Should(BeTrue())
+
+			Eventually(func() bool {
+				callsMu.Lock()
+				defer callsMu.Unlock()
+				return hasOrderedSubsequence(calls, []string{"RemoveDynamicHost", "RequestDynamicHostToken", "JoinDynamicHost"})
+			}, cleanupTimeout, interval).Should(BeTrue())
+
+			Eventually(func() bool {
+				err := k8sClient.Get(ctx, dynamicNsName, createdCR)
+				if err != nil || createdCR.Status.Dynamic == nil {
+					return false
+				}
+				for _, host := range createdCR.Status.Dynamic.Hosts {
+					if host.PodName == dynamicName+"-0" {
+						return createdCR.Status.Dynamic.Phase == "Idle" && (host.State == "joined" || host.State == "rejoined") && host.HostID == newHostID
+					}
+				}
+				return false
+			}, cleanupTimeout, interval).Should(BeTrue())
+
+			Eventually(func() bool {
+				callsMu.Lock()
+				defer callsMu.Unlock()
+				count := 0
+				for _, host := range tokenHostCalls {
+					if host == host0 {
+						count++
+					}
+				}
+				return count >= 2
 			}, cleanupTimeout, interval).Should(BeTrue())
 		})
 
@@ -1631,7 +1929,7 @@ var _ = Describe("MarkLogicGroup controller", func() {
 				}
 				for _, host := range createdCR.Status.Dynamic.Hosts {
 					if host.PodName == dynamicName+"-0" {
-						return createdCR.Status.Dynamic.Phase == "idle" && host.State == "joined"
+						return createdCR.Status.Dynamic.Phase == "Idle" && host.State == "joined"
 					}
 				}
 				return false
@@ -1702,7 +2000,7 @@ var _ = Describe("MarkLogicGroup controller", func() {
 				}
 				for _, host := range createdCR.Status.Dynamic.Hosts {
 					if host.PodName == dynamicName+"-0" {
-						return createdCR.Status.Dynamic.Phase == "idle" && (host.State == "rejoined" || host.State == "joined") && host.HostID == "host-id-after-cleanup"
+						return createdCR.Status.Dynamic.Phase == "Idle" && (host.State == "rejoined" || host.State == "joined") && host.HostID == "host-id-after-cleanup"
 					}
 				}
 				return false
@@ -1753,7 +2051,7 @@ var _ = Describe("MarkLogicGroup controller", func() {
 			createdCR := &marklogicv1.MarklogicGroup{}
 			Eventually(func() bool {
 				err := k8sClient.Get(ctx, dynamicNsName, createdCR)
-				return err == nil && createdCR.Status.Dynamic != nil && createdCR.Status.Dynamic.Phase == "idle" && createdCR.Status.Dynamic.ReadyReplicas == 2
+				return err == nil && createdCR.Status.Dynamic != nil && createdCR.Status.Dynamic.Phase == "Idle" && createdCR.Status.Dynamic.ReadyReplicas == 2
 			}, cleanupTimeout, interval).Should(BeTrue())
 
 			behavior.mu.Lock()
@@ -1835,7 +2133,7 @@ var _ = Describe("MarkLogicGroup controller", func() {
 			createdCR := &marklogicv1.MarklogicGroup{}
 			Eventually(func() bool {
 				err := k8sClient.Get(ctx, dynamicNsName, createdCR)
-				return err == nil && createdCR.Status.Dynamic != nil && createdCR.Status.Dynamic.Phase == "idle" && createdCR.Status.Dynamic.ReadyReplicas == 1
+				return err == nil && createdCR.Status.Dynamic != nil && createdCR.Status.Dynamic.Phase == "Idle" && createdCR.Status.Dynamic.ReadyReplicas == 1
 			}, cleanupTimeout, interval).Should(BeTrue())
 
 			behavior.mu.Lock()
@@ -1863,7 +2161,7 @@ var _ = Describe("MarkLogicGroup controller", func() {
 				if err != nil || createdCR.Status.Dynamic == nil {
 					return false
 				}
-				return createdCR.Status.Dynamic.Phase == "degraded" && createdCR.Status.Dynamic.Reason == "BootstrapNotReady"
+				return createdCR.Status.Dynamic.Phase == "Degraded" && createdCR.Status.Dynamic.Reason == "BootstrapNotReady"
 			}, cleanupTimeout, interval).Should(BeTrue())
 		})
 
