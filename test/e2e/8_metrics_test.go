@@ -51,7 +51,8 @@ const (
 //	E2E_METRICS_SECURE  "true"|"false"            (default: "true")
 //	E2E_SCOPE_TYPE      "cluster"|"namespace"     (default: "cluster")
 func TestMetricsEndpoint(t *testing.T) {
-	trackTest(t)                                                // ── Resolve runtime configuration ─────────────────────────────────────────
+	// Resolve runtime configuration
+	trackTest(t)
 	metricsSecure := os.Getenv("E2E_METRICS_SECURE") != "false" // default true
 	scopeType := os.Getenv("E2E_SCOPE_TYPE")
 	if scopeType == "" {
