@@ -5,8 +5,11 @@ package mlmanage
 import (
 	"bytes"
 	"context"
+	"crypto/md5"
+	"crypto/rand"
 	"crypto/tls"
 	"encoding/json"
+	"encoding/hex"
 	"encoding/xml"
 	"fmt"
 	"io"
@@ -336,26 +339,21 @@ func (c *managementClient) doJSON(ctx context.Context, method, path string, quer
 		endpoint = endpoint + "?" + query.Encode()
 	}
 
-	var bodyReader io.Reader
+	var bodyBytes []byte
 	if body != nil {
 		payload, err := json.Marshal(body)
 		if err != nil {
 			return nil, 0, err
 		}
-		bodyReader = bytes.NewBuffer(payload)
+		bodyBytes = payload
 	}
 
-	req, err := http.NewRequestWithContext(ctx, method, endpoint, bodyReader)
-	if err != nil {
-		return nil, 0, err
-	}
-	req.Header.Set("Accept", "application/json")
+	headers := map[string]string{"Accept": "application/json"}
 	if body != nil {
-		req.Header.Set("Content-Type", "application/json")
+		headers["Content-Type"] = "application/json"
 	}
-	req.SetBasicAuth(c.username, c.password)
 
-	resp, err := c.httpClient.Do(req)
+	resp, err := c.doRequestWithAuth(ctx, method, endpoint, headers, bodyBytes)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -380,22 +378,17 @@ func (c *managementClient) doXML(ctx context.Context, method, path string, query
 		endpoint = endpoint + "?" + query.Encode()
 	}
 
-	var bodyReader io.Reader
+	var bodyBytes []byte
 	if strings.TrimSpace(body) != "" {
-		bodyReader = strings.NewReader(body)
+		bodyBytes = []byte(body)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, method, endpoint, bodyReader)
-	if err != nil {
-		return nil, 0, err
+	headers := map[string]string{"Accept": "application/xml"}
+	if len(bodyBytes) > 0 {
+		headers["Content-Type"] = "application/xml"
 	}
-	req.Header.Set("Accept", "application/xml")
-	if bodyReader != nil {
-		req.Header.Set("Content-Type", "application/xml")
-	}
-	req.SetBasicAuth(c.username, c.password)
 
-	resp, err := c.httpClient.Do(req)
+	resp, err := c.doRequestWithAuth(ctx, method, endpoint, headers, bodyBytes)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -412,6 +405,157 @@ func (c *managementClient) doXML(ctx context.Context, method, path string, query
 		}
 	}
 	return data, resp.StatusCode, fmt.Errorf("management api %s %s returned status %d: %s", method, path, resp.StatusCode, string(data))
+}
+
+func (c *managementClient) doRequestWithAuth(ctx context.Context, method, endpoint string, headers map[string]string, body []byte) (*http.Response, error) {
+	req, err := newRequest(ctx, method, endpoint, headers, body)
+	if err != nil {
+		return nil, err
+	}
+	req.SetBasicAuth(c.username, c.password)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode != http.StatusUnauthorized {
+		return resp, nil
+	}
+
+	digestHeader := buildDigestAuthorizationHeader(resp.Header.Get("WWW-Authenticate"), method, req.URL.RequestURI(), c.username, c.password)
+	if digestHeader == "" {
+		return resp, nil
+	}
+	_ = resp.Body.Close()
+
+	digestReq, err := newRequest(ctx, method, endpoint, headers, body)
+	if err != nil {
+		return nil, err
+	}
+	digestReq.Header.Set("Authorization", digestHeader)
+	return c.httpClient.Do(digestReq)
+}
+
+func newRequest(ctx context.Context, method, endpoint string, headers map[string]string, body []byte) (*http.Request, error) {
+	var bodyReader io.Reader
+	if len(body) > 0 {
+		bodyReader = bytes.NewReader(body)
+	}
+	req, err := http.NewRequestWithContext(ctx, method, endpoint, bodyReader)
+	if err != nil {
+		return nil, err
+	}
+	for k, v := range headers {
+		req.Header.Set(k, v)
+	}
+	return req, nil
+}
+
+func buildDigestAuthorizationHeader(wwwAuthenticate, method, uri, username, password string) string {
+	params := parseDigestChallenge(wwwAuthenticate)
+	if params == nil {
+		return ""
+	}
+
+	realm := params["realm"]
+	nonce := params["nonce"]
+	if realm == "" || nonce == "" {
+		return ""
+	}
+	algorithm := strings.ToUpper(params["algorithm"])
+	if algorithm == "" {
+		algorithm = "MD5"
+	}
+	qop := chooseQOP(params["qop"])
+	if qop != "" && qop != "auth" {
+		return ""
+	}
+
+	cnonce := randomCNonce()
+	nc := "00000001"
+	ha1 := md5Hex(fmt.Sprintf("%s:%s:%s", username, realm, password))
+	if algorithm == "MD5-SESS" {
+		ha1 = md5Hex(fmt.Sprintf("%s:%s:%s", ha1, nonce, cnonce))
+	}
+	ha2 := md5Hex(fmt.Sprintf("%s:%s", method, uri))
+
+	var response string
+	if qop == "" {
+		response = md5Hex(fmt.Sprintf("%s:%s:%s", ha1, nonce, ha2))
+	} else {
+		response = md5Hex(fmt.Sprintf("%s:%s:%s:%s:%s:%s", ha1, nonce, nc, cnonce, qop, ha2))
+	}
+
+	fields := []string{
+		`Digest username="` + username + `"`,
+		`realm="` + realm + `"`,
+		`nonce="` + nonce + `"`,
+		`uri="` + uri + `"`,
+		`response="` + response + `"`,
+	}
+	if qop != "" {
+		fields = append(fields, "qop="+qop, "nc="+nc, `cnonce="`+cnonce+`"`)
+	}
+	if opaque := params["opaque"]; opaque != "" {
+		fields = append(fields, `opaque="`+opaque+`"`)
+	}
+	if algorithm != "" {
+		fields = append(fields, "algorithm="+algorithm)
+	}
+	return strings.Join(fields, ", ")
+}
+
+func parseDigestChallenge(header string) map[string]string {
+	header = strings.TrimSpace(header)
+	if !strings.HasPrefix(strings.ToLower(header), "digest ") {
+		return nil
+	}
+	header = strings.TrimSpace(header[len("Digest "):])
+	parts := strings.Split(header, ",")
+	params := make(map[string]string, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		key, value, ok := strings.Cut(part, "=")
+		if !ok {
+			continue
+		}
+		key = strings.ToLower(strings.TrimSpace(key))
+		value = strings.TrimSpace(value)
+		value = strings.Trim(value, `"`)
+		params[key] = value
+	}
+	if len(params) == 0 {
+		return nil
+	}
+	return params
+}
+
+func chooseQOP(qop string) string {
+	if qop == "" {
+		return ""
+	}
+	for _, part := range strings.Split(strings.ToLower(qop), ",") {
+		if strings.TrimSpace(part) == "auth" {
+			return "auth"
+		}
+	}
+	return ""
+}
+
+func randomCNonce() string {
+	var b [8]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return fmt.Sprintf("%d", time.Now().UnixNano())
+	}
+	return hex.EncodeToString(b[:])
+}
+
+func md5Hex(value string) string {
+	sum := md5.Sum([]byte(value))
+	return hex.EncodeToString(sum[:])
 }
 
 func escapeXMLText(value string) string {

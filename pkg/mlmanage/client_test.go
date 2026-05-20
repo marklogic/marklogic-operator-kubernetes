@@ -4,6 +4,7 @@ package mlmanage
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -132,5 +133,53 @@ func TestRemoveDynamicHostReturnsAPIError(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "returned status 400") {
 		t.Fatalf("expected status detail in error, got %v", err)
+	}
+}
+
+func TestDoJSONRetriesWithDigestAuthChallenge(t *testing.T) {
+	t.Parallel()
+
+	var calls int
+	var authHeaders []string
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		authHeaders = append(authHeaders, r.Header.Get("Authorization"))
+		if calls == 1 {
+			w.Header().Set("WWW-Authenticate", `Digest realm="manage", nonce="nonce123", qop="auth", algorithm=MD5`)
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		if !strings.HasPrefix(r.Header.Get("Authorization"), "Digest ") {
+			t.Fatalf("expected digest authorization header on retry, got %q", r.Header.Get("Authorization"))
+		}
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(map[string]any{"ok": true})
+	}))
+	defer server.Close()
+
+	client := &managementClient{
+		baseURL:    server.URL,
+		username:   "user",
+		password:   "password",
+		httpClient: server.Client(),
+	}
+
+	_, _, err := client.doJSON(context.Background(), http.MethodGet, "/manage/v2", nil, nil, http.StatusOK)
+	if err != nil {
+		t.Fatalf("doJSON returned error: %v", err)
+	}
+
+	if calls != 2 {
+		t.Fatalf("expected 2 calls (basic then digest), got %d", calls)
+	}
+	if len(authHeaders) != 2 {
+		t.Fatalf("expected 2 auth headers, got %d", len(authHeaders))
+	}
+	if !strings.HasPrefix(authHeaders[0], "Basic ") {
+		t.Fatalf("expected first request to use basic auth, got %q", authHeaders[0])
+	}
+	if !strings.HasPrefix(authHeaders[1], "Digest ") {
+		t.Fatalf("expected second request to use digest auth, got %q", authHeaders[1])
 	}
 }
