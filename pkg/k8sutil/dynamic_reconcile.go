@@ -149,7 +149,7 @@ func (oc *OperatorContext) ReconcileDynamicGroupConfig() result.ReconcileResult 
 		Username:           adminUser,
 		Password:           adminPass,
 		UseTLS:             useTLS,
-		InsecureSkipVerify: useTLS,
+		InsecureSkipVerify: false,
 	})
 
 	hosts, err := adminClient.ListHostsStatus(oc.Ctx)
