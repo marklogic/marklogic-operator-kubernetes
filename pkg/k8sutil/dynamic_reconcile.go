@@ -208,7 +208,7 @@ func (oc *OperatorContext) ReconcileDynamicGroupConfig() result.ReconcileResult 
 		Username:           manageUser,
 		Password:           managePass,
 		UseTLS:             useTLS,
-		InsecureSkipVerify: useTLS,
+		InsecureSkipVerify: false,
 	})
 
 	groupName := resolvedMarkLogicGroupName(oc.MarklogicGroup)
