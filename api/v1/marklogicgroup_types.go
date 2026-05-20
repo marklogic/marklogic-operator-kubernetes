@@ -70,6 +70,7 @@ type MarklogicGroupSpec struct {
 	// +kubebuilder:default:={name: "Default", enableXdqpSsl: true}
 	GroupConfig *GroupConfig `json:"groupConfig,omitempty"`
 	// +kubebuilder:default:=false
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="isDynamic is immutable after creation"
 	IsDynamic bool `json:"isDynamic,omitempty"`
 	// +optional
 	Dynamic                        *DynamicGroupConfig             `json:"dynamic,omitempty"`
