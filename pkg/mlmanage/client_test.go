@@ -178,3 +178,158 @@ func TestDoJSONRetriesWithDigestAuthChallenge(t *testing.T) {
 		t.Fatalf("expected second request to use digest auth, got %q", authHeaders[1])
 	}
 }
+
+func TestFetchClusterVersionParsesNestedVersion(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/manage/v2" {
+			t.Fatalf("expected /manage/v2 path, got %s", r.URL.Path)
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"local-cluster-default":{"version":"12.0.0","effective-version":12000000}}`))
+	}))
+	defer server.Close()
+
+	client := &managementClient{
+		baseURL:    server.URL,
+		username:   "user",
+		password:   "password",
+		httpClient: server.Client(),
+	}
+
+	version, err := client.fetchClusterVersion(context.Background())
+	if err != nil {
+		t.Fatalf("fetchClusterVersion returned error: %v", err)
+	}
+	if version != "12.0.0" {
+		t.Fatalf("expected version 12.0.0, got %s", version)
+	}
+}
+
+func TestListHostsStatusParsesHostStatusListEnvelope(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/manage/v2/hosts" {
+			t.Fatalf("expected /manage/v2/hosts path, got %s", r.URL.Path)
+		}
+		if r.URL.Query().Get("view") != "status" {
+			t.Fatalf("expected view=status, got %s", r.URL.Query().Get("view"))
+		}
+		if r.URL.Query().Get("format") != "json" {
+			t.Fatalf("expected format=json, got %s", r.URL.Query().Get("format"))
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"host-status-list":{"summary":{"total-hosts-offline":{"units":"quantity","value":0}},"status-list-items":{"status-list-item":[{"nameref":"node-0.node.default.svc.cluster.local","version":"12.0-1"}]}}}`))
+	}))
+	defer server.Close()
+
+	client := &managementClient{
+		baseURL:    server.URL,
+		username:   "user",
+		password:   "password",
+		httpClient: server.Client(),
+	}
+
+	hosts, err := client.ListHostsStatus(context.Background())
+	if err != nil {
+		t.Fatalf("ListHostsStatus returned error: %v", err)
+	}
+	if len(hosts) != 1 {
+		t.Fatalf("expected 1 host, got %d", len(hosts))
+	}
+	if hosts[0].Name != "node-0.node.default.svc.cluster.local" {
+		t.Fatalf("expected host name node-0.node.default.svc.cluster.local, got %s", hosts[0].Name)
+	}
+	if !hosts[0].Online {
+		t.Fatalf("expected host to be online")
+	}
+	if hosts[0].Version != "12.0-1" {
+		t.Fatalf("expected version 12.0-1, got %s", hosts[0].Version)
+	}
+}
+
+func TestListHostsStatusUsesSummaryWhenItemStatusMissing(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"host-status-list":{"status-list-summary":{"total-hosts-offline":{"units":"quantity","value":1}},"status-list-items":{"status-list-item":[{"nameref":"node-0.node.default.svc.cluster.local"}]}}}`))
+	}))
+	defer server.Close()
+
+	client := &managementClient{
+		baseURL:    server.URL,
+		username:   "user",
+		password:   "password",
+		httpClient: server.Client(),
+	}
+
+	hosts, err := client.ListHostsStatus(context.Background())
+	if err != nil {
+		t.Fatalf("ListHostsStatus returned error: %v", err)
+	}
+	if len(hosts) != 1 {
+		t.Fatalf("expected 1 host, got %d", len(hosts))
+	}
+	if hosts[0].Online {
+		t.Fatalf("expected host to be inferred offline when total-hosts-offline > 0")
+	}
+}
+
+func TestListHostsStatusUsesStatusListSummaryWhenItemStatusMissing(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"host-status-list":{"status-list-summary":{"total-hosts-offline":{"units":"quantity","value":0}},"status-list-items":{"status-list-item":[{"nameref":"node-0.node.default.svc.cluster.local"}]}}}`))
+	}))
+	defer server.Close()
+
+	client := &managementClient{
+		baseURL:    server.URL,
+		username:   "user",
+		password:   "password",
+		httpClient: server.Client(),
+	}
+
+	hosts, err := client.ListHostsStatus(context.Background())
+	if err != nil {
+		t.Fatalf("ListHostsStatus returned error: %v", err)
+	}
+	if len(hosts) != 1 {
+		t.Fatalf("expected 1 host, got %d", len(hosts))
+	}
+	if !hosts[0].Online {
+		t.Fatalf("expected host to be inferred online when total-hosts-offline == 0")
+	}
+}
+
+func TestListHostsStatusParsesHostDefaultListEnvelope(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"host-default-list":{"list-items":{"list-item":[{"nameref":"node-0","status":"online","version":"12.0-1"}]}}}`))
+	}))
+	defer server.Close()
+
+	client := &managementClient{
+		baseURL:    server.URL,
+		username:   "user",
+		password:   "password",
+		httpClient: server.Client(),
+	}
+
+	hosts, err := client.ListHostsStatus(context.Background())
+	if err != nil {
+		t.Fatalf("ListHostsStatus returned error: %v", err)
+	}
+	if len(hosts) != 1 {
+		t.Fatalf("expected 1 host, got %d", len(hosts))
+	}
+	if hosts[0].Name != "node-0" {
+		t.Fatalf("expected host name node-0, got %s", hosts[0].Name)
+	}
+}

@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	marklogicv1 "github.com/marklogic/marklogic-operator-kubernetes/api/v1"
 	"github.com/marklogic/marklogic-operator-kubernetes/pkg/mlmanage"
 )
 
@@ -20,6 +21,10 @@ type stubDynamicManagementClient struct {
 
 func (s *stubDynamicManagementClient) ListHostsStatus(ctx context.Context) ([]mlmanage.HostStatus, error) {
 	return nil, nil
+}
+
+func (s *stubDynamicManagementClient) GetHostGroupName(ctx context.Context, hostName string) (string, error) {
+	return "Default", nil
 }
 
 func (s *stubDynamicManagementClient) GetGroup(ctx context.Context, groupName string) (mlmanage.GroupInfo, error) {
@@ -173,6 +178,55 @@ func TestJoinDynamicPodFailsWhenJoinedHostMissingFromMembership(t *testing.T) {
 	}
 	if expected := "not yet visible in group membership"; err != nil && !strings.Contains(err.Error(), expected) {
 		t.Fatalf("expected error containing %q, got %v", expected, err)
+	}
+}
+
+func TestJoinDynamicPodFallsBackToBootstrapHostForToken(t *testing.T) {
+	hostFQDN := "dynamic-0.dynamic.default.svc.cluster.local"
+	bootstrapHost := "node-0.node.default.svc.cluster.local"
+	oc := &OperatorContext{
+		Ctx: context.Background(),
+		MarklogicGroup: &marklogicv1.MarklogicGroup{
+			Spec: marklogicv1.MarklogicGroupSpec{BootstrapHost: bootstrapHost},
+		},
+	}
+
+	requestedHosts := make([]string, 0, 2)
+	client := &stubDynamicManagementClient{
+		requestTokenFn: func(clusterName, groupName, requestedHost, duration string) (string, error) {
+			requestedHosts = append(requestedHosts, requestedHost)
+			switch requestedHost {
+			case hostFQDN:
+				return "", errors.New("management api POST /manage/v2/clusters/cluster/dynamic-host-token returned status 404: {\"errorResponse\":{\"messageCode\":\"XDMP-NOSUCHHOST\"}}")
+			case bootstrapHost:
+				return "token-bootstrap", nil
+			default:
+				return "", fmt.Errorf("unexpected token host: %s", requestedHost)
+			}
+		},
+		joinFn: func(requestedHost, token string) error {
+			if requestedHost != hostFQDN {
+				return fmt.Errorf("expected join host %s, got %s", hostFQDN, requestedHost)
+			}
+			if token != "token-bootstrap" {
+				return fmt.Errorf("expected fallback token, got %s", token)
+			}
+			return nil
+		},
+		listGroupFn: func(groupName string) ([]mlmanage.GroupHost, error) {
+			return []mlmanage.GroupHost{{Name: hostFQDN, HostID: "host-id-fallback", Online: true}}, nil
+		},
+	}
+
+	host, err := oc.joinDynamicPod(client, "cluster", "DynamicGroup", hostFQDN, "PT15M")
+	if err != nil {
+		t.Fatalf("joinDynamicPod returned error: %v", err)
+	}
+	if host.HostID != "host-id-fallback" {
+		t.Fatalf("expected host-id-fallback, got %s", host.HostID)
+	}
+	if len(requestedHosts) != 2 || requestedHosts[0] != hostFQDN || requestedHosts[1] != bootstrapHost {
+		t.Fatalf("expected token host fallback sequence [%s %s], got %v", hostFQDN, bootstrapHost, requestedHosts)
 	}
 }
 

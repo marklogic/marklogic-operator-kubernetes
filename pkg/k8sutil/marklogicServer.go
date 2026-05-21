@@ -208,6 +208,11 @@ func (cc *ClusterContext) ReconsileMarklogicCluster() (reconcile.Result, error) 
 				return result.Error(err).Output()
 			}
 		} else {
+			if err := immutableMarklogicGroupSpecMismatch(currentMlg, markLogicGroupDef); err != nil {
+				logger.Error(err, "Existing MarkLogicGroup cannot be reconciled to desired immutable spec")
+				return result.Error(err).Output()
+			}
+
 			patchDiff, err := patch.DefaultPatchMaker.Calculate(currentMlg, markLogicGroupDef,
 				patch.IgnoreStatusFields(),
 				patch.IgnoreVolumeClaimTemplateTypeMetaAndStatus(),
@@ -238,6 +243,18 @@ func (cc *ClusterContext) ReconsileMarklogicCluster() (reconcile.Result, error) 
 
 	}
 	return result.Done().Output()
+}
+
+func immutableMarklogicGroupSpecMismatch(current, desired *marklogicv1.MarklogicGroup) error {
+	if current == nil || desired == nil {
+		return nil
+	}
+
+	if current.Spec.IsDynamic != desired.Spec.IsDynamic {
+		return fmt.Errorf("marklogicgroup %s/%s cannot change isDynamic from %t to %t; delete the child MarklogicGroup so the cluster controller can recreate it", current.Namespace, current.Name, current.Spec.IsDynamic, desired.Spec.IsDynamic)
+	}
+
+	return nil
 }
 
 func generateMarkLogicClusterParams(cr *marklogicv1.MarklogicCluster) *MarkLogicClusterParameters {

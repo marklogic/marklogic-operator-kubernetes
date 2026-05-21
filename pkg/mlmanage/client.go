@@ -22,6 +22,7 @@ import (
 
 type Client interface {
 	ListHostsStatus(ctx context.Context) ([]HostStatus, error)
+	GetHostGroupName(ctx context.Context, hostName string) (string, error)
 	GetGroup(ctx context.Context, groupName string) (GroupInfo, error)
 	CreateGroup(ctx context.Context, groupName string) error
 	EnableDynamicHosts(ctx context.Context, groupName string) error
@@ -112,6 +113,7 @@ func (c *managementClient) ListHostsStatus(ctx context.Context) ([]HostStatus, e
 	}
 
 	items := extractHostItems(payload)
+	totalOffline, hasTotalOffline := extractTotalHostsOffline(payload)
 	hosts := make([]HostStatus, 0, len(items))
 	for i, item := range items {
 		name := firstString(item, "nameref", "host-name", "name")
@@ -120,9 +122,13 @@ func (c *managementClient) ListHostsStatus(ctx context.Context) ([]HostStatus, e
 		}
 		status := strings.ToLower(firstString(item, "status", "host-status"))
 		version := firstString(item, "version", "product-version")
+		online := status == "online"
+		if status == "" && hasTotalOffline {
+			online = totalOffline == 0
+		}
 		hosts = append(hosts, HostStatus{
 			Name:    name,
-			Online:  status == "online",
+			Online:  online,
 			Version: version,
 		})
 	}
@@ -167,6 +173,35 @@ func (c *managementClient) GetGroup(ctx context.Context, groupName string) (Grou
 		return GroupInfo{}, err
 	}
 	return GroupInfo{Exists: true, ForestCount: countForests(payload)}, nil
+}
+
+func (c *managementClient) GetHostGroupName(ctx context.Context, hostName string) (string, error) {
+	query := url.Values{}
+	query.Set("format", "json")
+	data, _, err := c.doJSON(ctx, http.MethodGet, "/manage/v2/hosts/"+url.PathEscape(hostName)+"/properties", query, nil, http.StatusOK)
+	if err != nil {
+		return "", err
+	}
+
+	var payload any
+	if err := json.Unmarshal(data, &payload); err != nil {
+		return "", err
+	}
+	root, ok := payload.(map[string]any)
+	if !ok {
+		return "", fmt.Errorf("unexpected host properties payload for %s", hostName)
+	}
+
+	if groupName := strings.TrimSpace(firstString(root, "group", "group-name")); groupName != "" {
+		return groupName, nil
+	}
+	if relationGroup, ok := root["relation-group"].(map[string]any); ok {
+		if groupName := strings.TrimSpace(firstString(relationGroup, "nameref", "name")); groupName != "" {
+			return groupName, nil
+		}
+	}
+
+	return "", fmt.Errorf("host %s did not report a group name", hostName)
 }
 
 func (c *managementClient) CreateGroup(ctx context.Context, groupName string) error {
@@ -215,6 +250,8 @@ func (c *managementClient) RequestDynamicHostToken(ctx context.Context, clusterN
 	if strings.TrimSpace(duration) == "" {
 		duration = "PT15M"
 	}
+	query := url.Values{}
+	query.Set("format", "json")
 	payload := map[string]any{
 		"dynamic-host-token": map[string]any{
 			"group":    groupName,
@@ -224,7 +261,7 @@ func (c *managementClient) RequestDynamicHostToken(ctx context.Context, clusterN
 			"comment":  "operator-managed",
 		},
 	}
-	data, _, err := c.doJSON(ctx, http.MethodPost, "/manage/v2/clusters/"+url.PathEscape(clusterName)+"/dynamic-host-token", nil, payload, http.StatusCreated, http.StatusOK)
+	data, _, err := c.doJSON(ctx, http.MethodPost, "/manage/v2/clusters/"+url.PathEscape(clusterName)+"/dynamic-host-token", query, payload, http.StatusCreated, http.StatusOK)
 	if err != nil {
 		return "", err
 	}
@@ -326,11 +363,16 @@ func (c *managementClient) fetchClusterVersion(ctx context.Context) (string, err
 	if err != nil {
 		return "", err
 	}
-	var payload map[string]any
+	var payload any
 	if err := json.Unmarshal(data, &payload); err != nil {
 		return "", err
 	}
-	return firstString(payload, "version", "product-version"), nil
+	if root, ok := payload.(map[string]any); ok {
+		if version := firstString(root, "version", "product-version"); version != "" {
+			return version, nil
+		}
+	}
+	return findFirstStringByKeys(payload, "version", "product-version"), nil
 }
 
 func (c *managementClient) doJSON(ctx context.Context, method, path string, query url.Values, body any, expectedStatus ...int) ([]byte, int, error) {
@@ -570,15 +612,37 @@ func extractHostItems(payload any) []map[string]any {
 	if !ok {
 		return nil
 	}
-	listItems, ok := root["host-default-list"].(map[string]any)
+
+	// MarkLogic can return host collections in different list envelopes depending
+	// on endpoint/view combinations and server versions.
+	candidates := []struct {
+		topLevel string
+		listKey  string
+		itemKey  string
+	}{
+		{topLevel: "host-default-list", listKey: "list-items", itemKey: "list-item"},
+		{topLevel: "host-status-list", listKey: "status-list-items", itemKey: "status-list-item"},
+	}
+	for _, candidate := range candidates {
+		items := extractListItems(root, candidate.topLevel, candidate.listKey, candidate.itemKey)
+		if len(items) > 0 {
+			return items
+		}
+	}
+
+	return nil
+}
+
+func extractListItems(root map[string]any, topLevel, listKey, itemKey string) []map[string]any {
+	top, ok := root[topLevel].(map[string]any)
 	if !ok {
 		return nil
 	}
-	listData, ok := listItems["list-items"].(map[string]any)
+	list, ok := top[listKey].(map[string]any)
 	if !ok {
 		return nil
 	}
-	rawItems, ok := listData["list-item"]
+	rawItems, ok := list[itemKey]
 	if !ok {
 		return nil
 	}
@@ -595,6 +659,57 @@ func extractHostItems(payload any) []map[string]any {
 		result = append(result, items)
 	}
 	return result
+}
+
+func extractTotalHostsOffline(payload any) (int, bool) {
+	root, ok := payload.(map[string]any)
+	if !ok {
+		return 0, false
+	}
+	hostStatusList, ok := root["host-status-list"].(map[string]any)
+	if !ok {
+		return 0, false
+	}
+
+	var summary map[string]any
+	if statusSummary, exists := hostStatusList["status-list-summary"].(map[string]any); exists {
+		summary = statusSummary
+	} else if legacySummary, exists := hostStatusList["summary"].(map[string]any); exists {
+		summary = legacySummary
+	} else {
+		return 0, false
+	}
+	rawOffline, ok := summary["total-hosts-offline"]
+	if !ok {
+		return 0, false
+	}
+
+	value, ok := quantityValueAsInt(rawOffline)
+	if !ok {
+		return 0, false
+	}
+	return value, true
+}
+
+func quantityValueAsInt(value any) (int, bool) {
+	switch v := value.(type) {
+	case float64:
+		return int(v), true
+	case int:
+		return v, true
+	case map[string]any:
+		raw, exists := v["value"]
+		if !exists {
+			return 0, false
+		}
+		switch typed := raw.(type) {
+		case float64:
+			return int(typed), true
+		case int:
+			return typed, true
+		}
+	}
+	return 0, false
 }
 
 func countForests(payload any) int {

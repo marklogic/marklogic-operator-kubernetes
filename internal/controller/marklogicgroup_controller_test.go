@@ -2545,6 +2545,20 @@ func (f *fakeDynamicManagementClient) ListHostsStatus(ctx context.Context) ([]ml
 	return hosts, f.behavior.listHostsErr
 }
 
+func (f *fakeDynamicManagementClient) GetHostGroupName(ctx context.Context, hostName string) (string, error) {
+	if f.behavior == nil {
+		return "Default", nil
+	}
+	f.behavior.mu.Lock()
+	defer f.behavior.mu.Unlock()
+	if f.behavior.hostGroupByHost != nil {
+		if groupName, ok := f.behavior.hostGroupByHost[hostName]; ok && strings.TrimSpace(groupName) != "" {
+			return groupName, nil
+		}
+	}
+	return "Default", nil
+}
+
 func (f *fakeDynamicManagementClient) GetGroup(ctx context.Context, groupName string) (mlmanage.GroupInfo, error) {
 	f.record("GetGroup")
 	if f.behavior == nil {

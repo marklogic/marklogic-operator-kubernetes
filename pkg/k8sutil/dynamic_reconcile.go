@@ -211,11 +211,14 @@ func (oc *OperatorContext) ReconcileDynamicGroupConfig() result.ReconcileResult 
 	}
 
 	groupClient := NewDynamicManagementClient(mlmanage.ClientOptions{
-		Host:               bootstrapHost,
-		Username:           manageUser,
-		Password:           managePass,
+		Host: bootstrapHost,
+		// Use bootstrap admin credentials for dynamic-host management APIs.
+		// Some MarkLogic versions reject manage-admin for dynamic-host-token
+		// issuance/removal even when group-level configuration calls succeed.
+		Username:           adminUser,
+		Password:           adminPass,
 		UseTLS:             useTLS,
-		InsecureSkipVerify: false,
+		InsecureSkipVerify: insecureSkipVerify,
 	})
 
 	groupName := resolvedMarkLogicGroupName(oc.MarklogicGroup)
@@ -268,6 +271,20 @@ func (oc *OperatorContext) ReconcileDynamicGroupConfig() result.ReconcileResult 
 		return result.Done()
 	}
 
+	bootstrapGroupName, err := groupClient.GetHostGroupName(oc.Ctx, bootstrapHost)
+	if err != nil {
+		if isTransientManagementError(err) {
+			if err := oc.setDynamicStatus(dynamicPhaseDegraded, dynamicReasonGroupConfigFailed, fmt.Sprintf("failed to resolve bootstrap host group: %v", err), true, false, true); err != nil {
+				return result.Error(err)
+			}
+			return result.RequeueSoon(5)
+		}
+		if err := oc.setDynamicStatus(dynamicPhaseFailed, dynamicReasonGroupConfigFailed, fmt.Sprintf("failed to resolve bootstrap host group: %v", err), true, false, true); err != nil {
+			return result.Error(err)
+		}
+		return result.Done()
+	}
+
 	if err := groupClient.EnableAdminAPITokenAuthentication(oc.Ctx, groupName); err != nil {
 		if isTransientManagementError(err) {
 			if err := oc.setDynamicStatus(dynamicPhaseDegraded, dynamicReasonGroupConfigFailed, fmt.Sprintf("failed to enable API-token-authentication: %v", err), true, false, true); err != nil {
@@ -279,6 +296,21 @@ func (oc *OperatorContext) ReconcileDynamicGroupConfig() result.ReconcileResult 
 			return result.Error(err)
 		}
 		return result.Done()
+	}
+
+	if !strings.EqualFold(bootstrapGroupName, groupName) {
+		if err := groupClient.EnableAdminAPITokenAuthentication(oc.Ctx, bootstrapGroupName); err != nil {
+			if isTransientManagementError(err) {
+				if err := oc.setDynamicStatus(dynamicPhaseDegraded, dynamicReasonGroupConfigFailed, fmt.Sprintf("failed to enable API-token-authentication for bootstrap group %q: %v", bootstrapGroupName, err), true, false, true); err != nil {
+					return result.Error(err)
+				}
+				return result.RequeueSoon(5)
+			}
+			if err := oc.setDynamicStatus(dynamicPhaseFailed, dynamicReasonGroupConfigFailed, fmt.Sprintf("failed to enable API-token-authentication for bootstrap group %q: %v", bootstrapGroupName, err), true, false, true); err != nil {
+				return result.Error(err)
+			}
+			return result.Done()
+		}
 	}
 
 	desiredReplicas := desiredDynamicReplicas(oc.MarklogicGroup)
@@ -471,7 +503,9 @@ func (oc *OperatorContext) reconcileDynamicDeletionLifecycle(groupClient mlmanag
 	hostStatuses = pruneRemovedHostStatuses(hostStatuses, pods, members)
 
 	if len(members) > 0 {
-		return oc.reconcileDynamicScaleDown(groupClient, clusterName, groupName, desiredReplicas, true, pods, members, hostStatuses, localReadyReplicas, readyReplicas)
+		// During MarklogicGroup deletion we must drain all dynamic hosts,
+		// independent of the last desired replica count.
+		return oc.reconcileDynamicScaleDown(groupClient, clusterName, groupName, 0, true, pods, members, hostStatuses, localReadyReplicas, readyReplicas)
 	}
 
 	if err := oc.releaseDynamicPodFinalizers(pods); err != nil {
@@ -1260,6 +1294,14 @@ func isTokenExpiredError(err error) bool {
 	return strings.Contains(message, "token") && strings.Contains(message, "expired")
 }
 
+func isNoSuchHostManagementError(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "xdmp-nosuchhost") || strings.Contains(message, "no such host")
+}
+
 func statusCodeFromError(err error) (int, bool) {
 	if err == nil {
 		return 0, false
@@ -1500,14 +1542,22 @@ func (oc *OperatorContext) handleDynamicRemoveFailure(hostStatuses []marklogicv1
 }
 
 func (oc *OperatorContext) joinDynamicPod(groupClient mlmanage.Client, clusterName, groupName, hostFQDN, tokenDuration string) (mlmanage.GroupHost, error) {
-	token, err := groupClient.RequestDynamicHostToken(oc.Ctx, clusterName, groupName, hostFQDN, tokenDuration)
+	tokenHost := hostFQDN
+	token, err := groupClient.RequestDynamicHostToken(oc.Ctx, clusterName, groupName, tokenHost, tokenDuration)
+	if err != nil && isNoSuchHostManagementError(err) && oc.MarklogicGroup != nil {
+		bootstrapHost := strings.TrimSpace(oc.MarklogicGroup.Spec.BootstrapHost)
+		if bootstrapHost != "" && !strings.EqualFold(bootstrapHost, tokenHost) {
+			tokenHost = bootstrapHost
+			token, err = groupClient.RequestDynamicHostToken(oc.Ctx, clusterName, groupName, tokenHost, tokenDuration)
+		}
+	}
 	if err != nil {
 		return mlmanage.GroupHost{}, err
 	}
 
 	err = groupClient.JoinDynamicHost(oc.Ctx, hostFQDN, token)
 	if err != nil && isTokenExpiredError(err) {
-		token, tokenErr := groupClient.RequestDynamicHostToken(oc.Ctx, clusterName, groupName, hostFQDN, tokenDuration)
+		token, tokenErr := groupClient.RequestDynamicHostToken(oc.Ctx, clusterName, groupName, tokenHost, tokenDuration)
 		if tokenErr != nil {
 			return mlmanage.GroupHost{}, tokenErr
 		}
