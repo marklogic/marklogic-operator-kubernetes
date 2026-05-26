@@ -139,6 +139,9 @@ kubectl logs -n <operator-namespace> deployment/marklogic-operator-controller-ma
 - `Role`: marklogic-operator-manager-role (in watched namespace)
 - `RoleBinding`: marklogic-operator-manager-rolebinding (in watched namespace)
 
+Note: Volume resize validation may need read access to `storage.k8s.io/storageclasses` even in namespace-scoped mode.
+The current chart templates do not create a dedicated StorageClass reader `ClusterRole`/`ClusterRoleBinding`, so do not expect those resources or names to be present unless they are added separately.
+
 ## Migration Between Scopes
 
 ### From Cluster to Namespace:

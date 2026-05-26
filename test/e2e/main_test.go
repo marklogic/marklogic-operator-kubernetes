@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"sync"
 	"testing"
 	"time"
 
@@ -47,6 +48,77 @@ func namespaceLabels() map[string]string {
 		}
 	}
 	return nil
+}
+
+// ── Test summary tracker ──────────────────────────────────────────────────────
+
+type testResult struct {
+	name    string
+	passed  bool
+	skipped bool
+}
+
+var (
+	trackMu      sync.Mutex
+	trackedTests []testResult
+)
+
+// trackTest registers t in the global summary. Call it at the top of each Test* function.
+// t.Cleanup runs after the test (and all its sub-tests) complete, so t.Failed()/t.Skipped() are final.
+func trackTest(t *testing.T) {
+	t.Helper()
+	t.Cleanup(func() {
+		trackMu.Lock()
+		trackedTests = append(trackedTests, testResult{
+			name:    t.Name(),
+			passed:  !t.Failed() && !t.Skipped(),
+			skipped: t.Skipped(),
+		})
+		trackMu.Unlock()
+	})
+}
+
+// printTestSummary logs a structured pass/fail banner of all tracked tests to stdout.
+func printTestSummary() {
+	trackMu.Lock()
+	results := make([]testResult, len(trackedTests))
+	copy(results, trackedTests)
+	trackMu.Unlock()
+
+	total := len(results)
+	passed := 0
+	var failed []string
+	var skipped []string
+	for _, r := range results {
+		if r.skipped {
+			skipped = append(skipped, r.name)
+		} else if r.passed {
+			passed++
+		} else {
+			failed = append(failed, r.name)
+		}
+	}
+
+	fmt.Println()
+	fmt.Println("╔══════════════════════════════════════════════════════════════╗")
+	fmt.Println("║              E2E (CLUSTER-SCOPED) TEST SUITE SUMMARY         ║")
+	fmt.Println("╠══════════════════════════════════════════════════════════════╣")
+	fmt.Printf("║  Total   : %-50d║\n", total)
+	fmt.Printf("║  Passed  : %-50d║\n", passed)
+	fmt.Printf("║  Skipped : %-50d║\n", len(skipped))
+	fmt.Printf("║  Failed  : %-50d║\n", len(failed))
+	if len(failed) > 0 {
+		fmt.Println("╠══════════════════════════════════════════════════════════════╣")
+		fmt.Println("║  Failed tests:                                               ║")
+		for _, name := range failed {
+			if len(name) > 49 {
+				name = name[:46] + "..."
+			}
+			fmt.Printf("║    ✗ %-57s║\n", name)
+		}
+	}
+	fmt.Println("╚══════════════════════════════════════════════════════════════╝")
+	fmt.Println()
 }
 
 func TestMain(m *testing.M) {
@@ -258,5 +330,7 @@ func TestMain(m *testing.M) {
 	)
 
 	// Use Environment.Run to launch the test
-	os.Exit(testEnv.Run(m))
+	exitCode := testEnv.Run(m)
+	printTestSummary()
+	os.Exit(exitCode)
 }

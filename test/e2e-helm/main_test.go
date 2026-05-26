@@ -51,7 +51,7 @@ const helmChart = "charts/marklogic-operator-kubernetes"
 // watchedNamespaces is the comma-separated list of namespaces the operator watches.
 // Every test namespace in this suite must appear here — the namespace-scoped operator
 // only has a Role/RoleBinding in these namespaces (no ClusterRole backstop).
-const watchedNamespaces = "ml-ns-test,ml-ns-ednode,ml-ns-tls,ml-ns-tls-named,ml-ns-tls-ednode,ml-ns-haproxy-path,ml-ns-haproxy,ml-ns-log"
+const watchedNamespaces = "ml-ns-test,ml-ns-ednode,ml-ns-tls,ml-ns-tls-named,ml-ns-tls-ednode,ml-ns-haproxy-path,ml-ns-haproxy,ml-ns-log,ml-ns-resize-a,ml-ns-resize-b"
 
 var (
 	testEnv        env.Environment

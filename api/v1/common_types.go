@@ -22,12 +22,23 @@ type ContainerProbe struct {
 	FailureThreshold int32 `json:"failureThreshold,omitempty"`
 }
 
+// VolumeResizeStrategy defines how PVC resize requests are submitted.
+type VolumeResizeStrategy string
+
+const (
+	VolumeResizeStrategyParallel   VolumeResizeStrategy = "parallel"
+	VolumeResizeStrategySequential VolumeResizeStrategy = "sequential"
+)
+
 // Storage is the inteface to add pvc and pv support in marklogic
 type Persistence struct {
 	Enabled bool `json:"enabled,omitempty"`
 	// +kubebuilder:validation:Required
-	Size             string `json:"size,omitempty"`
-	StorageClassName string `json:"storageClassName,omitempty"`
+	Size string `json:"size,omitempty"`
+	// +kubebuilder:validation:Enum=parallel;sequential
+	// +kubebuilder:default:=parallel
+	ResizeStrategy   VolumeResizeStrategy `json:"resizeStrategy,omitempty"`
+	StorageClassName string               `json:"storageClassName,omitempty"`
 	// +kubebuilder:default:={ReadWriteOnce}
 	AccessModes []corev1.PersistentVolumeAccessMode `json:"accessModes,omitempty"`
 	Annotations map[string]string                   `json:"annotations,omitempty"`

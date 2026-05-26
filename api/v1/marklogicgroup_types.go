@@ -84,13 +84,121 @@ type MarklogicGroupSpec struct {
 // InternalState defines the observed state of MarklogicGroup
 type InternalState string
 
+type VolumeResizePhase string
+
+const (
+	VolumeResizePhaseValidating               VolumeResizePhase = "Validating"
+	VolumeResizePhaseResizingPVCs             VolumeResizePhase = "ResizingPVCs"
+	VolumeResizePhaseWaitingForPVCResize      VolumeResizePhase = "WaitingForPVCResize"
+	VolumeResizePhaseSynchronizingStatefulSet VolumeResizePhase = "SynchronizingStatefulSet"
+	VolumeResizePhaseRestartingPods           VolumeResizePhase = "RestartingPods"
+	VolumeResizePhaseWaitingForPodsReady      VolumeResizePhase = "WaitingForPodsReady"
+	VolumeResizePhaseVerifyingResizeOutcome   VolumeResizePhase = "VerifyingResizeOutcome"
+	VolumeResizePhaseCompleted                VolumeResizePhase = "Completed"
+	VolumeResizePhaseStalled                  VolumeResizePhase = "Stalled"
+	VolumeResizePhaseFailed                   VolumeResizePhase = "Failed"
+)
+
+type VolumeResizeReason string
+
+const (
+	VolumeResizeReasonResizeFailed               VolumeResizeReason = "ResizeFailed"
+	VolumeResizeReasonPartialResizeFailure       VolumeResizeReason = "PartialResizeFailure"
+	VolumeResizeReasonResizeRateLimited          VolumeResizeReason = "ResizeRateLimited"
+	VolumeResizeReasonStorageQuotaExceeded       VolumeResizeReason = "StorageQuotaExceeded"
+	VolumeResizeReasonResizeForbidden            VolumeResizeReason = "ResizeForbidden"
+	VolumeResizeReasonInvalidResizeRequest       VolumeResizeReason = "InvalidResizeRequest"
+	VolumeResizeReasonStorageClassNotExpandable  VolumeResizeReason = "StorageClassNotExpandable"
+	VolumeResizeReasonShrinkNotSupported         VolumeResizeReason = "ShrinkNotSupported"
+	VolumeResizeReasonPVCNotBound                VolumeResizeReason = "PVCNotBound"
+	VolumeResizeReasonConcurrentResize           VolumeResizeReason = "ConcurrentResize"
+	VolumeResizeReasonStatefulSetSyncFailed      VolumeResizeReason = "StatefulSetSyncFailed"
+	VolumeResizeReasonPodRecoveryFailed          VolumeResizeReason = "PodRecoveryFailed"
+	VolumeResizeReasonTemplateUpdateInterrupted  VolumeResizeReason = "TemplateUpdateInterrupted"
+	VolumeResizeReasonMarkLogicHealthCheckFailed VolumeResizeReason = "MarkLogicHealthCheckFailed"
+	VolumeResizeReasonPaused                     VolumeResizeReason = "Paused"
+	VolumeResizeReasonMaxRetriesExceeded         VolumeResizeReason = "MaxRetriesExceeded"
+	VolumeResizeReasonMaxOperationTimeExceeded   VolumeResizeReason = "MaxOperationTimeExceeded"
+)
+
+type PVCResizeState string
+
+const (
+	PVCResizeStatePending              PVCResizeState = "Pending"
+	PVCResizeStateResizeSubmitted      PVCResizeState = "ResizeSubmitted"
+	PVCResizeStateWaitingForCheckpoint PVCResizeState = "WaitingForCheckpoint"
+	PVCResizeStateCheckpointed         PVCResizeState = "Checkpointed"
+	PVCResizeStateRestartPending       PVCResizeState = "RestartPending"
+	PVCResizeStateRestarted            PVCResizeState = "Restarted"
+	PVCResizeStateFailed               PVCResizeState = "Failed"
+)
+
+type PVCResizeCheckpointType string
+
+const (
+	PVCResizeCheckpointTypeOnlineComplete  PVCResizeCheckpointType = "OnlineComplete"
+	PVCResizeCheckpointTypeOfflinePending  PVCResizeCheckpointType = "OfflinePending"
+	PVCResizeCheckpointTypeOfflineComplete PVCResizeCheckpointType = "OfflineComplete"
+)
+
+type PVCResizeStatus struct {
+	Name             string `json:"name,omitempty"`
+	PodName          string `json:"podName,omitempty"`
+	RequestedSize    string `json:"requestedSize,omitempty"`
+	ObservedCapacity string `json:"observedCapacity,omitempty"`
+	// +kubebuilder:validation:Enum=Pending;ResizeSubmitted;WaitingForCheckpoint;Checkpointed;RestartPending;Restarted;Failed
+	State PVCResizeState `json:"state,omitempty"`
+	// +kubebuilder:validation:Enum=OnlineComplete;OfflinePending;OfflineComplete
+	CheckpointType     PVCResizeCheckpointType `json:"checkpointType,omitempty"`
+	RestartRequired    bool                    `json:"restartRequired,omitempty"`
+	LastReason         string                  `json:"lastReason,omitempty"`
+	LastMessage        string                  `json:"lastMessage,omitempty"`
+	LastTransitionTime *metav1.Time            `json:"lastTransitionTime,omitempty"`
+}
+
+type FailedPVCStatus struct {
+	Name    string `json:"name,omitempty"`
+	Reason  string `json:"reason,omitempty"`
+	Message string `json:"message,omitempty"`
+}
+
+type VolumeResizeStatus struct {
+	OperationID        string `json:"operationID,omitempty"`
+	ObservedGeneration int64  `json:"observedGeneration,omitempty"`
+	// +kubebuilder:validation:Enum=Validating;ResizingPVCs;WaitingForPVCResize;SynchronizingStatefulSet;RestartingPods;WaitingForPodsReady;VerifyingResizeOutcome;Completed;Stalled;Failed
+	Phase   VolumeResizePhase `json:"phase,omitempty"`
+	Message string            `json:"message,omitempty"`
+	// +kubebuilder:validation:Enum=ResizeFailed;PartialResizeFailure;ResizeRateLimited;StorageQuotaExceeded;ResizeForbidden;InvalidResizeRequest;StorageClassNotExpandable;ShrinkNotSupported;PVCNotBound;ConcurrentResize;StatefulSetSyncFailed;PodRecoveryFailed;TemplateUpdateInterrupted;MarkLogicHealthCheckFailed;Paused;MaxRetriesExceeded;MaxOperationTimeExceeded
+	Reason                     VolumeResizeReason `json:"reason,omitempty"`
+	CurrentSize                string             `json:"currentSize,omitempty"`
+	TargetSize                 string             `json:"targetSize,omitempty"`
+	DeferredTargetSize         string             `json:"deferredTargetSize,omitempty"`
+	DeferredObservedGeneration int64              `json:"deferredObservedGeneration,omitempty"`
+	// +kubebuilder:validation:Enum=parallel;sequential
+	ResizeStrategy   VolumeResizeStrategy `json:"resizeStrategy,omitempty"`
+	TotalPVCs        int32                `json:"totalPvcs,omitempty"`
+	PVCsCheckpointed int32                `json:"pvcsCheckpointed,omitempty"`
+	ActivePVC        string               `json:"activePVC,omitempty"`
+	PVCStatuses      []PVCResizeStatus    `json:"pvcStatuses,omitempty"`
+	FailedPVCs       []FailedPVCStatus    `json:"failedPVCs,omitempty"`
+	// Internal crash-recovery workflow markers for resize reconciliation.
+	Markers            []string     `json:"markers,omitempty"`
+	Warnings           []string     `json:"warnings,omitempty"`
+	RetryCount         int32        `json:"retryCount,omitempty"`
+	NextRetryTime      *metav1.Time `json:"nextRetryTime,omitempty"`
+	LastTransitionTime *metav1.Time `json:"lastTransitionTime,omitempty"`
+	FirstStartedTime   *metav1.Time `json:"firstStartedTime,omitempty"`
+	CompletionTime     *metav1.Time `json:"completionTime,omitempty"`
+}
+
 // MarklogicGroupStatus defines the observed state of MarklogicGroup
 type MarklogicGroupStatus struct {
 	// INSERT ADDITIONAL STATUS FIELD - define observed state of cluster
 	// Important: Run "make" to regenerate code after modifying this file
-	Conditions    []metav1.Condition       `json:"conditions,omitempty"`
-	Stage         string                   `json:"stage,omitempty"`
-	MarkLogicPods []corev1.ObjectReference `json:"active,omitempty"`
+	Conditions         []metav1.Condition       `json:"conditions,omitempty"`
+	Stage              string                   `json:"stage,omitempty"`
+	MarkLogicPods      []corev1.ObjectReference `json:"active,omitempty"`
+	VolumeResizeStatus *VolumeResizeStatus      `json:"volumeResizeStatus,omitempty"`
 
 	// +optional
 	MarklogicGroupStatus InternalState `json:"markLogicGroupStatus,omitempty"`
