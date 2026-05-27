@@ -8290,6 +8290,9 @@ spec:
                     isDynamic:
                       default: false
                       type: boolean
+                      x-kubernetes-validations:
+                      - message: isDynamic cannot be changed
+                        rule: self == oldSelf
                     labels:
                       additionalProperties:
                         type: string
