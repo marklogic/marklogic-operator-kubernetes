@@ -8289,10 +8289,10 @@ spec:
                       type: boolean
                     isDynamic:
                       default: false
+                      description: |-
+                        isDynamic immutability is enforced in reconciliation logic for child MarklogicGroup resources.
+                        A field-level CEL rule using oldSelf is invalid here because markLogicGroups items are uncorrelatable.
                       type: boolean
-                      x-kubernetes-validations:
-                      - message: isDynamic cannot be changed
-                        rule: self == oldSelf
                     labels:
                       additionalProperties:
                         type: string

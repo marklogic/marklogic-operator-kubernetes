@@ -8,9 +8,12 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	marklogicv1 "github.com/marklogic/marklogic-operator-kubernetes/api/v1"
 	"github.com/marklogic/marklogic-operator-kubernetes/pkg/mlmanage"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 type stubDynamicManagementClient struct {
@@ -292,4 +295,121 @@ func TestIsValidDynamicTokenDuration(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestBuildDynamicHostStatusesClearsFailedStateForRecreatedPod(t *testing.T) {
+	recreatedAt := metav1.NewTime(time.Now())
+	lastUpdated := metav1.NewTime(recreatedAt.Add(-5 * time.Minute))
+
+	oc := &OperatorContext{
+		MarklogicGroup: &marklogicv1.MarklogicGroup{
+			ObjectMeta: metav1.ObjectMeta{Namespace: "default"},
+			Spec:       marklogicv1.MarklogicGroupSpec{Name: "dynamic", ClusterDomain: "cluster.local", IsDynamic: true},
+		},
+	}
+
+	pods := []corev1.Pod{dynamicReadyPodForTest("dynamic-0", recreatedAt)}
+	members := []mlmanage.GroupHost{{Name: "dynamic-0.dynamic.default.svc.cluster.local", HostID: "host-id-new", Online: true}}
+	previous := []marklogicv1.DynamicHostStatus{{
+		PodName:     "dynamic-0",
+		Hostname:    "dynamic-0.dynamic.default.svc.cluster.local",
+		HostID:      "host-id-old",
+		State:       dynamicHostStateFailed,
+		Message:     "pod did not reach local readiness before startup timeout",
+		Attempts:    3,
+		LastUpdated: &lastUpdated,
+	}}
+
+	hosts, localReady, ready, joinCandidates := oc.buildDynamicHostStatuses(pods, members, previous)
+	if localReady != 1 {
+		t.Fatalf("expected localReadyReplicas=1, got %d", localReady)
+	}
+	if ready != 1 {
+		t.Fatalf("expected readyReplicas=1, got %d", ready)
+	}
+	if len(joinCandidates) != 0 {
+		t.Fatalf("expected no join candidates, got %d", len(joinCandidates))
+	}
+
+	host, found := findDynamicHostStatusByPod(hosts, "dynamic-0")
+	if !found {
+		t.Fatalf("expected host status for dynamic-0")
+	}
+	if host.State != dynamicHostStateJoined {
+		t.Fatalf("expected recreated pod host state to reset to %q, got %q", dynamicHostStateJoined, host.State)
+	}
+	if host.HostID != "host-id-new" {
+		t.Fatalf("expected host-id-new after recovery, got %q", host.HostID)
+	}
+	if host.Attempts != 0 {
+		t.Fatalf("expected attempts reset to 0, got %d", host.Attempts)
+	}
+	if host.Message != "" {
+		t.Fatalf("expected message cleared on recovery, got %q", host.Message)
+	}
+}
+
+func TestBuildDynamicHostStatusesPreservesFailedStateForSamePod(t *testing.T) {
+	podCreation := metav1.NewTime(time.Now().Add(-5 * time.Minute))
+	lastUpdated := metav1.NewTime(time.Now())
+
+	oc := &OperatorContext{
+		MarklogicGroup: &marklogicv1.MarklogicGroup{
+			ObjectMeta: metav1.ObjectMeta{Namespace: "default"},
+			Spec:       marklogicv1.MarklogicGroupSpec{Name: "dynamic", ClusterDomain: "cluster.local", IsDynamic: true},
+		},
+	}
+
+	pods := []corev1.Pod{dynamicReadyPodForTest("dynamic-0", podCreation)}
+	members := []mlmanage.GroupHost{{Name: "dynamic-0.dynamic.default.svc.cluster.local", HostID: "host-id-stable", Online: true}}
+	previous := []marklogicv1.DynamicHostStatus{{
+		PodName:     "dynamic-0",
+		Hostname:    "dynamic-0.dynamic.default.svc.cluster.local",
+		HostID:      "host-id-stable",
+		State:       dynamicHostStateFailed,
+		Message:     "retry budget exhausted",
+		Attempts:    3,
+		LastUpdated: &lastUpdated,
+	}}
+
+	hosts, _, _, joinCandidates := oc.buildDynamicHostStatuses(pods, members, previous)
+	if len(joinCandidates) != 0 {
+		t.Fatalf("expected no join candidates, got %d", len(joinCandidates))
+	}
+
+	host, found := findDynamicHostStatusByPod(hosts, "dynamic-0")
+	if !found {
+		t.Fatalf("expected host status for dynamic-0")
+	}
+	if host.State != dynamicHostStateFailed {
+		t.Fatalf("expected failed state to be preserved for same pod lifecycle, got %q", host.State)
+	}
+	if host.Attempts != 3 {
+		t.Fatalf("expected attempts to remain 3, got %d", host.Attempts)
+	}
+	if host.Message != "retry budget exhausted" {
+		t.Fatalf("expected failure message to be preserved, got %q", host.Message)
+	}
+}
+
+func dynamicReadyPodForTest(name string, createdAt metav1.Time) corev1.Pod {
+	return corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: name, CreationTimestamp: createdAt},
+		Status: corev1.PodStatus{
+			Phase: corev1.PodRunning,
+			Conditions: []corev1.PodCondition{{
+				Type:   corev1.PodReady,
+				Status: corev1.ConditionTrue,
+			}},
+		},
+	}
+}
+
+func findDynamicHostStatusByPod(hosts []marklogicv1.DynamicHostStatus, podName string) (marklogicv1.DynamicHostStatus, bool) {
+	for _, host := range hosts {
+		if host.PodName == podName {
+			return host, true
+		}
+	}
+	return marklogicv1.DynamicHostStatus{}, false
 }

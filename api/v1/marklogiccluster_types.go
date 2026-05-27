@@ -120,7 +120,8 @@ type MarklogicGroups struct {
 	// +kubebuilder:default:=false
 	IsBootstrap bool `json:"isBootstrap,omitempty"`
 	// +kubebuilder:default:=false
-	// +kubebuilder:validation:XValidation:rule="self == oldSelf", message="isDynamic cannot be changed"
+	// isDynamic immutability is enforced in reconciliation logic for child MarklogicGroup resources.
+	// A field-level CEL rule using oldSelf is invalid here because markLogicGroups items are uncorrelatable.
 	IsDynamic bool `json:"isDynamic,omitempty"`
 	// +optional
 	Dynamic                        *DynamicGroupConfig             `json:"dynamic,omitempty"`

@@ -856,7 +856,7 @@ func (oc *OperatorContext) handleDynamicRestartCleanupFailure(hostStatuses []mar
 }
 
 func (oc *OperatorContext) handleDynamicRestartJoinFailure(hostStatuses []marklogicv1.DynamicHostStatus, podName, hostFQDN, hostID string, desiredReplicas, localReadyReplicas, readyReplicas int32, joinErr error) result.ReconcileResult {
-	attempts := incrementDynamicHostAttempts(hostStatuses, podName) + 1
+	attempts := incrementDynamicHostAttempts(hostStatuses, podName)
 	message := fmt.Sprintf("restart recovery rejoin failed for %s: %v", podName, joinErr)
 
 	if isPermanentAuthError(joinErr) {
@@ -1647,8 +1647,14 @@ func (oc *OperatorContext) buildDynamicHostStatuses(pods []corev1.Pod, members [
 				if hostStatus.HostID == "" {
 					hostStatus.HostID = previousStatus.HostID
 				}
+				preservePreviousState := false
 				switch previousStatus.State {
-				case dynamicHostStateRetained, dynamicHostStateRemoving, dynamicHostStateFailed, dynamicHostStateRemoved, dynamicHostStateRejoined:
+				case dynamicHostStateRetained, dynamicHostStateRemoving, dynamicHostStateRemoved, dynamicHostStateRejoined:
+					preservePreviousState = true
+				case dynamicHostStateFailed:
+					preservePreviousState = shouldPreserveFailedDynamicHostState(previousStatus, pod, member)
+				}
+				if preservePreviousState {
 					hostStatus.State = previousStatus.State
 					hostStatus.Attempts = previousStatus.Attempts
 					hostStatus.Message = previousStatus.Message
@@ -1714,6 +1720,20 @@ func (oc *OperatorContext) buildDynamicHostStatuses(pods []corev1.Pod, members [
 	}
 
 	return statuses, localReadyReplicas, readyReplicas, joinCandidates
+}
+
+func shouldPreserveFailedDynamicHostState(previousStatus marklogicv1.DynamicHostStatus, pod corev1.Pod, member mlmanage.GroupHost) bool {
+	if previousStatus.LastUpdated != nil && !pod.CreationTimestamp.IsZero() && pod.CreationTimestamp.Time.After(previousStatus.LastUpdated.Time) {
+		return false
+	}
+
+	previousHostID := strings.TrimSpace(previousStatus.HostID)
+	memberHostID := strings.TrimSpace(member.HostID)
+	if previousHostID != "" && memberHostID != "" && previousHostID != memberHostID {
+		return false
+	}
+
+	return true
 }
 
 func pruneRemovedHostStatuses(hosts []marklogicv1.DynamicHostStatus, pods []corev1.Pod, members []mlmanage.GroupHost) []marklogicv1.DynamicHostStatus {
