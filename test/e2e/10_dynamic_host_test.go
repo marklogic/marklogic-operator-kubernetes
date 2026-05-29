@@ -972,7 +972,6 @@ func dumpDynamicDiagnostics(t *testing.T) {
 	line := strings.Repeat("-", 78)
 	t.Logf("\n%s\n  DYNAMIC HOST DIAGNOSTICS (%s)\n%s", line, dynamicE2ENamespace, line)
 	for _, cmd := range []string{
-		"kubectl get crd marklogicclusters.marklogic.progress.com marklogicgroups.marklogic.progress.com -o yaml",
 		fmt.Sprintf("kubectl get pods -n %s -o wide", dynamicE2ENamespace),
 		fmt.Sprintf("kubectl describe pods -n %s", dynamicE2ENamespace),
 		fmt.Sprintf("kubectl get statefulset,svc,pvc -n %s -o wide", dynamicE2ENamespace),
