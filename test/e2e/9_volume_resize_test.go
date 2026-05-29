@@ -73,7 +73,7 @@ func TestVolumeResizeClusterScoped(t *testing.T) {
 	// ── Pre-flight: storage class must allow expansion ────────────────────────
 	feature.Setup(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 		if err := assertDefaultStorageClassExpandable(ctx, c.Client()); err != nil {
-			t.Fatalf("Pre-flight failed: %v", err)
+			t.Skipf("Skipping volume resize test: %v", err)
 		}
 		return ctx
 	})

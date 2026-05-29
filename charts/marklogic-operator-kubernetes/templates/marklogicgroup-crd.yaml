@@ -4898,7 +4898,7 @@ spec:
               rule: '!has(self.dynamic) || self.isDynamic == true'
             - message: dynamic hosts require image tag latest or MarkLogic major version
                 12+
-              rule: '!self.isDynamic || self.image.matches(''^.+:(latest.*|((1[2-9]|[2-9][0-9])\.[0-9]+\.[0-9]+.*))$'')'
+              rule: '!self.isDynamic || self.image.matches(''^.+:(latest.*|((1[2-9]|[2-9][0-9])[.][0-9]+[.][0-9]+.*))$'')'
           status:
             description: MarklogicGroupStatus defines the observed state of MarklogicGroup
             properties:

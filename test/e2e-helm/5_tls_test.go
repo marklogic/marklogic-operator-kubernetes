@@ -236,6 +236,29 @@ func TestTlsWithNamedCert(t *testing.T) {
 		}
 		marklogicv1.AddToScheme(client.Resources(namedNS).GetScheme())
 
+		// Ensure idempotency across interrupted runs by removing any stale CR first.
+		existing := &marklogicv1.MarklogicCluster{}
+		if err := client.Resources(namedNS).Get(ctx, cr.Name, namedNS, existing); err == nil {
+			if err := client.Resources(namedNS).Delete(ctx, existing); err != nil {
+				t.Fatalf("Failed to delete stale MarklogicCluster %s/%s: %v", namedNS, cr.Name, err)
+			}
+			if err := wait.For(
+				conditions.New(client.Resources()).ResourceDeleted(existing),
+				wait.WithTimeout(5*time.Minute),
+				wait.WithInterval(5*time.Second),
+			); err != nil {
+				t.Fatalf("Timed out waiting for stale MarklogicCluster %s/%s deletion: %v", namedNS, cr.Name, err)
+			}
+		} else if !apierrors.IsNotFound(err) {
+			t.Fatalf("Failed checking for stale MarklogicCluster %s/%s: %v", namedNS, cr.Name, err)
+		}
+
+		// Also remove any orphaned workload artifacts left behind by interrupted runs.
+		e2eutils.RunCommand(fmt.Sprintf("kubectl -n %s delete statefulset marklogic --ignore-not-found=true", namedNS))
+		e2eutils.RunCommand(fmt.Sprintf("kubectl -n %s delete service marklogic marklogic-cluster --ignore-not-found=true", namedNS))
+		e2eutils.RunCommand(fmt.Sprintf("kubectl -n %s delete pod --all --ignore-not-found=true", namedNS))
+		e2eutils.RunCommand(fmt.Sprintf("kubectl -n %s delete pvc --all --ignore-not-found=true", namedNS))
+
 		if err := utils.GenerateCACertificate("test/test_data/ca_cert"); err != nil {
 			t.Fatalf("Failed to generate CA certificate: %v", err)
 		}
@@ -249,6 +272,7 @@ func TestTlsWithNamedCert(t *testing.T) {
 		e2eutils.RunCommand(fmt.Sprintf("kubectl -n %s delete secret ca-cert --ignore-not-found=true", namedNS))
 		e2eutils.RunCommand(fmt.Sprintf("kubectl -n %s delete secret marklogic-0-cert --ignore-not-found=true", namedNS))
 		e2eutils.RunCommand(fmt.Sprintf("kubectl -n %s delete secret marklogic-1-cert --ignore-not-found=true", namedNS))
+		e2eutils.RunCommand(fmt.Sprintf("kubectl -n %s delete marklogiccluster %s --ignore-not-found=true", namedNS, cr.Name))
 
 		if p := e2eutils.RunCommand(fmt.Sprintf("kubectl -n %s create secret generic ca-cert --from-file=test/test_data/ca_cert/cacert.pem", namedNS)); p.Err() != nil {
 			t.Fatalf("Failed to create ca-cert secret: %s", p.Result())
@@ -261,7 +285,15 @@ func TestTlsWithNamedCert(t *testing.T) {
 		}
 
 		if err := client.Resources(namedNS).Create(ctx, cr); err != nil {
-			t.Fatalf("Failed to create MarklogicCluster: %v", err)
+			if apierrors.IsAlreadyExists(err) {
+				e2eutils.RunCommand(fmt.Sprintf("kubectl -n %s delete marklogiccluster %s --ignore-not-found=true", namedNS, cr.Name))
+				time.Sleep(3 * time.Second)
+				if retryErr := client.Resources(namedNS).Create(ctx, cr); retryErr != nil {
+					t.Fatalf("Failed to create MarklogicCluster after replacing stale resource: %v", retryErr)
+				}
+			} else {
+				t.Fatalf("Failed to create MarklogicCluster: %v", err)
+			}
 		}
 		if err := wait.For(
 			conditions.New(client.Resources()).ResourceMatch(cr, func(object k8s.Object) bool { return true }),
@@ -320,24 +352,18 @@ func TestTlsWithNamedCert(t *testing.T) {
 	})
 
 	feature.Teardown(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
-		ml := &marklogicv1.MarklogicCluster{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      "marklogic",
-				Namespace: namedNS,
-			},
-		}
-		if err := c.Client().Resources().Delete(ctx, ml); err != nil && !apierrors.IsNotFound(err) {
-			t.Fatalf("failed to delete MarkLogicCluster %s/%s: %v", namedNS, ml.Name, err)
+		if err := c.Client().Resources().Delete(ctx, cr); err != nil && !apierrors.IsNotFound(err) {
+			t.Fatalf("failed to delete MarkLogicCluster %s/%s: %v", namedNS, cr.Name, err)
 		}
 
 		deadline := time.Now().Add(3 * time.Minute)
 		for time.Now().Before(deadline) {
-			err := c.Client().Resources().Get(ctx, ml.Name, namedNS, ml)
+			err := c.Client().Resources().Get(ctx, cr.Name, namedNS, cr)
 			if apierrors.IsNotFound(err) {
 				break
 			}
 			if err != nil {
-				t.Fatalf("failed to get MarkLogicCluster %s/%s while waiting for deletion: %v", namedNS, ml.Name, err)
+				t.Fatalf("failed to get MarkLogicCluster %s/%s while waiting for deletion: %v", namedNS, cr.Name, err)
 			}
 			time.Sleep(5 * time.Second)
 		}

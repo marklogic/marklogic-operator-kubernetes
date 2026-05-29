@@ -37,6 +37,22 @@ var (
 	ctrlgenVer     = os.Getenv("E2E_CONTROLLER_TOOLS_VERSION")
 	marklogicImage = os.Getenv("E2E_MARKLOGIC_IMAGE_VERSION")
 	kubernetesVer  = os.Getenv("E2E_KUBERNETES_VERSION")
+
+	staleE2ENamespaces = []string{
+		"ml-dynamic-host",
+		"ml-cluster-test",
+		"ednode",
+		"tls-self-signed",
+		"marklogic-tlsnamed",
+		"marklogic-tlsednode",
+		"haproxy-pathbased",
+		"haproxy-test",
+		"log-test",
+		"ml-resize-a",
+		"ml-resize-b",
+		"loki",
+		"grafana",
+	}
 )
 
 const (
@@ -206,6 +222,15 @@ func TestMain(m *testing.M) {
 			return ctx, nil
 		},
 		envfuncs.CreateNamespace(namespace),
+
+		// Ensure stale namespaces from interrupted prior runs do not cause
+		// namespace-already-exists conflicts in individual tests.
+		func(ctx context.Context, cfg *envconf.Config) (context.Context, error) {
+			if err := cleanupStaleE2ENamespaces(ctx, cfg.Client(), staleE2ENamespaces); err != nil {
+				return ctx, err
+			}
+			return ctx, nil
+		},
 
 		// When Istio ambient mode is enabled, label the operator namespace
 		func(ctx context.Context, cfg *envconf.Config) (context.Context, error) {
@@ -578,15 +603,52 @@ func waitForNamespaceDeletionByName(ctx context.Context, client klient.Client, n
 	return fmt.Errorf("timeout waiting for namespace %s to be deleted after force-finalize", nsName)
 }
 
+func cleanupStaleE2ENamespaces(ctx context.Context, client klient.Client, namespaces []string) error {
+	for _, nsName := range namespaces {
+		ns := &corev1.Namespace{}
+		err := client.Resources().Get(ctx, nsName, "", ns)
+		if apierrors.IsNotFound(err) {
+			continue
+		}
+		if err != nil {
+			return fmt.Errorf("failed to query stale namespace %s: %w", nsName, err)
+		}
+
+		log.Printf("Cleaning stale test namespace: %s", nsName)
+		if err := client.Resources().Delete(ctx, ns); err != nil && !apierrors.IsNotFound(err) {
+			return fmt.Errorf("failed to delete stale namespace %s: %w", nsName, err)
+		}
+
+		if err := waitForNamespaceDeletionByName(ctx, client, nsName, 60*time.Second); err == nil {
+			continue
+		}
+
+		log.Printf("Namespace %s is still terminating; forcing finalizer cleanup", nsName)
+		if err := forceFinalizeNamespace(nsName); err != nil {
+			return fmt.Errorf("failed to force-finalize stale namespace %s: %w", nsName, err)
+		}
+		if err := waitForNamespaceDeletionByName(ctx, client, nsName, 90*time.Second); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
 func forceFinalizeNamespace(nsName string) error {
-	cmd := fmt.Sprintf(
+	command := fmt.Sprintf(
 		"kubectl get namespace %s -o json | python3 -c \"import sys, json; d=json.load(sys.stdin); d['spec']['finalizers']=[]; print(json.dumps(d))\" | kubectl replace --raw /api/v1/namespaces/%s/finalize -f -",
 		nsName,
 		nsName,
 	)
-	p := utils.RunCommand(cmd)
-	if p.Err() != nil {
-		return fmt.Errorf("%w: %s", p.Err(), p.Result())
+	cmd := exec.Command("bash", "-c", command)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		output := string(out)
+		if strings.Contains(output, "(NotFound)") || strings.Contains(strings.ToLower(output), "not found") {
+			return nil
+		}
+		return fmt.Errorf("%w: %s", err, output)
 	}
 	return nil
 }

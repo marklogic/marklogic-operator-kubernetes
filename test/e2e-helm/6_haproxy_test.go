@@ -19,6 +19,7 @@ import (
 	"sigs.k8s.io/e2e-framework/klient/wait/conditions"
 	"sigs.k8s.io/e2e-framework/pkg/envconf"
 	"sigs.k8s.io/e2e-framework/pkg/features"
+	e2eutils "sigs.k8s.io/e2e-framework/pkg/utils"
 )
 
 // TestHAProxyPathBasedEnabled verifies that path-based HAProxy routing works correctly
@@ -93,8 +94,17 @@ func TestHAProxyPathBasedEnabled(t *testing.T) {
 			t.Fatalf("Failed to create namespace %s: %v", haProxyPathNS, err)
 		}
 		marklogicv1.AddToScheme(client.Resources(haProxyPathNS).GetScheme())
+		e2eutils.RunCommand(fmt.Sprintf("kubectl -n %s delete marklogiccluster %s --ignore-not-found=true", haProxyPathNS, cr.Name))
 		if err := client.Resources(haProxyPathNS).Create(ctx, cr); err != nil {
-			t.Fatalf("Failed to create MarklogicCluster: %v", err)
+			if apierrors.IsAlreadyExists(err) {
+				e2eutils.RunCommand(fmt.Sprintf("kubectl -n %s delete marklogiccluster %s --ignore-not-found=true", haProxyPathNS, cr.Name))
+				time.Sleep(3 * time.Second)
+				if retryErr := client.Resources(haProxyPathNS).Create(ctx, cr); retryErr != nil {
+					t.Fatalf("Failed to create MarklogicCluster after replacing stale resource: %v", retryErr)
+				}
+			} else {
+				t.Fatalf("Failed to create MarklogicCluster: %v", err)
+			}
 		}
 		if err := wait.For(
 			conditions.New(client.Resources()).ResourceMatch(cr, func(object k8s.Object) bool { return true }),
@@ -258,8 +268,17 @@ func TestHAProxyPathBasedDisabled(t *testing.T) {
 			t.Fatalf("Failed to create namespace %s: %v", haProxyNS, err)
 		}
 		marklogicv1.AddToScheme(client.Resources(haProxyNS).GetScheme())
+		e2eutils.RunCommand(fmt.Sprintf("kubectl -n %s delete marklogiccluster %s --ignore-not-found=true", haProxyNS, cr.Name))
 		if err := client.Resources(haProxyNS).Create(ctx, cr); err != nil {
-			t.Fatalf("Failed to create MarklogicCluster: %v", err)
+			if apierrors.IsAlreadyExists(err) {
+				e2eutils.RunCommand(fmt.Sprintf("kubectl -n %s delete marklogiccluster %s --ignore-not-found=true", haProxyNS, cr.Name))
+				time.Sleep(3 * time.Second)
+				if retryErr := client.Resources(haProxyNS).Create(ctx, cr); retryErr != nil {
+					t.Fatalf("Failed to create MarklogicCluster after replacing stale resource: %v", retryErr)
+				}
+			} else {
+				t.Fatalf("Failed to create MarklogicCluster: %v", err)
+			}
 		}
 		if err := wait.For(
 			conditions.New(client.Resources()).ResourceMatch(cr, func(object k8s.Object) bool { return true }),

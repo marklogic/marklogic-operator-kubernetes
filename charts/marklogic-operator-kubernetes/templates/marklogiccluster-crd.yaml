@@ -10047,12 +10047,7 @@ spec:
             - message: dynamic hosts require image tag latest or MarkLogic major version
                 12+
               rule: '!has(self.markLogicGroups) || !self.markLogicGroups.exists(g, g.isDynamic
-                && (!has(g.image) || g.image == ”)) || self.image.matches(''^.+:(latest.*|((1[2-9]|[2-9][0-9])\.[0-9]+\.[0-9]+.*))$'')'
-            - message: dynamic host group image override must use tag latest or MarkLogic
-                major version 12+
-              rule: '!has(self.markLogicGroups) || self.markLogicGroups.filter(g, g.isDynamic
-                && has(g.image) && g.image != ” && !g.image.matches(''^.+:(latest.*|((1[2-9]|[2-9][0-9])\.[0-9]+\.[0-9]+.*))$'')).size()
-                == 0'
+                && (!has(g.image) || size(g.image) == 0)) || self.image.matches(''^.+:(latest.*|((1[2-9]|[2-9][0-9])[.][0-9]+[.][0-9]+.*))$'')'
           status:
             description: MarklogicClusterStatus defines the observed state of MarklogicCluster
             properties:
