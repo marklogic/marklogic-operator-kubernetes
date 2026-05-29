@@ -3357,6 +3357,17 @@ spec:
                 type: string
               doNotDelete:
                 type: boolean
+              dynamic:
+                properties:
+                  tokenDuration:
+                    default: PT15M
+                    pattern: ^$|^P(?:[0-9]+Y)?(?:[0-9]+M)?(?:[0-9]+W)?(?:[0-9]+D)?(?:T(?:[0-9]+H)?(?:[0-9]+M)?(?:[0-9]+(?:\.[0-9]+)?S)?)?$
+                    type: string
+                    x-kubernetes-validations:
+                    - message: tokenDuration must include at least one ISO-8601 duration
+                        component
+                      rule: self == '' || (self != 'P' && self != 'PT')
+                type: object
               enableConverters:
                 type: boolean
               groupConfig:
@@ -3406,6 +3417,12 @@ spec:
                   type: object
                   x-kubernetes-map-type: atomic
                 type: array
+              isDynamic:
+                default: false
+                type: boolean
+                x-kubernetes-validations:
+                - message: isDynamic is immutable after creation
+                  rule: self == oldSelf
               labels:
                 additionalProperties:
                   type: string
@@ -4876,6 +4893,12 @@ spec:
             required:
             - image
             type: object
+            x-kubernetes-validations:
+            - message: dynamic can only be set when isDynamic is true
+              rule: '!has(self.dynamic) || self.isDynamic == true'
+            - message: dynamic hosts require image tag latest or MarkLogic major version
+                12+
+              rule: '!self.isDynamic || self.image.matches(''^.+:(latest.*|((1[2-9]|[2-9][0-9])\.[0-9]+\.[0-9]+.*))$'')'
           status:
             description: MarklogicGroupStatus defines the observed state of MarklogicGroup
             properties:
@@ -4984,6 +5007,54 @@ spec:
                   - type
                   type: object
                 type: array
+              dynamic:
+                properties:
+                  bootstrapReady:
+                    type: boolean
+                  configured:
+                    type: boolean
+                  desiredReplicas:
+                    format: int32
+                    type: integer
+                  dynamicHostsEnabled:
+                    type: boolean
+                  hosts:
+                    items:
+                      properties:
+                        attempts:
+                          format: int32
+                          type: integer
+                        hostId:
+                          type: string
+                        hostname:
+                          type: string
+                        lastUpdated:
+                          format: date-time
+                          type: string
+                        message:
+                          type: string
+                        podName:
+                          type: string
+                        state:
+                          type: string
+                      type: object
+                    type: array
+                  lastTransitionTime:
+                    format: date-time
+                    type: string
+                  localReadyReplicas:
+                    format: int32
+                    type: integer
+                  message:
+                    type: string
+                  phase:
+                    type: string
+                  readyReplicas:
+                    format: int32
+                    type: integer
+                  reason:
+                    type: string
+                type: object
               markLogicGroupStatus:
                 description: InternalState defines the observed state of MarklogicGroup
                 type: string

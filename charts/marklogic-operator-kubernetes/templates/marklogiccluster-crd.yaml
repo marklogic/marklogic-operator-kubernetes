@@ -8163,6 +8163,17 @@ spec:
                       additionalProperties:
                         type: string
                       type: object
+                    dynamic:
+                      properties:
+                        tokenDuration:
+                          default: PT15M
+                          pattern: ^$|^P(?:[0-9]+Y)?(?:[0-9]+M)?(?:[0-9]+W)?(?:[0-9]+D)?(?:T(?:[0-9]+H)?(?:[0-9]+M)?(?:[0-9]+(?:\.[0-9]+)?S)?)?$
+                          type: string
+                          x-kubernetes-validations:
+                          - message: tokenDuration must include at least one ISO-8601
+                              duration component
+                            rule: self == '' || (self != 'P' && self != 'PT')
+                      type: object
                     groupConfig:
                       default:
                         enableXdqpSsl: true
@@ -8253,6 +8264,12 @@ spec:
                       type: array
                     isBootstrap:
                       default: false
+                      type: boolean
+                    isDynamic:
+                      default: false
+                      description: |-
+                        isDynamic immutability is enforced in reconciliation logic for child MarklogicGroup resources.
+                        A field-level CEL rule using oldSelf is invalid here because markLogicGroups items are uncorrelatable.
                       type: boolean
                     labels:
                       additionalProperties:
@@ -8818,6 +8835,11 @@ spec:
                   required:
                   - name
                   type: object
+                  x-kubernetes-validations:
+                  - message: dynamic can only be set when isDynamic is true
+                    rule: '!has(self.dynamic) || self.isDynamic == true'
+                  - message: isDynamic cannot be set when isBootstrap is true
+                    rule: '!(self.isDynamic == true && self.isBootstrap == true)'
                 maxItems: 100
                 minItems: 1
                 type: array
@@ -10019,9 +10041,18 @@ spec:
             x-kubernetes-validations:
             - message: HAProxy and Pathbased Routing is enabled. PathBasedRouting is
                 only supported for MarkLogic 11.1 and above
-              rule: '!(self.haproxy.enabled == true && self.haproxy.pathBasedRouting
+              rule: '!has(self.haproxy) || !(self.haproxy.enabled == true && self.haproxy.pathBasedRouting
                 == true) || self.image.split('':'')[1].matches(''.*latest.*'') || int(self.image.split('':'')[1].split(''.'')[0]
                 + self.image.split('':'')[1].split(''.'')[1]) >= 111'
+            - message: dynamic hosts require image tag latest or MarkLogic major version
+                12+
+              rule: '!has(self.markLogicGroups) || !self.markLogicGroups.exists(g, g.isDynamic
+                && (!has(g.image) || g.image == ”)) || self.image.matches(''^.+:(latest.*|((1[2-9]|[2-9][0-9])\.[0-9]+\.[0-9]+.*))$'')'
+            - message: dynamic host group image override must use tag latest or MarkLogic
+                major version 12+
+              rule: '!has(self.markLogicGroups) || self.markLogicGroups.filter(g, g.isDynamic
+                && has(g.image) && g.image != ” && !g.image.matches(''^.+:(latest.*|((1[2-9]|[2-9][0-9])\.[0-9]+\.[0-9]+.*))$'')).size()
+                == 0'
           status:
             description: MarklogicClusterStatus defines the observed state of MarklogicCluster
             properties:

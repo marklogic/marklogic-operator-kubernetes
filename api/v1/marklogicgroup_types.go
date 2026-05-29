@@ -26,6 +26,7 @@ import (
 // NOTE: json tags are required.  Any new fields you add must have json tags for the fields to be serialized.
 
 // +kubebuilder:validation:XValidation:rule="!has(self.dynamic) || self.isDynamic == true", message="dynamic can only be set when isDynamic is true"
+// +kubebuilder:validation:XValidation:rule="!self.isDynamic || self.image.matches('^.+:(latest.*|((1[2-9]|[2-9][0-9])\\.[0-9]+\\.[0-9]+.*))$')", message="dynamic hosts require image tag latest or MarkLogic major version 12+"
 // MarklogicGroupSpec defines the desired state of MarklogicGroup
 type MarklogicGroupSpec struct {
 	// +kubebuilder:default:=1

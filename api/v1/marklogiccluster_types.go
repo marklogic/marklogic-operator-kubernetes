@@ -28,6 +28,8 @@ import (
 // MarklogicClusterSpec defines the desired state of MarklogicCluster
 
 // +kubebuilder:validation:XValidation:rule="!has(self.haproxy) || !(self.haproxy.enabled == true && self.haproxy.pathBasedRouting == true) || self.image.split(':')[1].matches('.*latest.*') || int(self.image.split(':')[1].split('.')[0] + self.image.split(':')[1].split('.')[1]) >= 111", message="HAProxy and Pathbased Routing is enabled. PathBasedRouting is only supported for MarkLogic 11.1 and above"
+// +kubebuilder:validation:XValidation:rule="!has(self.markLogicGroups) || !self.markLogicGroups.exists(g, g.isDynamic && (!has(g.image) || g.image == ”)) || self.image.matches('^.+:(latest.*|((1[2-9]|[2-9][0-9])\\.[0-9]+\\.[0-9]+.*))$')", message="dynamic hosts require image tag latest or MarkLogic major version 12+"
+// +kubebuilder:validation:XValidation:rule="!has(self.markLogicGroups) || self.markLogicGroups.filter(g, g.isDynamic && has(g.image) && g.image != ” && !g.image.matches('^.+:(latest.*|((1[2-9]|[2-9][0-9])\\.[0-9]+\\.[0-9]+.*))$')).size() == 0", message="dynamic host group image override must use tag latest or MarkLogic major version 12+"
 type MarklogicClusterSpec struct {
 	// INSERT ADDITIONAL SPEC FIELDS - desired state of cluster
 	// Important: Run "make" to regenerate code after modifying this file
