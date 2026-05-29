@@ -367,7 +367,7 @@ Dynamic groups reuse the existing group schema for image, resources, affinity, n
 1.  `isDynamic=true` requires `isBootstrap=false`.
 2.  `dynamic` may be omitted when `isDynamic=true`; if omitted, defaults apply. If `dynamic` is present, `isDynamic` must be `true`.
 3.  `dynamic.tokenDuration` must be a valid ISO 8601 duration string.
-4.  `isDynamic` is immutable after a group is created.
+4.  `isDynamic` is immutable after a group is created. In v1 this is enforced at reconcile time by controller logic (not by a field-level CEL `oldSelf` rule on each `markLogicGroups[]` item).
 5.  A dynamic group's `groupConfig.name` must remain immutable while that group has registered dynamic hosts.
 6.  When `isDynamic=true`, `persistence.enabled` may be `false` or `true`. If omitted, it defaults to `false` for that dynamic group.
 7.  `isDynamic=true` allows `additionalVolumeClaimTemplates` only for auxiliary storage such as audit or log retention; they must not be used to persist forests or replace the standard MarkLogic datadir persistence model beyond the explicit `persistence` setting for `/var/opt/MarkLogic`.
@@ -380,6 +380,8 @@ Validation rules above are enforced through two mechanisms in v1:
 
 1.  **CEL rules on the CRD** for structural and field-level invariants that fit CRD validation cleanly. In v1 this includes rules such as `dynamic` requiring `isDynamic=true`, `tokenDuration` being a valid ISO 8601 duration, and any cross-entry checks that can be expressed maintainably with the current CEL-based CRD validation model.
 2.  **Reconcile-time validation in the controllers** for checks that either depend on live bootstrap-cluster state or are not enforced robustly by the current CEL rules. The `MarklogicCluster` controller is responsible for surfacing any remaining cross-entry configuration violations that are not blocked by CEL. The `MarklogicGroup` controller is responsible for checks that depend on live bootstrap state or multi-field storage semantics, including bootstrap reachability, bootstrap health, bootstrap MarkLogic version compatibility, and ensuring any auxiliary PVCs or mounts on a dynamic group are not used to persist forests or replace the standard MarkLogic datadir.
+
+Because `markLogicGroups` is an array, item-level immutability rules that rely on CEL `oldSelf` correlation can be invalid on some Kubernetes versions. For this reason, dynamic-group immutability checks such as `isDynamic` are enforced by controller reconciliation in v1.
 
 No validating admission webhook is part of v1 for this feature. As a result, invalid specifications that are not rejected by CEL are not blocked at create or update time. Instead, the responsible controller surfaces the violation through `status` and events and transitions the affected group to `Failed` with `InvalidConfiguration` (the `message` field identifies the specific rule that was violated, e.g., missing bootstrap group or reuse of a forest-bearing MarkLogic group).
 
@@ -407,6 +409,8 @@ For static groups, the existing `status.conditions`, `status.stage`, and `status
 | `desiredReplicas` | integer | Yes | Desired number of dynamic hosts from spec |
 | `localReadyReplicas` | integer | Yes | Number of Pods passing the configured readiness probe (locally ready, may or may not be joined) |
 | `readyReplicas` | integer | Yes | Number of hosts that are both locally ready and registered in MarkLogic. Always `<= localReadyReplicas`. |
+| `bootstrapReady` | boolean | Yes | Whether bootstrap-cluster readiness checks are currently passing |
+| `configured` | boolean | Yes | Whether one-time dynamic group configuration has completed |
 | `message` | string | No | Human-readable summary |
 | `reason` | enum | No | Machine-readable reason for degraded or failed state |
 | `dynamicHostsEnabled` | boolean | Yes | Whether dynamic-host settings have been applied to the MarkLogic group (`allow-dynamic-hosts` and API token authentication) |
@@ -420,8 +424,9 @@ For static groups, the existing `status.conditions`, `status.stage`, and `status
 | `podName` | string | Kubernetes Pod name |
 | `hostname` | string | FQDN registered in MarkLogic |
 | `hostId` | string | MarkLogic host ID used for removal |
-| `state` | enum | `Pending`, `Joining`, `Joined`, `Retained`, `Removing`, `Removed`, `Failed` |
+| `state` | enum | Wire values are lowercase. Core values: `pending`, `joining`, `joined`, `retained`, `removing`, `removed`, `failed`. Restart-recovery values: `rejoin-pending`, `rejoining`, `rejoined`. |
 | `message` | string | Human-readable detail |
+| `attempts` | integer | Retry-attempt counter tracked per host |
 | `lastUpdated` | timestamp | Time of last state change |
 
 ### Phase Values

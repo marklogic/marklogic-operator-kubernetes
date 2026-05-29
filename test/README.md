@@ -64,7 +64,25 @@ make e2e-test-cluster
 
 ### Run specific test types
 
-Each test is assigned a `type` label, allowing you to run only tests of that type.
+Use Make targets when possible so the repository defaults for image/tooling variables are applied consistently.
+
+```bash
+# Dynamic host lifecycle (recommended)
+make e2e-test-dynamic-host
+
+# Dynamic host lifecycle against local code changes (build + minikube image load)
+make e2e-test-dynamic-host-local
+
+# Optional: override the local test image tag
+make e2e-test-dynamic-host-local LOCAL_E2E_IMG=my-operator:e2e-local
+
+# Volume resize (recommended)
+make e2e-test-volume-resize
+```
+
+When testing newly added operator behavior (such as dynamic-host reconciliation), prefer `make e2e-test-dynamic-host-local`. This target now builds and loads a dedicated local tag (`marklogic-operator-kubernetes:e2e-local` by default), which avoids accidentally reusing a stale released image such as `progressofficial/marklogic-operator-kubernetes:1.2.0`.
+
+If you need direct label filtering, each test is assigned a `type` label:
 
 ```bash
 # TLS named cert

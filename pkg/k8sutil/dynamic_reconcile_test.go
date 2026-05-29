@@ -64,6 +64,56 @@ func (s *stubDynamicManagementClient) JoinDynamicHost(ctx context.Context, hostF
 	return s.joinFn(hostFQDN, token)
 }
 
+func TestBuildDynamicHostStatusesClearsFailedStateWhenPodRecoveredAndOnline(t *testing.T) {
+	podCreation := metav1.NewTime(time.Now())
+	lastUpdated := metav1.NewTime(podCreation.Add(2 * time.Minute))
+
+	oc := &OperatorContext{
+		MarklogicGroup: &marklogicv1.MarklogicGroup{
+			ObjectMeta: metav1.ObjectMeta{Namespace: "default"},
+			Spec:       marklogicv1.MarklogicGroupSpec{Name: "dynamic", ClusterDomain: "cluster.local", IsDynamic: true},
+		},
+	}
+
+	pods := []corev1.Pod{dynamicReadyPodForTest("dynamic-0", podCreation)}
+	members := []mlmanage.GroupHost{{Name: "dynamic-0.dynamic.default.svc.cluster.local", HostID: "host-id-stable", Online: true}}
+	previous := []marklogicv1.DynamicHostStatus{{
+		PodName:     "dynamic-0",
+		Hostname:    "dynamic-0.dynamic.default.svc.cluster.local",
+		HostID:      "host-id-stable",
+		State:       dynamicHostStateFailed,
+		Message:     "restart recovery rejoin failed",
+		Attempts:    2,
+		LastUpdated: &lastUpdated,
+	}}
+
+	hosts, localReady, ready, joinCandidates := oc.buildDynamicHostStatuses(pods, members, previous)
+
+	if localReady != 1 {
+		t.Fatalf("expected localReady=1, got %d", localReady)
+	}
+	if ready != 1 {
+		t.Fatalf("expected ready=1, got %d", ready)
+	}
+	if len(joinCandidates) != 0 {
+		t.Fatalf("expected no join candidates after recovery, got %d", len(joinCandidates))
+	}
+
+	host, found := findDynamicHostStatusByPod(hosts, "dynamic-0")
+	if !found {
+		t.Fatalf("expected host status for dynamic-0")
+	}
+	if host.State != dynamicHostStateJoined {
+		t.Fatalf("expected recovered host state %q, got %q", dynamicHostStateJoined, host.State)
+	}
+	if host.Attempts != 0 {
+		t.Fatalf("expected attempts reset to 0 after recovery, got %d", host.Attempts)
+	}
+	if host.Message != "" {
+		t.Fatalf("expected message cleared after recovery, got %q", host.Message)
+	}
+}
+
 func (s *stubDynamicManagementClient) ListGroupHosts(ctx context.Context, groupName string) ([]mlmanage.GroupHost, error) {
 	if s.listGroupFn == nil {
 		return nil, errors.New("listGroupFn is not configured")
@@ -412,4 +462,153 @@ func findDynamicHostStatusByPod(hosts []marklogicv1.DynamicHostStatus, podName s
 		}
 	}
 	return marklogicv1.DynamicHostStatus{}, false
+}
+
+func TestShouldSuppressBootstrapTransientDegradeWhenHealthyIdle(t *testing.T) {
+	replicas := int32(2)
+	oc := &OperatorContext{
+		MarklogicGroup: &marklogicv1.MarklogicGroup{
+			Spec: marklogicv1.MarklogicGroupSpec{Replicas: &replicas, IsDynamic: true},
+			Status: marklogicv1.MarklogicGroupStatus{
+				Dynamic: &marklogicv1.DynamicGroupStatus{
+					Phase:         dynamicPhaseIdle,
+					ReadyReplicas: 2,
+					Hosts:         []marklogicv1.DynamicHostStatus{{PodName: "dynamic-0", State: dynamicHostStateJoined}},
+				},
+			},
+		},
+	}
+
+	err := errors.New("bootstrap readiness check failed: dial tcp: lookup node-0.node.ml-dynamic-host.svc.cluster.local: no such host")
+	if !oc.shouldSuppressBootstrapTransientDegrade(err) {
+		t.Fatalf("expected transient bootstrap degrade suppression for healthy idle status")
+	}
+}
+
+func TestShouldNotSuppressBootstrapTransientDegradeWhenNotHealthy(t *testing.T) {
+	replicas := int32(2)
+	oc := &OperatorContext{
+		MarklogicGroup: &marklogicv1.MarklogicGroup{
+			Spec: marklogicv1.MarklogicGroupSpec{Replicas: &replicas, IsDynamic: true},
+			Status: marklogicv1.MarklogicGroupStatus{
+				Dynamic: &marklogicv1.DynamicGroupStatus{
+					Phase:         dynamicPhaseReconciling,
+					ReadyReplicas: 1,
+					Hosts:         []marklogicv1.DynamicHostStatus{{PodName: "dynamic-0", State: dynamicHostStateFailed}},
+				},
+			},
+		},
+	}
+
+	err := errors.New("bootstrap readiness check failed: dial tcp: lookup node-0.node.ml-dynamic-host.svc.cluster.local: no such host")
+	if oc.shouldSuppressBootstrapTransientDegrade(err) {
+		t.Fatalf("expected no suppression when dynamic group is not healthy idle")
+	}
+}
+
+func TestShouldSuppressBootstrapHostOfflineDegradeWhenHealthyIdle(t *testing.T) {
+	replicas := int32(2)
+	oc := &OperatorContext{
+		MarklogicGroup: &marklogicv1.MarklogicGroup{
+			Spec: marklogicv1.MarklogicGroupSpec{Replicas: &replicas, IsDynamic: true},
+			Status: marklogicv1.MarklogicGroupStatus{
+				Dynamic: &marklogicv1.DynamicGroupStatus{
+					Phase:         dynamicPhaseIdle,
+					ReadyReplicas: 2,
+					Hosts:         []marklogicv1.DynamicHostStatus{{PodName: "dynamic-0", State: dynamicHostStateJoined}},
+				},
+			},
+		},
+	}
+
+	if !oc.shouldSuppressBootstrapHostOfflineDegrade() {
+		t.Fatalf("expected bootstrap host offline degrade suppression for healthy idle status")
+	}
+}
+
+func TestShouldNotSuppressBootstrapHostOfflineDegradeWhenNotHealthy(t *testing.T) {
+	replicas := int32(2)
+	oc := &OperatorContext{
+		MarklogicGroup: &marklogicv1.MarklogicGroup{
+			Spec: marklogicv1.MarklogicGroupSpec{Replicas: &replicas, IsDynamic: true},
+			Status: marklogicv1.MarklogicGroupStatus{
+				Dynamic: &marklogicv1.DynamicGroupStatus{
+					Phase:         dynamicPhaseReconciling,
+					ReadyReplicas: 1,
+					Hosts:         []marklogicv1.DynamicHostStatus{{PodName: "dynamic-0", State: dynamicHostStateFailed}},
+				},
+			},
+		},
+	}
+
+	if oc.shouldSuppressBootstrapHostOfflineDegrade() {
+		t.Fatalf("expected no suppression when dynamic group is not healthy idle")
+	}
+}
+
+func TestShouldSuppressBootstrapHostOfflineDegradeDuringRestartRecovery(t *testing.T) {
+	replicas := int32(2)
+	oc := &OperatorContext{
+		MarklogicGroup: &marklogicv1.MarklogicGroup{
+			Spec: marklogicv1.MarklogicGroupSpec{Replicas: &replicas, IsDynamic: true},
+			Status: marklogicv1.MarklogicGroupStatus{
+				Dynamic: &marklogicv1.DynamicGroupStatus{
+					Phase:         dynamicPhaseReconciling,
+					Reason:        dynamicReasonClusterRestart,
+					ReadyReplicas: 2,
+					Hosts:         []marklogicv1.DynamicHostStatus{{PodName: "dynamic-1", State: dynamicHostStateRejoined}},
+				},
+			},
+		},
+	}
+
+	if !oc.shouldSuppressBootstrapHostOfflineDegrade() {
+		t.Fatalf("expected suppression during healthy restart recovery")
+	}
+}
+
+func TestShouldSuppressBootstrapTransientDegradeDuringRestartRecovery(t *testing.T) {
+	replicas := int32(2)
+	oc := &OperatorContext{
+		MarklogicGroup: &marklogicv1.MarklogicGroup{
+			Spec: marklogicv1.MarklogicGroupSpec{Replicas: &replicas, IsDynamic: true},
+			Status: marklogicv1.MarklogicGroupStatus{
+				Dynamic: &marklogicv1.DynamicGroupStatus{
+					Phase:         dynamicPhaseReconciling,
+					Reason:        dynamicReasonClusterRestart,
+					ReadyReplicas: 2,
+					Hosts:         []marklogicv1.DynamicHostStatus{{PodName: "dynamic-1", State: dynamicHostStateRejoined}},
+				},
+			},
+		},
+	}
+
+	err := errors.New("bootstrap readiness check failed: dial tcp: lookup node-0.node.ml-dynamic-host.svc.cluster.local: no such host")
+	if !oc.shouldSuppressBootstrapTransientDegrade(err) {
+		t.Fatalf("expected suppression for transient bootstrap error during healthy restart recovery")
+	}
+}
+
+func TestIsBootstrapHostStatusMatchesFQDNAndShortName(t *testing.T) {
+	bootstrap := "node-0.node.ml-dynamic-host.svc.cluster.local"
+
+	if !isBootstrapHostStatus("node-0.node.ml-dynamic-host.svc.cluster.local", bootstrap) {
+		t.Fatalf("expected exact bootstrap FQDN match")
+	}
+
+	if !isBootstrapHostStatus("node-0", bootstrap) {
+		t.Fatalf("expected short host name to match bootstrap host")
+	}
+
+	if !isBootstrapHostStatus("node-0.node.ml-dynamic-host.svc.cluster.local:8002", bootstrap) {
+		t.Fatalf("expected host with management port to match bootstrap host")
+	}
+}
+
+func TestIsBootstrapHostStatusDoesNotMatchOtherHosts(t *testing.T) {
+	bootstrap := "node-0.node.ml-dynamic-host.svc.cluster.local"
+
+	if isBootstrapHostStatus("dynamic-1.dynamic.ml-dynamic-host.svc.cluster.local", bootstrap) {
+		t.Fatalf("expected non-bootstrap dynamic host to not match bootstrap host")
+	}
 }

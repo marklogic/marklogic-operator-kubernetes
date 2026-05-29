@@ -5,6 +5,7 @@ package k8sutil
 import (
 	"fmt"
 	"hash/fnv"
+	"net"
 	"reflect"
 	"regexp"
 	"sort"
@@ -108,7 +109,7 @@ func (oc *OperatorContext) ReconcileDynamicGroupConfig() result.ReconcileResult 
 	clusterName, err := oc.getOwningClusterName()
 	if err != nil {
 		if oc.MarklogicGroup.DeletionTimestamp != nil {
-			clusterName = ""
+			return oc.releaseDynamicFinalizersWithoutBootstrap()
 		} else {
 			if err := oc.setDynamicStatus(dynamicPhaseFailed, dynamicReasonInvalidConfig, err.Error(), false, false, false); err != nil {
 				return result.Error(err)
@@ -117,12 +118,13 @@ func (oc *OperatorContext) ReconcileDynamicGroupConfig() result.ReconcileResult 
 		}
 	}
 
-	if oc.MarklogicGroup.DeletionTimestamp != nil && oc.isOwningClusterDeletingOrGone() {
-		return oc.releaseDynamicFinalizersWithoutBootstrap()
-	}
+	clusterOwnerTearingDown := oc.MarklogicGroup.DeletionTimestamp != nil && oc.isOwningClusterDeletingOrGone()
 
 	bootstrapHost := strings.TrimSpace(oc.MarklogicGroup.Spec.BootstrapHost)
 	if bootstrapHost == "" {
+		if clusterOwnerTearingDown {
+			return oc.releaseDynamicFinalizersWithoutBootstrap()
+		}
 		if err := oc.setDynamicStatus(dynamicPhaseFailed, dynamicReasonInvalidConfig, "bootstrap host is required for dynamic groups", false, false, false); err != nil {
 			return result.Error(err)
 		}
@@ -131,6 +133,9 @@ func (oc *OperatorContext) ReconcileDynamicGroupConfig() result.ReconcileResult 
 
 	adminSecretName := strings.TrimSpace(oc.MarklogicGroup.Spec.SecretName)
 	if adminSecretName == "" {
+		if clusterOwnerTearingDown {
+			return oc.releaseDynamicFinalizersWithoutBootstrap()
+		}
 		if err := oc.setDynamicStatus(dynamicPhaseFailed, dynamicReasonInvalidConfig, "admin credential secret is missing", false, false, false); err != nil {
 			return result.Error(err)
 		}
@@ -139,6 +144,9 @@ func (oc *OperatorContext) ReconcileDynamicGroupConfig() result.ReconcileResult 
 
 	adminUser, adminPass, err := oc.readCredentialSecret(adminSecretName)
 	if err != nil {
+		if clusterOwnerTearingDown {
+			return oc.releaseDynamicFinalizersWithoutBootstrap()
+		}
 		if err := oc.setDynamicStatus(dynamicPhaseDegraded, dynamicReasonBootstrapNotReady, fmt.Sprintf("failed to read admin credentials: %v", err), false, false, false); err != nil {
 			return result.Error(err)
 		}
@@ -161,15 +169,25 @@ func (oc *OperatorContext) ReconcileDynamicGroupConfig() result.ReconcileResult 
 
 	hosts, err := adminClient.ListHostsStatus(oc.Ctx)
 	if err != nil {
+		if oc.shouldSuppressBootstrapTransientDegrade(err) {
+			return result.RequeueSoon(5)
+		}
 		if err := oc.setDynamicStatus(dynamicPhaseDegraded, dynamicReasonBootstrapNotReady, fmt.Sprintf("bootstrap readiness check failed: %v", err), false, false, false); err != nil {
 			return result.Error(err)
 		}
 		return result.RequeueSoon(5)
 	}
 
+	bootstrapHostSeen := false
 	version := ""
 	for _, host := range hosts {
-		if !host.Online {
+		if isBootstrapHostStatus(host.Name, bootstrapHost) {
+			bootstrapHostSeen = true
+		}
+		if isBootstrapHostStatus(host.Name, bootstrapHost) && !host.Online {
+			if oc.shouldSuppressBootstrapHostOfflineDegrade() {
+				return result.RequeueSoon(5)
+			}
 			if err := oc.setDynamicStatus(dynamicPhaseDegraded, dynamicReasonBootstrapNotReady, "bootstrap hosts are not yet online", false, false, false); err != nil {
 				return result.Error(err)
 			}
@@ -178,6 +196,16 @@ func (oc *OperatorContext) ReconcileDynamicGroupConfig() result.ReconcileResult 
 		if version == "" && host.Version != "" {
 			version = host.Version
 		}
+	}
+
+	if !bootstrapHostSeen {
+		if oc.shouldSuppressBootstrapHostOfflineDegrade() {
+			return result.RequeueSoon(5)
+		}
+		if err := oc.setDynamicStatus(dynamicPhaseDegraded, dynamicReasonBootstrapNotReady, fmt.Sprintf("bootstrap host %q status is not available yet", bootstrapHost), false, false, false); err != nil {
+			return result.Error(err)
+		}
+		return result.RequeueSoon(5)
 	}
 
 	if !isSupportedMarkLogicVersion(version) {
@@ -222,6 +250,11 @@ func (oc *OperatorContext) ReconcileDynamicGroupConfig() result.ReconcileResult 
 	})
 
 	groupName := resolvedMarkLogicGroupName(oc.MarklogicGroup)
+	if oc.MarklogicGroup.DeletionTimestamp != nil {
+		desiredReplicas := desiredDynamicReplicas(oc.MarklogicGroup)
+		return oc.reconcileDynamicLifecycle(groupClient, clusterName, groupName, dynamicTokenDuration(oc.MarklogicGroup), desiredReplicas)
+	}
+
 	groupInfo, err := groupClient.GetGroup(oc.Ctx, groupName)
 	if err != nil {
 		if isTransientManagementError(err) {
@@ -339,6 +372,13 @@ func (oc *OperatorContext) reconcileDynamicLifecycle(groupClient mlmanage.Client
 
 	if err := oc.ensureDynamicPodFinalizers(pods); err != nil {
 		if statusErr := oc.setDynamicStatus(dynamicPhaseDegraded, dynamicReasonJoinFailed, fmt.Sprintf("failed to ensure pod cleanup finalizers: %v", err), true, true, true); statusErr != nil {
+			return result.Error(statusErr)
+		}
+		return result.RequeueSoon(dynamicJoinRequeueSeconds)
+	}
+
+	if err := oc.releaseUnexpectedDeletionFinalizers(pods, desiredReplicas); err != nil {
+		if statusErr := oc.setDynamicStatus(dynamicPhaseDegraded, dynamicReasonJoinFailed, fmt.Sprintf("failed to release non-scale-down pod finalizers: %v", err), true, true, true); statusErr != nil {
 			return result.Error(statusErr)
 		}
 		return result.RequeueSoon(dynamicJoinRequeueSeconds)
@@ -483,12 +523,11 @@ func (oc *OperatorContext) reconcileDynamicLifecycle(groupClient mlmanage.Client
 }
 
 func (oc *OperatorContext) reconcileDynamicDeletionLifecycle(groupClient mlmanage.Client, clusterName, groupName string, desiredReplicas int32, pods []corev1.Pod) result.ReconcileResult {
-	if oc.isOwningClusterDeletingOrGone() {
-		return oc.releaseDynamicFinalizersWithoutBootstrap()
-	}
-
 	members, err := groupClient.ListGroupHosts(oc.Ctx, groupName)
 	if err != nil {
+		if oc.isOwningClusterDeletingOrGone() {
+			return oc.releaseDynamicFinalizersWithoutBootstrap()
+		}
 		if statusErr := oc.setDynamicStatus(dynamicPhaseDegraded, dynamicReasonBootstrapNotReady, fmt.Sprintf("failed to query dynamic group membership during deletion cleanup: %v", err), true, true, true); statusErr != nil {
 			return result.Error(statusErr)
 		}
@@ -568,7 +607,9 @@ func (oc *OperatorContext) reconcileDynamicScaleDown(groupClient mlmanage.Client
 				}
 
 				if removeErr := groupClient.RemoveDynamicHost(oc.Ctx, clusterName, hostID); removeErr != nil {
-					return oc.handleDynamicRemoveFailure(hostStatuses, candidate.PodName, candidate.Hostname, hostID, desiredReplicas, localReadyReplicas, readyReplicas, removeErr, deleting)
+					if !isNoSuchHostManagementError(removeErr) {
+						return oc.handleDynamicRemoveFailure(hostStatuses, candidate.PodName, candidate.Hostname, hostID, desiredReplicas, localReadyReplicas, readyReplicas, removeErr, deleting)
+					}
 				}
 				hostStatuses = setDynamicHostStatus(hostStatuses, candidate.PodName, candidate.Hostname, dynamicHostStateRemoved, "host removed from MarkLogic; waiting for pod deletion", hostID, 0)
 			}
@@ -1317,6 +1358,48 @@ func statusCodeFromError(err error) (int, bool) {
 	return statusCode, true
 }
 
+func (oc *OperatorContext) shouldSuppressBootstrapTransientDegrade(err error) bool {
+	if err == nil || !isTransientManagementError(err) {
+		return false
+	}
+
+	return oc.isHealthyDynamicSteadyStatus()
+}
+
+func (oc *OperatorContext) shouldSuppressBootstrapHostOfflineDegrade() bool {
+	return oc.isHealthyDynamicSteadyStatus()
+}
+
+func (oc *OperatorContext) isHealthyDynamicSteadyStatus() bool {
+	if oc == nil || oc.MarklogicGroup == nil {
+		return false
+	}
+	if oc.MarklogicGroup.DeletionTimestamp != nil {
+		return false
+	}
+
+	current := oc.MarklogicGroup.Status.Dynamic
+	if current == nil {
+		return false
+	}
+
+	if current.Phase != dynamicPhaseIdle {
+		if !(current.Phase == dynamicPhaseReconciling && current.Reason == dynamicReasonClusterRestart) {
+			return false
+		}
+	}
+
+	if current.ReadyReplicas < desiredDynamicReplicas(oc.MarklogicGroup) {
+		return false
+	}
+
+	if hasFailedDynamicHost(current.Hosts) {
+		return false
+	}
+
+	return true
+}
+
 func desiredDynamicReplicas(group *marklogicv1.MarklogicGroup) int32 {
 	if group.Spec.Replicas != nil {
 		return *group.Spec.Replicas
@@ -1723,6 +1806,10 @@ func (oc *OperatorContext) buildDynamicHostStatuses(pods []corev1.Pod, members [
 }
 
 func shouldPreserveFailedDynamicHostState(previousStatus marklogicv1.DynamicHostStatus, pod corev1.Pod, member mlmanage.GroupHost) bool {
+	if strings.Contains(strings.ToLower(previousStatus.Message), "restart recovery") {
+		return false
+	}
+
 	if previousStatus.LastUpdated != nil && !pod.CreationTimestamp.IsZero() && pod.CreationTimestamp.Time.After(previousStatus.LastUpdated.Time) {
 		return false
 	}
@@ -1832,6 +1919,22 @@ func (oc *OperatorContext) ensureDynamicPodFinalizers(pods []corev1.Pod) error {
 		patch := client.MergeFrom(pod.DeepCopy())
 		controllerutil.AddFinalizer(pod, dynamicHostCleanupFinalizer)
 		if err := oc.Client.Patch(oc.Ctx, pod, patch); err != nil && !apierrors.IsNotFound(err) {
+			return err
+		}
+	}
+	return nil
+}
+
+func (oc *OperatorContext) releaseUnexpectedDeletionFinalizers(pods []corev1.Pod, desiredReplicas int32) error {
+	for i := range pods {
+		pod := &pods[i]
+		if pod.DeletionTimestamp == nil {
+			continue
+		}
+		if int32(podOrdinal(pod.Name)) >= desiredReplicas {
+			continue
+		}
+		if err := oc.releaseDynamicPodFinalizer(pod); err != nil {
 			return err
 		}
 	}
@@ -2153,6 +2256,33 @@ func isPodLocallyReady(pod *corev1.Pod) bool {
 		}
 	}
 	return false
+}
+
+func isBootstrapHostStatus(hostName, bootstrapHost string) bool {
+	hostNormalized := normalizeManagedHostName(hostName)
+	bootstrapNormalized := normalizeManagedHostName(bootstrapHost)
+	if hostNormalized == "" || bootstrapNormalized == "" {
+		return false
+	}
+	if hostNormalized == bootstrapNormalized {
+		return true
+	}
+	hostShort := hostnameToPodName(hostNormalized)
+	bootstrapShort := hostnameToPodName(bootstrapNormalized)
+	return hostShort != "" && bootstrapShort != "" && hostShort == bootstrapShort
+}
+
+func normalizeManagedHostName(value string) string {
+	trimmed := strings.ToLower(strings.TrimSpace(value))
+	trimmed = strings.TrimPrefix(trimmed, "http://")
+	trimmed = strings.TrimPrefix(trimmed, "https://")
+	if slashIdx := strings.Index(trimmed, "/"); slashIdx >= 0 {
+		trimmed = trimmed[:slashIdx]
+	}
+	if host, _, err := net.SplitHostPort(trimmed); err == nil {
+		trimmed = host
+	}
+	return strings.TrimSuffix(trimmed, ".")
 }
 
 func podOrdinal(name string) int {

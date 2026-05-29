@@ -188,6 +188,7 @@ func (cc *ClusterContext) SetClusterLabels(labels map[string]string) {
 
 func (cc *ClusterContext) SetClusterAnnotations(annotations map[string]string) {
 	delete(annotations, "kubectl.kubernetes.io/last-applied-configuration")
+	delete(annotations, "e2e.marklogic.progress.com/reconcile-kick")
 	cc.Annotations = annotations
 }
 
@@ -219,5 +220,6 @@ func (oc *OperatorContext) SetOperatorLabels(labels map[string]string) {
 
 func (oc *OperatorContext) SetOperatorAnnotations(annotations map[string]string) {
 	delete(annotations, "kubectl.kubernetes.io/last-applied-configuration")
+	delete(annotations, "e2e.marklogic.progress.com/reconcile-kick")
 	oc.Annotations = annotations
 }

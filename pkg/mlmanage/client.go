@@ -250,6 +250,7 @@ func (c *managementClient) RequestDynamicHostToken(ctx context.Context, clusterN
 	if strings.TrimSpace(duration) == "" {
 		duration = "PT15M"
 	}
+	comment := fmt.Sprintf("operator-managed token for host %s in group %s", hostFQDN, groupName)
 	query := url.Values{}
 	query.Set("format", "json")
 	payload := map[string]any{
@@ -258,7 +259,7 @@ func (c *managementClient) RequestDynamicHostToken(ctx context.Context, clusterN
 			"host":     hostFQDN,
 			"port":     8001,
 			"duration": duration,
-			"comment":  "operator-managed",
+			"comment":  comment,
 		},
 	}
 	data, _, err := c.doJSON(ctx, http.MethodPost, "/manage/v2/clusters/"+url.PathEscape(clusterName)+"/dynamic-host-token", query, payload, http.StatusCreated, http.StatusOK)
