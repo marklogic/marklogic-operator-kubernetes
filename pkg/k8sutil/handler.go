@@ -9,6 +9,15 @@ import (
 func (oc *OperatorContext) ReconsileMarklogicGroupHandler() (reconcile.Result, error) {
 	oc.ReqLogger.Info("handler::ReconsileMarklogicGroupHandler")
 
+	if oc.MarklogicGroup.Spec.IsDynamic && oc.MarklogicGroup.DeletionTimestamp != nil {
+		// During dynamic-group teardown, skip create/update reconcilers so
+		// finalizer cleanup can complete even when the namespace is terminating.
+		if dynamicResult := oc.ReconcileDynamicGroupConfig(); dynamicResult.Completed() {
+			return dynamicResult.Output()
+		}
+		return reconcile.Result{Requeue: true}, nil
+	}
+
 	if result := oc.ReconcileServices(); result.Completed() {
 		return result.Output()
 	}
