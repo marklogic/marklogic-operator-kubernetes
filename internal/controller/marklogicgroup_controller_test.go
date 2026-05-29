@@ -368,7 +368,7 @@ var _ = Describe("MarkLogicGroup controller", func() {
 			adminSecretName := clusterName + "-admin"
 			dynamicNsName := types.NamespacedName{Name: dynamicName, Namespace: dynamicNamespace}
 
-			behavior := &fakeDynamicManagementBehavior{hosts: []mlmanage.HostStatus{{Name: "bootstrap", Online: true, Version: "11.0-1"}}}
+			behavior := &fakeDynamicManagementBehavior{hosts: []mlmanage.HostStatus{{Name: "bootstrap-0", Online: true, Version: "11.0-1"}}}
 			originalFactory := k8sutil.NewDynamicManagementClient
 			k8sutil.NewDynamicManagementClient = func(opts mlmanage.ClientOptions) mlmanage.Client {
 				return &fakeDynamicManagementClient{behavior: behavior}
@@ -418,7 +418,7 @@ var _ = Describe("MarkLogicGroup controller", func() {
 			host0 := dynamicHostFQDN(dynamicName, dynamicNamespace, dynamicName+"-0")
 			tokenHostCalls := []string{}
 			callsMu := &sync.Mutex{}
-			behavior := &fakeDynamicManagementBehavior{hosts: []mlmanage.HostStatus{{Name: "bootstrap", Online: true, Version: "12.0-1"}}, groupInfo: mlmanage.GroupInfo{Exists: false}, autoRegisterOnJoin: true, hostIDsByHost: map[string]string{host0: "host-id-0"}}
+			behavior := &fakeDynamicManagementBehavior{hosts: []mlmanage.HostStatus{{Name: "bootstrap-0", Online: true, Version: "12.0-1"}}, groupInfo: mlmanage.GroupInfo{Exists: false}, autoRegisterOnJoin: true, hostIDsByHost: map[string]string{host0: "host-id-0"}}
 			originalFactory := k8sutil.NewDynamicManagementClient
 			k8sutil.NewDynamicManagementClient = func(opts mlmanage.ClientOptions) mlmanage.Client {
 				return &fakeDynamicManagementClient{behavior: behavior, callsMu: callsMu, tokenHostCalls: &tokenHostCalls}
@@ -472,7 +472,7 @@ var _ = Describe("MarkLogicGroup controller", func() {
 			calls := []string{}
 			callsMu := &sync.Mutex{}
 			behavior := &fakeDynamicManagementBehavior{
-				hosts:     []mlmanage.HostStatus{{Name: "bootstrap", Online: true, Version: "12.0-1"}},
+				hosts:     []mlmanage.HostStatus{{Name: "bootstrap-0", Online: true, Version: "12.0-1"}},
 				groupInfo: mlmanage.GroupInfo{Exists: false},
 			}
 			originalFactory := k8sutil.NewDynamicManagementClient
@@ -538,7 +538,7 @@ var _ = Describe("MarkLogicGroup controller", func() {
 			zeroReplicas := int32(0)
 
 			behavior := &fakeDynamicManagementBehavior{
-				hosts:     []mlmanage.HostStatus{{Name: "bootstrap", Online: true, Version: "12.0-1"}},
+				hosts:     []mlmanage.HostStatus{{Name: "bootstrap-0", Online: true, Version: "12.0-1"}},
 				groupInfo: mlmanage.GroupInfo{Exists: false},
 			}
 			originalFactory := k8sutil.NewDynamicManagementClient
@@ -633,7 +633,7 @@ var _ = Describe("MarkLogicGroup controller", func() {
 			calls := []string{}
 			callsMu := &sync.Mutex{}
 			behavior := &fakeDynamicManagementBehavior{
-				hosts:              []mlmanage.HostStatus{{Name: "bootstrap", Online: true, Version: "12.0-1"}},
+				hosts:              []mlmanage.HostStatus{{Name: "bootstrap-0", Online: true, Version: "12.0-1"}},
 				groupInfo:          mlmanage.GroupInfo{Exists: false},
 				autoRegisterOnJoin: true,
 				hostIDsByHost: map[string]string{
@@ -720,7 +720,7 @@ var _ = Describe("MarkLogicGroup controller", func() {
 			tokenHostCalls := []string{}
 			callsMu := &sync.Mutex{}
 			behavior := &fakeDynamicManagementBehavior{
-				hosts:                         []mlmanage.HostStatus{{Name: "bootstrap", Online: true, Version: "12.0-1"}},
+				hosts:                         []mlmanage.HostStatus{{Name: "bootstrap-0", Online: true, Version: "12.0-1"}},
 				groupInfo:                     mlmanage.GroupInfo{Exists: false},
 				autoRegisterOnJoin:            true,
 				hostIDsByHost:                 map[string]string{host0: "host-id-0"},
@@ -785,7 +785,7 @@ var _ = Describe("MarkLogicGroup controller", func() {
 
 			host0 := dynamicHostFQDN(dynamicName, dynamicNamespace, dynamicName+"-0")
 			behavior := &fakeDynamicManagementBehavior{
-				hosts:                 []mlmanage.HostStatus{{Name: "bootstrap", Online: true, Version: "12.0-1"}},
+				hosts:                 []mlmanage.HostStatus{{Name: "bootstrap-0", Online: true, Version: "12.0-1"}},
 				groupInfo:             mlmanage.GroupInfo{Exists: false},
 				requestTokenErrByHost: map[string]error{host0: errors.New("status 401 unauthorized")},
 			}
@@ -849,7 +849,7 @@ var _ = Describe("MarkLogicGroup controller", func() {
 			host0 := dynamicHostFQDN(dynamicName, dynamicNamespace, dynamicName+"-0")
 			host1 := dynamicHostFQDN(dynamicName, dynamicNamespace, dynamicName+"-1")
 			behavior := &fakeDynamicManagementBehavior{
-				hosts:              []mlmanage.HostStatus{{Name: "bootstrap", Online: true, Version: "12.0-1"}},
+				hosts:              []mlmanage.HostStatus{{Name: "bootstrap-0", Online: true, Version: "12.0-1"}},
 				groupInfo:          mlmanage.GroupInfo{Exists: false},
 				autoRegisterOnJoin: true,
 				hostIDsByHost:      map[string]string{host0: "host-id-0", host1: "host-id-1"},
@@ -913,7 +913,7 @@ var _ = Describe("MarkLogicGroup controller", func() {
 			adminSecretName := clusterName + "-admin"
 
 			behavior := &fakeDynamicManagementBehavior{
-				hosts:              []mlmanage.HostStatus{{Name: "bootstrap", Online: true, Version: "12.0-1"}},
+				hosts:              []mlmanage.HostStatus{{Name: "bootstrap-0", Online: true, Version: "12.0-1"}},
 				groupInfo:          mlmanage.GroupInfo{Exists: false},
 				autoRegisterOnJoin: true,
 				hostIDsByHost:      map[string]string{dynamicHostFQDN(dynamicName, dynamicNamespace, dynamicName+"-0"): "host-id-0"},
@@ -1010,7 +1010,7 @@ var _ = Describe("MarkLogicGroup controller", func() {
 			host0 := dynamicHostFQDN(dynamicName, dynamicNamespace, dynamicName+"-0")
 			var callsMu sync.Mutex
 			tokenHostCalls := []string{}
-			behavior := &fakeDynamicManagementBehavior{hosts: []mlmanage.HostStatus{{Name: "bootstrap", Online: true, Version: "12.0-1"}}, groupInfo: mlmanage.GroupInfo{Exists: false}, autoRegisterOnJoin: true, hostIDsByHost: map[string]string{host0: "host-id-0"}}
+			behavior := &fakeDynamicManagementBehavior{hosts: []mlmanage.HostStatus{{Name: "bootstrap-0", Online: true, Version: "12.0-1"}}, groupInfo: mlmanage.GroupInfo{Exists: false}, autoRegisterOnJoin: true, hostIDsByHost: map[string]string{host0: "host-id-0"}}
 
 			originalFactory := k8sutil.NewDynamicManagementClient
 			k8sutil.NewDynamicManagementClient = func(opts mlmanage.ClientOptions) mlmanage.Client {
@@ -1100,7 +1100,7 @@ var _ = Describe("MarkLogicGroup controller", func() {
 			removeHostCalls := []string{}
 			callsMu := &sync.Mutex{}
 			behavior := &fakeDynamicManagementBehavior{
-				hosts:              []mlmanage.HostStatus{{Name: "bootstrap", Online: true, Version: "12.0-1"}},
+				hosts:              []mlmanage.HostStatus{{Name: "bootstrap-0", Online: true, Version: "12.0-1"}},
 				groupInfo:          mlmanage.GroupInfo{Exists: false},
 				autoRegisterOnJoin: true,
 				hostIDsByHost:      map[string]string{host0: "host-id-0", host1: "host-id-1"},
@@ -1184,7 +1184,7 @@ var _ = Describe("MarkLogicGroup controller", func() {
 			host1 := dynamicHostFQDN(dynamicName, dynamicNamespace, dynamicName+"-1")
 			removeHostCalls := []string{}
 			callsMu := &sync.Mutex{}
-			behavior := &fakeDynamicManagementBehavior{hosts: []mlmanage.HostStatus{{Name: "bootstrap", Online: true, Version: "12.0-1"}}, groupInfo: mlmanage.GroupInfo{Exists: false}, autoRegisterOnJoin: true, hostIDsByHost: map[string]string{host0: "host-id-0", host1: "host-id-1"}}
+			behavior := &fakeDynamicManagementBehavior{hosts: []mlmanage.HostStatus{{Name: "bootstrap-0", Online: true, Version: "12.0-1"}}, groupInfo: mlmanage.GroupInfo{Exists: false}, autoRegisterOnJoin: true, hostIDsByHost: map[string]string{host0: "host-id-0", host1: "host-id-1"}}
 
 			originalFactory := k8sutil.NewDynamicManagementClient
 			k8sutil.NewDynamicManagementClient = func(opts mlmanage.ClientOptions) mlmanage.Client {
@@ -1259,7 +1259,7 @@ var _ = Describe("MarkLogicGroup controller", func() {
 
 			removeHostCalls := []string{}
 			callsMu := &sync.Mutex{}
-			behavior := &fakeDynamicManagementBehavior{hosts: []mlmanage.HostStatus{{Name: "bootstrap", Online: true, Version: "12.0-1"}}, groupInfo: mlmanage.GroupInfo{Exists: false}, autoRegisterOnJoin: true, hostIDsByHost: map[string]string{emptyDirHost: "host-id-emptydir", pvcHost: "host-id-pvc"}}
+			behavior := &fakeDynamicManagementBehavior{hosts: []mlmanage.HostStatus{{Name: "bootstrap-0", Online: true, Version: "12.0-1"}}, groupInfo: mlmanage.GroupInfo{Exists: false}, autoRegisterOnJoin: true, hostIDsByHost: map[string]string{emptyDirHost: "host-id-emptydir", pvcHost: "host-id-pvc"}}
 
 			originalFactory := k8sutil.NewDynamicManagementClient
 			k8sutil.NewDynamicManagementClient = func(opts mlmanage.ClientOptions) mlmanage.Client {
@@ -1350,7 +1350,7 @@ var _ = Describe("MarkLogicGroup controller", func() {
 			host0 := dynamicHostFQDN(dynamicName, dynamicNamespace, dynamicName+"-0")
 			removeHostCalls := []string{}
 			callsMu := &sync.Mutex{}
-			behavior := &fakeDynamicManagementBehavior{hosts: []mlmanage.HostStatus{{Name: "bootstrap", Online: true, Version: "12.0-1"}}, groupInfo: mlmanage.GroupInfo{Exists: false}, autoRegisterOnJoin: true, hostIDsByHost: map[string]string{host0: "host-id-0"}}
+			behavior := &fakeDynamicManagementBehavior{hosts: []mlmanage.HostStatus{{Name: "bootstrap-0", Online: true, Version: "12.0-1"}}, groupInfo: mlmanage.GroupInfo{Exists: false}, autoRegisterOnJoin: true, hostIDsByHost: map[string]string{host0: "host-id-0"}}
 
 			originalFactory := k8sutil.NewDynamicManagementClient
 			k8sutil.NewDynamicManagementClient = func(opts mlmanage.ClientOptions) mlmanage.Client {
@@ -1428,7 +1428,7 @@ var _ = Describe("MarkLogicGroup controller", func() {
 			dynamicNsName := types.NamespacedName{Name: dynamicName, Namespace: dynamicNamespace}
 
 			host0 := dynamicHostFQDN(dynamicName, dynamicNamespace, dynamicName+"-0")
-			behavior := &fakeDynamicManagementBehavior{hosts: []mlmanage.HostStatus{{Name: "bootstrap", Online: true, Version: "12.0-1"}}, groupInfo: mlmanage.GroupInfo{Exists: false}, autoRegisterOnJoin: true, hostIDsByHost: map[string]string{host0: "host-id-0"}}
+			behavior := &fakeDynamicManagementBehavior{hosts: []mlmanage.HostStatus{{Name: "bootstrap-0", Online: true, Version: "12.0-1"}}, groupInfo: mlmanage.GroupInfo{Exists: false}, autoRegisterOnJoin: true, hostIDsByHost: map[string]string{host0: "host-id-0"}}
 
 			originalFactory := k8sutil.NewDynamicManagementClient
 			k8sutil.NewDynamicManagementClient = func(opts mlmanage.ClientOptions) mlmanage.Client {
@@ -1490,7 +1490,7 @@ var _ = Describe("MarkLogicGroup controller", func() {
 			dynamicNsName := types.NamespacedName{Name: dynamicName, Namespace: dynamicNamespace}
 
 			host0 := dynamicHostFQDN(dynamicName, dynamicNamespace, dynamicName+"-0")
-			behavior := &fakeDynamicManagementBehavior{hosts: []mlmanage.HostStatus{{Name: "bootstrap", Online: true, Version: "12.0-1"}}, groupInfo: mlmanage.GroupInfo{Exists: false}, autoRegisterOnJoin: true, hostIDsByHost: map[string]string{host0: "host-id-0"}, removeErrByHostID: map[string]error{"host-id-0": errors.New("connection refused")}}
+			behavior := &fakeDynamicManagementBehavior{hosts: []mlmanage.HostStatus{{Name: "bootstrap-0", Online: true, Version: "12.0-1"}}, groupInfo: mlmanage.GroupInfo{Exists: false}, autoRegisterOnJoin: true, hostIDsByHost: map[string]string{host0: "host-id-0"}, removeErrByHostID: map[string]error{"host-id-0": errors.New("connection refused")}}
 
 			originalFactory := k8sutil.NewDynamicManagementClient
 			k8sutil.NewDynamicManagementClient = func(opts mlmanage.ClientOptions) mlmanage.Client {
@@ -1559,7 +1559,7 @@ var _ = Describe("MarkLogicGroup controller", func() {
 
 			host0 := dynamicHostFQDN(dynamicName, dynamicNamespace, dynamicName+"-0")
 			groupName := "DynamicRestartEmptyDirRejoin"
-			behavior := &fakeDynamicManagementBehavior{hosts: []mlmanage.HostStatus{{Name: "bootstrap", Online: true, Version: "12.0-1"}}, groupInfo: mlmanage.GroupInfo{Exists: false}, autoRegisterOnJoin: true, hostIDsByHost: map[string]string{host0: "host-id-old"}}
+			behavior := &fakeDynamicManagementBehavior{hosts: []mlmanage.HostStatus{{Name: "bootstrap-0", Online: true, Version: "12.0-1"}}, groupInfo: mlmanage.GroupInfo{Exists: false}, autoRegisterOnJoin: true, hostIDsByHost: map[string]string{host0: "host-id-old"}}
 
 			originalFactory := k8sutil.NewDynamicManagementClient
 			k8sutil.NewDynamicManagementClient = func(opts mlmanage.ClientOptions) mlmanage.Client {
@@ -1643,7 +1643,7 @@ var _ = Describe("MarkLogicGroup controller", func() {
 			groupName := "DynamicRestartStatus"
 			tokenHostCalls := []string{}
 			callsMu := &sync.Mutex{}
-			behavior := &fakeDynamicManagementBehavior{hosts: []mlmanage.HostStatus{{Name: "bootstrap", Online: true, Version: "12.0-1"}}, groupInfo: mlmanage.GroupInfo{Exists: false}, autoRegisterOnJoin: true, hostIDsByHost: map[string]string{host0: "host-id-initial"}}
+			behavior := &fakeDynamicManagementBehavior{hosts: []mlmanage.HostStatus{{Name: "bootstrap-0", Online: true, Version: "12.0-1"}}, groupInfo: mlmanage.GroupInfo{Exists: false}, autoRegisterOnJoin: true, hostIDsByHost: map[string]string{host0: "host-id-initial"}}
 
 			originalFactory := k8sutil.NewDynamicManagementClient
 			k8sutil.NewDynamicManagementClient = func(opts mlmanage.ClientOptions) mlmanage.Client {
@@ -1736,7 +1736,7 @@ var _ = Describe("MarkLogicGroup controller", func() {
 			tokenHostCalls := []string{}
 			removeHostCalls := []string{}
 			callsMu := &sync.Mutex{}
-			behavior := &fakeDynamicManagementBehavior{hosts: []mlmanage.HostStatus{{Name: "bootstrap", Online: true, Version: "12.0-1"}}, groupInfo: mlmanage.GroupInfo{Exists: false}, autoRegisterOnJoin: true, hostIDsByHost: map[string]string{host0: oldHostID}}
+			behavior := &fakeDynamicManagementBehavior{hosts: []mlmanage.HostStatus{{Name: "bootstrap-0", Online: true, Version: "12.0-1"}}, groupInfo: mlmanage.GroupInfo{Exists: false}, autoRegisterOnJoin: true, hostIDsByHost: map[string]string{host0: oldHostID}}
 
 			originalFactory := k8sutil.NewDynamicManagementClient
 			k8sutil.NewDynamicManagementClient = func(opts mlmanage.ClientOptions) mlmanage.Client {
@@ -1887,7 +1887,7 @@ var _ = Describe("MarkLogicGroup controller", func() {
 			groupName := "DynamicRestartPVCCleanup"
 			tokenHostCalls := []string{}
 			callsMu := &sync.Mutex{}
-			behavior := &fakeDynamicManagementBehavior{hosts: []mlmanage.HostStatus{{Name: "bootstrap", Online: true, Version: "12.0-1"}}, groupInfo: mlmanage.GroupInfo{Exists: false}, autoRegisterOnJoin: true, hostIDsByHost: map[string]string{host0: "host-id-initial"}}
+			behavior := &fakeDynamicManagementBehavior{hosts: []mlmanage.HostStatus{{Name: "bootstrap-0", Online: true, Version: "12.0-1"}}, groupInfo: mlmanage.GroupInfo{Exists: false}, autoRegisterOnJoin: true, hostIDsByHost: map[string]string{host0: "host-id-initial"}}
 
 			cleanupCalls := []string{}
 			cleanupMu := &sync.Mutex{}
@@ -2029,7 +2029,7 @@ var _ = Describe("MarkLogicGroup controller", func() {
 			groupName := "DynamicRestartPartial"
 			var callsMu sync.Mutex
 			tokenHostCalls := []string{}
-			behavior := &fakeDynamicManagementBehavior{hosts: []mlmanage.HostStatus{{Name: "bootstrap", Online: true, Version: "12.0-1"}}, groupInfo: mlmanage.GroupInfo{Exists: false}, autoRegisterOnJoin: true, hostIDsByHost: map[string]string{host0: "host-id-0", host1: "host-id-1"}}
+			behavior := &fakeDynamicManagementBehavior{hosts: []mlmanage.HostStatus{{Name: "bootstrap-0", Online: true, Version: "12.0-1"}}, groupInfo: mlmanage.GroupInfo{Exists: false}, autoRegisterOnJoin: true, hostIDsByHost: map[string]string{host0: "host-id-0", host1: "host-id-1"}}
 
 			originalFactory := k8sutil.NewDynamicManagementClient
 			k8sutil.NewDynamicManagementClient = func(opts mlmanage.ClientOptions) mlmanage.Client {
@@ -2112,7 +2112,7 @@ var _ = Describe("MarkLogicGroup controller", func() {
 
 			host0 := dynamicHostFQDN(dynamicName, dynamicNamespace, dynamicName+"-0")
 			groupName := "DynamicRestartBootstrapUnavailable"
-			behavior := &fakeDynamicManagementBehavior{hosts: []mlmanage.HostStatus{{Name: "bootstrap", Online: true, Version: "12.0-1"}}, groupInfo: mlmanage.GroupInfo{Exists: false}, autoRegisterOnJoin: true, hostIDsByHost: map[string]string{host0: "host-id-0"}}
+			behavior := &fakeDynamicManagementBehavior{hosts: []mlmanage.HostStatus{{Name: "bootstrap-0", Online: true, Version: "12.0-1"}}, groupInfo: mlmanage.GroupInfo{Exists: false}, autoRegisterOnJoin: true, hostIDsByHost: map[string]string{host0: "host-id-0"}}
 
 			originalFactory := k8sutil.NewDynamicManagementClient
 			k8sutil.NewDynamicManagementClient = func(opts mlmanage.ClientOptions) mlmanage.Client {
