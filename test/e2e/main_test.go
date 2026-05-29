@@ -4,9 +4,11 @@ package e2e
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"os"
+	"os/exec"
 	"strings"
 	"sync"
 	"testing"
@@ -243,15 +245,34 @@ func TestMain(m *testing.M) {
 			os.Setenv("GOBIN", gobin)
 			os.Setenv("PATH", os.Getenv("PATH")+":"+gobin)
 
+			resolveExistingKustomize := func() (string, error) {
+				if kustomizeCmd, lookErr := exec.LookPath("kustomize"); lookErr == nil {
+					return kustomizeCmd, nil
+				}
+				if kubectlCmd, lookErr := exec.LookPath("kubectl"); lookErr == nil {
+					return kubectlCmd + " kustomize", nil
+				}
+				return "", errors.New("kustomize not found in PATH")
+			}
+
 			// Only download kustomize if it is not already present in bin/
 			kustomizePath := gobin + "/kustomize"
 			if _, err := os.Stat(kustomizePath); os.IsNotExist(err) {
 				if p := utils.RunCommand(fmt.Sprintf("go install sigs.k8s.io/kustomize/kustomize/v5@%s", kustomizeVer)); p.Err() != nil {
-					log.Printf("Failed to install kustomize binary: %s: %s", p.Err(), p.Result())
-					return ctx, p.Err()
+					fallbackKustomize, fallbackErr := resolveExistingKustomize()
+					if fallbackErr != nil {
+						log.Printf("Failed to install kustomize binary: %s: %s", p.Err(), p.Result())
+						return ctx, p.Err()
+					}
+					log.Printf("Failed to install kustomize binary (%s); falling back to existing command: %s", p.Err(), fallbackKustomize)
+					os.Setenv("KUSTOMIZE", fallbackKustomize)
+				}
+				if _, statErr := os.Stat(kustomizePath); statErr == nil {
+					os.Setenv("KUSTOMIZE", kustomizePath)
 				}
 			} else {
 				log.Printf("kustomize already present at %s, skipping install", kustomizePath)
+				os.Setenv("KUSTOMIZE", kustomizePath)
 			}
 
 			// Only download controller-gen if it is not already present in bin/
@@ -266,6 +287,13 @@ func TestMain(m *testing.M) {
 			}
 
 			p := utils.RunCommand("kustomize version")
+			if p.Err() != nil {
+				// If kustomize is unavailable but KUSTOMIZE was set to "kubectl kustomize",
+				// report it clearly for deploy diagnostics.
+				if customKustomize := os.Getenv("KUSTOMIZE"); customKustomize != "" {
+					log.Printf("kustomize version command failed (%s); KUSTOMIZE override is set to: %s", p.Err(), customKustomize)
+				}
+			}
 			log.Printf("Kustomize version: %s", p.Result())
 			return ctx, nil
 		},
