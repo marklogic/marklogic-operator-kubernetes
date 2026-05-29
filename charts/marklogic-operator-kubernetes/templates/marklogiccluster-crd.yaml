@@ -4668,6 +4668,7 @@ spec:
                 type: object
               image:
                 default: progressofficial/marklogic-db:12.0.0-ubi9-rootless-2.2.2
+                maxLength: 256
                 type: string
               imagePullPolicy:
                 default: IfNotPresent
@@ -8241,6 +8242,7 @@ spec:
                           type: string
                       type: object
                     image:
+                      maxLength: 256
                       type: string
                     imagePullPolicy:
                       type: string
@@ -8840,6 +8842,10 @@ spec:
                     rule: '!has(self.dynamic) || self.isDynamic == true'
                   - message: isDynamic cannot be set when isBootstrap is true
                     rule: '!(self.isDynamic == true && self.isBootstrap == true)'
+                  - message: dynamic host group image override must use tag latest or
+                      MarkLogic major version 12+
+                    rule: '!self.isDynamic || !has(self.image) || size(self.image) ==
+                      0 || self.image.matches(''^.+:(latest.*|((1[2-9]|[2-9][0-9])[.][0-9]+[.][0-9]+.*))$'')'
                 maxItems: 100
                 minItems: 1
                 type: array
