@@ -84,6 +84,7 @@ endif
 # Image URL to use all building/pushing image targets
 # Image for dev: ml-marklogic-operator-dev.bed-artifactory.bedford.progress.com/marklogic-operator-kubernetes
 IMG ?= progressofficial/marklogic-operator-kubernetes:$(VERSION)
+LOCAL_E2E_IMG ?= marklogic-operator-kubernetes:e2e-local
 
 
 # Get the currently used golang install path (in GOPATH/bin, unless GOBIN is set)
@@ -142,6 +143,11 @@ fmt: ## Run go fmt against code.
 vet: ## Run go vet against code.
 	go vet ./...
 
+.PHONY: kill-envtest
+kill-envtest: ## Kill any stale envtest kube-apiserver and etcd processes left by interrupted test runs.
+	@pkill -f "$(LOCALBIN)/k8s/.*/kube-apiserver" 2>/dev/null || true
+	@pkill -f "$(LOCALBIN)/k8s/.*/etcd" 2>/dev/null || true
+
 .PHONY: test
 test: manifests generate fmt vet envtest ## Run tests.
 	KUBEBUILDER_ASSETS="$(shell $(ENVTEST) use $(ENVTEST_K8S_VERSION) --bin-dir $(LOCALBIN) -p path)" go test -v $$(go list ./... | grep -v /e2e) -coverprofile cover.out
@@ -160,7 +166,7 @@ ifeq ($(VERIFY_HUGE_PAGES), true)
 	minikube start
 
 	@echo "=====Running e2e test including hugepages test"
-	IMG=$(IMG) go test -v -count=1 -timeout 30m ./test/e2e -verifyHugePages
+	IMG=$(IMG) go test -v -count=1 -timeout 60m ./test/e2e -verifyHugePages
 
 	@echo "=====Resetting hugepages value to 0"
 	sudo sysctl -w vm.nr_hugepages=0
@@ -200,6 +206,44 @@ e2e-test-helm-namespace:
 e2e-test-volume-resize:
 	@echo "=====Running cluster-scoped volume-resize e2e test (parallel, 2 namespaces)====="
 	IMG=$(IMG) go test -v -count=1 -timeout 30m ./test/e2e -run TestVolumeResizeClusterScoped
+
+.PHONY: e2e-test-dynamic-host  ## Run ONLY the cluster-scoped dynamic-host lifecycle test
+e2e-test-dynamic-host:
+	@echo "=====Running cluster-scoped dynamic-host lifecycle e2e test (controller image: $(IMG))====="
+	IMG=$(IMG) go test -v -count=1 -timeout 45m ./test/e2e -args --labels="type=dynamic-host"
+
+.PHONY: e2e-test-dynamic-host-local  ## Build/load local operator image (minikube context) and run ONLY dynamic-host lifecycle test
+e2e-test-dynamic-host-local:
+	@echo "=====Preparing local image for dynamic-host lifecycle e2e test (controller image: $(LOCAL_E2E_IMG))====="
+	$(MAKE) docker-build IMG=$(LOCAL_E2E_IMG)
+	@if kubectl config current-context 2>/dev/null | grep -q '^minikube$$'; then \
+		echo "=====Loading local operator image into minikube====="; \
+		minikube image load $(LOCAL_E2E_IMG); \
+	else \
+		echo "=====Current context is not minikube; skipping minikube image load====="; \
+	fi
+	@echo "=====Running cluster-scoped dynamic-host lifecycle e2e test against local image====="
+	IMG=$(LOCAL_E2E_IMG) go test -v -count=1 -timeout 45m ./test/e2e -args --labels="type=dynamic-host"
+
+.PHONY: e2e-test-volume-resize-local  ## Build/load local operator image (minikube context) and run ONLY volume-resize test; ensures CSI hostpath is default SC
+e2e-test-volume-resize-local:
+	@echo "=====Preparing local image for volume-resize e2e test (controller image: $(LOCAL_E2E_IMG))====="
+	$(MAKE) docker-build IMG=$(LOCAL_E2E_IMG)
+	@if kubectl config current-context 2>/dev/null | grep -q '^minikube$$'; then \
+		echo "=====Loading local operator image into minikube====="; \
+		minikube image load $(LOCAL_E2E_IMG); \
+		echo "=====Ensuring CSI hostpath driver is enabled for PVC expansion====="; \
+		minikube addons enable csi-hostpath-driver 2>/dev/null || true; \
+		kubectl patch storageclass standard \
+		  -p '{"metadata":{"annotations":{"storageclass.kubernetes.io/is-default-class":"false"}}}' 2>/dev/null || true; \
+		kubectl patch storageclass csi-hostpath-sc \
+		  -p '{"metadata":{"annotations":{"storageclass.kubernetes.io/is-default-class":"true"}}}' 2>/dev/null || true; \
+		kubectl patch storageclass csi-hostpath-sc -p '{"allowVolumeExpansion":true}' 2>/dev/null || true; \
+	else \
+		echo "=====Current context is not minikube; skipping minikube image load and storage class setup====="; \
+	fi
+	@echo "=====Running cluster-scoped volume-resize e2e test against local image====="
+	IMG=$(LOCAL_E2E_IMG) go test -v -count=1 -timeout 30m ./test/e2e -run TestVolumeResizeClusterScoped
 
 .PHONY: e2e-test-helm-volume-resize  ## Run ONLY the namespace-scoped volume resize test via Helm (two watched namespaces in parallel)
 e2e-test-helm-volume-resize:
@@ -400,7 +444,7 @@ run: manifests generate fmt vet ## Run a controller from your host.
 # More info: https://docs.docker.com/develop/develop-images/build_enhancements/
 .PHONY: docker-build
 docker-build: ## Build docker image with the manager. to build for linux, add --platform="linux/amd64"
-	$(CONTAINER_TOOL) buildx build --platform="linux/amd64" -t ${IMG} .
+	$(CONTAINER_TOOL) buildx build --load -t ${IMG} .
 
 .PHONY: docker-push
 docker-push: ## Push docker image with the manager.

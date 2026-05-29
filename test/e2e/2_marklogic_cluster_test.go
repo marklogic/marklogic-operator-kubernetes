@@ -286,7 +286,7 @@ func TestMarklogicCluster(t *testing.T) {
 			t.Fatal("No Grafana pods found")
 		}
 		grafanaPodName := podList.Items[0].Name
-		err = utils.WaitForPod(ctx, t, client, "grafana", grafanaPodName, 120*time.Second)
+		err = utils.WaitForPod(ctx, t, client, "grafana", grafanaPodName, 120*time.Second, true)
 		if err != nil {
 			t.Fatalf("Failed to wait for grafana pod creation: %v", err)
 		}
