@@ -26,7 +26,7 @@ import (
 // NOTE: json tags are required.  Any new fields you add must have json tags for the fields to be serialized.
 
 // +kubebuilder:validation:XValidation:rule="!has(self.dynamic) || self.isDynamic == true", message="dynamic can only be set when isDynamic is true"
-// +kubebuilder:validation:XValidation:rule="!self.isDynamic || self.image.matches('^.+:(latest.*|((1[2-9]|[2-9][0-9])\\.[0-9]+\\.[0-9]+.*))$')", message="dynamic hosts require image tag latest or MarkLogic major version 12+"
+// +kubebuilder:validation:XValidation:rule="!self.isDynamic || self.image.matches('^.+:(latest.*|((1[2-9]|[2-9][0-9])[.][0-9]+[.][0-9]+.*))$')", message="dynamic hosts require image tag latest or MarkLogic major version 12+"
 // MarklogicGroupSpec defines the desired state of MarklogicGroup
 type MarklogicGroupSpec struct {
 	// +kubebuilder:default:=1
@@ -37,6 +37,7 @@ type MarklogicGroupSpec struct {
 	// +kubebuilder:default:="cluster.local"
 	ClusterDomain string `json:"clusterDomain,omitempty"`
 	// +kubebuilder:default:="progressofficial/marklogic-db:12.0.0-ubi9-rootless-2.2.2"
+	// +kubebuilder:validation:MaxLength=256
 	Image string `json:"image"`
 	// +kubebuilder:default:="IfNotPresent"
 	ImagePullPolicy    string                        `json:"imagePullPolicy,omitempty"`

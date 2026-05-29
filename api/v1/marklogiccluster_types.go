@@ -28,8 +28,7 @@ import (
 // MarklogicClusterSpec defines the desired state of MarklogicCluster
 
 // +kubebuilder:validation:XValidation:rule="!has(self.haproxy) || !(self.haproxy.enabled == true && self.haproxy.pathBasedRouting == true) || self.image.split(':')[1].matches('.*latest.*') || int(self.image.split(':')[1].split('.')[0] + self.image.split(':')[1].split('.')[1]) >= 111", message="HAProxy and Pathbased Routing is enabled. PathBasedRouting is only supported for MarkLogic 11.1 and above"
-// +kubebuilder:validation:XValidation:rule="!has(self.markLogicGroups) || !self.markLogicGroups.exists(g, g.isDynamic && (!has(g.image) || g.image == ”)) || self.image.matches('^.+:(latest.*|((1[2-9]|[2-9][0-9])\\.[0-9]+\\.[0-9]+.*))$')", message="dynamic hosts require image tag latest or MarkLogic major version 12+"
-// +kubebuilder:validation:XValidation:rule="!has(self.markLogicGroups) || self.markLogicGroups.filter(g, g.isDynamic && has(g.image) && g.image != ” && !g.image.matches('^.+:(latest.*|((1[2-9]|[2-9][0-9])\\.[0-9]+\\.[0-9]+.*))$')).size() == 0", message="dynamic host group image override must use tag latest or MarkLogic major version 12+"
+// +kubebuilder:validation:XValidation:rule="!has(self.markLogicGroups) || !self.markLogicGroups.exists(g, g.isDynamic && (!has(g.image) || size(g.image) == 0)) || self.image.matches('^.+:(latest.*|((1[2-9]|[2-9][0-9])[.][0-9]+[.][0-9]+.*))$')", message="dynamic hosts require image tag latest or MarkLogic major version 12+"
 type MarklogicClusterSpec struct {
 	// INSERT ADDITIONAL SPEC FIELDS - desired state of cluster
 	// Important: Run "make" to regenerate code after modifying this file
@@ -38,6 +37,7 @@ type MarklogicClusterSpec struct {
 	ClusterDomain string `json:"clusterDomain,omitempty"`
 
 	// +kubebuilder:default:="progressofficial/marklogic-db:12.0.0-ubi9-rootless-2.2.2"
+	// +kubebuilder:validation:MaxLength=256
 	Image string `json:"image"`
 	// +kubebuilder:default:="IfNotPresent"
 	ImagePullPolicy  string                        `json:"imagePullPolicy,omitempty"`
@@ -93,6 +93,7 @@ type MarklogicClusterSpec struct {
 
 // +kubebuilder:validation:XValidation:rule="!has(self.dynamic) || self.isDynamic == true", message="dynamic can only be set when isDynamic is true"
 // +kubebuilder:validation:XValidation:rule="!(self.isDynamic == true && self.isBootstrap == true)", message="isDynamic cannot be set when isBootstrap is true"
+// +kubebuilder:validation:XValidation:rule="!self.isDynamic || !has(self.image) || size(self.image) == 0 || self.image.matches('^.+:(latest.*|((1[2-9]|[2-9][0-9])[.][0-9]+[.][0-9]+.*))$')", message="dynamic host group image override must use tag latest or MarkLogic major version 12+"
 type MarklogicGroups struct {
 	// +kubebuilder:default:=1
 	Replicas *int32 `json:"replicas,omitempty"`
@@ -101,7 +102,8 @@ type MarklogicGroups struct {
 	Labels      map[string]string `json:"labels,omitempty"`
 	Annotations map[string]string `json:"annotations,omitempty"`
 	// +kubebuilder:default:={name: "Default", enableXdqpSsl: true}
-	GroupConfig               *GroupConfig                      `json:"groupConfig,omitempty"`
+	GroupConfig *GroupConfig `json:"groupConfig,omitempty"`
+	// +kubebuilder:validation:MaxLength=256
 	Image                     string                            `json:"image,omitempty"`
 	ImagePullPolicy           string                            `json:"imagePullPolicy,omitempty"`
 	ImagePullSecrets          []corev1.LocalObjectReference     `json:"imagePullSecrets,omitempty"`
