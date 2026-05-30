@@ -11,7 +11,6 @@ rules:
   resources:
   - configmaps
   - pods
-  - persistentvolumeclaims
   - secrets
   - serviceaccounts
   - services
@@ -23,12 +22,6 @@ rules:
   - patch
   - update
   - watch
-- apiGroups:
-  - ""
-  resources:
-  - persistentvolumeclaims/status
-  verbs:
-  - get
 - apiGroups:
   - apps
   resources:
@@ -142,7 +135,6 @@ rules:
   resources:
   - configmaps
   - pods
-  - persistentvolumeclaims
   - secrets
   - serviceaccounts
   - services
@@ -154,12 +146,6 @@ rules:
   - patch
   - update
   - watch
-- apiGroups:
-  - ""
-  resources:
-  - persistentvolumeclaims/status
-  verbs:
-  - get
 - apiGroups:
   - apps
   resources:
