@@ -239,6 +239,11 @@ func WaitForPod(ctx context.Context, t *testing.T, client klient.Client, namespa
 		err := client.Resources(namespace).Get(ctx, podName, namespace, pod)
 
 		if err == nil {
+			if pod.DeletionTimestamp != nil {
+				t.Logf("Pod %s is terminating (deletionTimestamp=%s), waiting for replacement", pod.Name, pod.DeletionTimestamp.Time.Format(time.RFC3339))
+				time.Sleep(5 * time.Second)
+				continue
+			}
 			t.Logf("Pod %s is in phase %s", pod.Name, pod.Status.Phase)
 
 			// Check for Running state
@@ -405,16 +410,24 @@ func GetPodLogs(namespace, podName, containerName string) (string, error) {
 }
 
 func AddHelmRepo(chartName, url string) error {
-	// --force-update makes the command idempotent: if the repo already exists
-	// (common on shared CI agents) it updates the entry instead of failing,
-	// and always refreshes the local index so the requested chart version is
-	// guaranteed to be in the cache.
-	cmd := exec.Command("helm", "repo", "add", "--force-update", chartName, url)
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("failed to add Helm repo: %w", err)
+	// --force-update makes the command idempotent, and retrying helps with
+	// intermittent network hiccups in CI/local environments.
+	var lastErr error
+	for attempt := 1; attempt <= 3; attempt++ {
+		cmd := exec.Command("helm", "repo", "add", "--force-update", chartName, url)
+		output, err := cmd.CombinedOutput()
+		if err == nil {
+			fmt.Printf("%s helm repo added/updated successfully\n", chartName)
+			return nil
+		}
+
+		lastErr = fmt.Errorf("failed to add Helm repo (attempt %d/3): %w, output: %s", attempt, err, strings.TrimSpace(string(output)))
+		if attempt < 3 {
+			time.Sleep(time.Duration(attempt*2) * time.Second)
+		}
 	}
-	fmt.Printf("%s helm repo added/updated successfully \n", chartName)
-	return nil
+
+	return lastErr
 }
 
 func InstallHelmChart(releaseName string, chartName string, namespace string, version string, valuesFile ...string) error {
