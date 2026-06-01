@@ -1561,8 +1561,17 @@ func (oc *OperatorContext) reconcileDynamicScaleUp(groupClient mlmanage.Client, 
 }
 
 func (oc *OperatorContext) handleDynamicJoinFailure(hostStatuses []marklogicv1.DynamicHostStatus, podName, hostFQDN string, desiredReplicas, localReadyReplicas, readyReplicas int32, joinErr error) result.ReconcileResult {
-	attempts := incrementDynamicHostAttempts(hostStatuses, podName) + 1
+	currentAttempts := incrementDynamicHostAttempts(hostStatuses, podName)
+	attempts := currentAttempts + 1
 	message := fmt.Sprintf("join failed for %s: %v", podName, joinErr)
+
+	if isNoSuchClusterManagementError(joinErr) {
+		hostStatuses = setDynamicHostStatus(hostStatuses, podName, hostFQDN, dynamicHostStatePending, message, "", currentAttempts)
+		if err := oc.setDynamicStatusDetailed(dynamicPhaseDegraded, dynamicReasonBootstrapNotReady, message, true, true, true, desiredReplicas, localReadyReplicas, readyReplicas, hostStatuses); err != nil {
+			return result.Error(err)
+		}
+		return result.RequeueSoon(dynamicJoinRequeueSeconds)
+	}
 
 	if isPermanentAuthError(joinErr) {
 		hostStatuses = setDynamicHostStatus(hostStatuses, podName, hostFQDN, dynamicHostStateFailed, message, "", attempts)
@@ -1761,7 +1770,7 @@ func (oc *OperatorContext) buildDynamicHostStatuses(pods []corev1.Pod, members [
 			hostStatus.State = dynamicHostStateRejoinPending
 			hostStatus.HostID = member.HostID
 			hostStatus.Message = "stale host membership detected for recreated EmptyDir pod; removing stale host before rejoin"
-		} else if hasPrevious && previousStatus.State == dynamicHostStateFailed && previousStatus.Attempts >= dynamicJoinRetryBudget {
+		} else if hasPrevious && previousStatus.State == dynamicHostStateFailed && previousStatus.Attempts >= dynamicJoinRetryBudget && !isNoSuchClusterFailureMessage(previousStatus.Message) {
 			hostStatus.State = dynamicHostStateFailed
 			if hostStatus.Message == "" {
 				hostStatus.Message = "retry budget exhausted"
@@ -1817,6 +1826,10 @@ func (oc *OperatorContext) buildDynamicHostStatuses(pods []corev1.Pod, members [
 }
 
 func shouldPreserveFailedDynamicHostState(previousStatus marklogicv1.DynamicHostStatus, pod corev1.Pod, member mlmanage.GroupHost) bool {
+	if isNoSuchClusterFailureMessage(previousStatus.Message) {
+		return false
+	}
+
 	if strings.Contains(strings.ToLower(previousStatus.Message), "restart recovery") {
 		return false
 	}
@@ -1832,6 +1845,14 @@ func shouldPreserveFailedDynamicHostState(previousStatus marklogicv1.DynamicHost
 	}
 
 	return true
+}
+
+func isNoSuchClusterFailureMessage(message string) bool {
+	lower := strings.ToLower(strings.TrimSpace(message))
+	if lower == "" {
+		return false
+	}
+	return strings.Contains(lower, "nosuchcluster") || strings.Contains(lower, "no such cluster")
 }
 
 func pruneRemovedHostStatuses(hosts []marklogicv1.DynamicHostStatus, pods []corev1.Pod, members []mlmanage.GroupHost) []marklogicv1.DynamicHostStatus {

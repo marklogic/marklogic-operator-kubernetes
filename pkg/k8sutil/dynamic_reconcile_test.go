@@ -442,6 +442,53 @@ func TestBuildDynamicHostStatusesPreservesFailedStateForSamePod(t *testing.T) {
 	}
 }
 
+func TestBuildDynamicHostStatusesRetriesNoSuchClusterFailedState(t *testing.T) {
+	podCreation := metav1.NewTime(time.Now().Add(-5 * time.Minute))
+	lastUpdated := metav1.NewTime(time.Now().Add(-2 * time.Minute))
+
+	oc := &OperatorContext{
+		MarklogicGroup: &marklogicv1.MarklogicGroup{
+			ObjectMeta: metav1.ObjectMeta{Namespace: "default"},
+			Spec:       marklogicv1.MarklogicGroupSpec{Name: "dynamic", ClusterDomain: "cluster.local", IsDynamic: true},
+		},
+	}
+
+	pods := []corev1.Pod{dynamicReadyPodForTest("dynamic-0", podCreation)}
+	previous := []marklogicv1.DynamicHostStatus{{
+		PodName:     "dynamic-0",
+		Hostname:    "dynamic-0.dynamic.default.svc.cluster.local",
+		State:       dynamicHostStateFailed,
+		Message:     "retry budget exhausted for dynamic-0: management api POST /manage/v2/clusters/ml-dynamic-cluster/dynamic-host-token returned status 404: {\"errorResponse\":{\"messageCode\":\"XDMP-NOSUCHCLUSTER\"}}",
+		Attempts:    dynamicJoinRetryBudget,
+		LastUpdated: &lastUpdated,
+	}}
+
+	hosts, _, _, joinCandidates := oc.buildDynamicHostStatuses(pods, nil, previous)
+	if len(joinCandidates) != 1 {
+		t.Fatalf("expected retry join candidate for NOSUCHCLUSTER failed state, got %d", len(joinCandidates))
+	}
+
+	host, found := findDynamicHostStatusByPod(hosts, "dynamic-0")
+	if !found {
+		t.Fatalf("expected host status for dynamic-0")
+	}
+	if host.State != dynamicHostStatePending {
+		t.Fatalf("expected host state %q for NOSUCHCLUSTER retry, got %q", dynamicHostStatePending, host.State)
+	}
+}
+
+func TestIsNoSuchClusterFailureMessage(t *testing.T) {
+	if !isNoSuchClusterFailureMessage("management api returned XDMP-NOSUCHCLUSTER") {
+		t.Fatalf("expected NOSUCHCLUSTER marker to be detected")
+	}
+	if !isNoSuchClusterFailureMessage("no such cluster") {
+		t.Fatalf("expected generic no such cluster marker to be detected")
+	}
+	if isNoSuchClusterFailureMessage("retry budget exhausted for transient timeout") {
+		t.Fatalf("did not expect unrelated message to match")
+	}
+}
+
 func dynamicReadyPodForTest(name string, createdAt metav1.Time) corev1.Pod {
 	return corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{Name: name, CreationTimestamp: createdAt},
