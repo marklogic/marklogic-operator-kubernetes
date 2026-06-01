@@ -1305,6 +1305,9 @@ func isTransientManagementError(err error) bool {
 		return false
 	}
 	message := strings.ToLower(err.Error())
+	if isNoSuchClusterManagementError(err) {
+		return true
+	}
 	if strings.Contains(message, "timeout") || strings.Contains(message, "connection refused") || strings.Contains(message, "no such host") || strings.Contains(message, "temporary") {
 		return true
 	}
@@ -1341,6 +1344,14 @@ func isNoSuchHostManagementError(err error) bool {
 	}
 	message := strings.ToLower(err.Error())
 	return strings.Contains(message, "xdmp-nosuchhost") || strings.Contains(message, "no such host")
+}
+
+func isNoSuchClusterManagementError(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "xdmp-nosuchcluster") || strings.Contains(message, "no such cluster")
 }
 
 func statusCodeFromError(err error) (int, bool) {

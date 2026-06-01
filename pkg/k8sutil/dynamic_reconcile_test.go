@@ -612,3 +612,17 @@ func TestIsBootstrapHostStatusDoesNotMatchOtherHosts(t *testing.T) {
 		t.Fatalf("expected non-bootstrap dynamic host to not match bootstrap host")
 	}
 }
+
+func TestIsTransientManagementErrorRecognizesNoSuchCluster(t *testing.T) {
+	err := errors.New("management api POST /manage/v2/clusters/ml-dynamic-cluster/dynamic-host-token returned status 404: {\"errorResponse\":{\"messageCode\":\"XDMP-NOSUCHCLUSTER\"}}")
+	if !isTransientManagementError(err) {
+		t.Fatalf("expected XDMP-NOSUCHCLUSTER 404 to be treated as transient")
+	}
+}
+
+func TestIsTransientManagementErrorDoesNotTreatArbitrary404AsTransient(t *testing.T) {
+	err := errors.New("management api POST /manage/v2/clusters/ml-dynamic-cluster/dynamic-host-token returned status 404: {\"errorResponse\":{\"messageCode\":\"SOME-OTHER-404\"}}")
+	if isTransientManagementError(err) {
+		t.Fatalf("expected arbitrary 404 to remain non-transient")
+	}
+}
