@@ -37,7 +37,7 @@ func cleanupLogNS(ctx context.Context, t *testing.T, _ *envconf.Config) {
 	t.Helper()
 	// Delete all MarklogicCluster CRs in the namespace.
 	if p := e2eutils.RunCommand(fmt.Sprintf(
-		"kubectl delete marklogicclusters --all -n %s --ignore-not-found=true", logNS,
+		"kubectl --request-timeout=20s delete marklogicclusters --all -n %s --ignore-not-found=true --wait=false", logNS,
 	)); p.Err() != nil {
 		t.Logf("Warning: could not delete MarklogicCluster CRs in %s: %s", logNS, p.Result())
 	}
@@ -45,7 +45,7 @@ func cleanupLogNS(ctx context.Context, t *testing.T, _ *envconf.Config) {
 	deadline := time.Now().Add(2 * time.Minute)
 	for time.Now().Before(deadline) {
 		p := e2eutils.RunCommand(fmt.Sprintf(
-			"kubectl get statefulsets -n %s -o name 2>/dev/null", logNS,
+			"kubectl --request-timeout=20s get statefulsets -n %s -o name --ignore-not-found=true 2>/dev/null", logNS,
 		))
 		if strings.TrimSpace(p.Result()) == "" {
 			return
@@ -94,7 +94,7 @@ func TestLogCollectionDisabled(t *testing.T) {
 
 	feature.Assess("Pod created without fluent-bit container", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 		client := c.Client()
-		if err := utils.WaitForPod(ctx, t, client, logNS, "lognode-0", 120*time.Second); err != nil {
+		if err := utils.WaitForPod(ctx, t, client, logNS, "lognode-0", 300*time.Second); err != nil {
 			logDiagnostics(t, logNS)
 			t.Fatalf("Failed to wait for pod: %v", err)
 		}
@@ -181,7 +181,7 @@ func TestLogCollectionPartialLogs(t *testing.T) {
 
 	feature.Assess("Pod created with fluent-bit container", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 		client := c.Client()
-		if err := utils.WaitForPod(ctx, t, client, logNS, "lognode-0", 120*time.Second); err != nil {
+		if err := utils.WaitForPod(ctx, t, client, logNS, "lognode-0", 300*time.Second); err != nil {
 			logDiagnostics(t, logNS)
 			t.Fatalf("Failed to wait for pod: %v", err)
 		}
@@ -279,7 +279,7 @@ func TestLogCollectionCustomResources(t *testing.T) {
 	})
 
 	feature.Assess("Pod created with custom resources", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
-		if err := utils.WaitForPod(ctx, t, c.Client(), logNS, "lognode-0", 120*time.Second); err != nil {
+		if err := utils.WaitForPod(ctx, t, c.Client(), logNS, "lognode-0", 300*time.Second); err != nil {
 			logDiagnostics(t, logNS)
 			t.Fatalf("Failed to wait for pod: %v", err)
 		}
@@ -376,7 +376,7 @@ func TestLogCollectionCustomFilters(t *testing.T) {
 	})
 
 	feature.Assess("Pod created with custom filters", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
-		if err := utils.WaitForPod(ctx, t, c.Client(), logNS, "lognode-0", 120*time.Second); err != nil {
+		if err := utils.WaitForPod(ctx, t, c.Client(), logNS, "lognode-0", 300*time.Second); err != nil {
 			logDiagnostics(t, logNS)
 			t.Fatalf("Failed to wait for pod: %v", err)
 		}

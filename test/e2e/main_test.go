@@ -60,10 +60,12 @@ const (
 
 	// Keep CRD cleanup fast in local/CI e2e loops: do a short grace wait first,
 	// then escalate quickly to finalizer cleanup when termination is stuck.
-	crdCleanupInitialWaitAttempts      = 8
-	crdCleanupInitialWaitInterval      = 1 * time.Second
-	crdCleanupPostFinalizeWaitAttempts = 8
-	crdCleanupPostFinalizeWaitInterval = 1 * time.Second
+	// On minikube, CRD terminating/finalizer transitions can take noticeably
+	// longer after force-delete, especially when suites run back-to-back.
+	crdCleanupInitialWaitAttempts      = 30
+	crdCleanupInitialWaitInterval      = 2 * time.Second
+	crdCleanupPostFinalizeWaitAttempts = 90
+	crdCleanupPostFinalizeWaitInterval = 2 * time.Second
 )
 
 // namespaceLabels returns the labels to apply to test namespaces.
@@ -472,7 +474,7 @@ func forceDeleteMarkLogicCustomResources() error {
 	}
 
 	for _, kind := range kinds {
-		check := utils.RunCommand(fmt.Sprintf("kubectl get crd %s --ignore-not-found", kind))
+		check := utils.RunCommand(fmt.Sprintf("kubectl --request-timeout=20s get crd %s --ignore-not-found", kind))
 		if check.Err() != nil {
 			continue
 		}
@@ -481,7 +483,7 @@ func forceDeleteMarkLogicCustomResources() error {
 		// correct namespace. Plain `-o name` with `-A` omits namespace information and
 		// causes kubectl patch/delete to target the wrong namespace.
 		objects := utils.RunCommand(fmt.Sprintf(
-			`kubectl get %s -A --ignore-not-found -o jsonpath='{range .items[*]}{.metadata.namespace}/{.metadata.name}{"\n"}{end}'`,
+			`kubectl --request-timeout=20s get %s -A --ignore-not-found -o jsonpath='{range .items[*]}{.metadata.namespace}/{.metadata.name}{"\n"}{end}'`,
 			kind))
 		if objects.Err() != nil {
 			continue
@@ -494,8 +496,8 @@ func forceDeleteMarkLogicCustomResources() error {
 			}
 			parts := strings.SplitN(nsName, "/", 2)
 			ns, name := parts[0], parts[1]
-			utils.RunCommand(fmt.Sprintf("kubectl patch %s %s -n %s --type=merge -p '{\"metadata\":{\"finalizers\":[]}}'", kind, name, ns))
-			utils.RunCommand(fmt.Sprintf("kubectl delete %s %s -n %s --ignore-not-found --wait=false", kind, name, ns))
+			utils.RunCommand(fmt.Sprintf("kubectl --request-timeout=20s patch %s %s -n %s --type=merge -p '{\"metadata\":{\"finalizers\":[]}}'", kind, name, ns))
+			utils.RunCommand(fmt.Sprintf("kubectl --request-timeout=20s delete %s %s -n %s --ignore-not-found --wait=false", kind, name, ns))
 		}
 	}
 
@@ -505,7 +507,7 @@ func forceDeleteMarkLogicCustomResources() error {
 
 	log.Printf("CRD termination is still pending after initial wait, forcing CRD finalizer cleanup")
 	for _, kind := range kinds {
-		status := utils.RunCommand(fmt.Sprintf("kubectl get crd %s --ignore-not-found -o jsonpath='{.metadata.deletionTimestamp}'", kind))
+		status := utils.RunCommand(fmt.Sprintf("kubectl --request-timeout=20s get crd %s --ignore-not-found -o jsonpath='{.metadata.deletionTimestamp}'", kind))
 		if status.Err() != nil {
 			return fmt.Errorf("failed to query %s CRD termination status: %w: %s", kind, status.Err(), status.Result())
 		}
@@ -515,7 +517,7 @@ func forceDeleteMarkLogicCustomResources() error {
 		// Re-clear any CR instances that might still have finalizers (e.g. from a
 		// concurrent test run that left resources in a different namespace).
 		objects := utils.RunCommand(fmt.Sprintf(
-			`kubectl get %s -A --ignore-not-found -o jsonpath='{range .items[*]}{.metadata.namespace}/{.metadata.name}{"\n"}{end}'`,
+			`kubectl --request-timeout=20s get %s -A --ignore-not-found -o jsonpath='{range .items[*]}{.metadata.namespace}/{.metadata.name}{"\n"}{end}'`,
 			kind))
 		if objects.Err() == nil {
 			for _, nsName := range strings.Fields(objects.Result()) {
@@ -525,11 +527,11 @@ func forceDeleteMarkLogicCustomResources() error {
 				}
 				parts := strings.SplitN(nsName, "/", 2)
 				ns, name := parts[0], parts[1]
-				utils.RunCommand(fmt.Sprintf("kubectl patch %s %s -n %s --type=merge -p '{\"metadata\":{\"finalizers\":[]}}'", kind, name, ns))
-				utils.RunCommand(fmt.Sprintf("kubectl delete %s %s -n %s --ignore-not-found --wait=false", kind, name, ns))
+				utils.RunCommand(fmt.Sprintf("kubectl --request-timeout=20s patch %s %s -n %s --type=merge -p '{\"metadata\":{\"finalizers\":[]}}'", kind, name, ns))
+				utils.RunCommand(fmt.Sprintf("kubectl --request-timeout=20s delete %s %s -n %s --ignore-not-found --wait=false", kind, name, ns))
 			}
 		}
-		patch := utils.RunCommand(fmt.Sprintf("kubectl patch crd %s --type=merge -p '{\"metadata\":{\"finalizers\":[]}}'", kind))
+		patch := utils.RunCommand(fmt.Sprintf("kubectl --request-timeout=20s patch crd %s --type=merge -p '{\"metadata\":{\"finalizers\":[]}}'", kind))
 		if patch.Err() != nil {
 			log.Printf("Warning: failed to clear finalizers on CRD %s: %v: %s", kind, patch.Err(), patch.Result())
 		}
@@ -543,11 +545,11 @@ func forceDeleteMarkLogicCustomResources() error {
 	// Last resort: force-delete with grace-period=0 to bypass the normal GC cycle.
 	log.Printf("CRD still terminating after finalizer cleanup; force-deleting remaining CRDs")
 	for _, kind := range kinds {
-		status := utils.RunCommand(fmt.Sprintf("kubectl get crd %s --ignore-not-found -o jsonpath='{.metadata.deletionTimestamp}'", kind))
+		status := utils.RunCommand(fmt.Sprintf("kubectl --request-timeout=20s get crd %s --ignore-not-found -o jsonpath='{.metadata.deletionTimestamp}'", kind))
 		if status.Err() != nil || strings.TrimSpace(status.Result()) == "" {
 			continue
 		}
-		forceDelete := utils.RunCommand(fmt.Sprintf("kubectl delete crd %s --ignore-not-found --force --grace-period=0 --wait=false", kind))
+		forceDelete := utils.RunCommand(fmt.Sprintf("kubectl --request-timeout=20s delete crd %s --ignore-not-found --force --grace-period=0 --wait=false", kind))
 		if forceDelete.Err() != nil {
 			log.Printf("Warning: force-delete of CRD %s failed: %v: %s", kind, forceDelete.Err(), forceDelete.Result())
 		} else {
@@ -568,7 +570,7 @@ func waitForCRDTerminationToClear(crds []string, attempts int, interval time.Dur
 	for i := 0; i < attempts; i++ {
 		terminating = terminating[:0]
 		for _, crd := range crds {
-			status := utils.RunCommand(fmt.Sprintf("kubectl get crd %s --ignore-not-found -o jsonpath='{.metadata.deletionTimestamp}'", crd))
+			status := utils.RunCommand(fmt.Sprintf("kubectl --request-timeout=20s get crd %s --ignore-not-found -o jsonpath='{.metadata.deletionTimestamp}'", crd))
 			if status.Err() != nil {
 				return fmt.Errorf("failed to query %s CRD termination status: %w: %s", crd, status.Err(), status.Result())
 			}

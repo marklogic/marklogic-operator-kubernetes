@@ -222,6 +222,18 @@ func TestMain(m *testing.M) {
 		func(ctx context.Context, cfg *envconf.Config) (context.Context, error) {
 			log.Printf("Installing operator via Helm (scope=namespace, metrics.secure=false)...")
 
+			if err := resetMarkLogicCRDsForHelmInstall(); err != nil {
+				return ctx, err
+			}
+
+			if err := cleanupClusterScopedRBACArtifacts(); err != nil {
+				return ctx, err
+			}
+
+			if err := adoptExistingCRDsForHelm(); err != nil {
+				return ctx, err
+			}
+
 			args := []string{
 				"upgrade", "--install", helmRelease, helmChart,
 				"--namespace", helmNS,
@@ -318,4 +330,173 @@ func TestMain(m *testing.M) {
 	exitCode := testEnv.Run(m)
 	printTestSummary()
 	os.Exit(exitCode)
+}
+
+func adoptExistingCRDsForHelm() error {
+	crds := []string{
+		"marklogicclusters.marklogic.progress.com",
+		"marklogicgroups.marklogic.progress.com",
+	}
+
+	for _, crd := range crds {
+		checkCmd := exec.Command("kubectl", "--request-timeout=20s", "get", "crd", crd, "-o", "name", "--ignore-not-found")
+		checkOut, err := checkCmd.CombinedOutput()
+		if err != nil {
+			return fmt.Errorf("failed checking CRD %s: %w: %s", crd, err, strings.TrimSpace(string(checkOut)))
+		}
+		if strings.TrimSpace(string(checkOut)) == "" {
+			continue
+		}
+
+		log.Printf("Adopting existing CRD %s into Helm release ownership", crd)
+
+		labelCmd := exec.Command("kubectl", "--request-timeout=20s", "label", "crd", crd, "app.kubernetes.io/managed-by=Helm", "--overwrite")
+		labelOut, err := labelCmd.CombinedOutput()
+		if err != nil {
+			return fmt.Errorf("failed labeling CRD %s for Helm ownership: %w: %s", crd, err, strings.TrimSpace(string(labelOut)))
+		}
+
+		annotateCmd := exec.Command(
+			"kubectl", "--request-timeout=20s", "annotate", "crd", crd,
+			"meta.helm.sh/release-name="+helmRelease,
+			"meta.helm.sh/release-namespace="+helmNS,
+			"--overwrite",
+		)
+		annotateOut, err := annotateCmd.CombinedOutput()
+		if err != nil {
+			return fmt.Errorf("failed annotating CRD %s for Helm ownership: %w: %s", crd, err, strings.TrimSpace(string(annotateOut)))
+		}
+	}
+
+	return nil
+}
+
+func resetMarkLogicCRDsForHelmInstall() error {
+	crds := []string{
+		"marklogicclusters.marklogic.progress.com",
+		"marklogicgroups.marklogic.progress.com",
+	}
+
+	for _, crd := range crds {
+		if err := clearMarkLogicCustomResourcesForCRD(crd); err != nil {
+			return err
+		}
+
+		patchCmd := exec.Command("kubectl", "--request-timeout=20s", "patch", "crd", crd, "--type=merge", "-p", `{"metadata":{"finalizers":[]}}`)
+		if patchOut, err := patchCmd.CombinedOutput(); err != nil && !strings.Contains(string(patchOut), "NotFound") {
+			return fmt.Errorf("failed patching CRD finalizers for %s: %w: %s", crd, err, strings.TrimSpace(string(patchOut)))
+		}
+
+		deleteCmd := exec.Command("kubectl", "--request-timeout=20s", "delete", "crd", crd, "--ignore-not-found", "--wait=false")
+		if deleteOut, err := deleteCmd.CombinedOutput(); err != nil {
+			return fmt.Errorf("failed deleting CRD %s: %w: %s", crd, err, strings.TrimSpace(string(deleteOut)))
+		}
+	}
+
+	deadline := time.Now().Add(2 * time.Minute)
+	escalated := false
+	for {
+		remaining := make([]string, 0)
+		for _, crd := range crds {
+			checkCmd := exec.Command("kubectl", "--request-timeout=20s", "get", "crd", crd, "-o", "name", "--ignore-not-found")
+			checkOut, err := checkCmd.CombinedOutput()
+			if err != nil {
+				return fmt.Errorf("failed checking CRD %s during reset: %w: %s", crd, err, strings.TrimSpace(string(checkOut)))
+			}
+			if strings.TrimSpace(string(checkOut)) != "" {
+				remaining = append(remaining, crd)
+			}
+		}
+
+		if len(remaining) == 0 {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			if !escalated {
+				log.Printf("CRD reset is still pending, forcing finalizer cleanup for: %s", strings.Join(remaining, ", "))
+				for _, crd := range remaining {
+					_ = clearMarkLogicCustomResourcesForCRD(crd)
+
+					patchCmd := exec.Command("kubectl", "--request-timeout=20s", "patch", "crd", crd, "--type=merge", "-p", `{"metadata":{"finalizers":[]}}`)
+					if patchOut, err := patchCmd.CombinedOutput(); err != nil && !strings.Contains(string(patchOut), "NotFound") {
+						log.Printf("Warning: failed force-patching CRD finalizers for %s: %v: %s", crd, err, strings.TrimSpace(string(patchOut)))
+					}
+
+					forceCmd := exec.Command("kubectl", "--request-timeout=20s", "delete", "crd", crd, "--ignore-not-found", "--force", "--grace-period=0", "--wait=false")
+					if forceOut, err := forceCmd.CombinedOutput(); err != nil {
+						log.Printf("Warning: failed force-deleting CRD %s: %v: %s", crd, err, strings.TrimSpace(string(forceOut)))
+					}
+				}
+				escalated = true
+				deadline = time.Now().Add(2 * time.Minute)
+				continue
+			}
+			return fmt.Errorf("timeout waiting for CRD reset before Helm install: %s", strings.Join(remaining, ", "))
+		}
+
+		time.Sleep(2 * time.Second)
+	}
+}
+
+func clearMarkLogicCustomResourcesForCRD(crd string) error {
+	listCmd := exec.Command("kubectl", "--request-timeout=20s", "get", crd, "-A", "--ignore-not-found", "-o", `jsonpath={range .items[*]}{.metadata.namespace}/{.metadata.name}{"\n"}{end}`)
+	listOut, err := listCmd.CombinedOutput()
+	if err != nil {
+		out := string(listOut)
+		if strings.Contains(out, "the server doesn't have a resource type") || strings.Contains(out, "the server could not find the requested resource") {
+			return nil
+		}
+		return fmt.Errorf("failed listing custom resources for %s: %w: %s", crd, err, strings.TrimSpace(string(listOut)))
+	}
+
+	for _, nsName := range strings.Fields(string(listOut)) {
+		parts := strings.SplitN(strings.TrimSpace(nsName), "/", 2)
+		if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+			continue
+		}
+
+		patchCmd := exec.Command("kubectl", "--request-timeout=20s", "patch", crd, parts[1], "-n", parts[0], "--type=merge", "-p", `{"metadata":{"finalizers":[]}}`)
+		if patchOut, err := patchCmd.CombinedOutput(); err != nil && !strings.Contains(string(patchOut), "NotFound") {
+			return fmt.Errorf("failed patching finalizers for %s %s/%s: %w: %s", crd, parts[0], parts[1], err, strings.TrimSpace(string(patchOut)))
+		}
+
+		deleteCmd := exec.Command("kubectl", "--request-timeout=20s", "delete", crd, parts[1], "-n", parts[0], "--ignore-not-found", "--wait=false")
+		if deleteOut, err := deleteCmd.CombinedOutput(); err != nil {
+			return fmt.Errorf("failed deleting %s %s/%s: %w: %s", crd, parts[0], parts[1], err, strings.TrimSpace(string(deleteOut)))
+		}
+	}
+
+	return nil
+}
+
+func cleanupClusterScopedRBACArtifacts() error {
+	clusterRoles := []string{
+		"marklogic-operator-manager-role",
+		"marklogic-operator-metrics-auth-role",
+		"marklogic-operator-metrics-reader",
+	}
+	clusterRoleBindings := []string{
+		"marklogic-operator-manager-rolebinding",
+		"marklogic-operator-metrics-auth-rolebinding",
+	}
+
+	for _, name := range clusterRoleBindings {
+		log.Printf("Ensuring stale ClusterRoleBinding %s is removed", name)
+		deleteCmd := exec.Command("kubectl", "--request-timeout=20s", "delete", "clusterrolebinding", name, "--ignore-not-found")
+		deleteOut, err := deleteCmd.CombinedOutput()
+		if err != nil {
+			return fmt.Errorf("failed deleting ClusterRoleBinding %s: %w: %s", name, err, strings.TrimSpace(string(deleteOut)))
+		}
+	}
+
+	for _, name := range clusterRoles {
+		log.Printf("Ensuring stale ClusterRole %s is removed", name)
+		deleteCmd := exec.Command("kubectl", "--request-timeout=20s", "delete", "clusterrole", name, "--ignore-not-found")
+		deleteOut, err := deleteCmd.CombinedOutput()
+		if err != nil {
+			return fmt.Errorf("failed deleting ClusterRole %s: %w: %s", name, err, strings.TrimSpace(string(deleteOut)))
+		}
+	}
+
+	return nil
 }

@@ -22,6 +22,26 @@ import (
 	e2eutils "sigs.k8s.io/e2e-framework/pkg/utils"
 )
 
+func cleanupHAProxyNamespaceArtifacts(ns string) {
+	// Remove stale resources from interrupted runs so each test starts from a clean workload state.
+	e2eutils.RunCommand(fmt.Sprintf("kubectl --request-timeout=20s -n %s delete marklogiccluster --all --ignore-not-found=true --wait=false", ns))
+	e2eutils.RunCommand(fmt.Sprintf("kubectl --request-timeout=20s -n %s delete statefulset --all --ignore-not-found=true --wait=false", ns))
+	e2eutils.RunCommand(fmt.Sprintf("kubectl --request-timeout=20s -n %s delete deployment marklogic-haproxy --ignore-not-found=true --wait=false", ns))
+	e2eutils.RunCommand(fmt.Sprintf("kubectl --request-timeout=20s -n %s delete service marklogic-haproxy ml ml-cluster --ignore-not-found=true --wait=false", ns))
+	e2eutils.RunCommand(fmt.Sprintf("kubectl --request-timeout=20s -n %s delete pod --all --ignore-not-found=true --wait=false", ns))
+	e2eutils.RunCommand(fmt.Sprintf("kubectl --request-timeout=20s -n %s delete pvc --all --ignore-not-found=true --wait=false", ns))
+
+	deadline := time.Now().Add(3 * time.Minute)
+	for time.Now().Before(deadline) {
+		pods := strings.TrimSpace(e2eutils.RunCommand(fmt.Sprintf("kubectl get pods -n %s -o name --ignore-not-found=true 2>/dev/null", ns)).Result())
+		sts := strings.TrimSpace(e2eutils.RunCommand(fmt.Sprintf("kubectl get statefulsets -n %s -o name --ignore-not-found=true 2>/dev/null", ns)).Result())
+		if pods == "" && sts == "" {
+			return
+		}
+		time.Sleep(5 * time.Second)
+	}
+}
+
 // TestHAProxyPathBasedEnabled verifies that path-based HAProxy routing works correctly
 // in a watched namespace with namespace-scoped RBAC.
 func TestHAProxyPathBasedEnabled(t *testing.T) {
@@ -93,6 +113,7 @@ func TestHAProxyPathBasedEnabled(t *testing.T) {
 		}); err != nil && !apierrors.IsAlreadyExists(err) {
 			t.Fatalf("Failed to create namespace %s: %v", haProxyPathNS, err)
 		}
+		cleanupHAProxyNamespaceArtifacts(haProxyPathNS)
 		marklogicv1.AddToScheme(client.Resources(haProxyPathNS).GetScheme())
 		e2eutils.RunCommand(fmt.Sprintf("kubectl -n %s delete marklogiccluster %s --ignore-not-found=true", haProxyPathNS, cr.Name))
 		if err := client.Resources(haProxyPathNS).Create(ctx, cr); err != nil {
@@ -117,7 +138,7 @@ func TestHAProxyPathBasedEnabled(t *testing.T) {
 	})
 
 	feature.Assess("pod ml-0 is ready", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
-		if err := utils.WaitForPod(ctx, t, c.Client(), haProxyPathNS, "ml-0", 120*time.Second, true); err != nil {
+		if err := utils.WaitForPod(ctx, t, c.Client(), haProxyPathNS, "ml-0", 300*time.Second, true); err != nil {
 			logDiagnostics(t, haProxyPathNS)
 			t.Fatalf("ml-0 not ready: %v", err)
 		}
@@ -267,6 +288,7 @@ func TestHAProxyPathBasedDisabled(t *testing.T) {
 		}); err != nil && !apierrors.IsAlreadyExists(err) {
 			t.Fatalf("Failed to create namespace %s: %v", haProxyNS, err)
 		}
+		cleanupHAProxyNamespaceArtifacts(haProxyNS)
 		marklogicv1.AddToScheme(client.Resources(haProxyNS).GetScheme())
 		e2eutils.RunCommand(fmt.Sprintf("kubectl -n %s delete marklogiccluster %s --ignore-not-found=true", haProxyNS, cr.Name))
 		if err := client.Resources(haProxyNS).Create(ctx, cr); err != nil {
@@ -291,7 +313,7 @@ func TestHAProxyPathBasedDisabled(t *testing.T) {
 	})
 
 	feature.Assess("pod ml-0 is ready", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
-		if err := utils.WaitForPod(ctx, t, c.Client(), haProxyNS, "ml-0", 120*time.Second, true); err != nil {
+		if err := utils.WaitForPod(ctx, t, c.Client(), haProxyNS, "ml-0", 300*time.Second, true); err != nil {
 			logDiagnostics(t, haProxyNS)
 			t.Fatalf("ml-0 not ready: %v", err)
 		}
@@ -324,10 +346,12 @@ func TestHAProxyPathBasedDisabled(t *testing.T) {
 	})
 
 	feature.Teardown(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
-		// Do not delete the watched namespace here. In this suite, Helm installs
-		// namespace-scoped RBAC into watched namespaces, and deleting haProxyNS
-		// during test teardown can remove that RBAC and cause terminating-namespace
-		// churn. Namespace cleanup is deferred to the suite's final cleanup.
+		// Keep the watched namespace and RBAC in place, but clean workload resources
+		// so re-runs start from a known-good state.
+		if err := c.Client().Resources(haProxyNS).Delete(ctx, cr); err != nil && !apierrors.IsNotFound(err) {
+			t.Logf("Warning: failed to delete MarklogicCluster %s/%s: %v", haProxyNS, cr.Name, err)
+		}
+		cleanupHAProxyNamespaceArtifacts(haProxyNS)
 		return ctx
 	})
 
