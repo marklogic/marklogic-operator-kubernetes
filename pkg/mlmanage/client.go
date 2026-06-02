@@ -248,6 +248,10 @@ func (c *managementClient) EnsureManageAdminUser(ctx context.Context, username, 
 }
 
 func (c *managementClient) ResolveClusterName(ctx context.Context) (string, error) {
+	if clusterName, err := c.resolveClusterNameFromClusterList(ctx); err == nil && strings.TrimSpace(clusterName) != "" {
+		return clusterName, nil
+	}
+
 	query := url.Values{}
 	query.Set("format", "json")
 	data, _, err := c.doJSON(ctx, http.MethodGet, "/manage/v2", query, nil, http.StatusOK)
@@ -264,6 +268,27 @@ func (c *managementClient) ResolveClusterName(ctx context.Context) (string, erro
 	if strings.TrimSpace(clusterName) == "" {
 		return "", fmt.Errorf("cluster name was not present in management response")
 	}
+	return clusterName, nil
+}
+
+func (c *managementClient) resolveClusterNameFromClusterList(ctx context.Context) (string, error) {
+	query := url.Values{}
+	query.Set("format", "json")
+	data, _, err := c.doJSON(ctx, http.MethodGet, "/manage/v2/clusters", query, nil, http.StatusOK)
+	if err != nil {
+		return "", err
+	}
+
+	var payload any
+	if err := json.Unmarshal(data, &payload); err != nil {
+		return "", err
+	}
+
+	clusterName := extractClusterNameFromClusterList(payload)
+	if strings.TrimSpace(clusterName) == "" {
+		return "", fmt.Errorf("cluster name was not present in cluster list response")
+	}
+
 	return clusterName, nil
 }
 
@@ -835,6 +860,78 @@ func extractClusterName(payload any) string {
 	}
 
 	return findClusterNameByVersionEnvelope(root)
+}
+
+func extractClusterNameFromClusterList(payload any) string {
+	root, ok := payload.(map[string]any)
+	if !ok {
+		return ""
+	}
+
+	if clusterName := strings.TrimSpace(firstString(root, "cluster-name")); clusterName != "" {
+		return clusterName
+	}
+
+	for _, listKey := range []string{"cluster-default-list", "cluster-list"} {
+		if listEnvelope, ok := root[listKey].(map[string]any); ok {
+			if clusterName := extractClusterNameFromListEnvelope(listEnvelope); clusterName != "" {
+				return clusterName
+			}
+		}
+	}
+
+	if clusterName := extractClusterNameFromListEnvelope(root); clusterName != "" {
+		return clusterName
+	}
+
+	return ""
+}
+
+func extractClusterNameFromListEnvelope(envelope map[string]any) string {
+	for _, containerKey := range []string{"list-items", "cluster-items", "clusters", "items"} {
+		if container, ok := envelope[containerKey]; ok {
+			if clusterName := extractClusterNameFromListItems(container); clusterName != "" {
+				return clusterName
+			}
+		}
+	}
+
+	if clusterName := extractClusterNameFromListItems(envelope); clusterName != "" {
+		return clusterName
+	}
+
+	return ""
+}
+
+func extractClusterNameFromListItems(node any) string {
+	switch current := node.(type) {
+	case map[string]any:
+		for _, itemKey := range []string{"list-item", "cluster-item"} {
+			if item, ok := current[itemKey]; ok {
+				if clusterName := extractClusterNameFromListItems(item); clusterName != "" {
+					return clusterName
+				}
+			}
+		}
+
+		if clusterName := strings.TrimSpace(firstString(current, "cluster-name", "nameref", "idref")); clusterName != "" {
+			return clusterName
+		}
+
+		for _, value := range current {
+			if clusterName := extractClusterNameFromListItems(value); clusterName != "" {
+				return clusterName
+			}
+		}
+	case []any:
+		for _, value := range current {
+			if clusterName := extractClusterNameFromListItems(value); clusterName != "" {
+				return clusterName
+			}
+		}
+	}
+
+	return ""
 }
 
 func findClusterNameByVersionEnvelope(node map[string]any) string {

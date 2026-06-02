@@ -211,11 +211,16 @@ func TestResolveClusterNameParsesVersionEnvelopeKey(t *testing.T) {
 	t.Parallel()
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/manage/v2" {
-			t.Fatalf("expected /manage/v2 path, got %s", r.URL.Path)
+		switch r.URL.Path {
+		case "/manage/v2/clusters":
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = w.Write([]byte(`{"errorResponse":{"message":"not found"}}`))
+		case "/manage/v2":
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"local-cluster-default":{"version":"12.0.0","effective-version":12000000}}`))
+		default:
+			t.Fatalf("unexpected path %s", r.URL.Path)
 		}
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(`{"local-cluster-default":{"version":"12.0.0","effective-version":12000000}}`))
 	}))
 	defer server.Close()
 
@@ -239,8 +244,16 @@ func TestResolveClusterNameParsesExplicitClusterName(t *testing.T) {
 	t.Parallel()
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(`{"cluster-name":"ml-dynamic-cluster"}`))
+		switch r.URL.Path {
+		case "/manage/v2/clusters":
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"cluster-name":"ml-dynamic-cluster"}`))
+		case "/manage/v2":
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"cluster-name":"should-not-be-used"}`))
+		default:
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
 	}))
 	defer server.Close()
 
@@ -257,6 +270,39 @@ func TestResolveClusterNameParsesExplicitClusterName(t *testing.T) {
 	}
 	if clusterName != "ml-dynamic-cluster" {
 		t.Fatalf("expected cluster name ml-dynamic-cluster, got %s", clusterName)
+	}
+}
+
+func TestResolveClusterNamePrefersClusterListEnvelope(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/manage/v2/clusters":
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"cluster-default-list":{"list-items":{"list-item":[{"nameref":"actual-cluster-name"}]}}}`))
+		case "/manage/v2":
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"cluster-name":"fallback-cluster"}`))
+		default:
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	client := &managementClient{
+		baseURL:    server.URL,
+		username:   "user",
+		password:   "password",
+		httpClient: server.Client(),
+	}
+
+	clusterName, err := client.ResolveClusterName(context.Background())
+	if err != nil {
+		t.Fatalf("ResolveClusterName returned error: %v", err)
+	}
+	if clusterName != "actual-cluster-name" {
+		t.Fatalf("expected cluster name actual-cluster-name, got %s", clusterName)
 	}
 }
 
