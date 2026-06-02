@@ -2492,6 +2492,8 @@ type fakeDynamicManagementBehavior struct {
 	enableDynamicErr error
 	enableTokenErr   error
 	ensureUserErr    error
+	resolveName      string
+	resolveNameErr   error
 
 	groupHosts []mlmanage.GroupHost
 
@@ -2607,6 +2609,22 @@ func (f *fakeDynamicManagementClient) EnsureManageAdminUser(ctx context.Context,
 	f.behavior.mu.Lock()
 	defer f.behavior.mu.Unlock()
 	return f.behavior.ensureUserErr
+}
+
+func (f *fakeDynamicManagementClient) ResolveClusterName(ctx context.Context) (string, error) {
+	f.record("ResolveClusterName")
+	if f.behavior == nil {
+		return "cluster-default", nil
+	}
+	f.behavior.mu.Lock()
+	defer f.behavior.mu.Unlock()
+	if f.behavior.resolveNameErr != nil {
+		return "", f.behavior.resolveNameErr
+	}
+	if strings.TrimSpace(f.behavior.resolveName) != "" {
+		return f.behavior.resolveName, nil
+	}
+	return "cluster-default", nil
 }
 
 func (f *fakeDynamicManagementClient) RequestDynamicHostToken(ctx context.Context, clusterName, groupName, hostFQDN, duration string) (string, error) {
