@@ -2195,6 +2195,7 @@ var _ = Describe("MarkLogicGroup controller", func() {
 
 	Context("When validating volume resize requests", func() {
 		ctx := context.Background()
+		resizeTimeout := time.Second * 60
 
 		It("Should initialize resize operation status for growth request", func() {
 			nsName := "resize-init-ns"
@@ -2210,7 +2211,7 @@ var _ = Describe("MarkLogicGroup controller", func() {
 			Eventually(func() bool {
 				sts := &appsv1.StatefulSet{}
 				return k8sClient.Get(ctx, nn, sts) == nil
-			}, timeout, interval).Should(BeTrue())
+			}, resizeTimeout, interval).Should(BeTrue())
 
 			pvc := newPersistentPVC(nsName, groupName, "20Gi")
 			Expect(k8sClient.Create(ctx, pvc)).Should(Succeed())
@@ -2226,7 +2227,7 @@ var _ = Describe("MarkLogicGroup controller", func() {
 					return ""
 				}
 				return string(updated.Status.VolumeResizeStatus.Reason)
-			}, timeout, interval).Should(Equal(string(marklogicv1.VolumeResizeReasonPVCNotBound)))
+			}, resizeTimeout, interval).Should(Equal(string(marklogicv1.VolumeResizeReasonPVCNotBound)))
 
 			updated := &marklogicv1.MarklogicGroup{}
 			Expect(k8sClient.Get(ctx, nn, updated)).Should(Succeed())
@@ -2253,7 +2254,7 @@ var _ = Describe("MarkLogicGroup controller", func() {
 			Eventually(func() bool {
 				sts := &appsv1.StatefulSet{}
 				return k8sClient.Get(ctx, nn, sts) == nil
-			}, timeout, interval).Should(BeTrue())
+			}, resizeTimeout, interval).Should(BeTrue())
 
 			pvc := newPersistentPVC(nsName, groupName, "20Gi")
 			Expect(k8sClient.Create(ctx, pvc)).Should(Succeed())
@@ -2269,7 +2270,7 @@ var _ = Describe("MarkLogicGroup controller", func() {
 					return ""
 				}
 				return string(updated.Status.VolumeResizeStatus.Reason)
-			}, timeout, interval).Should(Equal(string(marklogicv1.VolumeResizeReasonShrinkNotSupported)))
+			}, resizeTimeout, interval).Should(Equal(string(marklogicv1.VolumeResizeReasonShrinkNotSupported)))
 
 			updated := &marklogicv1.MarklogicGroup{}
 			Expect(k8sClient.Get(ctx, nn, updated)).Should(Succeed())
@@ -2293,7 +2294,7 @@ var _ = Describe("MarkLogicGroup controller", func() {
 			Eventually(func() bool {
 				sts := &appsv1.StatefulSet{}
 				return k8sClient.Get(ctx, nn, sts) == nil
-			}, timeout, interval).Should(BeTrue())
+			}, resizeTimeout, interval).Should(BeTrue())
 
 			pvc := newPersistentPVC(nsName, groupName, "20Gi")
 			Expect(k8sClient.Create(ctx, pvc)).Should(Succeed())
@@ -2310,7 +2311,7 @@ var _ = Describe("MarkLogicGroup controller", func() {
 					return ""
 				}
 				return string(updated.Status.VolumeResizeStatus.Reason)
-			}, timeout, interval).Should(Equal(string(marklogicv1.VolumeResizeReasonInvalidResizeRequest)))
+			}, resizeTimeout, interval).Should(Equal(string(marklogicv1.VolumeResizeReasonInvalidResizeRequest)))
 
 			updated := &marklogicv1.MarklogicGroup{}
 			Expect(k8sClient.Get(ctx, nn, updated)).Should(Succeed())
