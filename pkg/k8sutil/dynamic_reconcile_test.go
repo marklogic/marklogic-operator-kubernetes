@@ -17,11 +17,12 @@ import (
 )
 
 type stubDynamicManagementClient struct {
-	requestTokenFn func(clusterName, groupName, hostFQDN, duration string) (string, error)
-	joinFn         func(hostFQDN, token string) error
-	listGroupFn    func(groupName string) ([]mlmanage.GroupHost, error)
-	resolveNameFn  func() (string, error)
-	removeFn       func(clusterName, hostID string) error
+	requestTokenFn      func(clusterName, groupName, hostFQDN, duration string) (string, error)
+	joinFn              func(hostFQDN, token string) error
+	listGroupFn         func(groupName string) ([]mlmanage.GroupHost, error)
+	resolveNameFn       func() (string, error)
+	resolveCandidatesFn func() ([]string, error)
+	removeFn            func(clusterName, hostID string) error
 }
 
 func (s *stubDynamicManagementClient) ListHostsStatus(ctx context.Context) ([]mlmanage.HostStatus, error) {
@@ -57,6 +58,13 @@ func (s *stubDynamicManagementClient) ResolveClusterName(ctx context.Context) (s
 		return "", errors.New("resolveNameFn is not configured")
 	}
 	return s.resolveNameFn()
+}
+
+func (s *stubDynamicManagementClient) ResolveClusterNameCandidates(ctx context.Context) ([]string, error) {
+	if s.resolveCandidatesFn == nil {
+		return nil, errors.New("resolveCandidatesFn is not configured")
+	}
+	return s.resolveCandidatesFn()
 }
 
 func (s *stubDynamicManagementClient) RequestDynamicHostToken(ctx context.Context, clusterName, groupName, hostFQDN, duration string) (string, error) {
@@ -338,6 +346,61 @@ func TestJoinDynamicPodRetriesWithResolvedClusterNameForNoSuchCluster(t *testing
 	}
 	if len(requestedClusters) != 2 || requestedClusters[0] != "ml-dynamic-cluster" || requestedClusters[1] != "local-cluster-default" {
 		t.Fatalf("expected token cluster fallback sequence [ml-dynamic-cluster local-cluster-default], got %v", requestedClusters)
+	}
+}
+
+func TestJoinDynamicPodRetriesAllResolvedClusterCandidatesForNoSuchCluster(t *testing.T) {
+	oc := &OperatorContext{Ctx: context.Background()}
+	hostFQDN := "dynamic-0.dynamic.default.svc.cluster.local"
+
+	requestedClusters := make([]string, 0, 4)
+	client := &stubDynamicManagementClient{
+		requestTokenFn: func(clusterName, groupName, requestedHost, duration string) (string, error) {
+			requestedClusters = append(requestedClusters, clusterName)
+			switch clusterName {
+			case "ml-dynamic-cluster":
+				return "", errors.New("management api POST /manage/v2/clusters/ml-dynamic-cluster/dynamic-host-token returned status 404: {\"errorResponse\":{\"messageCode\":\"XDMP-NOSUCHCLUSTER\"}}")
+			case "local-cluster-default":
+				return "", errors.New("management api POST /manage/v2/clusters/local-cluster-default/dynamic-host-token returned status 404: {\"errorResponse\":{\"messageCode\":\"XDMP-NOSUCHCLUSTER\"}}")
+			case "actual-cluster-id":
+				return "token-resolved", nil
+			default:
+				return "", fmt.Errorf("unexpected cluster in token request: %s", clusterName)
+			}
+		},
+		resolveCandidatesFn: func() ([]string, error) {
+			return []string{"local-cluster-default", "actual-cluster-id"}, nil
+		},
+		joinFn: func(requestedHost, token string) error {
+			if requestedHost != hostFQDN {
+				return fmt.Errorf("expected join host %s, got %s", hostFQDN, requestedHost)
+			}
+			if token != "token-resolved" {
+				return fmt.Errorf("expected resolved-cluster token, got %s", token)
+			}
+			return nil
+		},
+		listGroupFn: func(groupName string) ([]mlmanage.GroupHost, error) {
+			return []mlmanage.GroupHost{{Name: hostFQDN, HostID: "host-id-resolved", Online: true}}, nil
+		},
+	}
+
+	host, err := oc.joinDynamicPod(client, "ml-dynamic-cluster", "DynamicGroup", hostFQDN, "PT15M")
+	if err != nil {
+		t.Fatalf("joinDynamicPod returned error: %v", err)
+	}
+	if host.HostID != "host-id-resolved" {
+		t.Fatalf("expected host-id-resolved, got %s", host.HostID)
+	}
+
+	expectedSequence := []string{"ml-dynamic-cluster", "local-cluster-default", "actual-cluster-id"}
+	if len(requestedClusters) != len(expectedSequence) {
+		t.Fatalf("expected token cluster fallback sequence %v, got %v", expectedSequence, requestedClusters)
+	}
+	for i, expected := range expectedSequence {
+		if requestedClusters[i] != expected {
+			t.Fatalf("expected token cluster fallback sequence %v, got %v", expectedSequence, requestedClusters)
+		}
 	}
 }
 

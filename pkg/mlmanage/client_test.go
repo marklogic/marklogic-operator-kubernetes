@@ -306,6 +306,43 @@ func TestResolveClusterNamePrefersClusterListEnvelope(t *testing.T) {
 	}
 }
 
+func TestResolveClusterNameCandidatesFromClusterListIncludesIdrefAndNameref(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/manage/v2/clusters":
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"cluster-default-list":{"list-items":{"list-item":[{"nameref":"local-cluster-default","idref":"actual-cluster-id"}]}}}`))
+		default:
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	client := &managementClient{
+		baseURL:    server.URL,
+		username:   "user",
+		password:   "password",
+		httpClient: server.Client(),
+	}
+
+	candidates, err := client.ResolveClusterNameCandidates(context.Background())
+	if err != nil {
+		t.Fatalf("ResolveClusterNameCandidates returned error: %v", err)
+	}
+
+	expected := []string{"actual-cluster-id", "local-cluster-default"}
+	if len(candidates) < len(expected) {
+		t.Fatalf("expected at least %d cluster name candidates, got %v", len(expected), candidates)
+	}
+	for i, candidate := range expected {
+		if candidates[i] != candidate {
+			t.Fatalf("expected candidate order prefix %v, got %v", expected, candidates)
+		}
+	}
+}
+
 func TestListHostsStatusParsesHostStatusListEnvelope(t *testing.T) {
 	t.Parallel()
 

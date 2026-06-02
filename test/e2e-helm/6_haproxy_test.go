@@ -115,10 +115,10 @@ func TestHAProxyPathBasedEnabled(t *testing.T) {
 		}
 		cleanupHAProxyNamespaceArtifacts(haProxyPathNS)
 		marklogicv1.AddToScheme(client.Resources(haProxyPathNS).GetScheme())
-		e2eutils.RunCommand(fmt.Sprintf("kubectl -n %s delete marklogiccluster %s --ignore-not-found=true", haProxyPathNS, cr.Name))
+		e2eutils.RunCommand(fmt.Sprintf("kubectl --request-timeout=20s -n %s delete marklogiccluster %s --ignore-not-found=true --wait=false", haProxyPathNS, cr.Name))
 		if err := client.Resources(haProxyPathNS).Create(ctx, cr); err != nil {
 			if apierrors.IsAlreadyExists(err) {
-				e2eutils.RunCommand(fmt.Sprintf("kubectl -n %s delete marklogiccluster %s --ignore-not-found=true", haProxyPathNS, cr.Name))
+				e2eutils.RunCommand(fmt.Sprintf("kubectl --request-timeout=20s -n %s delete marklogiccluster %s --ignore-not-found=true --wait=false", haProxyPathNS, cr.Name))
 				time.Sleep(3 * time.Second)
 				if retryErr := client.Resources(haProxyPathNS).Create(ctx, cr); retryErr != nil {
 					t.Fatalf("Failed to create MarklogicCluster after replacing stale resource: %v", retryErr)
@@ -290,10 +290,10 @@ func TestHAProxyPathBasedDisabled(t *testing.T) {
 		}
 		cleanupHAProxyNamespaceArtifacts(haProxyNS)
 		marklogicv1.AddToScheme(client.Resources(haProxyNS).GetScheme())
-		e2eutils.RunCommand(fmt.Sprintf("kubectl -n %s delete marklogiccluster %s --ignore-not-found=true", haProxyNS, cr.Name))
+		e2eutils.RunCommand(fmt.Sprintf("kubectl --request-timeout=20s -n %s delete marklogiccluster %s --ignore-not-found=true --wait=false", haProxyNS, cr.Name))
 		if err := client.Resources(haProxyNS).Create(ctx, cr); err != nil {
 			if apierrors.IsAlreadyExists(err) {
-				e2eutils.RunCommand(fmt.Sprintf("kubectl -n %s delete marklogiccluster %s --ignore-not-found=true", haProxyNS, cr.Name))
+				e2eutils.RunCommand(fmt.Sprintf("kubectl --request-timeout=20s -n %s delete marklogiccluster %s --ignore-not-found=true --wait=false", haProxyNS, cr.Name))
 				time.Sleep(3 * time.Second)
 				if retryErr := client.Resources(haProxyNS).Create(ctx, cr); retryErr != nil {
 					t.Fatalf("Failed to create MarklogicCluster after replacing stale resource: %v", retryErr)
@@ -348,9 +348,22 @@ func TestHAProxyPathBasedDisabled(t *testing.T) {
 	feature.Teardown(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 		// Keep the watched namespace and RBAC in place, but clean workload resources
 		// so re-runs start from a known-good state.
-		if err := c.Client().Resources(haProxyNS).Delete(ctx, cr); err != nil && !apierrors.IsNotFound(err) {
-			t.Logf("Warning: failed to delete MarklogicCluster %s/%s: %v", haProxyNS, cr.Name, err)
+		t.Logf("Teardown: deleting MarklogicCluster %s/%s", haProxyNS, cr.Name)
+		e2eutils.RunCommand(fmt.Sprintf("kubectl --request-timeout=20s -n %s delete marklogiccluster %s --ignore-not-found=true --wait=false", haProxyNS, cr.Name))
+		deadline := time.Now().Add(2 * time.Minute)
+		for time.Now().Before(deadline) {
+			current := &marklogicv1.MarklogicCluster{}
+			err := c.Client().Resources(haProxyNS).Get(ctx, cr.Name, haProxyNS, current)
+			if apierrors.IsNotFound(err) {
+				break
+			}
+			if err != nil {
+				t.Logf("Warning: failed waiting for MarklogicCluster deletion in %s: %v", haProxyNS, err)
+				break
+			}
+			time.Sleep(5 * time.Second)
 		}
+		t.Logf("Teardown: cleaning HAProxy namespace artifacts in %s", haProxyNS)
 		cleanupHAProxyNamespaceArtifacts(haProxyNS)
 		return ctx
 	})

@@ -271,6 +271,46 @@ func (c *managementClient) ResolveClusterName(ctx context.Context) (string, erro
 	return clusterName, nil
 }
 
+func (c *managementClient) ResolveClusterNameCandidates(ctx context.Context) ([]string, error) {
+	candidates, err := c.resolveClusterNameCandidatesFromClusterList(ctx)
+	if err == nil && len(candidates) > 0 {
+		return candidates, nil
+	}
+
+	clusterName, resolveErr := c.ResolveClusterName(ctx)
+	if resolveErr != nil {
+		return nil, resolveErr
+	}
+
+	fallback := strings.TrimSpace(clusterName)
+	if fallback == "" {
+		return nil, fmt.Errorf("cluster name was not present in management response")
+	}
+
+	return []string{fallback}, nil
+}
+
+func (c *managementClient) resolveClusterNameCandidatesFromClusterList(ctx context.Context) ([]string, error) {
+	query := url.Values{}
+	query.Set("format", "json")
+	data, _, err := c.doJSON(ctx, http.MethodGet, "/manage/v2/clusters", query, nil, http.StatusOK)
+	if err != nil {
+		return nil, err
+	}
+
+	var payload any
+	if err := json.Unmarshal(data, &payload); err != nil {
+		return nil, err
+	}
+
+	candidates := extractClusterNameCandidatesFromClusterList(payload)
+	if len(candidates) == 0 {
+		return nil, fmt.Errorf("cluster name was not present in cluster list response")
+	}
+
+	return candidates, nil
+}
+
 func (c *managementClient) resolveClusterNameFromClusterList(ctx context.Context) (string, error) {
 	query := url.Values{}
 	query.Set("format", "json")
@@ -914,7 +954,7 @@ func extractClusterNameFromListItems(node any) string {
 			}
 		}
 
-		if clusterName := strings.TrimSpace(firstString(current, "cluster-name", "nameref", "idref")); clusterName != "" {
+		if clusterName := strings.TrimSpace(firstString(current, "cluster-name", "idref", "nameref")); clusterName != "" {
 			return clusterName
 		}
 
@@ -932,6 +972,83 @@ func extractClusterNameFromListItems(node any) string {
 	}
 
 	return ""
+}
+
+func extractClusterNameCandidatesFromClusterList(payload any) []string {
+	root, ok := payload.(map[string]any)
+	if !ok {
+		return nil
+	}
+
+	candidates := make([]string, 0, 4)
+	seen := make(map[string]struct{})
+	addCandidate := func(value string) {
+		candidate := strings.TrimSpace(value)
+		if candidate == "" {
+			return
+		}
+		if _, exists := seen[candidate]; exists {
+			return
+		}
+		seen[candidate] = struct{}{}
+		candidates = append(candidates, candidate)
+	}
+
+	for _, key := range []string{"cluster-name", "idref", "nameref", "name", "cluster"} {
+		if value, exists := root[key]; exists {
+			addCandidate(toString(value))
+		}
+	}
+
+	for _, listKey := range []string{"cluster-default-list", "cluster-list"} {
+		if listEnvelope, ok := root[listKey].(map[string]any); ok {
+			collectClusterNameCandidatesFromListItems(listEnvelope, addCandidate)
+		}
+	}
+
+	collectClusterNameCandidatesFromListItems(root, addCandidate)
+
+	for key, value := range root {
+		child, ok := value.(map[string]any)
+		if !ok {
+			continue
+		}
+		if strings.EqualFold(strings.TrimSpace(key), "errorResponse") {
+			continue
+		}
+		_, hasVersion := child["version"]
+		_, hasEffectiveVersion := child["effective-version"]
+		if hasVersion || hasEffectiveVersion {
+			addCandidate(key)
+		}
+	}
+
+	return candidates
+}
+
+func collectClusterNameCandidatesFromListItems(node any, addCandidate func(string)) {
+	switch current := node.(type) {
+	case map[string]any:
+		for _, itemKey := range []string{"list-item", "cluster-item"} {
+			if item, ok := current[itemKey]; ok {
+				collectClusterNameCandidatesFromListItems(item, addCandidate)
+			}
+		}
+
+		for _, key := range []string{"cluster-name", "idref", "nameref"} {
+			if value, exists := current[key]; exists {
+				addCandidate(toString(value))
+			}
+		}
+
+		for _, value := range current {
+			collectClusterNameCandidatesFromListItems(value, addCandidate)
+		}
+	case []any:
+		for _, value := range current {
+			collectClusterNameCandidatesFromListItems(value, addCandidate)
+		}
+	}
 }
 
 func findClusterNameByVersionEnvelope(node map[string]any) string {

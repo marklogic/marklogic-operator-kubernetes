@@ -3,6 +3,7 @@
 package k8sutil
 
 import (
+	"context"
 	"fmt"
 	"hash/fnv"
 	"net"
@@ -1646,29 +1647,16 @@ func (oc *OperatorContext) handleDynamicRemoveFailure(hostStatuses []marklogicv1
 
 func (oc *OperatorContext) joinDynamicPod(groupClient mlmanage.Client, clusterName, groupName, hostFQDN, tokenDuration string) (mlmanage.GroupHost, error) {
 	effectiveClusterName := clusterName
-	tokenHost := hostFQDN
-	token, err := groupClient.RequestDynamicHostToken(oc.Ctx, effectiveClusterName, groupName, tokenHost, tokenDuration)
-	if err != nil && isNoSuchHostManagementError(err) && oc.MarklogicGroup != nil {
-		bootstrapHost := strings.TrimSpace(oc.MarklogicGroup.Spec.BootstrapHost)
-		if bootstrapHost != "" && !strings.EqualFold(bootstrapHost, tokenHost) {
-			tokenHost = bootstrapHost
-			token, err = groupClient.RequestDynamicHostToken(oc.Ctx, effectiveClusterName, groupName, tokenHost, tokenDuration)
-		}
-	}
+	token, tokenHost, err := oc.requestDynamicTokenWithHostFallback(groupClient, effectiveClusterName, groupName, hostFQDN, tokenDuration)
 	if err != nil && isNoSuchClusterManagementError(err) {
-		resolvedClusterName, resolveErr := groupClient.ResolveClusterName(oc.Ctx)
-		if resolveErr == nil {
-			resolvedClusterName = strings.TrimSpace(resolvedClusterName)
-			if resolvedClusterName != "" && !strings.EqualFold(resolvedClusterName, effectiveClusterName) {
-				effectiveClusterName = resolvedClusterName
-				token, err = groupClient.RequestDynamicHostToken(oc.Ctx, effectiveClusterName, groupName, tokenHost, tokenDuration)
-				if err != nil && isNoSuchHostManagementError(err) && oc.MarklogicGroup != nil {
-					bootstrapHost := strings.TrimSpace(oc.MarklogicGroup.Spec.BootstrapHost)
-					if bootstrapHost != "" && !strings.EqualFold(bootstrapHost, tokenHost) {
-						tokenHost = bootstrapHost
-						token, err = groupClient.RequestDynamicHostToken(oc.Ctx, effectiveClusterName, groupName, tokenHost, tokenDuration)
-					}
-				}
+		for _, fallbackClusterName := range oc.resolveDynamicClusterNameCandidates(groupClient, effectiveClusterName) {
+			token, tokenHost, err = oc.requestDynamicTokenWithHostFallback(groupClient, fallbackClusterName, groupName, hostFQDN, tokenDuration)
+			if err == nil {
+				effectiveClusterName = fallbackClusterName
+				break
+			}
+			if !isNoSuchClusterManagementError(err) {
+				break
 			}
 		}
 	}
@@ -1699,22 +1687,72 @@ func (oc *OperatorContext) joinDynamicPod(groupClient mlmanage.Client, clusterNa
 	return member, nil
 }
 
+func (oc *OperatorContext) requestDynamicTokenWithHostFallback(groupClient mlmanage.Client, clusterName, groupName, hostFQDN, tokenDuration string) (string, string, error) {
+	tokenHost := hostFQDN
+	token, err := groupClient.RequestDynamicHostToken(oc.Ctx, clusterName, groupName, tokenHost, tokenDuration)
+	if err != nil && isNoSuchHostManagementError(err) && oc.MarklogicGroup != nil {
+		bootstrapHost := strings.TrimSpace(oc.MarklogicGroup.Spec.BootstrapHost)
+		if bootstrapHost != "" && !strings.EqualFold(bootstrapHost, tokenHost) {
+			tokenHost = bootstrapHost
+			token, err = groupClient.RequestDynamicHostToken(oc.Ctx, clusterName, groupName, tokenHost, tokenDuration)
+		}
+	}
+
+	return token, tokenHost, err
+}
+
+func (oc *OperatorContext) resolveDynamicClusterNameCandidates(groupClient mlmanage.Client, currentClusterName string) []string {
+	candidates := make([]string, 0, 4)
+	seen := make(map[string]struct{})
+	addCandidate := func(value string) {
+		candidate := strings.TrimSpace(value)
+		if candidate == "" || strings.EqualFold(candidate, currentClusterName) {
+			return
+		}
+		if _, exists := seen[candidate]; exists {
+			return
+		}
+		seen[candidate] = struct{}{}
+		candidates = append(candidates, candidate)
+	}
+
+	if resolver, ok := groupClient.(interface {
+		ResolveClusterNameCandidates(context.Context) ([]string, error)
+	}); ok {
+		if resolvedCandidates, err := resolver.ResolveClusterNameCandidates(oc.Ctx); err == nil {
+			for _, candidate := range resolvedCandidates {
+				addCandidate(candidate)
+			}
+		}
+	}
+
+	if len(candidates) == 0 {
+		if resolvedClusterName, err := groupClient.ResolveClusterName(oc.Ctx); err == nil {
+			addCandidate(resolvedClusterName)
+		}
+	}
+
+	return candidates
+}
+
 func (oc *OperatorContext) removeDynamicHostWithClusterFallback(groupClient mlmanage.Client, clusterName, hostID string) error {
 	err := groupClient.RemoveDynamicHost(oc.Ctx, clusterName, hostID)
 	if err == nil || !isNoSuchClusterManagementError(err) {
 		return err
 	}
 
-	resolvedClusterName, resolveErr := groupClient.ResolveClusterName(oc.Ctx)
-	if resolveErr != nil {
-		return err
-	}
-	resolvedClusterName = strings.TrimSpace(resolvedClusterName)
-	if resolvedClusterName == "" || strings.EqualFold(resolvedClusterName, clusterName) {
-		return err
+	for _, fallbackClusterName := range oc.resolveDynamicClusterNameCandidates(groupClient, clusterName) {
+		retryErr := groupClient.RemoveDynamicHost(oc.Ctx, fallbackClusterName, hostID)
+		if retryErr == nil {
+			return nil
+		}
+		err = retryErr
+		if !isNoSuchClusterManagementError(retryErr) {
+			return retryErr
+		}
 	}
 
-	return groupClient.RemoveDynamicHost(oc.Ctx, resolvedClusterName, hostID)
+	return err
 }
 
 func (oc *OperatorContext) listDynamicPods() ([]corev1.Pod, error) {

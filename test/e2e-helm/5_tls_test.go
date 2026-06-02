@@ -469,22 +469,47 @@ func TestTlsWithMultiNode(t *testing.T) {
 			break
 		}
 
-		if err := client.Resources(tlsEdNS).Create(ctx, &corev1.Namespace{
+		if err := client.Resources().Create(ctx, &corev1.Namespace{
 			ObjectMeta: metav1.ObjectMeta{Name: tlsEdNS, Labels: namespaceLabels()},
 		}); err != nil && !apierrors.IsAlreadyExists(err) {
 			t.Fatalf("Failed to create namespace %s: %v", tlsEdNS, err)
 		}
 		marklogicv1.AddToScheme(client.Resources(tlsEdNS).GetScheme())
 
+		// Remove any stale cluster and orphaned workload artifacts from interrupted runs.
+		existing := &marklogicv1.MarklogicCluster{}
+		if err := client.Resources(tlsEdNS).Get(ctx, cr.Name, tlsEdNS, existing); err == nil {
+			if err := client.Resources(tlsEdNS).Delete(ctx, existing); err != nil {
+				t.Fatalf("Failed to delete stale MarklogicCluster %s/%s: %v", tlsEdNS, cr.Name, err)
+			}
+			if err := wait.For(
+				conditions.New(client.Resources()).ResourceDeleted(existing),
+				wait.WithTimeout(5*time.Minute),
+				wait.WithInterval(5*time.Second),
+			); err != nil {
+				t.Fatalf("Timed out waiting for stale MarklogicCluster %s/%s deletion: %v", tlsEdNS, cr.Name, err)
+			}
+		} else if !apierrors.IsNotFound(err) {
+			t.Fatalf("Failed checking for stale MarklogicCluster %s/%s: %v", tlsEdNS, cr.Name, err)
+		}
+
+		e2eutils.RunCommand(fmt.Sprintf("kubectl -n %s delete statefulset dnode enode --ignore-not-found=true", tlsEdNS))
+		e2eutils.RunCommand(fmt.Sprintf("kubectl -n %s delete service dnode dnode-cluster enode enode-cluster --ignore-not-found=true", tlsEdNS))
+		e2eutils.RunCommand(fmt.Sprintf("kubectl -n %s delete pod --all --ignore-not-found=true", tlsEdNS))
+		e2eutils.RunCommand(fmt.Sprintf("kubectl -n %s delete pvc --all --ignore-not-found=true", tlsEdNS))
+
 		// Generate and populate TLS secrets before creating the CR so the operator
 		// never reconciles against missing secrets.
-		if err := utils.GenerateCACertificate("test/test_data/ca_cert"); err != nil {
+		multiNodeCAPath := "test/test_data/ca_cert_tls_ednode"
+		e2eutils.RunCommand(fmt.Sprintf("mkdir -p %s", multiNodeCAPath))
+
+		if err := utils.GenerateCACertificate(multiNodeCAPath); err != nil {
 			t.Fatalf("GenerateCACertificate failed: %v", err)
 		}
-		if err := utils.GenerateCertificates("test/test_data/helm_enode_zero_certs", "test/test_data/ca_cert"); err != nil {
+		if err := utils.GenerateCertificates("test/test_data/helm_enode_zero_certs", multiNodeCAPath); err != nil {
 			t.Fatalf("GenerateCertificates (enode) failed: %v", err)
 		}
-		if err := utils.GenerateCertificates("test/test_data/helm_dnode_zero_certs", "test/test_data/ca_cert"); err != nil {
+		if err := utils.GenerateCertificates("test/test_data/helm_dnode_zero_certs", multiNodeCAPath); err != nil {
 			t.Fatalf("GenerateCertificates (dnode) failed: %v", err)
 		}
 
@@ -492,7 +517,14 @@ func TestTlsWithMultiNode(t *testing.T) {
 		e2eutils.RunCommand(fmt.Sprintf("kubectl -n %s delete secret dnode-0-cert --ignore-not-found=true", tlsEdNS))
 		e2eutils.RunCommand(fmt.Sprintf("kubectl -n %s delete secret enode-0-cert --ignore-not-found=true", tlsEdNS))
 
-		if p := e2eutils.RunCommand(fmt.Sprintf("kubectl -n %s create secret generic ca-cert --from-file=test/test_data/ca_cert/cacert.pem", tlsEdNS)); p.Err() != nil {
+		if p := e2eutils.RunCommand(fmt.Sprintf("openssl verify -CAfile %s/cacert.pem %s/tls.crt", multiNodeCAPath, "test/test_data/helm_dnode_zero_certs")); p.Err() != nil {
+			t.Fatalf("dnode cert verification failed before secret creation: %s", p.Result())
+		}
+		if p := e2eutils.RunCommand(fmt.Sprintf("openssl verify -CAfile %s/cacert.pem %s/tls.crt", multiNodeCAPath, "test/test_data/helm_enode_zero_certs")); p.Err() != nil {
+			t.Fatalf("enode cert verification failed before secret creation: %s", p.Result())
+		}
+
+		if p := e2eutils.RunCommand(fmt.Sprintf("kubectl -n %s create secret generic ca-cert --from-file=%s/cacert.pem", tlsEdNS, multiNodeCAPath)); p.Err() != nil {
 			t.Fatalf("Failed to create ca-cert: %s", p.Result())
 		}
 		if p := e2eutils.RunCommand(fmt.Sprintf("kubectl -n %s create secret generic dnode-0-cert --from-file=test/test_data/helm_dnode_zero_certs/tls.crt --from-file=test/test_data/helm_dnode_zero_certs/tls.key", tlsEdNS)); p.Err() != nil {
@@ -503,7 +535,15 @@ func TestTlsWithMultiNode(t *testing.T) {
 		}
 
 		if err := client.Resources(tlsEdNS).Create(ctx, cr); err != nil {
-			t.Fatalf("Failed to create MarklogicCluster: %v", err)
+			if apierrors.IsAlreadyExists(err) {
+				e2eutils.RunCommand(fmt.Sprintf("kubectl -n %s delete marklogiccluster %s --ignore-not-found=true", tlsEdNS, cr.Name))
+				time.Sleep(3 * time.Second)
+				if retryErr := client.Resources(tlsEdNS).Create(ctx, cr); retryErr != nil {
+					t.Fatalf("Failed to create MarklogicCluster after replacing stale resource: %v", retryErr)
+				}
+			} else {
+				t.Fatalf("Failed to create MarklogicCluster: %v", err)
+			}
 		}
 		if err := wait.For(
 			conditions.New(client.Resources()).ResourceMatch(cr, func(object k8s.Object) bool { return true }),
@@ -590,6 +630,20 @@ func TestTlsWithMultiNode(t *testing.T) {
 		if err := c.Client().Resources().Delete(ctx, cr); err != nil && !apierrors.IsNotFound(err) {
 			t.Fatalf("failed to delete MarklogicCluster %s/%s during teardown: %v", cr.Namespace, cr.Name, err)
 		}
+
+		if err := wait.For(
+			conditions.New(c.Client().Resources()).ResourceDeleted(cr),
+			wait.WithTimeout(5*time.Minute),
+			wait.WithInterval(10*time.Second),
+		); err != nil && !apierrors.IsNotFound(err) {
+			t.Fatalf("timed out waiting for MarklogicCluster %s/%s deletion: %v", cr.Namespace, cr.Name, err)
+		}
+
+		e2eutils.RunCommand(fmt.Sprintf("kubectl -n %s delete statefulset dnode enode --ignore-not-found=true", tlsEdNS))
+		e2eutils.RunCommand(fmt.Sprintf("kubectl -n %s delete service dnode dnode-cluster enode enode-cluster --ignore-not-found=true", tlsEdNS))
+		e2eutils.RunCommand(fmt.Sprintf("kubectl -n %s delete pod --all --ignore-not-found=true", tlsEdNS))
+		e2eutils.RunCommand(fmt.Sprintf("kubectl -n %s delete pvc --all --ignore-not-found=true", tlsEdNS))
+		e2eutils.RunCommand(fmt.Sprintf("kubectl -n %s delete secret ca-cert dnode-0-cert enode-0-cert --ignore-not-found=true", tlsEdNS))
 		return ctx
 	})
 
