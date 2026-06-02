@@ -28,6 +28,7 @@ type Client interface {
 	EnableDynamicHosts(ctx context.Context, groupName string) error
 	EnableAdminAPITokenAuthentication(ctx context.Context, groupName string) error
 	EnsureManageAdminUser(ctx context.Context, username, password string) error
+	ResolveClusterName(ctx context.Context) (string, error)
 	RequestDynamicHostToken(ctx context.Context, clusterName, groupName, hostFQDN, duration string) (string, error)
 	JoinDynamicHost(ctx context.Context, hostFQDN, token string) error
 	ListGroupHosts(ctx context.Context, groupName string) ([]GroupHost, error)
@@ -244,6 +245,26 @@ func (c *managementClient) EnsureManageAdminUser(ctx context.Context, username, 
 
 	_, _, err = c.doJSON(ctx, http.MethodPut, "/manage/v2/users/"+url.PathEscape(username)+"/properties", nil, payload, http.StatusAccepted, http.StatusNoContent)
 	return err
+}
+
+func (c *managementClient) ResolveClusterName(ctx context.Context) (string, error) {
+	query := url.Values{}
+	query.Set("format", "json")
+	data, _, err := c.doJSON(ctx, http.MethodGet, "/manage/v2", query, nil, http.StatusOK)
+	if err != nil {
+		return "", err
+	}
+
+	var payload any
+	if err := json.Unmarshal(data, &payload); err != nil {
+		return "", err
+	}
+
+	clusterName := extractClusterName(payload)
+	if strings.TrimSpace(clusterName) == "" {
+		return "", fmt.Errorf("cluster name was not present in management response")
+	}
+	return clusterName, nil
 }
 
 func (c *managementClient) RequestDynamicHostToken(ctx context.Context, clusterName, groupName, hostFQDN, duration string) (string, error) {
@@ -794,6 +815,54 @@ func extractDynamicHostToken(payload any) string {
 	if token := findFirstStringByKeys(payload, "token", "dynamic-host-token"); token != "" {
 		return token
 	}
+	return ""
+}
+
+func extractClusterName(payload any) string {
+	root, ok := payload.(map[string]any)
+	if !ok {
+		return ""
+	}
+
+	if clusterName := strings.TrimSpace(firstString(root, "cluster-name", "cluster", "name", "nameref")); clusterName != "" {
+		return clusterName
+	}
+
+	if localCluster, ok := root["local-cluster"].(map[string]any); ok {
+		if clusterName := strings.TrimSpace(firstString(localCluster, "cluster-name", "name", "nameref")); clusterName != "" {
+			return clusterName
+		}
+	}
+
+	return findClusterNameByVersionEnvelope(root)
+}
+
+func findClusterNameByVersionEnvelope(node map[string]any) string {
+	for key, value := range node {
+		child, ok := value.(map[string]any)
+		if !ok {
+			continue
+		}
+		if strings.EqualFold(strings.TrimSpace(key), "errorResponse") {
+			continue
+		}
+		_, hasVersion := child["version"]
+		_, hasEffectiveVersion := child["effective-version"]
+		if hasVersion || hasEffectiveVersion {
+			return key
+		}
+	}
+
+	for _, value := range node {
+		child, ok := value.(map[string]any)
+		if !ok {
+			continue
+		}
+		if found := findClusterNameByVersionEnvelope(child); found != "" {
+			return found
+		}
+	}
+
 	return ""
 }
 

@@ -20,6 +20,8 @@ type stubDynamicManagementClient struct {
 	requestTokenFn func(clusterName, groupName, hostFQDN, duration string) (string, error)
 	joinFn         func(hostFQDN, token string) error
 	listGroupFn    func(groupName string) ([]mlmanage.GroupHost, error)
+	resolveNameFn  func() (string, error)
+	removeFn       func(clusterName, hostID string) error
 }
 
 func (s *stubDynamicManagementClient) ListHostsStatus(ctx context.Context) ([]mlmanage.HostStatus, error) {
@@ -48,6 +50,13 @@ func (s *stubDynamicManagementClient) EnableAdminAPITokenAuthentication(ctx cont
 
 func (s *stubDynamicManagementClient) EnsureManageAdminUser(ctx context.Context, username, password string) error {
 	return nil
+}
+
+func (s *stubDynamicManagementClient) ResolveClusterName(ctx context.Context) (string, error) {
+	if s.resolveNameFn == nil {
+		return "", errors.New("resolveNameFn is not configured")
+	}
+	return s.resolveNameFn()
 }
 
 func (s *stubDynamicManagementClient) RequestDynamicHostToken(ctx context.Context, clusterName, groupName, hostFQDN, duration string) (string, error) {
@@ -122,6 +131,9 @@ func (s *stubDynamicManagementClient) ListGroupHosts(ctx context.Context, groupN
 }
 
 func (s *stubDynamicManagementClient) RemoveDynamicHost(ctx context.Context, clusterName, hostID string) error {
+	if s.removeFn != nil {
+		return s.removeFn(clusterName, hostID)
+	}
 	return nil
 }
 
@@ -280,6 +292,81 @@ func TestJoinDynamicPodFallsBackToBootstrapHostForToken(t *testing.T) {
 	}
 	if len(requestedHosts) != 2 || requestedHosts[0] != hostFQDN || requestedHosts[1] != bootstrapHost {
 		t.Fatalf("expected token host fallback sequence [%s %s], got %v", hostFQDN, bootstrapHost, requestedHosts)
+	}
+}
+
+func TestJoinDynamicPodRetriesWithResolvedClusterNameForNoSuchCluster(t *testing.T) {
+	oc := &OperatorContext{Ctx: context.Background()}
+	hostFQDN := "dynamic-0.dynamic.default.svc.cluster.local"
+
+	requestedClusters := make([]string, 0, 2)
+	client := &stubDynamicManagementClient{
+		requestTokenFn: func(clusterName, groupName, requestedHost, duration string) (string, error) {
+			requestedClusters = append(requestedClusters, clusterName)
+			switch clusterName {
+			case "ml-dynamic-cluster":
+				return "", errors.New("management api POST /manage/v2/clusters/ml-dynamic-cluster/dynamic-host-token returned status 404: {\"errorResponse\":{\"messageCode\":\"XDMP-NOSUCHCLUSTER\"}}")
+			case "local-cluster-default":
+				return "token-resolved", nil
+			default:
+				return "", fmt.Errorf("unexpected cluster in token request: %s", clusterName)
+			}
+		},
+		resolveNameFn: func() (string, error) {
+			return "local-cluster-default", nil
+		},
+		joinFn: func(requestedHost, token string) error {
+			if requestedHost != hostFQDN {
+				return fmt.Errorf("expected join host %s, got %s", hostFQDN, requestedHost)
+			}
+			if token != "token-resolved" {
+				return fmt.Errorf("expected resolved-cluster token, got %s", token)
+			}
+			return nil
+		},
+		listGroupFn: func(groupName string) ([]mlmanage.GroupHost, error) {
+			return []mlmanage.GroupHost{{Name: hostFQDN, HostID: "host-id-resolved", Online: true}}, nil
+		},
+	}
+
+	host, err := oc.joinDynamicPod(client, "ml-dynamic-cluster", "DynamicGroup", hostFQDN, "PT15M")
+	if err != nil {
+		t.Fatalf("joinDynamicPod returned error: %v", err)
+	}
+	if host.HostID != "host-id-resolved" {
+		t.Fatalf("expected host-id-resolved, got %s", host.HostID)
+	}
+	if len(requestedClusters) != 2 || requestedClusters[0] != "ml-dynamic-cluster" || requestedClusters[1] != "local-cluster-default" {
+		t.Fatalf("expected token cluster fallback sequence [ml-dynamic-cluster local-cluster-default], got %v", requestedClusters)
+	}
+}
+
+func TestRemoveDynamicHostWithClusterFallbackRetriesResolvedClusterName(t *testing.T) {
+	oc := &OperatorContext{Ctx: context.Background()}
+	removeClusters := make([]string, 0, 2)
+
+	client := &stubDynamicManagementClient{
+		removeFn: func(clusterName, hostID string) error {
+			removeClusters = append(removeClusters, clusterName)
+			if clusterName == "ml-dynamic-cluster" {
+				return errors.New("management api DELETE /manage/v2/clusters/ml-dynamic-cluster/dynamic-hosts returned status 404: {\"errorResponse\":{\"messageCode\":\"XDMP-NOSUCHCLUSTER\"}}")
+			}
+			if clusterName != "local-cluster-default" {
+				return fmt.Errorf("unexpected cluster for remove call: %s", clusterName)
+			}
+			return nil
+		},
+		resolveNameFn: func() (string, error) {
+			return "local-cluster-default", nil
+		},
+	}
+
+	err := oc.removeDynamicHostWithClusterFallback(client, "ml-dynamic-cluster", "host-1")
+	if err != nil {
+		t.Fatalf("removeDynamicHostWithClusterFallback returned error: %v", err)
+	}
+	if len(removeClusters) != 2 || removeClusters[0] != "ml-dynamic-cluster" || removeClusters[1] != "local-cluster-default" {
+		t.Fatalf("expected remove cluster fallback sequence [ml-dynamic-cluster local-cluster-default], got %v", removeClusters)
 	}
 }
 

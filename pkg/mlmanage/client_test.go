@@ -207,6 +207,59 @@ func TestFetchClusterVersionParsesNestedVersion(t *testing.T) {
 	}
 }
 
+func TestResolveClusterNameParsesVersionEnvelopeKey(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/manage/v2" {
+			t.Fatalf("expected /manage/v2 path, got %s", r.URL.Path)
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"local-cluster-default":{"version":"12.0.0","effective-version":12000000}}`))
+	}))
+	defer server.Close()
+
+	client := &managementClient{
+		baseURL:    server.URL,
+		username:   "user",
+		password:   "password",
+		httpClient: server.Client(),
+	}
+
+	clusterName, err := client.ResolveClusterName(context.Background())
+	if err != nil {
+		t.Fatalf("ResolveClusterName returned error: %v", err)
+	}
+	if clusterName != "local-cluster-default" {
+		t.Fatalf("expected cluster name local-cluster-default, got %s", clusterName)
+	}
+}
+
+func TestResolveClusterNameParsesExplicitClusterName(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"cluster-name":"ml-dynamic-cluster"}`))
+	}))
+	defer server.Close()
+
+	client := &managementClient{
+		baseURL:    server.URL,
+		username:   "user",
+		password:   "password",
+		httpClient: server.Client(),
+	}
+
+	clusterName, err := client.ResolveClusterName(context.Background())
+	if err != nil {
+		t.Fatalf("ResolveClusterName returned error: %v", err)
+	}
+	if clusterName != "ml-dynamic-cluster" {
+		t.Fatalf("expected cluster name ml-dynamic-cluster, got %s", clusterName)
+	}
+}
+
 func TestListHostsStatusParsesHostStatusListEnvelope(t *testing.T) {
 	t.Parallel()
 
