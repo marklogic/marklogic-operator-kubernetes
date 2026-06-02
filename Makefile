@@ -5,7 +5,7 @@
 # To re-generate a bundle for another specific version without changing the standard setup, you can:
 # - use the VERSION as arg of the bundle target (e.g make bundle VERSION=0.0.2)
 # - use environment variables to overwrite this value (e.g export VERSION=0.0.2)
-VERSION ?= 1.2.0
+VERSION ?= 1.3.0
 
 # Tool Versions
 KUSTOMIZE_VERSION ?= v5.5.0
@@ -27,6 +27,7 @@ export E2E_MARKLOGIC_IMAGE_VERSION ?= progressofficial/marklogic-db:12.0.0-ubi9-
 export FLUENT_BIT_IMAGE ?= fluent/fluent-bit:4.1.1
 export E2E_KUBERNETES_VERSION ?= v1.31.13
 export E2E_ISTIO_AMBIENT ?= false
+export E2E_TEST_TIMEOUT ?= 60m
 
 # EKS / ECR configuration for Jenkins EKS test environment.
 # Set AWS_ACCOUNT_ID in the environment (or pass on the make command line).
@@ -164,6 +165,12 @@ ifeq ($(VERIFY_HUGE_PAGES), true)
 	@echo "=====Restart minikube cluster to apply hugepages value"
 	minikube stop
 	minikube start
+	@if kubectl config current-context 2>/dev/null | grep -q '^minikube$$'; then \
+		echo "=====Loading operator image $(IMG) into minikube====="; \
+		minikube image load $(IMG); \
+	else \
+		echo "=====Current context is not minikube; skipping image load====="; \
+	fi
 
 	@echo "=====Running e2e test including hugepages test"
 	IMG=$(IMG) go test -v -count=1 -timeout 60m ./test/e2e -verifyHugePages
@@ -176,12 +183,24 @@ ifeq ($(VERIFY_HUGE_PAGES), true)
 	minikube start
 else
 	@echo "=====Running e2e test without hugepages test"
-	IMG=$(IMG) go test -v -count=1 -timeout 30m ./test/e2e
+	@if kubectl config current-context 2>/dev/null | grep -q '^minikube$$'; then \
+		echo "=====Loading operator image $(IMG) into minikube====="; \
+		minikube image load $(IMG); \
+	else \
+		echo "=====Current context is not minikube; skipping image load====="; \
+	fi
+	IMG=$(IMG) go test -v -count=1 -timeout $(E2E_TEST_TIMEOUT) ./test/e2e
 endif
 
 .PHONY: e2e-test-istio  # Run Istio ambient mode e2e tests
 e2e-test-istio:
 	@echo "=====Running Istio ambient mode e2e tests"
+	@if kubectl config current-context 2>/dev/null | grep -q '^minikube$$'; then \
+		echo "=====Loading operator image $(IMG) into minikube====="; \
+		minikube image load $(IMG); \
+	else \
+		echo "=====Current context is not minikube; skipping image load====="; \
+	fi
 	IMG=$(IMG) E2E_ISTIO_AMBIENT=true go test -v -count=1 -timeout 30m ./test/e2e -run "Test(Istio|NonIstio)"
 
 # NOTE: There is intentionally no `e2e-test-namespace` target here.
@@ -195,11 +214,23 @@ e2e-test-istio:
 .PHONY: e2e-test-cluster  ## Run e2e tests against a cluster-scoped operator install (alias for `e2e-test`)
 e2e-test-cluster:
 	@echo "=====Running e2e tests in cluster-scoped mode"
-	IMG=$(IMG) go test -v -count=1 -timeout 30m ./test/e2e
+	@if kubectl config current-context 2>/dev/null | grep -q '^minikube$$'; then \
+		echo "=====Loading operator image $(IMG) into minikube====="; \
+		minikube image load $(IMG); \
+	else \
+		echo "=====Current context is not minikube; skipping image load====="; \
+	fi
+	IMG=$(IMG) go test -v -count=1 -timeout $(E2E_TEST_TIMEOUT) ./test/e2e
 
 .PHONY: e2e-test-helm-namespace  ## Run namespace-scoped e2e tests via Helm chart install (validates Role/RoleBinding, no ClusterRole, insecure metrics on :8080)
 e2e-test-helm-namespace:
 	@echo "=====Running namespace-scoped e2e tests via Helm chart====="
+	@if kubectl config current-context 2>/dev/null | grep -q '^minikube$$'; then \
+		echo "=====Loading operator image $(IMG) into minikube====="; \
+		minikube image load $(IMG); \
+	else \
+		echo "=====Current context is not minikube; skipping image load====="; \
+	fi
 	E2E_DOCKER_IMAGE=$(IMG) go test -v -count=1 -timeout 45m ./test/e2e-helm
 
 .PHONY: e2e-test-volume-resize  ## Run ONLY the cluster-scoped volume resize test (two namespaces in parallel)
@@ -209,13 +240,23 @@ e2e-test-volume-resize:
 
 .PHONY: e2e-test-dynamic-host  ## Run ONLY the cluster-scoped dynamic-host lifecycle test
 e2e-test-dynamic-host:
-	@echo "=====Running cluster-scoped dynamic-host lifecycle e2e test (controller image: $(IMG))====="
-	IMG=$(IMG) go test -v -count=1 -timeout 45m ./test/e2e -args --labels="type=dynamic-host"
+	@if kubectl config current-context 2>/dev/null | grep -q '^minikube$$'; then \
+		echo "=====Detected minikube context; using local image flow to avoid remote pull failures====="; \
+		$(MAKE) e2e-test-dynamic-host-local; \
+	else \
+		echo "=====Running cluster-scoped dynamic-host lifecycle e2e test (controller image: $(IMG))====="; \
+		IMG=$(IMG) go test -v -count=1 -timeout 45m ./test/e2e -args --labels=\"type=dynamic-host\"; \
+	fi
 
 .PHONY: e2e-test-dynamic-host-local  ## Build/load local operator image (minikube context) and run ONLY dynamic-host lifecycle test
 e2e-test-dynamic-host-local:
 	@echo "=====Preparing local image for dynamic-host lifecycle e2e test (controller image: $(LOCAL_E2E_IMG))====="
-	$(MAKE) docker-build IMG=$(LOCAL_E2E_IMG)
+	@if docker image inspect $(LOCAL_E2E_IMG) >/dev/null 2>&1; then \
+		echo "=====Reusing existing local operator image $(LOCAL_E2E_IMG)====="; \
+	else \
+		echo "=====Local image not found; building $(LOCAL_E2E_IMG)====="; \
+		$(MAKE) docker-build IMG=$(LOCAL_E2E_IMG); \
+	fi
 	@if kubectl config current-context 2>/dev/null | grep -q '^minikube$$'; then \
 		echo "=====Loading local operator image into minikube====="; \
 		minikube image load $(LOCAL_E2E_IMG); \
@@ -228,7 +269,12 @@ e2e-test-dynamic-host-local:
 .PHONY: e2e-test-volume-resize-local  ## Build/load local operator image (minikube context) and run ONLY volume-resize test; ensures CSI hostpath is default SC
 e2e-test-volume-resize-local:
 	@echo "=====Preparing local image for volume-resize e2e test (controller image: $(LOCAL_E2E_IMG))====="
-	$(MAKE) docker-build IMG=$(LOCAL_E2E_IMG)
+	@if docker image inspect $(LOCAL_E2E_IMG) >/dev/null 2>&1; then \
+		echo "=====Reusing existing local operator image $(LOCAL_E2E_IMG)====="; \
+	else \
+		echo "=====Local image not found; building $(LOCAL_E2E_IMG)====="; \
+		$(MAKE) docker-build IMG=$(LOCAL_E2E_IMG); \
+	fi
 	@if kubectl config current-context 2>/dev/null | grep -q '^minikube$$'; then \
 		echo "=====Loading local operator image into minikube====="; \
 		minikube image load $(LOCAL_E2E_IMG); \
@@ -248,6 +294,12 @@ e2e-test-volume-resize-local:
 .PHONY: e2e-test-helm-volume-resize  ## Run ONLY the namespace-scoped volume resize test via Helm (two watched namespaces in parallel)
 e2e-test-helm-volume-resize:
 	@echo "=====Running namespace-scoped volume-resize e2e test via Helm (parallel, 2 watched namespaces)====="
+	@if kubectl config current-context 2>/dev/null | grep -q '^minikube$$'; then \
+		echo "=====Loading operator image $(IMG) into minikube====="; \
+		minikube image load $(IMG); \
+	else \
+		echo "=====Current context is not minikube; skipping image load====="; \
+	fi
 	E2E_DOCKER_IMAGE=$(IMG) go test -v -count=1 -timeout 30m ./test/e2e-helm -run TestVolumeResizeNamespaceScoped
 
 .PHONY: e2e-setup-minikube
@@ -379,7 +431,7 @@ e2e-setup-eks: kustomize controller-gen build ecr-login eks-update-kubeconfig ek
 e2e-test-eks: ## Run e2e tests on EKS.
 	@echo "=====Running e2e tests on EKS====="
 	PATH=$(LOCALBIN):$$PATH IMG=$(ECR_OPERATOR_IMAGE) E2E_DOCKER_IMAGE=$(ECR_OPERATOR_IMAGE) \
-	  go test -v -count=1 -timeout 30m ./test/e2e
+	  go test -v -count=1 -timeout 60m ./test/e2e
 
 # Scale EKS worker nodes back to 0 after a test run.
 # Note: Kubernetes resources (operator, test namespaces) are removed by the
@@ -411,7 +463,7 @@ e2e-setup-eks-istio: kustomize controller-gen build istioctl ecr-login eks-updat
 e2e-test-eks-istio: ## Run Istio ambient mode e2e tests on EKS.
 	@echo "=====Running Istio ambient mode e2e tests on EKS====="
 	PATH=$(LOCALBIN):$$PATH IMG=$(ECR_OPERATOR_IMAGE) E2E_DOCKER_IMAGE=$(ECR_OPERATOR_IMAGE) E2E_ISTIO_AMBIENT=true \
-	  go test -v -count=1 -timeout 30m ./test/e2e -run "Test(Istio|NonIstio)"
+	  go test -v -count=1 -timeout 60m ./test/e2e -run "Test(Istio|NonIstio)"
 
 GOLANGCI_LINT = $(shell pwd)/bin/golangci-lint
 golangci-lint:
@@ -507,11 +559,19 @@ ISTIOCTL ?= $(LOCALBIN)/istioctl
 .PHONY: kustomize
 kustomize: $(KUSTOMIZE) ## Download kustomize locally if necessary. If wrong version is installed, it will be removed before downloading.
 $(KUSTOMIZE): $(LOCALBIN)
-	@if test -x $(LOCALBIN)/kustomize && ! $(LOCALBIN)/kustomize version | grep -q $(KUSTOMIZE_VERSION); then \
-		echo "$(LOCALBIN)/kustomize version is not expected $(KUSTOMIZE_VERSION). Removing it before installing."; \
-		rm -rf $(LOCALBIN)/kustomize; \
+	@if [ "$(KUSTOMIZE)" != "$(LOCALBIN)/kustomize" ]; then \
+		if [ ! -x "$(KUSTOMIZE)" ]; then \
+			echo "KUSTOMIZE is set to $(KUSTOMIZE) but that path is not executable."; \
+			exit 1; \
+		fi; \
+		echo "Using external kustomize at $(KUSTOMIZE)"; \
+	else \
+		if test -x $(LOCALBIN)/kustomize && ! $(LOCALBIN)/kustomize version | grep -q $(KUSTOMIZE_VERSION); then \
+			echo "$(LOCALBIN)/kustomize version is not expected $(KUSTOMIZE_VERSION). Removing it before installing."; \
+			rm -rf $(LOCALBIN)/kustomize; \
+		fi; \
+		test -s $(LOCALBIN)/kustomize || GOBIN=$(LOCALBIN) GO111MODULE=on go install sigs.k8s.io/kustomize/kustomize/v5@$(KUSTOMIZE_VERSION); \
 	fi
-	test -s $(LOCALBIN)/kustomize || GOBIN=$(LOCALBIN) GO111MODULE=on go install sigs.k8s.io/kustomize/kustomize/v5@$(KUSTOMIZE_VERSION)
 
 .PHONY: controller-gen
 controller-gen: $(CONTROLLER_GEN) ## Download controller-gen locally if necessary. If wrong version is installed, it will be overwritten.
