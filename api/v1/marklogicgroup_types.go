@@ -25,6 +25,8 @@ import (
 // EDIT THIS FILE!  THIS IS SCAFFOLDING FOR YOU TO OWN!
 // NOTE: json tags are required.  Any new fields you add must have json tags for the fields to be serialized.
 
+// +kubebuilder:validation:XValidation:rule="!has(self.dynamic) || self.isDynamic == true", message="dynamic can only be set when isDynamic is true"
+// +kubebuilder:validation:XValidation:rule="!self.isDynamic || self.image.matches('^.+:(latest.*|((1[2-9]|[2-9][0-9])[.][0-9]+[.][0-9]+.*))$')", message="dynamic hosts require image tag latest or MarkLogic major version 12+"
 // MarklogicGroupSpec defines the desired state of MarklogicGroup
 type MarklogicGroupSpec struct {
 	// +kubebuilder:default:=1
@@ -35,6 +37,7 @@ type MarklogicGroupSpec struct {
 	// +kubebuilder:default:="cluster.local"
 	ClusterDomain string `json:"clusterDomain,omitempty"`
 	// +kubebuilder:default:="progressofficial/marklogic-db:12.0.0-ubi9-rootless-2.2.2"
+	// +kubebuilder:validation:MaxLength=256
 	Image string `json:"image"`
 	// +kubebuilder:default:="IfNotPresent"
 	ImagePullPolicy    string                        `json:"imagePullPolicy,omitempty"`
@@ -67,7 +70,12 @@ type MarklogicGroupSpec struct {
 	// +kubebuilder:default:={enabled: false, image: "fluent/fluent-bit:4.1.1", resources: {requests: {cpu: "100m", memory: "200Mi"}, limits: {cpu: "200m", memory: "500Mi"}}, files: {errorLogs: true, accessLogs: true, requestLogs: true}, outputs: "stdout"}
 	LogCollection *LogCollection `json:"logCollection,omitempty"`
 	// +kubebuilder:default:={name: "Default", enableXdqpSsl: true}
-	GroupConfig                    *GroupConfig                    `json:"groupConfig,omitempty"`
+	GroupConfig *GroupConfig `json:"groupConfig,omitempty"`
+	// +kubebuilder:default:=false
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="isDynamic is immutable after creation"
+	IsDynamic bool `json:"isDynamic,omitempty"`
+	// +optional
+	Dynamic                        *DynamicGroupConfig             `json:"dynamic,omitempty"`
 	License                        *License                        `json:"license,omitempty"`
 	EnableConverters               bool                            `json:"enableConverters,omitempty"`
 	BootstrapHost                  string                          `json:"bootstrapHost,omitempty"`
@@ -202,6 +210,32 @@ type MarklogicGroupStatus struct {
 
 	// +optional
 	MarklogicGroupStatus InternalState `json:"markLogicGroupStatus,omitempty"`
+	// +optional
+	Dynamic *DynamicGroupStatus `json:"dynamic,omitempty"`
+}
+
+type DynamicGroupStatus struct {
+	Phase               string              `json:"phase,omitempty"`
+	Reason              string              `json:"reason,omitempty"`
+	Message             string              `json:"message,omitempty"`
+	LastTransitionTime  *metav1.Time        `json:"lastTransitionTime,omitempty"`
+	BootstrapReady      bool                `json:"bootstrapReady,omitempty"`
+	Configured          bool                `json:"configured,omitempty"`
+	DynamicHostsEnabled bool                `json:"dynamicHostsEnabled,omitempty"`
+	DesiredReplicas     int32               `json:"desiredReplicas,omitempty"`
+	LocalReadyReplicas  int32               `json:"localReadyReplicas,omitempty"`
+	ReadyReplicas       int32               `json:"readyReplicas,omitempty"`
+	Hosts               []DynamicHostStatus `json:"hosts,omitempty"`
+}
+
+type DynamicHostStatus struct {
+	PodName     string       `json:"podName,omitempty"`
+	Hostname    string       `json:"hostname,omitempty"`
+	HostID      string       `json:"hostId,omitempty"`
+	State       string       `json:"state,omitempty"`
+	Message     string       `json:"message,omitempty"`
+	Attempts    int32        `json:"attempts,omitempty"`
+	LastUpdated *metav1.Time `json:"lastUpdated,omitempty"`
 }
 
 func (status *MarklogicGroupStatus) SetCondition(condition metav1.Condition) {

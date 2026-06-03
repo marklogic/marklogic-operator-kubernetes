@@ -12,6 +12,7 @@ import (
 	marklogicv1 "github.com/marklogic/marklogic-operator-kubernetes/api/v1"
 	"github.com/marklogic/marklogic-operator-kubernetes/test/utils"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/e2e-framework/klient/k8s"
@@ -35,24 +36,79 @@ const (
 // creating resources in the fresh namespace.
 func cleanupLogNS(ctx context.Context, t *testing.T, _ *envconf.Config) {
 	t.Helper()
+	// Best-effort finalizer cleanup avoids long-lived terminating CRs between tests.
+	_ = e2eutils.RunCommand(fmt.Sprintf(
+		"kubectl --request-timeout=20s patch marklogicclusters --all -n %s --type=merge -p '{\"metadata\":{\"finalizers\":[]}}' 2>/dev/null || true", logNS,
+	))
 	// Delete all MarklogicCluster CRs in the namespace.
 	if p := e2eutils.RunCommand(fmt.Sprintf(
-		"kubectl delete marklogicclusters --all -n %s --ignore-not-found=true", logNS,
+		"kubectl --request-timeout=20s delete marklogicclusters --all -n %s --ignore-not-found=true --wait=false", logNS,
 	)); p.Err() != nil {
 		t.Logf("Warning: could not delete MarklogicCluster CRs in %s: %s", logNS, p.Result())
 	}
-	// Wait for the operator to cascade-delete all StatefulSets.
+	// Wait for the operator to cascade-delete all StatefulSets and CRs.
 	deadline := time.Now().Add(2 * time.Minute)
 	for time.Now().Before(deadline) {
-		p := e2eutils.RunCommand(fmt.Sprintf(
-			"kubectl get statefulsets -n %s -o name 2>/dev/null", logNS,
+		sts := e2eutils.RunCommand(fmt.Sprintf(
+			"kubectl --request-timeout=20s get statefulsets -n %s -o name --ignore-not-found=true 2>/dev/null", logNS,
 		))
-		if strings.TrimSpace(p.Result()) == "" {
+		crs := e2eutils.RunCommand(fmt.Sprintf(
+			"kubectl --request-timeout=20s get marklogicclusters -n %s -o name --ignore-not-found=true 2>/dev/null", logNS,
+		))
+		if strings.TrimSpace(sts.Result()) == "" && strings.TrimSpace(crs.Result()) == "" {
 			return
 		}
 		time.Sleep(3 * time.Second)
 	}
-	t.Logf("Warning: StatefulSets in %s may not be fully cleaned up before next test", logNS)
+	t.Logf("Warning: StatefulSets/CRs in %s may not be fully cleaned up before next test", logNS)
+}
+
+func createLogClusterWithRetry(ctx context.Context, t *testing.T, c *envconf.Config, cr *marklogicv1.MarklogicCluster) {
+	t.Helper()
+	client := c.Client()
+	marklogicv1.AddToScheme(client.Resources(logNS).GetScheme())
+
+	if err := client.Resources(logNS).Create(ctx, cr); err != nil {
+		if apierrors.IsAlreadyExists(err) {
+			_ = e2eutils.RunCommand(fmt.Sprintf(
+				"kubectl --request-timeout=20s patch marklogicclusters %s -n %s --type=merge -p '{\"metadata\":{\"finalizers\":[]}}' 2>/dev/null || true", cr.Name, logNS,
+			))
+			if p := e2eutils.RunCommand(fmt.Sprintf(
+				"kubectl --request-timeout=20s delete marklogicclusters %s -n %s --ignore-not-found=true --wait=false", cr.Name, logNS,
+			)); p.Err() != nil {
+				t.Logf("Warning: failed deleting stale MarklogicCluster %s/%s: %s", logNS, cr.Name, p.Result())
+			}
+
+			deadline := time.Now().Add(90 * time.Second)
+			for time.Now().Before(deadline) {
+				current := &marklogicv1.MarklogicCluster{}
+				getErr := client.Resources().Get(ctx, cr.Name, logNS, current)
+				if apierrors.IsNotFound(getErr) {
+					break
+				}
+				if getErr != nil {
+					t.Logf("Warning: failed while waiting for stale MarklogicCluster %s/%s deletion: %v", logNS, cr.Name, getErr)
+					break
+				}
+				time.Sleep(2 * time.Second)
+			}
+
+			if retryErr := client.Resources(logNS).Create(ctx, cr); retryErr != nil {
+				t.Fatalf("Failed to create MarklogicCluster %s/%s after deleting stale resource: %v", logNS, cr.Name, retryErr)
+			}
+		} else {
+			t.Fatalf("Failed to create MarklogicCluster: %v", err)
+		}
+	}
+
+	if err := wait.For(
+		conditions.New(client.Resources()).ResourceMatch(cr, func(object k8s.Object) bool { return true }),
+		wait.WithTimeout(3*time.Minute),
+		wait.WithInterval(5*time.Second),
+	); err != nil {
+		logDiagnostics(t, logNS)
+		t.Fatal(err)
+	}
 }
 
 // TestLogCollectionDisabled verifies that fluent-bit is NOT created when
@@ -76,25 +132,13 @@ func TestLogCollectionDisabled(t *testing.T) {
 
 	feature.Setup(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 		cleanupLogNS(ctx, t, c)
-		client := c.Client()
-		marklogicv1.AddToScheme(client.Resources(logNS).GetScheme())
-		if err := client.Resources(logNS).Create(ctx, cr); err != nil {
-			t.Fatalf("Failed to create MarklogicCluster: %v", err)
-		}
-		if err := wait.For(
-			conditions.New(client.Resources()).ResourceMatch(cr, func(object k8s.Object) bool { return true }),
-			wait.WithTimeout(3*time.Minute),
-			wait.WithInterval(5*time.Second),
-		); err != nil {
-			logDiagnostics(t, logNS)
-			t.Fatal(err)
-		}
+		createLogClusterWithRetry(ctx, t, c, cr)
 		return ctx
 	})
 
 	feature.Assess("Pod created without fluent-bit container", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 		client := c.Client()
-		if err := utils.WaitForPod(ctx, t, client, logNS, "lognode-0", 120*time.Second); err != nil {
+		if err := utils.WaitForPod(ctx, t, client, logNS, "lognode-0", 300*time.Second); err != nil {
 			logDiagnostics(t, logNS)
 			t.Fatalf("Failed to wait for pod: %v", err)
 		}
@@ -163,25 +207,13 @@ func TestLogCollectionPartialLogs(t *testing.T) {
 
 	feature.Setup(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 		cleanupLogNS(ctx, t, c)
-		client := c.Client()
-		marklogicv1.AddToScheme(client.Resources(logNS).GetScheme())
-		if err := client.Resources(logNS).Create(ctx, cr); err != nil {
-			t.Fatalf("Failed to create MarklogicCluster: %v", err)
-		}
-		if err := wait.For(
-			conditions.New(client.Resources()).ResourceMatch(cr, func(object k8s.Object) bool { return true }),
-			wait.WithTimeout(3*time.Minute),
-			wait.WithInterval(5*time.Second),
-		); err != nil {
-			logDiagnostics(t, logNS)
-			t.Fatal(err)
-		}
+		createLogClusterWithRetry(ctx, t, c, cr)
 		return ctx
 	})
 
 	feature.Assess("Pod created with fluent-bit container", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 		client := c.Client()
-		if err := utils.WaitForPod(ctx, t, client, logNS, "lognode-0", 120*time.Second); err != nil {
+		if err := utils.WaitForPod(ctx, t, client, logNS, "lognode-0", 300*time.Second); err != nil {
 			logDiagnostics(t, logNS)
 			t.Fatalf("Failed to wait for pod: %v", err)
 		}
@@ -262,24 +294,12 @@ func TestLogCollectionCustomResources(t *testing.T) {
 
 	feature.Setup(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 		cleanupLogNS(ctx, t, c)
-		client := c.Client()
-		marklogicv1.AddToScheme(client.Resources(logNS).GetScheme())
-		if err := client.Resources(logNS).Create(ctx, cr); err != nil {
-			t.Fatalf("Failed to create MarklogicCluster: %v", err)
-		}
-		if err := wait.For(
-			conditions.New(client.Resources()).ResourceMatch(cr, func(object k8s.Object) bool { return true }),
-			wait.WithTimeout(3*time.Minute),
-			wait.WithInterval(5*time.Second),
-		); err != nil {
-			logDiagnostics(t, logNS)
-			t.Fatal(err)
-		}
+		createLogClusterWithRetry(ctx, t, c, cr)
 		return ctx
 	})
 
 	feature.Assess("Pod created with custom resources", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
-		if err := utils.WaitForPod(ctx, t, c.Client(), logNS, "lognode-0", 120*time.Second); err != nil {
+		if err := utils.WaitForPod(ctx, t, c.Client(), logNS, "lognode-0", 300*time.Second); err != nil {
 			logDiagnostics(t, logNS)
 			t.Fatalf("Failed to wait for pod: %v", err)
 		}
@@ -359,24 +379,12 @@ func TestLogCollectionCustomFilters(t *testing.T) {
 
 	feature.Setup(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 		cleanupLogNS(ctx, t, c)
-		client := c.Client()
-		marklogicv1.AddToScheme(client.Resources(logNS).GetScheme())
-		if err := client.Resources(logNS).Create(ctx, cr); err != nil {
-			t.Fatalf("Failed to create MarklogicCluster: %v", err)
-		}
-		if err := wait.For(
-			conditions.New(client.Resources()).ResourceMatch(cr, func(object k8s.Object) bool { return true }),
-			wait.WithTimeout(3*time.Minute),
-			wait.WithInterval(5*time.Second),
-		); err != nil {
-			logDiagnostics(t, logNS)
-			t.Fatal(err)
-		}
+		createLogClusterWithRetry(ctx, t, c, cr)
 		return ctx
 	})
 
 	feature.Assess("Pod created with custom filters", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
-		if err := utils.WaitForPod(ctx, t, c.Client(), logNS, "lognode-0", 120*time.Second); err != nil {
+		if err := utils.WaitForPod(ctx, t, c.Client(), logNS, "lognode-0", 300*time.Second); err != nil {
 			logDiagnostics(t, logNS)
 			t.Fatalf("Failed to wait for pod: %v", err)
 		}

@@ -138,6 +138,9 @@ void runMinikubeSetup() {
 }
 
 void runE2eTests(String scope = 'cluster') {
+    if (!(scope in ['cluster', 'dynamic-host', 'volume-resize'])) {
+        error "Unsupported E2E scope '${scope}'. Supported scopes: cluster, dynamic-host, volume-resize"
+    }
     sh """
         make e2e-test-${scope} IMG=${operatorRepo}:${VERSION}
     """
@@ -318,6 +321,7 @@ pipeline {
     parameters {
         string(name: 'E2E_MARKLOGIC_IMAGE_VERSION', defaultValue: 'ml-docker-db-dev-tierpoint.bed-artifactory.bedford.progress.com/marklogic/marklogic-server-ubi-rootless:latest-12', description: 'Docker image to use for tests.', trim: true)
         string(name: 'VERSION', defaultValue: '1.2.0', description: 'Version to tag the image with.', trim: true)
+        choice(name: 'E2E_SCOPE', choices: ['cluster', 'dynamic-host', 'volume-resize'], description: 'E2E scope for Minikube runs. Use cluster for full suite; dynamic-host and volume-resize run focused targets.')
         booleanParam(name: 'PUBLISH_IMAGE', defaultValue: false, description: 'Publish image to internal registry')
         string(name: 'emailList', defaultValue: emailList, description: 'List of email for build notification', trim: true)
         booleanParam(name: 'VERIFY_ISTIO_AMBIENT', defaultValue: true, description: 'Run Istio ambient mode e2e tests (requires fresh minikube cluster with Istio)')
@@ -349,8 +353,12 @@ pipeline {
         stage('E2E Tests') {
             steps {
                 script {
+                    if (params.TEST_ON_EKS && params.E2E_SCOPE != 'cluster') {
+                        error "E2E_SCOPE='${params.E2E_SCOPE}' is not supported when TEST_ON_EKS=true. Use E2E_SCOPE='cluster'."
+                    }
+
                     def doSetup    = { params.TEST_ON_EKS ? runEKSSetup()          : runMinikubeSetup() }
-                    def doTests    = { params.TEST_ON_EKS ? runEKSE2eTests()        : runE2eTests() }
+                    def doTests    = { params.TEST_ON_EKS ? runEKSE2eTests()        : runE2eTests(params.E2E_SCOPE) }
                     def doCleanup  = {
                         catchError(buildResult: 'SUCCESS', stageResult: 'FAILURE') {
                             if (params.TEST_ON_EKS) { runEKSCleanup() } else { runMinikubeCleanup() }
@@ -372,17 +380,17 @@ pipeline {
                         // immediately skipped, preserving their position in the view.
                         try {
                             stage('Istio Setup') {
-                                if (params.VERIFY_ISTIO_AMBIENT) { doIstioSetup() }
-                                else { echo 'Istio tests skipped (VERIFY_ISTIO_AMBIENT=false)' }
+                                if (params.E2E_SCOPE == 'cluster' && params.VERIFY_ISTIO_AMBIENT) { doIstioSetup() }
+                                else { echo "Istio tests skipped (E2E_SCOPE=${params.E2E_SCOPE}, VERIFY_ISTIO_AMBIENT=${params.VERIFY_ISTIO_AMBIENT})" }
                             }
                             stage('Run Istio e2e Tests') {
-                                if (params.VERIFY_ISTIO_AMBIENT) { doIstioTests() }
-                                else { echo 'Istio tests skipped (VERIFY_ISTIO_AMBIENT=false)' }
+                                if (params.E2E_SCOPE == 'cluster' && params.VERIFY_ISTIO_AMBIENT) { doIstioTests() }
+                                else { echo "Istio tests skipped (E2E_SCOPE=${params.E2E_SCOPE}, VERIFY_ISTIO_AMBIENT=${params.VERIFY_ISTIO_AMBIENT})" }
                             }
                         } finally {
                             stage('Istio Cleanup') {
-                                if (params.VERIFY_ISTIO_AMBIENT) { doCleanup() }
-                                else { echo 'Istio tests skipped (VERIFY_ISTIO_AMBIENT=false)' }
+                                if (params.E2E_SCOPE == 'cluster' && params.VERIFY_ISTIO_AMBIENT) { doCleanup() }
+                                else { echo "Istio tests skipped (E2E_SCOPE=${params.E2E_SCOPE}, VERIFY_ISTIO_AMBIENT=${params.VERIFY_ISTIO_AMBIENT})" }
                             }
                         }
                     }
@@ -402,7 +410,7 @@ pipeline {
 
         stage('Helm-NS-Minikube-Setup') {
             when {
-                expression { return params.VERIFY_HELM_NAMESPACE_SCOPED != false }
+                expression { return params.VERIFY_HELM_NAMESPACE_SCOPED != false && params.E2E_SCOPE == 'cluster' }
             }
             steps {
                 runMinikubeSetup()
@@ -411,7 +419,7 @@ pipeline {
 
         stage('Run-Helm-NS-e2e-Tests') {
             when {
-                expression { return params.VERIFY_HELM_NAMESPACE_SCOPED != false }
+                expression { return params.VERIFY_HELM_NAMESPACE_SCOPED != false && params.E2E_SCOPE == 'cluster' }
             }
             steps {
                 runHelmNamespaceScopedE2eTests()
@@ -420,7 +428,7 @@ pipeline {
 
         stage('Helm-NS-Cleanup') {
             when {
-                expression { return params.VERIFY_HELM_NAMESPACE_SCOPED != false }
+                expression { return params.VERIFY_HELM_NAMESPACE_SCOPED != false && params.E2E_SCOPE == 'cluster' }
             }
             steps {
                 catchError(buildResult: 'SUCCESS', stageResult: 'FAILURE') {

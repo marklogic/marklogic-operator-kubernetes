@@ -4677,6 +4677,7 @@ spec:
                 type: object
               image:
                 default: progressofficial/marklogic-db:12.0.0-ubi9-rootless-2.2.2
+                maxLength: 256
                 type: string
               imagePullPolicy:
                 default: IfNotPresent
@@ -8185,6 +8186,17 @@ spec:
                       additionalProperties:
                         type: string
                       type: object
+                    dynamic:
+                      properties:
+                        tokenDuration:
+                          default: PT15M
+                          pattern: ^$|^P(?:[0-9]+Y)?(?:[0-9]+M)?(?:[0-9]+W)?(?:[0-9]+D)?(?:T(?:[0-9]+H)?(?:[0-9]+M)?(?:[0-9]+(?:\.[0-9]+)?S)?)?$
+                          type: string
+                          x-kubernetes-validations:
+                          - message: tokenDuration must include at least one ISO-8601
+                              duration component
+                            rule: self == '' || (self != 'P' && self != 'PT')
+                      type: object
                     groupConfig:
                       default:
                         enableXdqpSsl: true
@@ -8252,6 +8264,7 @@ spec:
                           type: string
                       type: object
                     image:
+                      maxLength: 256
                       type: string
                     imagePullPolicy:
                       type: string
@@ -8275,6 +8288,12 @@ spec:
                       type: array
                     isBootstrap:
                       default: false
+                      type: boolean
+                    isDynamic:
+                      default: false
+                      description: |-
+                        isDynamic immutability is enforced in reconciliation logic for child MarklogicGroup resources.
+                        A field-level CEL rule using oldSelf is invalid here because markLogicGroups items are uncorrelatable.
                       type: boolean
                     labels:
                       additionalProperties:
@@ -8842,6 +8861,15 @@ spec:
                   required:
                   - name
                   type: object
+                  x-kubernetes-validations:
+                  - message: dynamic can only be set when isDynamic is true
+                    rule: '!has(self.dynamic) || self.isDynamic == true'
+                  - message: isDynamic cannot be set when isBootstrap is true
+                    rule: '!(self.isDynamic == true && self.isBootstrap == true)'
+                  - message: dynamic host group image override must use tag latest
+                      or MarkLogic major version 12+
+                    rule: '!self.isDynamic || !has(self.image) || size(self.image)
+                      == 0 || self.image.matches(''^.+:(latest.*|((1[2-9]|[2-9][0-9])[.][0-9]+[.][0-9]+.*))$'')'
                 maxItems: 100
                 minItems: 1
                 type: array
@@ -10053,6 +10081,10 @@ spec:
                 == true) || self.image.split('':'')[1].matches(''.*latest.*'') ||
                 int(self.image.split('':'')[1].split(''.'')[0] + self.image.split('':'')[1].split(''.'')[1])
                 >= 111'
+            - message: dynamic hosts require image tag latest or MarkLogic major version
+                12+
+              rule: '!has(self.markLogicGroups) || !self.markLogicGroups.exists(g,
+                g.isDynamic && (!has(g.image) || size(g.image) == 0)) || self.image.matches(''^.+:(latest.*|((1[2-9]|[2-9][0-9])[.][0-9]+[.][0-9]+.*))$'')'
           status:
             description: MarklogicClusterStatus defines the observed state of MarklogicCluster
             properties:

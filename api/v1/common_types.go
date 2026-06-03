@@ -30,6 +30,13 @@ const (
 	VolumeResizeStrategySequential VolumeResizeStrategy = "sequential"
 )
 
+type DynamicGroupConfig struct {
+	// +kubebuilder:default:="PT15M"
+	// +kubebuilder:validation:Pattern="^$|^P(?:[0-9]+Y)?(?:[0-9]+M)?(?:[0-9]+W)?(?:[0-9]+D)?(?:T(?:[0-9]+H)?(?:[0-9]+M)?(?:[0-9]+(?:\\.[0-9]+)?S)?)?$"
+	// +kubebuilder:validation:XValidation:rule="self == '' || (self != 'P' && self != 'PT')",message="tokenDuration must include at least one ISO-8601 duration component"
+	TokenDuration string `json:"tokenDuration,omitempty"`
+}
+
 // Storage is the inteface to add pvc and pv support in marklogic
 type Persistence struct {
 	Enabled bool `json:"enabled,omitempty"`

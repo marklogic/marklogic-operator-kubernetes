@@ -21,6 +21,7 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 
 	networkingv1 "k8s.io/api/networking/v1"
@@ -43,6 +44,11 @@ var trueVal = true
 var enodeReplicas = int32(2)
 var dnodeReplicas = int32(1)
 var policy = []networkingv1.PolicyType{networkingv1.PolicyTypeIngress, networkingv1.PolicyTypeEgress}
+var dynamicClusterName = "marklogic-cluster-dynamic"
+var dynamicClusterNS = "cluster-dynamic-ns"
+var dynamicBootstrapReplicas = int32(1)
+var dynamicPoolReplicas = int32(2)
+var dynamicPersistentReplicas = int32(1)
 
 var marklogicGroups = []*marklogicv1.MarklogicGroups{
 	{
@@ -182,6 +188,110 @@ var _ = Describe("MarklogicCluster Controller", func() {
 				err := k8sClient.Get(ctx, types.NamespacedName{Name: secretName, Namespace: clusterNS}, secret)
 				return err == nil
 			}, timeout, interval).Should(BeTrue())
+		})
+
+		It("Should not create a dynamic manage-admin secret for static-only clusters", func() {
+			dynamicSecret := &corev1.Secret{}
+			dynamicSecretName := clusterName + "-manage-admin"
+			Consistently(func() bool {
+				err := k8sClient.Get(ctx, types.NamespacedName{Name: dynamicSecretName, Namespace: clusterNS}, dynamicSecret)
+				return err != nil
+			}, duration, interval).Should(BeTrue())
+		})
+
+		It("Should propagate dynamic group config and defaults to child MarklogicGroup resources", func() {
+			dynamicNS := corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: dynamicClusterNS}}
+			Expect(k8sClient.Create(ctx, &dynamicNS)).Should(Succeed())
+
+			mlCluster := &marklogicv1.MarklogicCluster{
+				TypeMeta: metav1.TypeMeta{
+					Kind:       "MarklogicCluster",
+					APIVersion: "marklogic.progress.com/v1",
+				},
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      dynamicClusterName,
+					Namespace: dynamicClusterNS,
+				},
+				Spec: marklogicv1.MarklogicClusterSpec{
+					Image: imageName,
+					Persistence: &marklogicv1.Persistence{
+						Enabled: true,
+						Size:    "20Gi",
+					},
+					MarkLogicGroups: []*marklogicv1.MarklogicGroups{
+						{
+							Name:        "bootstrap-static",
+							Replicas:    &dynamicBootstrapReplicas,
+							IsBootstrap: true,
+							GroupConfig: &marklogicv1.GroupConfig{Name: "BootstrapStatic", EnableXdqpSsl: true},
+							Service:     marklogicv1.Service{Type: corev1.ServiceTypeClusterIP},
+						},
+						{
+							Name:        "dynamic-no-persistence",
+							Replicas:    &dynamicPoolReplicas,
+							IsDynamic:   true,
+							GroupConfig: &marklogicv1.GroupConfig{Name: "DynamicNoPersistence", EnableXdqpSsl: true},
+							Dynamic: &marklogicv1.DynamicGroupConfig{
+								TokenDuration: "PT20M",
+							},
+							Service: marklogicv1.Service{Type: corev1.ServiceTypeClusterIP},
+						},
+						{
+							Name:        "dynamic-with-persistence",
+							Replicas:    &dynamicPersistentReplicas,
+							IsDynamic:   true,
+							GroupConfig: &marklogicv1.GroupConfig{Name: "DynamicWithPersistence", EnableXdqpSsl: true},
+							Persistence: &marklogicv1.Persistence{
+								Enabled: true,
+								Size:    "5Gi",
+							},
+							Service: marklogicv1.Service{Type: corev1.ServiceTypeClusterIP},
+						},
+					},
+				},
+			}
+
+			Expect(k8sClient.Create(ctx, mlCluster)).Should(Succeed())
+
+			dynamicNoPersistence := &marklogicv1.MarklogicGroup{}
+			Eventually(func() bool {
+				err := k8sClient.Get(ctx, types.NamespacedName{Name: "dynamic-no-persistence", Namespace: dynamicClusterNS}, dynamicNoPersistence)
+				return err == nil
+			}, timeout, interval).Should(BeTrue())
+
+			Expect(dynamicNoPersistence.Spec.IsDynamic).Should(BeTrue())
+			Expect(dynamicNoPersistence.Spec.Dynamic).ShouldNot(BeNil())
+			Expect(dynamicNoPersistence.Spec.Dynamic.TokenDuration).Should(Equal("PT20M"))
+			Expect(dynamicNoPersistence.Spec.UpdateStrategy).Should(Equal(appsv1.RollingUpdateStatefulSetStrategyType))
+			Expect(dynamicNoPersistence.Spec.Persistence).ShouldNot(BeNil())
+			Expect(dynamicNoPersistence.Spec.Persistence.Enabled).Should(BeFalse())
+
+			dynamicWithPersistence := &marklogicv1.MarklogicGroup{}
+			Eventually(func() bool {
+				err := k8sClient.Get(ctx, types.NamespacedName{Name: "dynamic-with-persistence", Namespace: dynamicClusterNS}, dynamicWithPersistence)
+				return err == nil
+			}, timeout, interval).Should(BeTrue())
+
+			Expect(dynamicWithPersistence.Spec.IsDynamic).Should(BeTrue())
+			Expect(dynamicWithPersistence.Spec.UpdateStrategy).Should(Equal(appsv1.RollingUpdateStatefulSetStrategyType))
+			Expect(dynamicWithPersistence.Spec.Persistence).ShouldNot(BeNil())
+			Expect(dynamicWithPersistence.Spec.Persistence.Enabled).Should(BeTrue())
+			Expect(dynamicWithPersistence.Spec.Persistence.Size).Should(Equal("5Gi"))
+
+			dynamicSecret := &corev1.Secret{}
+			Eventually(func() bool {
+				err := k8sClient.Get(ctx, types.NamespacedName{Name: dynamicClusterName + "-manage-admin", Namespace: dynamicClusterNS}, dynamicSecret)
+				return err == nil
+			}, timeout, interval).Should(BeTrue())
+			Expect(string(dynamicSecret.Data["username"])).Should(Equal(dynamicClusterName + "-manage-admin"))
+			Expect(len(dynamicSecret.Data["password"])).Should(BeNumerically(">", 0))
+
+			bootstrapStatic := &marklogicv1.MarklogicGroup{}
+			Eventually(func() bool {
+				err := k8sClient.Get(ctx, types.NamespacedName{Name: "bootstrap-static", Namespace: dynamicClusterNS}, bootstrapStatic)
+				return err == nil
+			}, timeout, interval).Should(BeTrue())
+			Expect(bootstrapStatic.Spec.IsDynamic).Should(BeFalse())
 		})
 	})
 })

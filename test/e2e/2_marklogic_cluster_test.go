@@ -152,6 +152,10 @@ func TestMarklogicCluster(t *testing.T) {
 		client := c.Client()
 		err := utils.AddHelmRepo("grafana", "https://grafana.github.io/helm-charts")
 		if err != nil {
+			errStr := err.Error()
+			if strings.Contains(errStr, "cannot be reached") || strings.Contains(errStr, "no such host") || strings.Contains(errStr, "socket is not connected") || strings.Contains(errStr, "i/o timeout") {
+				t.Skipf("Skipping Loki/Grafana-dependent checks due external Helm repository connectivity issue: %v", err)
+			}
 			t.Fatalf("Failed to add helm repo: %v", err)
 		}
 
@@ -286,7 +290,7 @@ func TestMarklogicCluster(t *testing.T) {
 			t.Fatal("No Grafana pods found")
 		}
 		grafanaPodName := podList.Items[0].Name
-		err = utils.WaitForPod(ctx, t, client, "grafana", grafanaPodName, 120*time.Second)
+		err = utils.WaitForPod(ctx, t, client, "grafana", grafanaPodName, 120*time.Second, true)
 		if err != nil {
 			t.Fatalf("Failed to wait for grafana pod creation: %v", err)
 		}
@@ -533,16 +537,24 @@ func TestMarklogicCluster(t *testing.T) {
 	feature.Teardown(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 		client := c.Client()
 		if err := client.Resources(mlNamespace).Delete(ctx, marklogiccluster); err != nil {
-			t.Fatalf("Failed to delete MarklogicCluster: %s", err)
+			if !apierrors.IsNotFound(err) {
+				t.Fatalf("Failed to delete MarklogicCluster: %s", err)
+			}
 		}
 		if err := client.Resources().Delete(ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "grafana"}}); err != nil {
-			t.Fatalf("Failed to delete namespace: %s", err)
+			if !apierrors.IsNotFound(err) {
+				t.Fatalf("Failed to delete namespace: %s", err)
+			}
 		}
 		if err := client.Resources().Delete(ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "loki"}}); err != nil {
-			t.Fatalf("Failed to delete namespace: %s", err)
+			if !apierrors.IsNotFound(err) {
+				t.Fatalf("Failed to delete namespace: %s", err)
+			}
 		}
 		if err := client.Resources().Delete(ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: mlNamespace}}); err != nil {
-			t.Fatalf("Failed to delete test namespace: %s", err)
+			if !apierrors.IsNotFound(err) {
+				t.Fatalf("Failed to delete test namespace: %s", err)
+			}
 		}
 		return ctx
 	})
