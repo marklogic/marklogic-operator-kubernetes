@@ -1726,10 +1726,11 @@ func (oc *OperatorContext) resolveDynamicClusterNameCandidates(groupClient mlman
 		}
 	}
 
-	if len(candidates) == 0 {
-		if resolvedClusterName, err := groupClient.ResolveClusterName(oc.Ctx); err == nil {
-			addCandidate(resolvedClusterName)
-		}
+	// Always supplement with the ResolveClusterName result. The /manage/v2/clusters
+	// endpoint may return API-format keys (e.g. "local-cluster-default") that differ
+	// from the actual MarkLogic cluster name. The /manage/v2 path is more authoritative.
+	if resolvedClusterName, err := groupClient.ResolveClusterName(oc.Ctx); err == nil {
+		addCandidate(resolvedClusterName)
 	}
 
 	return candidates
