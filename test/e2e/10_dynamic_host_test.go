@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"sort"
 	"strings"
 	"testing"
@@ -727,7 +728,7 @@ func removeDynamicHostByID(t *testing.T, hostID string) error {
 		payload,
 		adminUsername,
 		adminPassword,
-		clusterName,
+		url.PathEscape(clusterName),
 	)
 	out, err := utils.ExecCmdInPod(dynamicBootstrapPodName(), dynamicE2ENamespace, dynamicE2EMLContainerName, cmd)
 	if err != nil {
