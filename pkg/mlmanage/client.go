@@ -1019,7 +1019,10 @@ func extractClusterNameCandidatesFromClusterList(payload any) []string {
 		_, hasVersion := child["version"]
 		_, hasEffectiveVersion := child["effective-version"]
 		if hasVersion || hasEffectiveVersion {
-			if innerName := strings.TrimSpace(firstString(child, "cluster-name", "nameref")); innerName != "" {
+			// "name" is the actual MarkLogic cluster name in the version envelope
+			// (e.g. GET /manage/v2 returns {"local-cluster-default":{"name":"...-cluster",...}}).
+			// Prefer it over the API-format envelope key.
+			if innerName := strings.TrimSpace(firstString(child, "cluster-name", "nameref", "name")); innerName != "" {
 				addCandidate(innerName)
 			}
 			addCandidate(key)
@@ -1066,8 +1069,10 @@ func findClusterNameByVersionEnvelope(node map[string]any) string {
 		_, hasVersion := child["version"]
 		_, hasEffectiveVersion := child["effective-version"]
 		if hasVersion || hasEffectiveVersion {
-			// Prefer inner cluster-name/nameref over the API envelope key.
-			if innerName := strings.TrimSpace(firstString(child, "cluster-name", "nameref")); innerName != "" {
+			// "name" is the actual MarkLogic cluster name in the version envelope
+			// (e.g. GET /manage/v2 returns {"local-cluster-default":{"name":"...-cluster",...}}).
+			// Prefer it over the API-format envelope key.
+			if innerName := strings.TrimSpace(firstString(child, "cluster-name", "nameref", "name")); innerName != "" {
 				return innerName
 			}
 			return key

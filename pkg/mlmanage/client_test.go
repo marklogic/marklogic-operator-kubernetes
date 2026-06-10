@@ -217,7 +217,9 @@ func TestResolveClusterNameParsesVersionEnvelopeKey(t *testing.T) {
 			_, _ = w.Write([]byte(`{"errorResponse":{"message":"not found"}}`))
 		case "/manage/v2":
 			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write([]byte(`{"local-cluster-default":{"version":"12.0.0","effective-version":12000000}}`))
+			// MarkLogic 12 version envelope: envelope key is "local-cluster-{x}",
+			// actual cluster name is in the "name" field.
+			_, _ = w.Write([]byte(`{"local-cluster-default":{"id":"7743706418977919939","name":"node-0.node.ml-dynamic-host.svc.cluster.local-cluster","version":"12.0.1","effective-version":12000001}}`))
 		default:
 			t.Fatalf("unexpected path %s", r.URL.Path)
 		}
@@ -235,8 +237,9 @@ func TestResolveClusterNameParsesVersionEnvelopeKey(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ResolveClusterName returned error: %v", err)
 	}
-	if clusterName != "local-cluster-default" {
-		t.Fatalf("expected cluster name local-cluster-default, got %s", clusterName)
+	// The "name" field inside the version envelope is the actual MarkLogic cluster name.
+	if clusterName != "node-0.node.ml-dynamic-host.svc.cluster.local-cluster" {
+		t.Fatalf("expected cluster name from 'name' field in version envelope, got %s", clusterName)
 	}
 }
 
