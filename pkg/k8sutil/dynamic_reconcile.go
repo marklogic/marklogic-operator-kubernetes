@@ -1716,6 +1716,14 @@ func (oc *OperatorContext) resolveDynamicClusterNameCandidates(groupClient mlman
 		candidates = append(candidates, candidate)
 	}
 
+	// ResolveClusterName (GET /manage/v2) returns the actual cluster name from the
+	// version envelope "name" field and is more authoritative than ResolveClusterNameCandidates
+	// (GET /manage/v2/clusters), which may return API-format envelope keys. Add it first
+	// so callers try the authoritative name before falling back to list candidates.
+	if resolvedClusterName, err := groupClient.ResolveClusterName(oc.Ctx); err == nil {
+		addCandidate(resolvedClusterName)
+	}
+
 	if resolver, ok := groupClient.(interface {
 		ResolveClusterNameCandidates(context.Context) ([]string, error)
 	}); ok {
@@ -1724,13 +1732,6 @@ func (oc *OperatorContext) resolveDynamicClusterNameCandidates(groupClient mlman
 				addCandidate(candidate)
 			}
 		}
-	}
-
-	// Always supplement with the ResolveClusterName result. The /manage/v2/clusters
-	// endpoint may return API-format keys (e.g. "local-cluster-default") that differ
-	// from the actual MarkLogic cluster name. The /manage/v2 path is more authoritative.
-	if resolvedClusterName, err := groupClient.ResolveClusterName(oc.Ctx); err == nil {
-		addCandidate(resolvedClusterName)
 	}
 
 	return candidates

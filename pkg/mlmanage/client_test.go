@@ -346,6 +346,66 @@ func TestResolveClusterNameCandidatesFromClusterListIncludesIdrefAndNameref(t *t
 	}
 }
 
+// TestResolveClusterNameCandidatesVersionEnvelopePreservesInnerNameOrder verifies that
+// when /manage/v2/clusters returns a version-envelope response (MarkLogic 12 format),
+// the inner "name" field is listed before the raw envelope key in the candidate slice,
+// ensuring callers try the authoritative cluster name first.
+func TestResolveClusterNameCandidatesVersionEnvelopePreservesInnerNameOrder(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/manage/v2/clusters":
+			w.WriteHeader(http.StatusOK)
+			// MarkLogic 12 version-envelope response from GET /manage/v2/clusters:
+			// the envelope key is "local-cluster-default"; the actual cluster name
+			// is in the nested "name" field.
+			_, _ = w.Write([]byte(`{"local-cluster-default":{"id":"7743706418977919939","name":"node-0.node.ml-dynamic-host.svc.cluster.local-cluster","version":"12.0.1","effective-version":12000001}}`))
+		default:
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	client := &managementClient{
+		baseURL:    server.URL,
+		username:   "user",
+		password:   "password",
+		httpClient: server.Client(),
+	}
+
+	candidates, err := client.ResolveClusterNameCandidates(context.Background())
+	if err != nil {
+		t.Fatalf("ResolveClusterNameCandidates returned error: %v", err)
+	}
+
+	// The inner "name" must appear before the raw envelope key.
+	innerName := "node-0.node.ml-dynamic-host.svc.cluster.local-cluster"
+	envelopeKey := "local-cluster-default"
+
+	innerIdx := -1
+	envelopeIdx := -1
+	for i, c := range candidates {
+		if c == innerName {
+			innerIdx = i
+		}
+		if c == envelopeKey {
+			envelopeIdx = i
+		}
+	}
+
+	if innerIdx == -1 {
+		t.Fatalf("expected candidate %q to be present, got %v", innerName, candidates)
+	}
+	if envelopeIdx == -1 {
+		t.Fatalf("expected candidate %q to be present, got %v", envelopeKey, candidates)
+	}
+	if innerIdx >= envelopeIdx {
+		t.Fatalf("expected inner name %q (idx %d) to appear before envelope key %q (idx %d) in %v",
+			innerName, innerIdx, envelopeKey, envelopeIdx, candidates)
+	}
+}
+
 func TestListHostsStatusParsesHostStatusListEnvelope(t *testing.T) {
 	t.Parallel()
 
