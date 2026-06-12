@@ -109,7 +109,7 @@ type NetworkPolicy struct {
 }
 type HAProxy struct {
 	Enabled bool `json:"enabled,omitempty"`
-	// +kubebuilder:default:="haproxytech/haproxy-alpine:3.2"
+	// +kubebuilder:default:="haproxytech/haproxy-alpine:3.4.0"
 	Image            string                        `json:"image,omitempty"`
 	ImagePullSecrets []corev1.LocalObjectReference `json:"imagePullSecrets,omitempty"`
 	// +kubebuilder:default:=1
