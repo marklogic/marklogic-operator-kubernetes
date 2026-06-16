@@ -387,7 +387,9 @@ func (c *managementClient) JoinDynamicHost(ctx context.Context, hostFQDN, token 
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() {
+		_ = resp.Body.Close()
+	}()
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -486,7 +488,9 @@ func (c *managementClient) doJSON(ctx context.Context, method, path string, quer
 	if err != nil {
 		return nil, 0, err
 	}
-	defer resp.Body.Close()
+	defer func() {
+		_ = resp.Body.Close()
+	}()
 
 	data, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -521,7 +525,9 @@ func (c *managementClient) doXML(ctx context.Context, method, path string, query
 	if err != nil {
 		return nil, 0, err
 	}
-	defer resp.Body.Close()
+	defer func() {
+		_ = resp.Body.Close()
+	}()
 
 	data, err := io.ReadAll(resp.Body)
 	if err != nil {
