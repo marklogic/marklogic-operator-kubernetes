@@ -324,7 +324,7 @@ e2e-setup-minikube: kustomize controller-gen build docker-build
 	kubectl get storageclass
 	minikube image load $(IMG)
 	minikube image load $(E2E_MARKLOGIC_IMAGE_VERSION)
-	minikube image load "docker.io/haproxytech/haproxy-alpine:3.2"
+	minikube image load "docker.io/haproxytech/haproxy-alpine:3.4.0"
 	minikube image load $(FLUENT_BIT_IMAGE)
 	minikube image ls
 
@@ -344,7 +344,7 @@ e2e-setup-minikube-istio: kustomize controller-gen build docker-build istioctl #
 	kubectl get pods -n istio-system
 	minikube image load $(IMG)
 	minikube image load $(E2E_MARKLOGIC_IMAGE_VERSION)
-	minikube image load "docker.io/haproxytech/haproxy-alpine:3.2"
+	minikube image load "docker.io/haproxytech/haproxy-alpine:3.4.0"
 	minikube image load $(FLUENT_BIT_IMAGE)
 	minikube image ls
 

@@ -4302,7 +4302,7 @@ spec:
                     format: int32
                     type: integer
                   image:
-                    default: haproxytech/haproxy-alpine:3.2
+                    default: haproxytech/haproxy-alpine:3.4.0
                     type: string
                   imagePullSecrets:
                     items:

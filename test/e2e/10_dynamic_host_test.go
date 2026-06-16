@@ -4,7 +4,9 @@ package e2e
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"net/url"
 	"sort"
 	"strings"
 	"testing"
@@ -680,15 +682,53 @@ func assertAllowDynamicHostsEnabled(t *testing.T) {
 	}
 }
 
+// fetchMLClusterName queries GET /manage/v2 on the bootstrap pod and returns the
+// actual MarkLogic cluster name (the "name" field inside the version envelope).
+// Example response: {"local-cluster-default":{"id":"...","name":"node-0.node.ml-dynamic-host.svc.cluster.local-cluster",...}}
+// Falls back to the K8s resource name if the query or parse fails.
+func fetchMLClusterName(t *testing.T) string {
+	t.Helper()
+	cmd := fmt.Sprintf(
+		"curl -sS --digest -u '%s:%s' 'http://localhost:8002/manage/v2?format=json'",
+		adminUsername,
+		adminPassword,
+	)
+	out, err := utils.ExecCmdInPod(dynamicBootstrapPodName(), dynamicE2ENamespace, dynamicE2EMLContainerName, cmd)
+	if err != nil {
+		t.Logf("warning: failed to query ML cluster name, using K8s resource name %q: %v", dynamicE2EClusterName, err)
+		return dynamicE2EClusterName
+	}
+	var envelope map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(out), &envelope); err != nil {
+		t.Logf("warning: failed to parse /manage/v2 response, using K8s resource name %q: %v", dynamicE2EClusterName, err)
+		return dynamicE2EClusterName
+	}
+	for key, raw := range envelope {
+		if strings.EqualFold(key, "errorResponse") {
+			continue
+		}
+		var inner struct {
+			Name string `json:"name"`
+		}
+		if err := json.Unmarshal(raw, &inner); err == nil && inner.Name != "" {
+			t.Logf("resolved ML cluster name %q from /manage/v2", inner.Name)
+			return inner.Name
+		}
+	}
+	t.Logf("warning: no cluster name found in /manage/v2 response, using K8s resource name %q", dynamicE2EClusterName)
+	return dynamicE2EClusterName
+}
+
 func removeDynamicHostByID(t *testing.T, hostID string) error {
 	t.Helper()
+	clusterName := fetchMLClusterName(t)
 	payload := fmt.Sprintf("<dynamic-hosts><dynamic-host>%s</dynamic-host></dynamic-hosts>", hostID)
 	cmd := fmt.Sprintf(
 		"payload='%s'; status=$(curl -sS -o /tmp/dh-remove.out -w '%%{http_code}' --digest -u '%s:%s' -H 'Content-Type: application/xml' -X DELETE --data \"$payload\" 'http://localhost:8002/manage/v2/clusters/%s/dynamic-hosts'); echo \"HTTP_STATUS=$status\"; cat /tmp/dh-remove.out",
 		payload,
 		adminUsername,
 		adminPassword,
-		dynamicE2EClusterName,
+		url.PathEscape(clusterName),
 	)
 	out, err := utils.ExecCmdInPod(dynamicBootstrapPodName(), dynamicE2ENamespace, dynamicE2EMLContainerName, cmd)
 	if err != nil {
