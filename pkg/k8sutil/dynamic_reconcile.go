@@ -1716,6 +1716,14 @@ func (oc *OperatorContext) resolveDynamicClusterNameCandidates(groupClient mlman
 		candidates = append(candidates, candidate)
 	}
 
+	// ResolveClusterName (GET /manage/v2) returns the actual cluster name from the
+	// version envelope "name" field and is more authoritative than ResolveClusterNameCandidates
+	// (GET /manage/v2/clusters), which may return API-format envelope keys. Add it first
+	// so callers try the authoritative name before falling back to list candidates.
+	if resolvedClusterName, err := groupClient.ResolveClusterName(oc.Ctx); err == nil {
+		addCandidate(resolvedClusterName)
+	}
+
 	if resolver, ok := groupClient.(interface {
 		ResolveClusterNameCandidates(context.Context) ([]string, error)
 	}); ok {
@@ -1723,12 +1731,6 @@ func (oc *OperatorContext) resolveDynamicClusterNameCandidates(groupClient mlman
 			for _, candidate := range resolvedCandidates {
 				addCandidate(candidate)
 			}
-		}
-	}
-
-	if len(candidates) == 0 {
-		if resolvedClusterName, err := groupClient.ResolveClusterName(oc.Ctx); err == nil {
-			addCandidate(resolvedClusterName)
 		}
 	}
 
