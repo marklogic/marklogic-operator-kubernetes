@@ -485,14 +485,6 @@ rules:
   - patch
   - update
   - watch
-- apiGroups:
-  - storage.k8s.io
-  resources:
-  - storageclasses
-  verbs:
-  - get
-  - list
-  - watch
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
@@ -513,6 +505,42 @@ subjects:
   name: '{{ include "marklogic-operator-kubernetes.serviceAccountName" $ }}'
   namespace: '{{ $.Release.Namespace }}'
 {{- end }}
+{{- /*
+storageclass is a cluster-scoped resource; a namespaced Role cannot grant access
+to it. A dedicated ClusterRole + ClusterRoleBinding is required in namespace mode
+so the operator can read allowVolumeExpansion and perform PVC resize operations.
+*/}}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: marklogic-operator-storageclass-reader
+  labels:
+  {{- include "marklogic-operator-kubernetes.labels" . | nindent 4 }}
+rules:
+- apiGroups:
+  - storage.k8s.io
+  resources:
+  - storageclasses
+  verbs:
+  - get
+  - list
+  - watch
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: marklogic-operator-storageclass-reader
+  labels:
+  {{- include "marklogic-operator-kubernetes.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: marklogic-operator-storageclass-reader
+subjects:
+- kind: ServiceAccount
+  name: '{{ include "marklogic-operator-kubernetes.serviceAccountName" . }}'
+  namespace: '{{ .Release.Namespace }}'
 {{- end }}
 TMPL_EOF
     echo "  [manager-rbac.yaml] Done."
