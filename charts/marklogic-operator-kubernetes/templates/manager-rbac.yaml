@@ -271,7 +271,7 @@ so the operator can read allowVolumeExpansion and perform PVC resize operations.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: marklogic-operator-storageclass-reader
+  name: {{ printf "%s-storageclass-reader" (include "marklogic-operator-kubernetes.fullname" .) | trunc 63 | trimSuffix "-" }}
   labels:
   {{- include "marklogic-operator-kubernetes.labels" . | nindent 4 }}
 rules:
@@ -287,13 +287,13 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: marklogic-operator-storageclass-reader
+  name: {{ printf "%s-storageclass-reader" (include "marklogic-operator-kubernetes.fullname" .) | trunc 63 | trimSuffix "-" }}
   labels:
   {{- include "marklogic-operator-kubernetes.labels" . | nindent 4 }}
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
-  name: marklogic-operator-storageclass-reader
+  name: {{ printf "%s-storageclass-reader" (include "marklogic-operator-kubernetes.fullname" .) | trunc 63 | trimSuffix "-" }}
 subjects:
 - kind: ServiceAccount
   name: '{{ include "marklogic-operator-kubernetes.serviceAccountName" . }}'
