@@ -85,6 +85,23 @@ rules:
   - patch
   - update
   - watch
+- apiGroups:
+  - ""
+  - events.k8s.io
+  resources:
+  - events
+  verbs:
+  - create
+  - patch
+  - update
+- apiGroups:
+  - storage.k8s.io
+  resources:
+  - storageclasses
+  verbs:
+  - get
+  - list
+  - watch
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
@@ -216,6 +233,15 @@ rules:
   - patch
   - update
   - watch
+- apiGroups:
+  - ""
+  - events.k8s.io
+  resources:
+  - events
+  verbs:
+  - create
+  - patch
+  - update
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
@@ -236,4 +262,40 @@ subjects:
   name: '{{ include "marklogic-operator-kubernetes.serviceAccountName" $ }}'
   namespace: '{{ $.Release.Namespace }}'
 {{- end }}
+{{- /*
+storageclass is a cluster-scoped resource; a namespaced Role cannot grant access
+to it. A dedicated ClusterRole + ClusterRoleBinding is required in namespace mode
+so the operator can read allowVolumeExpansion and perform PVC resize operations.
+*/}}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ printf "%s-storageclass-reader" (include "marklogic-operator-kubernetes.fullname" .) | trunc 63 | trimSuffix "-" }}
+  labels:
+  {{- include "marklogic-operator-kubernetes.labels" . | nindent 4 }}
+rules:
+- apiGroups:
+  - storage.k8s.io
+  resources:
+  - storageclasses
+  verbs:
+  - get
+  - list
+  - watch
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ printf "%s-storageclass-reader" (include "marklogic-operator-kubernetes.fullname" .) | trunc 63 | trimSuffix "-" }}
+  labels:
+  {{- include "marklogic-operator-kubernetes.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ printf "%s-storageclass-reader" (include "marklogic-operator-kubernetes.fullname" .) | trunc 63 | trimSuffix "-" }}
+subjects:
+- kind: ServiceAccount
+  name: '{{ include "marklogic-operator-kubernetes.serviceAccountName" . }}'
+  namespace: '{{ .Release.Namespace }}'
 {{- end }}
