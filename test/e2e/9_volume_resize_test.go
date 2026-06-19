@@ -45,11 +45,12 @@ import (
 var resizeNamespaces = []string{"ml-resize-a", "ml-resize-b"}
 
 const (
-	resizeClusterName = "ml-resize-cluster"
-	resizeGroupName   = "node"
-	resizeInitialSize = "2Gi"
-	resizeTargetSize  = "3Gi"
-	resizeWaitTimeout = 15 * time.Minute
+	resizeClusterName  = "ml-resize-cluster"
+	resizeGroupName    = "node"
+	resizeExtraPVCName = "logs"
+	resizeInitialSize  = "2Gi"
+	resizeTargetSize   = "3Gi"
+	resizeWaitTimeout  = 15 * time.Minute
 )
 
 // resizeOutcome captures the per-namespace result for the final summary banner.
@@ -247,6 +248,19 @@ func createResizeNamespaceAndCluster(ctx context.Context, t *testing.T, client k
 				Enabled: true,
 				Size:    resizeInitialSize,
 			},
+			AdditionalVolumeClaimTemplates: &[]corev1.PersistentVolumeClaim{
+				{
+					ObjectMeta: metav1.ObjectMeta{Name: resizeExtraPVCName},
+					Spec: corev1.PersistentVolumeClaimSpec{
+						AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
+						Resources: corev1.VolumeResourceRequirements{
+							Requests: corev1.ResourceList{
+								corev1.ResourceStorage: resource.MustParse(resizeInitialSize),
+							},
+						},
+					},
+				},
+			},
 			MarkLogicGroups: []*marklogicv1.MarklogicGroups{
 				{
 					Name:        resizeGroupName,
@@ -268,13 +282,19 @@ func createResizeNamespaceAndCluster(ctx context.Context, t *testing.T, client k
 func triggerAndWaitForResize(ctx context.Context, t *testing.T, client klient.Client, ns string) resizeOutcome {
 	out := resizeOutcome{namespace: ns, initialSize: resizeInitialSize, requestSize: resizeTargetSize}
 
-	// Capture the current PVC capacity for the per-namespace summary.
-	if size, err := minPVCCapacity(ctx, client, ns); err == nil {
-		out.initialSize = size
+	templatePrefixes := map[string]string{
+		"datadir":          "datadir-" + resizeGroupName + "-",
+		resizeExtraPVCName: resizeExtraPVCName + "-" + resizeGroupName + "-",
 	}
 
-	// Patch spec.persistence.size on the MarklogicCluster (triggers reconcile).
-	patch := []byte(fmt.Sprintf(`{"spec":{"persistence":{"size":"%s"}}}`, resizeTargetSize))
+	// Capture current capacities for the per-namespace summary.
+	if sizes, err := minPVCCapacityByTemplate(ctx, client, ns, templatePrefixes); err == nil {
+		out.initialSize = formatTemplateSizes(sizes)
+	}
+
+	// Patch both datadir and additional volume template target sizes.
+	patch := []byte(fmt.Sprintf(`{"spec":{"persistence":{"size":"%s"},"additionalVolumeClaimTemplates":[{"metadata":{"name":"%s"},"spec":{"accessModes":["ReadWriteOnce"],"resources":{"requests":{"storage":"%s"}}}}]}}`,
+		resizeTargetSize, resizeExtraPVCName, resizeTargetSize))
 	cluster := &marklogicv1.MarklogicCluster{
 		ObjectMeta: metav1.ObjectMeta{Name: resizeClusterName, Namespace: ns},
 	}
@@ -282,7 +302,7 @@ func triggerAndWaitForResize(ctx context.Context, t *testing.T, client klient.Cl
 		out.failReason = fmt.Sprintf("patch cluster: %v", err)
 		return out
 	}
-	t.Logf("[%s] patched MarklogicCluster persistence.size → %s", ns, resizeTargetSize)
+	t.Logf("[%s] patched MarklogicCluster persistence.size + additionalVolumeClaimTemplates[%s].storage → %s", ns, resizeExtraPVCName, resizeTargetSize)
 
 	// Poll until Completed or timeout.
 	deadline := time.Now().Add(resizeWaitTimeout)
@@ -295,11 +315,13 @@ func triggerAndWaitForResize(ctx context.Context, t *testing.T, client klient.Cl
 		if grp.Status.VolumeResizeStatus != nil {
 			out.phase = string(grp.Status.VolumeResizeStatus.Phase)
 		}
-		obs, _ := minPVCCapacity(ctx, client, ns)
-		out.observedSize = obs
+		sizes, _ := minPVCCapacityByTemplate(ctx, client, ns, templatePrefixes)
+		out.observedSize = formatTemplateSizes(sizes)
 
-		// Success criteria: phase=Completed AND every PVC reaches the target.
-		if out.phase == string(marklogicv1.VolumeResizePhaseCompleted) && sizesEqual(obs, resizeTargetSize) {
+		// Success criteria: phase=Completed AND every target PVC family reaches the target.
+		if out.phase == string(marklogicv1.VolumeResizePhaseCompleted) &&
+			templateSizeEquals(sizes, "datadir", resizeTargetSize) &&
+			templateSizeEquals(sizes, resizeExtraPVCName, resizeTargetSize) {
 			out.passed = true
 			return out
 		}
@@ -309,40 +331,69 @@ func triggerAndWaitForResize(ctx context.Context, t *testing.T, client klient.Cl
 				grp.Status.VolumeResizeStatus.Reason, grp.Status.VolumeResizeStatus.Message)
 			return out
 		}
-		t.Logf("[%s] resize in progress: phase=%s observed=%s target=%s", ns, out.phase, obs, resizeTargetSize)
+		t.Logf("[%s] resize in progress: phase=%s observed=%s target=%s", ns, out.phase, out.observedSize, resizeTargetSize)
 		time.Sleep(15 * time.Second)
 	}
 	out.failReason = fmt.Sprintf("timeout after %s (last phase=%s observed=%s)", resizeWaitTimeout, out.phase, out.observedSize)
 	return out
 }
 
-// minPVCCapacity returns the smallest .status.capacity.storage across the PVCs
-// owned by the resize StatefulSet in ns, formatted as a human-readable string.
-func minPVCCapacity(ctx context.Context, client klient.Client, ns string) (string, error) {
+// minPVCCapacityByTemplate returns the smallest .status.capacity.storage for
+// each tracked PVC template prefix in the namespace.
+func minPVCCapacityByTemplate(ctx context.Context, client klient.Client, ns string, templatePrefixes map[string]string) (map[string]string, error) {
 	pvcs := &corev1.PersistentVolumeClaimList{}
 	if err := client.Resources(ns).List(ctx, pvcs); err != nil {
-		return "", err
+		return nil, err
 	}
-	var min *resource.Quantity
+	minByTemplate := make(map[string]*resource.Quantity, len(templatePrefixes))
 	for i := range pvcs.Items {
 		pvc := &pvcs.Items[i]
-		// Restrict to PVCs whose name belongs to the resize StatefulSet.
-		if !strings.HasPrefix(pvc.Name, "datadir-"+resizeGroupName+"-") {
+		matchedTemplate := ""
+		for templateName, prefix := range templatePrefixes {
+			if strings.HasPrefix(pvc.Name, prefix) {
+				matchedTemplate = templateName
+				break
+			}
+		}
+		if matchedTemplate == "" {
 			continue
 		}
 		q, ok := pvc.Status.Capacity[corev1.ResourceStorage]
 		if !ok {
 			continue
 		}
+		min := minByTemplate[matchedTemplate]
 		if min == nil || q.Cmp(*min) < 0 {
 			qq := q.DeepCopy()
-			min = &qq
+			minByTemplate[matchedTemplate] = &qq
 		}
 	}
-	if min == nil {
-		return "", fmt.Errorf("no PVC capacity reported yet")
+	out := make(map[string]string, len(templatePrefixes))
+	for templateName := range templatePrefixes {
+		if minByTemplate[templateName] == nil {
+			return nil, fmt.Errorf("no PVC capacity reported yet for template %s", templateName)
+		}
+		out[templateName] = minByTemplate[templateName].String()
 	}
-	return min.String(), nil
+	return out, nil
+}
+
+func templateSizeEquals(sizes map[string]string, templateName, target string) bool {
+	if sizes == nil {
+		return false
+	}
+	current, ok := sizes[templateName]
+	if !ok {
+		return false
+	}
+	return sizesEqual(current, target)
+}
+
+func formatTemplateSizes(sizes map[string]string) string {
+	if sizes == nil {
+		return ""
+	}
+	return fmt.Sprintf("datadir=%s %s=%s", sizes["datadir"], resizeExtraPVCName, sizes[resizeExtraPVCName])
 }
 
 // sizesEqual compares two storage size strings (e.g. "3Gi" == "3072Mi").

@@ -45,11 +45,12 @@ import (
 var resizeNSNamespaces = []string{"ml-ns-resize-a", "ml-ns-resize-b"}
 
 const (
-	resizeNSClusterName = "ml-ns-resize-cluster"
-	resizeNSGroupName   = "node"
-	resizeNSInitialSize = "2Gi"
-	resizeNSTargetSize  = "3Gi"
-	resizeNSWaitTimeout = 15 * time.Minute
+	resizeNSClusterName  = "ml-ns-resize-cluster"
+	resizeNSGroupName    = "node"
+	resizeNSExtraPVCName = "logs"
+	resizeNSInitialSize  = "2Gi"
+	resizeNSTargetSize   = "3Gi"
+	resizeNSWaitTimeout  = 15 * time.Minute
 )
 
 type resizeNSOutcome struct {
@@ -71,8 +72,12 @@ func TestVolumeResizeNamespaceScoped(t *testing.T) {
 
 	// ── Pre-flight ─────────────────────────────────────────────────────────────
 	feature.Setup(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
-		_ = c
-		t.Skip("skipping namespace-scoped Helm volume-resize test: the current namespace-scoped chart RBAC does not guarantee the operator can read cluster-scoped StorageClasses or patch/update PVCs during reconciliation")
+		if err := assertResizeNSNamespacesWatched(); err != nil {
+			t.Fatalf("namespace-scoped Helm resize test misconfigured: %v", err)
+		}
+		if err := assertNSStorageClassExpandable(ctx, c.Client()); err != nil {
+			t.Skipf("Skipping namespace-scoped Helm volume resize test: %v", err)
+		}
 		return ctx
 	})
 
@@ -206,6 +211,30 @@ func assertNSStorageClassExpandable(ctx context.Context, client klient.Client) e
 	}
 }
 
+// assertResizeNSNamespacesWatched validates that all resize namespaces are in
+// the Helm operator watch list configured in main_test.go.
+func assertResizeNSNamespacesWatched() error {
+	watched := make(map[string]struct{})
+	for _, ns := range strings.Split(watchedNamespaces, ",") {
+		ns = strings.TrimSpace(ns)
+		if ns == "" {
+			continue
+		}
+		watched[ns] = struct{}{}
+	}
+
+	missing := make([]string, 0)
+	for _, ns := range resizeNSNamespaces {
+		if _, ok := watched[ns]; !ok {
+			missing = append(missing, ns)
+		}
+	}
+	if len(missing) > 0 {
+		return fmt.Errorf("missing from watchedNamespaces: %s", strings.Join(missing, ", "))
+	}
+	return nil
+}
+
 // isNSDefaultStorageClass reports whether sc carries either the GA or the
 // legacy beta default-class annotation set to "true".
 func isNSDefaultStorageClass(sc storagev1.StorageClass) bool {
@@ -234,6 +263,19 @@ func createNSResizeCluster(ctx context.Context, client klient.Client, ns string)
 				Enabled: true,
 				Size:    resizeNSInitialSize,
 			},
+			AdditionalVolumeClaimTemplates: &[]corev1.PersistentVolumeClaim{
+				{
+					ObjectMeta: metav1.ObjectMeta{Name: resizeNSExtraPVCName},
+					Spec: corev1.PersistentVolumeClaimSpec{
+						AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
+						Resources: corev1.VolumeResourceRequirements{
+							Requests: corev1.ResourceList{
+								corev1.ResourceStorage: resource.MustParse(resizeNSInitialSize),
+							},
+						},
+					},
+				},
+			},
 			MarkLogicGroups: []*marklogicv1.MarklogicGroups{
 				{
 					Name:        resizeNSGroupName,
@@ -252,11 +294,17 @@ func createNSResizeCluster(ctx context.Context, client klient.Client, ns string)
 func triggerNSResizeAndWait(ctx context.Context, t *testing.T, client klient.Client, ns string) resizeNSOutcome {
 	out := resizeNSOutcome{namespace: ns, initialSize: resizeNSInitialSize, requestSize: resizeNSTargetSize}
 
-	if size, err := minNSPVCCapacity(ctx, client, ns); err == nil {
-		out.initialSize = size
+	templatePrefixes := map[string]string{
+		"datadir":            "datadir-" + resizeNSGroupName + "-",
+		resizeNSExtraPVCName: resizeNSExtraPVCName + "-" + resizeNSGroupName + "-",
 	}
 
-	patch := []byte(fmt.Sprintf(`{"spec":{"persistence":{"size":"%s"}}}`, resizeNSTargetSize))
+	if sizes, err := minNSPVCCapacityByTemplate(ctx, client, ns, templatePrefixes); err == nil {
+		out.initialSize = formatNSTemplateSizes(sizes)
+	}
+
+	patch := []byte(fmt.Sprintf(`{"spec":{"persistence":{"size":"%s"},"additionalVolumeClaimTemplates":[{"metadata":{"name":"%s"},"spec":{"accessModes":["ReadWriteOnce"],"resources":{"requests":{"storage":"%s"}}}}]}}`,
+		resizeNSTargetSize, resizeNSExtraPVCName, resizeNSTargetSize))
 	cluster := &marklogicv1.MarklogicCluster{
 		ObjectMeta: metav1.ObjectMeta{Name: resizeNSClusterName, Namespace: ns},
 	}
@@ -264,7 +312,7 @@ func triggerNSResizeAndWait(ctx context.Context, t *testing.T, client klient.Cli
 		out.failReason = fmt.Sprintf("patch cluster: %v", err)
 		return out
 	}
-	t.Logf("[%s] patched MarklogicCluster persistence.size → %s", ns, resizeNSTargetSize)
+	t.Logf("[%s] patched MarklogicCluster persistence.size + additionalVolumeClaimTemplates[%s].storage → %s", ns, resizeNSExtraPVCName, resizeNSTargetSize)
 
 	deadline := time.Now().Add(resizeNSWaitTimeout)
 	for time.Now().Before(deadline) {
@@ -276,10 +324,12 @@ func triggerNSResizeAndWait(ctx context.Context, t *testing.T, client klient.Cli
 		if grp.Status.VolumeResizeStatus != nil {
 			out.phase = string(grp.Status.VolumeResizeStatus.Phase)
 		}
-		obs, _ := minNSPVCCapacity(ctx, client, ns)
-		out.observedSize = obs
+		sizes, _ := minNSPVCCapacityByTemplate(ctx, client, ns, templatePrefixes)
+		out.observedSize = formatNSTemplateSizes(sizes)
 
-		if out.phase == string(marklogicv1.VolumeResizePhaseCompleted) && nsSizesEqual(obs, resizeNSTargetSize) {
+		if out.phase == string(marklogicv1.VolumeResizePhaseCompleted) &&
+			nsTemplateSizeEquals(sizes, "datadir", resizeNSTargetSize) &&
+			nsTemplateSizeEquals(sizes, resizeNSExtraPVCName, resizeNSTargetSize) {
 			out.passed = true
 			return out
 		}
@@ -288,37 +338,67 @@ func triggerNSResizeAndWait(ctx context.Context, t *testing.T, client klient.Cli
 				grp.Status.VolumeResizeStatus.Reason, grp.Status.VolumeResizeStatus.Message)
 			return out
 		}
-		t.Logf("[%s] resize in progress: phase=%s observed=%s target=%s", ns, out.phase, obs, resizeNSTargetSize)
+		t.Logf("[%s] resize in progress: phase=%s observed=%s target=%s", ns, out.phase, out.observedSize, resizeNSTargetSize)
 		time.Sleep(15 * time.Second)
 	}
 	out.failReason = fmt.Sprintf("timeout after %s (last phase=%s observed=%s)", resizeNSWaitTimeout, out.phase, out.observedSize)
 	return out
 }
 
-func minNSPVCCapacity(ctx context.Context, client klient.Client, ns string) (string, error) {
+func minNSPVCCapacityByTemplate(ctx context.Context, client klient.Client, ns string, templatePrefixes map[string]string) (map[string]string, error) {
 	pvcs := &corev1.PersistentVolumeClaimList{}
 	if err := client.Resources(ns).List(ctx, pvcs); err != nil {
-		return "", err
+		return nil, err
 	}
-	var min *resource.Quantity
+	minByTemplate := make(map[string]*resource.Quantity, len(templatePrefixes))
 	for i := range pvcs.Items {
 		pvc := &pvcs.Items[i]
-		if !strings.HasPrefix(pvc.Name, "datadir-"+resizeNSGroupName+"-") {
+		matchedTemplate := ""
+		for templateName, prefix := range templatePrefixes {
+			if strings.HasPrefix(pvc.Name, prefix) {
+				matchedTemplate = templateName
+				break
+			}
+		}
+		if matchedTemplate == "" {
 			continue
 		}
 		q, ok := pvc.Status.Capacity[corev1.ResourceStorage]
 		if !ok {
 			continue
 		}
+		min := minByTemplate[matchedTemplate]
 		if min == nil || q.Cmp(*min) < 0 {
 			qq := q.DeepCopy()
-			min = &qq
+			minByTemplate[matchedTemplate] = &qq
 		}
 	}
-	if min == nil {
-		return "", fmt.Errorf("no PVC capacity reported yet")
+	out := make(map[string]string, len(templatePrefixes))
+	for templateName := range templatePrefixes {
+		if minByTemplate[templateName] == nil {
+			return nil, fmt.Errorf("no PVC capacity reported yet for template %s", templateName)
+		}
+		out[templateName] = minByTemplate[templateName].String()
 	}
-	return min.String(), nil
+	return out, nil
+}
+
+func nsTemplateSizeEquals(sizes map[string]string, templateName, target string) bool {
+	if sizes == nil {
+		return false
+	}
+	current, ok := sizes[templateName]
+	if !ok {
+		return false
+	}
+	return nsSizesEqual(current, target)
+}
+
+func formatNSTemplateSizes(sizes map[string]string) string {
+	if sizes == nil {
+		return ""
+	}
+	return fmt.Sprintf("datadir=%s %s=%s", sizes["datadir"], resizeNSExtraPVCName, sizes[resizeNSExtraPVCName])
 }
 
 func nsSizesEqual(a, b string) bool {

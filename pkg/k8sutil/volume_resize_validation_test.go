@@ -63,6 +63,141 @@ func TestResizeValidationSuccessInitializesStatus(t *testing.T) {
 	}
 }
 
+func TestResizeValidationIncludesAdditionalTemplatePVCs(t *testing.T) {
+	additionalTemplate := corev1.PersistentVolumeClaim{
+		ObjectMeta: metav1.ObjectMeta{Name: "logs"},
+		Spec: corev1.PersistentVolumeClaimSpec{
+			Resources: corev1.VolumeResourceRequirements{
+				Requests: corev1.ResourceList{corev1.ResourceStorage: resourceMustParse("30Gi")},
+			},
+		},
+	}
+	oc := newResizeTestContext(t, resizeTestInput{
+		desiredSize:         "50Gi",
+		currentSize:         "20Gi",
+		updateStrategy:      appsv1.OnDeleteStatefulSetStrategyType,
+		additionalTemplates: []corev1.PersistentVolumeClaim{additionalTemplate},
+	})
+
+	res := oc.ReconcileVolumeResizeValidation()
+	if !res.Completed() {
+		t.Fatalf("expected validation to complete this reconcile step")
+	}
+	if _, err := res.Output(); err != nil {
+		t.Fatalf("unexpected result error: %v", err)
+	}
+
+	updated := getUpdatedGroup(t, oc)
+	status := updated.Status.VolumeResizeStatus
+	if status == nil {
+		t.Fatalf("expected volumeResizeStatus to be initialized")
+	}
+	if status.TotalPVCs != 4 {
+		t.Fatalf("expected totalPvcs 4 (datadir + logs for 2 replicas), got %d", status.TotalPVCs)
+	}
+	if findPVCStatus(status, "logs-dnode-0") == nil || findPVCStatus(status, "logs-dnode-1") == nil {
+		t.Fatalf("expected logs pvc statuses to be present")
+	}
+}
+
+func TestResizeSubmissionPatchesAdditionalTemplatePVCs(t *testing.T) {
+	additionalTemplate := corev1.PersistentVolumeClaim{
+		ObjectMeta: metav1.ObjectMeta{Name: "logs"},
+		Spec: corev1.PersistentVolumeClaimSpec{
+			Resources: corev1.VolumeResourceRequirements{
+				Requests: corev1.ResourceList{corev1.ResourceStorage: resourceMustParse("40Gi")},
+			},
+		},
+	}
+	oc := newResizeTestContext(t, resizeTestInput{
+		desiredSize:         "50Gi",
+		currentSize:         "20Gi",
+		updateStrategy:      appsv1.OnDeleteStatefulSetStrategyType,
+		additionalTemplates: []corev1.PersistentVolumeClaim{additionalTemplate},
+	})
+
+	// Seed additional PVCs below target so submission must patch them.
+	replacePVC(t, oc, newBoundPVC("logs-dnode-0", "20Gi"))
+	replacePVC(t, oc, newBoundPVC("logs-dnode-1", "20Gi"))
+
+	if err := runResizeStep(t, oc); err != nil {
+		t.Fatalf("initial validation failed: %v", err)
+	}
+	if err := runResizeStep(t, oc); err != nil {
+		t.Fatalf("submission reconcile failed: %v", err)
+	}
+
+	logsPVC := &corev1.PersistentVolumeClaim{}
+	if err := oc.Client.Get(oc.Ctx, client.ObjectKey{Name: "logs-dnode-0", Namespace: "testns"}, logsPVC); err != nil {
+		t.Fatalf("failed to fetch logs pvc: %v", err)
+	}
+	request := logsPVC.Spec.Resources.Requests[corev1.ResourceStorage]
+	if got := request.String(); got != "40Gi" {
+		t.Fatalf("expected logs pvc request to be 40Gi, got %s", got)
+	}
+}
+
+func TestResizeVerificationStallsWhenAdditionalTemplateRequestBelowTarget(t *testing.T) {
+	additionalTemplate := corev1.PersistentVolumeClaim{
+		ObjectMeta: metav1.ObjectMeta{Name: "logs"},
+		Spec: corev1.PersistentVolumeClaimSpec{
+			Resources: corev1.VolumeResourceRequirements{
+				Requests: corev1.ResourceList{corev1.ResourceStorage: resourceMustParse("40Gi")},
+			},
+		},
+	}
+	oc := newResizeTestContext(t, resizeTestInput{
+		desiredSize:         "50Gi",
+		currentSize:         "20Gi",
+		updateStrategy:      appsv1.OnDeleteStatefulSetStrategyType,
+		additionalTemplates: []corev1.PersistentVolumeClaim{additionalTemplate},
+	})
+
+	now := metav1.Now()
+	status := &marklogicv1.VolumeResizeStatus{
+		OperationID:        "resize-verify-additional",
+		ObservedGeneration: oc.MarklogicGroup.Generation,
+		Phase:              marklogicv1.VolumeResizePhaseVerifyingResizeOutcome,
+		CurrentSize:        "20Gi",
+		TargetSize:         "50Gi",
+		ResizeStrategy:     marklogicv1.VolumeResizeStrategyParallel,
+		TotalPVCs:          4,
+		FirstStartedTime:   &now,
+		LastTransitionTime: &now,
+		PVCStatuses: []marklogicv1.PVCResizeStatus{
+			{Name: "datadir-dnode-0", PodName: "dnode-0", RequestedSize: "50Gi", State: marklogicv1.PVCResizeStateCheckpointed},
+			{Name: "datadir-dnode-1", PodName: "dnode-1", RequestedSize: "50Gi", State: marklogicv1.PVCResizeStateCheckpointed},
+			{Name: "logs-dnode-0", PodName: "dnode-0", RequestedSize: "40Gi", State: marklogicv1.PVCResizeStateCheckpointed},
+			{Name: "logs-dnode-1", PodName: "dnode-1", RequestedSize: "40Gi", State: marklogicv1.PVCResizeStateCheckpointed},
+		},
+	}
+	if err := oc.patchResizeStatus(status); err != nil {
+		t.Fatalf("failed to seed verification status: %v", err)
+	}
+
+	if err := setStatefulSetTemplateRequestByName(oc, dataDirPVCName, "50Gi"); err != nil {
+		t.Fatalf("failed to set datadir template request: %v", err)
+	}
+	if err := setStatefulSetTemplateRequestByName(oc, "logs", "30Gi"); err != nil {
+		t.Fatalf("failed to set logs template request: %v", err)
+	}
+
+	if err := runResizeStep(t, oc); err != nil {
+		t.Fatalf("verification step failed: %v", err)
+	}
+
+	updated := getUpdatedGroup(t, oc)
+	if updated.Status.VolumeResizeStatus == nil {
+		t.Fatalf("expected resize status after verification")
+	}
+	if updated.Status.VolumeResizeStatus.Phase != marklogicv1.VolumeResizePhaseStalled {
+		t.Fatalf("expected Stalled phase when logs template is below target, got %s", updated.Status.VolumeResizeStatus.Phase)
+	}
+	if updated.Status.VolumeResizeStatus.Reason != marklogicv1.VolumeResizeReasonStatefulSetSyncFailed {
+		t.Fatalf("expected StatefulSetSyncFailed reason, got %s", updated.Status.VolumeResizeStatus.Reason)
+	}
+}
+
 func TestResizeValidationShrinkFails(t *testing.T) {
 	oc := newResizeTestContext(t, resizeTestInput{desiredSize: "10Gi", currentSize: "20Gi", updateStrategy: appsv1.OnDeleteStatefulSetStrategyType})
 	res := oc.ReconcileVolumeResizeValidation()
@@ -1332,10 +1467,11 @@ func TestJitteredResizeRetryDelaySeconds_CappedAtMax(t *testing.T) {
 }
 
 type resizeTestInput struct {
-	desiredSize    string
-	currentSize    string
-	updateStrategy appsv1.StatefulSetUpdateStrategyType
-	replicas       int32
+	desiredSize         string
+	currentSize         string
+	updateStrategy      appsv1.StatefulSetUpdateStrategyType
+	replicas            int32
+	additionalTemplates []corev1.PersistentVolumeClaim
 }
 
 func newResizeTestContext(t *testing.T, in resizeTestInput) *OperatorContext {
@@ -1378,6 +1514,14 @@ func newResizeTestContext(t *testing.T, in resizeTestInput) *OperatorContext {
 			},
 		},
 	}
+	if len(in.additionalTemplates) > 0 {
+		templates := make([]corev1.PersistentVolumeClaim, 0, len(in.additionalTemplates))
+		for i := range in.additionalTemplates {
+			copied := in.additionalTemplates[i].DeepCopy()
+			templates = append(templates, *copied)
+		}
+		group.Spec.AdditionalVolumeClaimTemplates = &templates
+	}
 
 	sts := &appsv1.StatefulSet{
 		ObjectMeta: metav1.ObjectMeta{Name: "dnode", Namespace: "testns"},
@@ -1395,6 +1539,12 @@ func newResizeTestContext(t *testing.T, in resizeTestInput) *OperatorContext {
 			},
 		},
 	}
+	if len(in.additionalTemplates) > 0 {
+		for i := range in.additionalTemplates {
+			copied := in.additionalTemplates[i].DeepCopy()
+			sts.Spec.VolumeClaimTemplates = append(sts.Spec.VolumeClaimTemplates, *copied)
+		}
+	}
 
 	allowExpansion := true
 	sc := &storagev1.StorageClass{
@@ -1407,6 +1557,17 @@ func newResizeTestContext(t *testing.T, in resizeTestInput) *OperatorContext {
 		pvcName := fmt.Sprintf("datadir-dnode-%d", i)
 		podName := fmt.Sprintf("dnode-%d", i)
 		objects = append(objects, newBoundPVC(pvcName, in.currentSize), newGroupPod(podName, true))
+		for _, template := range in.additionalTemplates {
+			if template.Name == "" || template.Spec.Resources.Requests == nil {
+				continue
+			}
+			target, ok := template.Spec.Resources.Requests[corev1.ResourceStorage]
+			if !ok || target.IsZero() {
+				continue
+			}
+			additionalPVCName := fmt.Sprintf("%s-dnode-%d", template.Name, i)
+			objects = append(objects, newBoundPVC(additionalPVCName, target.String()))
+		}
 	}
 
 	fakeClient := fake.NewClientBuilder().
@@ -1546,17 +1707,29 @@ func seedVerificationStatus(t *testing.T, oc *OperatorContext, operationID, targ
 }
 
 func setStatefulSetTemplateRequest(oc *OperatorContext, size string) error {
+	return setStatefulSetTemplateRequestByName(oc, dataDirPVCName, size)
+}
+
+func setStatefulSetTemplateRequestByName(oc *OperatorContext, templateName, size string) error {
 	sts := &appsv1.StatefulSet{}
 	if err := oc.Client.Get(oc.Ctx, client.ObjectKey{Name: "dnode", Namespace: "testns"}, sts); err != nil {
 		return err
 	}
-	if len(sts.Spec.VolumeClaimTemplates) == 0 {
-		sts.Spec.VolumeClaimTemplates = []corev1.PersistentVolumeClaim{{ObjectMeta: metav1.ObjectMeta{Name: dataDirPVCName}}}
+	idx := -1
+	for i := range sts.Spec.VolumeClaimTemplates {
+		if sts.Spec.VolumeClaimTemplates[i].Name == templateName {
+			idx = i
+			break
+		}
 	}
-	if sts.Spec.VolumeClaimTemplates[0].Spec.Resources.Requests == nil {
-		sts.Spec.VolumeClaimTemplates[0].Spec.Resources.Requests = corev1.ResourceList{}
+	if idx == -1 {
+		sts.Spec.VolumeClaimTemplates = append(sts.Spec.VolumeClaimTemplates, corev1.PersistentVolumeClaim{ObjectMeta: metav1.ObjectMeta{Name: templateName}})
+		idx = len(sts.Spec.VolumeClaimTemplates) - 1
 	}
-	sts.Spec.VolumeClaimTemplates[0].Spec.Resources.Requests[corev1.ResourceStorage] = resourceMustParse(size)
+	if sts.Spec.VolumeClaimTemplates[idx].Spec.Resources.Requests == nil {
+		sts.Spec.VolumeClaimTemplates[idx].Spec.Resources.Requests = corev1.ResourceList{}
+	}
+	sts.Spec.VolumeClaimTemplates[idx].Spec.Resources.Requests[corev1.ResourceStorage] = resourceMustParse(size)
 	return oc.Client.Update(oc.Ctx, sts)
 }
 

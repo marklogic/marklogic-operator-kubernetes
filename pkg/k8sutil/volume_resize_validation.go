@@ -47,18 +47,26 @@ type resizePVCDiscovery struct {
 	missingPVCs   []string
 	notBoundPVCs  []string
 	minSize       *resource.Quantity
+	minByTemplate map[string]*resource.Quantity
+	targetByPVC   map[string]resource.Quantity
 }
+
+type templateResizeTargets map[string]resource.Quantity
 
 func (oc *OperatorContext) ReconcileVolumeResizeValidation() result.ReconcileResult {
 	cr := oc.MarklogicGroup
-	if cr == nil || cr.Spec.Persistence == nil || !cr.Spec.Persistence.Enabled {
+	if cr == nil {
 		return result.Continue()
 	}
 
-	targetSize, err := resource.ParseQuantity(cr.Spec.Persistence.Size)
+	targets, err := resolveResizeTargetsFromSpec(cr)
 	if err != nil {
-		return oc.failResizeValidation(marklogicv1.VolumeResizeReasonInvalidResizeRequest, fmt.Sprintf("Invalid persistence size %q", cr.Spec.Persistence.Size))
+		return oc.failResizeValidation(marklogicv1.VolumeResizeReasonInvalidResizeRequest, err.Error())
 	}
+	if len(targets) == 0 {
+		return result.Continue()
+	}
+	primaryTarget := primaryResizeTarget(targets)
 
 	currentSts, err := oc.GetStatefulSet(cr.Namespace, cr.Spec.Name)
 	if err != nil {
@@ -69,14 +77,14 @@ func (oc *OperatorContext) ReconcileVolumeResizeValidation() result.ReconcileRes
 		return result.Error(err)
 	}
 
-	pvcState, err := oc.discoverPrimaryPVCs(currentSts)
+	pvcState, err := oc.discoverPrimaryPVCs(currentSts, targets)
 	if err != nil {
 		return result.Error(err)
 	}
 
 	active := cr.Status.VolumeResizeStatus
 	if isResizeOperationActive(active) {
-		return oc.reconcileActiveResizeOperation(active, targetSize, currentSts)
+		return oc.reconcileActiveResizeOperation(active, primaryTarget, currentSts)
 	}
 
 	if pvcState.minSize == nil {
@@ -84,29 +92,29 @@ func (oc *OperatorContext) ReconcileVolumeResizeValidation() result.ReconcileRes
 		return result.Continue()
 	}
 
-	comparison := targetSize.Cmp(*pvcState.minSize)
+	comparison, cmpMessage := compareTargetsWithCurrent(pvcState, targets)
 	if comparison == 0 {
 		return result.Continue()
 	}
 
-	if shouldIgnoreTerminalResizeRestart(cr.Status.VolumeResizeStatus, cr.Spec.Persistence.Size, cr.Generation) {
+	if shouldIgnoreTerminalResizeRestart(cr.Status.VolumeResizeStatus, primaryTarget.String(), cr.Generation) {
 		return result.Continue()
 	}
 
-	resizeStatus := oc.newResizeStatus(pvcState, targetSize.String())
+	resizeStatus := oc.newResizeStatus(pvcState, primaryTarget.String())
 	claimed, err := oc.claimResizeStatusCAS(resizeStatus)
 	if err != nil {
 		return result.Error(err)
 	}
 	if !claimed {
 		if isResizeOperationActive(oc.MarklogicGroup.Status.VolumeResizeStatus) {
-			return oc.reconcileActiveResizeOperation(oc.MarklogicGroup.Status.VolumeResizeStatus, targetSize, currentSts)
+			return oc.reconcileActiveResizeOperation(oc.MarklogicGroup.Status.VolumeResizeStatus, primaryTarget, currentSts)
 		}
 		return result.Continue()
 	}
 
 	if comparison < 0 {
-		oc.transitionResizePhase(resizeStatus, marklogicv1.VolumeResizePhaseFailed, marklogicv1.VolumeResizeReasonShrinkNotSupported, fmt.Sprintf("Shrink is not supported: current=%s target=%s", pvcState.minSize.String(), targetSize.String()))
+		oc.transitionResizePhase(resizeStatus, marklogicv1.VolumeResizePhaseFailed, marklogicv1.VolumeResizeReasonShrinkNotSupported, cmpMessage)
 		oc.emitResizeEvent(corev1.EventTypeWarning, "VolumeResizeFailed", resizeStatus.Message)
 		if err := oc.patchResizeStatus(resizeStatus); err != nil {
 			return result.Error(err)
@@ -174,6 +182,10 @@ func (oc *OperatorContext) ReconcileVolumeResizeValidation() result.ReconcileRes
 func (oc *OperatorContext) failResizeValidation(reason marklogicv1.VolumeResizeReason, message string) result.ReconcileResult {
 	resizeStatus := oc.MarklogicGroup.Status.VolumeResizeStatus
 	if resizeStatus == nil {
+		targetSize := ""
+		if oc.MarklogicGroup.Spec.Persistence != nil {
+			targetSize = oc.MarklogicGroup.Spec.Persistence.Size
+		}
 		now := metav1.Now()
 		resizeStatus = &marklogicv1.VolumeResizeStatus{
 			OperationID:        "resize-" + generateRandomAlphaNumeric(10),
@@ -181,7 +193,7 @@ func (oc *OperatorContext) failResizeValidation(reason marklogicv1.VolumeResizeR
 			FirstStartedTime:   &now,
 			LastTransitionTime: &now,
 			CurrentSize:        "",
-			TargetSize:         oc.MarklogicGroup.Spec.Persistence.Size,
+			TargetSize:         targetSize,
 			ResizeStrategy:     resolveResizeStrategy(oc.MarklogicGroup.Spec.Persistence),
 			Phase:              marklogicv1.VolumeResizePhaseValidating,
 		}
@@ -302,22 +314,16 @@ func (oc *OperatorContext) processResizeSubmission(status *marklogicv1.VolumeRes
 		return result.RequeueSoon(requeueSecs)
 	}
 
-	targetSize, err := resource.ParseQuantity(status.TargetSize)
-	if err != nil {
-		oc.transitionResizePhase(status, marklogicv1.VolumeResizePhaseFailed, marklogicv1.VolumeResizeReasonInvalidResizeRequest, fmt.Sprintf("Invalid target size %q", status.TargetSize))
-		oc.emitResizeEvent(corev1.EventTypeWarning, "VolumeResizeFailed", status.Message)
-		if patchErr := oc.patchResizeStatus(status); patchErr != nil {
-			return result.Error(patchErr)
-		}
-		return result.Done()
-	}
-
 	if len(status.PVCStatuses) == 0 {
 		currentSts, stsErr := oc.GetStatefulSet(oc.MarklogicGroup.Namespace, oc.MarklogicGroup.Spec.Name)
 		if stsErr != nil {
 			return result.Error(stsErr)
 		}
-		pvcState, discoverErr := oc.discoverPrimaryPVCs(currentSts)
+		targets, targetErr := resolveResizeTargetsFromSpec(oc.MarklogicGroup)
+		if targetErr != nil {
+			return result.Error(targetErr)
+		}
+		pvcState, discoverErr := oc.discoverPrimaryPVCs(currentSts, targets)
 		if discoverErr != nil {
 			return result.Error(discoverErr)
 		}
@@ -342,10 +348,15 @@ func (oc *OperatorContext) processResizeSubmission(status *marklogicv1.VolumeRes
 		if observed.IsZero() {
 			observed = requested
 		}
-		entry.RequestedSize = requested.String()
+		entryTarget, targetErr := resizeTargetForPVCEntry(status, entry)
+		if targetErr != nil {
+			oc.markPVCFailed(status, entry.Name, marklogicv1.VolumeResizeReasonInvalidResizeRequest, targetErr.Error())
+			continue
+		}
+		entry.RequestedSize = entryTarget.String()
 		entry.ObservedCapacity = observed.String()
 
-		if requested.Cmp(targetSize) >= 0 {
+		if requested.Cmp(entryTarget) >= 0 {
 			entry.State = marklogicv1.PVCResizeStateWaitingForCheckpoint
 			entry.LastReason = ""
 			entry.LastMessage = "Waiting for resize checkpoint"
@@ -356,13 +367,13 @@ func (oc *OperatorContext) processResizeSubmission(status *marklogicv1.VolumeRes
 		if pvc.Spec.Resources.Requests == nil {
 			pvc.Spec.Resources.Requests = corev1.ResourceList{}
 		}
-		pvc.Spec.Resources.Requests[corev1.ResourceStorage] = targetSize
+		pvc.Spec.Resources.Requests[corev1.ResourceStorage] = entryTarget
 		if patchErr := oc.Client.Patch(oc.Ctx, pvc, patch); patchErr != nil {
 			oc.markPVCFailed(status, entry.Name, marklogicv1.VolumeResizeReasonResizeFailed, patchErr.Error())
 			continue
 		}
 
-		entry.RequestedSize = targetSize.String()
+		entry.RequestedSize = entryTarget.String()
 		entry.State = marklogicv1.PVCResizeStateResizeSubmitted
 		entry.LastReason = ""
 		entry.LastMessage = "Resize request submitted"
@@ -401,16 +412,6 @@ func (oc *OperatorContext) processResizeWaiting(status *marklogicv1.VolumeResize
 		return result.RequeueSoon(requeueSecs)
 	}
 
-	targetSize, err := resource.ParseQuantity(status.TargetSize)
-	if err != nil {
-		oc.transitionResizePhase(status, marklogicv1.VolumeResizePhaseFailed, marklogicv1.VolumeResizeReasonInvalidResizeRequest, fmt.Sprintf("Invalid target size %q", status.TargetSize))
-		oc.emitResizeEvent(corev1.EventTypeWarning, "VolumeResizeFailed", status.Message)
-		if patchErr := oc.patchResizeStatus(status); patchErr != nil {
-			return result.Error(patchErr)
-		}
-		return result.Done()
-	}
-
 	for i := range status.PVCStatuses {
 		entry := &status.PVCStatuses[i]
 		if isPVCCheckpointed(entry) {
@@ -429,10 +430,15 @@ func (oc *OperatorContext) processResizeWaiting(status *marklogicv1.VolumeResize
 			observed = requested
 		}
 
-		entry.RequestedSize = requested.String()
+		entryTarget, targetErr := resizeTargetForPVCEntry(status, entry)
+		if targetErr != nil {
+			oc.markPVCFailed(status, entry.Name, marklogicv1.VolumeResizeReasonInvalidResizeRequest, targetErr.Error())
+			continue
+		}
+		entry.RequestedSize = entryTarget.String()
 		entry.ObservedCapacity = observed.String()
 
-		if requested.Cmp(targetSize) >= 0 && observed.Cmp(targetSize) >= 0 {
+		if requested.Cmp(entryTarget) >= 0 && observed.Cmp(entryTarget) >= 0 {
 			if hasFileSystemResizePending(pvc) {
 				entry.State = marklogicv1.PVCResizeStateCheckpointed
 				entry.CheckpointType = marklogicv1.PVCResizeCheckpointTypeOfflinePending
@@ -502,9 +508,9 @@ func (oc *OperatorContext) processResizeWaiting(status *marklogicv1.VolumeResize
 }
 
 func (oc *OperatorContext) processStatefulSetSynchronization(status *marklogicv1.VolumeResizeStatus, currentSts *appsv1.StatefulSet) result.ReconcileResult {
-	targetSize, err := resource.ParseQuantity(status.TargetSize)
+	templateTargets, err := desiredTemplateTargetsFromStatus(status, currentSts.Name)
 	if err != nil {
-		oc.transitionResizePhase(status, marklogicv1.VolumeResizePhaseFailed, marklogicv1.VolumeResizeReasonInvalidResizeRequest, fmt.Sprintf("Invalid target size %q", status.TargetSize))
+		oc.transitionResizePhase(status, marklogicv1.VolumeResizePhaseFailed, marklogicv1.VolumeResizeReasonInvalidResizeRequest, err.Error())
 		oc.emitResizeEvent(corev1.EventTypeWarning, "VolumeResizeFailed", status.Message)
 		if patchErr := oc.patchResizeStatus(status); patchErr != nil {
 			return result.Error(patchErr)
@@ -514,7 +520,7 @@ func (oc *OperatorContext) processStatefulSetSynchronization(status *marklogicv1
 
 	addResizeMarker(status, resizeMarkerSyncStarted)
 	if !hasResizeMarker(status, resizeMarkerTemplateSynced) {
-		synced, syncErr := oc.syncStatefulSetDataDirTemplate(status, currentSts, targetSize)
+		synced, syncErr := oc.syncStatefulSetPVCTemplates(status, currentSts, templateTargets)
 		if syncErr != nil {
 			return oc.scheduleSyncRetryOrFail(status, marklogicv1.VolumeResizeReasonStatefulSetSyncFailed, "Failed to synchronize StatefulSet template", syncErr)
 		}
@@ -630,11 +636,20 @@ func (oc *OperatorContext) processPodsReadyWait(status *marklogicv1.VolumeResize
 					return result.RequeueSoon(3)
 				}
 
-				activeEntry.State = marklogicv1.PVCResizeStateRestarted
-				activeEntry.CheckpointType = marklogicv1.PVCResizeCheckpointTypeOfflineComplete
-				activeEntry.RestartRequired = false
-				activeEntry.LastReason = ""
-				activeEntry.LastMessage = "Pod restart completed"
+				for i := range status.PVCStatuses {
+					entry := &status.PVCStatuses[i]
+					if entry.PodName != activeEntry.PodName {
+						continue
+					}
+					if entry.State != marklogicv1.PVCResizeStateRestartPending {
+						continue
+					}
+					entry.State = marklogicv1.PVCResizeStateRestarted
+					entry.CheckpointType = marklogicv1.PVCResizeCheckpointTypeOfflineComplete
+					entry.RestartRequired = false
+					entry.LastReason = ""
+					entry.LastMessage = "Pod restart completed"
+				}
 				status.ActivePVC = ""
 			}
 		}
@@ -676,9 +691,9 @@ func (oc *OperatorContext) processResizeVerification(status *marklogicv1.VolumeR
 		return result.RequeueSoon(requeueSecs)
 	}
 
-	targetSize, err := resource.ParseQuantity(status.TargetSize)
+	templateTargets, err := desiredTemplateTargetsFromStatus(status, currentSts.Name)
 	if err != nil {
-		oc.transitionResizePhase(status, marklogicv1.VolumeResizePhaseFailed, marklogicv1.VolumeResizeReasonInvalidResizeRequest, fmt.Sprintf("Invalid target size %q", status.TargetSize))
+		oc.transitionResizePhase(status, marklogicv1.VolumeResizePhaseFailed, marklogicv1.VolumeResizeReasonInvalidResizeRequest, err.Error())
 		oc.emitResizeEvent(corev1.EventTypeWarning, "VolumeResizeFailed", status.Message)
 		if patchErr := oc.patchResizeStatus(status); patchErr != nil {
 			return result.Error(patchErr)
@@ -691,17 +706,24 @@ func (oc *OperatorContext) processResizeVerification(status *marklogicv1.VolumeR
 		oc.emitResizeEvent(corev1.EventTypeNormal, "VolumeResizeProgressing", "Starting resize outcome verification")
 	}
 
-	templateRequest, hasTemplate := getStatefulSetDataDirTemplateRequest(currentSts)
-	if !hasTemplate {
-		oc.transitionResizePhase(status, marklogicv1.VolumeResizePhaseFailed, marklogicv1.VolumeResizeReasonTemplateUpdateInterrupted, "StatefulSet datadir template is missing during verification")
-		oc.emitResizeEvent(corev1.EventTypeWarning, "VolumeResizeFailed", status.Message)
-		if patchErr := oc.patchResizeStatus(status); patchErr != nil {
-			return result.Error(patchErr)
+	templatesBelowTarget := make([]string, 0)
+	for templateName, templateTarget := range templateTargets {
+		templateRequest, hasTemplate := getStatefulSetTemplateRequest(currentSts, templateName)
+		if !hasTemplate {
+			oc.transitionResizePhase(status, marklogicv1.VolumeResizePhaseFailed, marklogicv1.VolumeResizeReasonTemplateUpdateInterrupted, fmt.Sprintf("StatefulSet template %s is missing during verification", templateName))
+			oc.emitResizeEvent(corev1.EventTypeWarning, "VolumeResizeFailed", status.Message)
+			if patchErr := oc.patchResizeStatus(status); patchErr != nil {
+				return result.Error(patchErr)
+			}
+			return result.Done()
 		}
-		return result.Done()
+		if templateRequest.Cmp(templateTarget) < 0 {
+			templatesBelowTarget = append(templatesBelowTarget, fmt.Sprintf("%s=%s", templateName, templateRequest.String()))
+		}
 	}
-	if templateRequest.Cmp(targetSize) < 0 {
-		return oc.scheduleSyncRetryOrFail(status, marklogicv1.VolumeResizeReasonStatefulSetSyncFailed, fmt.Sprintf("StatefulSet datadir template request (%s) has not reached target (%s)", templateRequest.String(), targetSize.String()), fmt.Errorf("template request below target"))
+	if len(templatesBelowTarget) > 0 {
+		sort.Strings(templatesBelowTarget)
+		return oc.scheduleSyncRetryOrFail(status, marklogicv1.VolumeResizeReasonStatefulSetSyncFailed, fmt.Sprintf("StatefulSet template requests are below target: %s", strings.Join(templatesBelowTarget, ",")), fmt.Errorf("template request below target"))
 	}
 
 	notFinalPVCs := make([]string, 0)
@@ -718,10 +740,14 @@ func (oc *OperatorContext) processResizeVerification(status *marklogicv1.VolumeR
 			observed = requested
 		}
 
-		entry.RequestedSize = requested.String()
+		entryTarget, targetErr := resizeTargetForPVCEntry(status, entry)
+		if targetErr != nil {
+			return oc.scheduleSyncRetryOrFail(status, marklogicv1.VolumeResizeReasonInvalidResizeRequest, "Invalid PVC target during verification", targetErr)
+		}
+		entry.RequestedSize = entryTarget.String()
 		entry.ObservedCapacity = observed.String()
 
-		if requested.Cmp(targetSize) < 0 || observed.Cmp(targetSize) < 0 {
+		if requested.Cmp(entryTarget) < 0 || observed.Cmp(entryTarget) < 0 {
 			notFinalPVCs = append(notFinalPVCs, entry.Name)
 			continue
 		}
@@ -798,7 +824,11 @@ func (oc *OperatorContext) initializePVCStatuses(status *marklogicv1.VolumeResiz
 	if len(status.PVCStatuses) == 0 {
 		status.PVCStatuses = make([]marklogicv1.PVCResizeStatus, 0, len(pvcState.expectedNames))
 		for _, name := range pvcState.expectedNames {
-			status.PVCStatuses = append(status.PVCStatuses, marklogicv1.PVCResizeStatus{Name: name, State: marklogicv1.PVCResizeStatePending})
+			entry := marklogicv1.PVCResizeStatus{Name: name, State: marklogicv1.PVCResizeStatePending}
+			if target, ok := pvcState.targetByPVC[name]; ok {
+				entry.RequestedSize = target.String()
+			}
+			status.PVCStatuses = append(status.PVCStatuses, entry)
 		}
 	}
 	status.TotalPVCs = int32(len(status.PVCStatuses))
@@ -1166,38 +1196,37 @@ func (oc *OperatorContext) scheduleSyncRetryOrFail(status *marklogicv1.VolumeRes
 	return result.Done()
 }
 
-func (oc *OperatorContext) syncStatefulSetDataDirTemplate(status *marklogicv1.VolumeResizeStatus, currentSts *appsv1.StatefulSet, targetSize resource.Quantity) (bool, error) {
+func (oc *OperatorContext) syncStatefulSetPVCTemplates(status *marklogicv1.VolumeResizeStatus, currentSts *appsv1.StatefulSet, templateTargets templateResizeTargets) (bool, error) {
 	if currentSts == nil {
 		return false, fmt.Errorf("statefulset is nil")
 	}
 
-	templateFound := false
-	templateMatchesTarget := false
-	for i := range currentSts.Spec.VolumeClaimTemplates {
-		pvcTemplate := &currentSts.Spec.VolumeClaimTemplates[i]
-		if pvcTemplate.Name != dataDirPVCName {
+	templatesMissingFromStatefulSet := make([]string, 0)
+	templatesBelowTarget := make([]string, 0)
+	for templateName, target := range templateTargets {
+		current, hasTemplate := getStatefulSetTemplateRequest(currentSts, templateName)
+		if !hasTemplate {
+			templatesMissingFromStatefulSet = append(templatesMissingFromStatefulSet, templateName)
 			continue
 		}
-		templateFound = true
-		if pvcTemplate.Spec.Resources.Requests == nil {
-			break
+		if current.Cmp(target) < 0 {
+			templatesBelowTarget = append(templatesBelowTarget, templateName)
 		}
-		current := pvcTemplate.Spec.Resources.Requests[corev1.ResourceStorage]
-		if current.Cmp(targetSize) >= 0 {
-			templateMatchesTarget = true
-		}
-		break
 	}
 
-	if !templateFound {
-		return false, fmt.Errorf("statefulset %s has no %s volumeClaimTemplate", currentSts.Name, dataDirPVCName)
+	if len(templatesMissingFromStatefulSet) > 0 {
+		sort.Strings(templatesMissingFromStatefulSet)
+		return false, fmt.Errorf("statefulset %s is missing volumeClaimTemplates: %s", currentSts.Name, strings.Join(templatesMissingFromStatefulSet, ","))
 	}
 
-	if templateMatchesTarget {
+	if len(templatesBelowTarget) == 0 {
 		addResizeMarker(status, resizeMarkerTemplateRecreated)
 		addResizeMarker(status, resizeMarkerTemplateSynced)
 		return false, nil
 	}
+
+	sort.Strings(templatesBelowTarget)
+	_ = templatesBelowTarget
 
 	addResizeMarker(status, resizeMarkerTemplateRecreateStarted)
 	if hasResizeMarker(status, resizeMarkerTemplateDeleted) {
@@ -1217,13 +1246,13 @@ func (oc *OperatorContext) syncStatefulSetDataDirTemplate(status *marklogicv1.Vo
 	return true, nil
 }
 
-func getStatefulSetDataDirTemplateRequest(currentSts *appsv1.StatefulSet) (resource.Quantity, bool) {
+func getStatefulSetTemplateRequest(currentSts *appsv1.StatefulSet, templateName string) (resource.Quantity, bool) {
 	if currentSts == nil {
 		return resource.Quantity{}, false
 	}
 	for i := range currentSts.Spec.VolumeClaimTemplates {
 		template := currentSts.Spec.VolumeClaimTemplates[i]
-		if template.Name != dataDirPVCName {
+		if template.Name != templateName {
 			continue
 		}
 		if template.Spec.Resources.Requests == nil {
@@ -1236,6 +1265,23 @@ func getStatefulSetDataDirTemplateRequest(currentSts *appsv1.StatefulSet) (resou
 		return request, true
 	}
 	return resource.Quantity{}, false
+}
+
+func getTemplateNameFromPVCName(statefulSetName, pvcName string) (string, bool) {
+	ordinal := parseOrdinalFromName(pvcName)
+	if ordinal < 0 {
+		return "", false
+	}
+	withoutOrdinalSuffix := strings.TrimSuffix(pvcName, fmt.Sprintf("-%d", ordinal))
+	statefulSetSuffix := fmt.Sprintf("-%s", statefulSetName)
+	if !strings.HasSuffix(withoutOrdinalSuffix, statefulSetSuffix) {
+		return "", false
+	}
+	templateName := strings.TrimSuffix(withoutOrdinalSuffix, statefulSetSuffix)
+	if templateName == "" {
+		return "", false
+	}
+	return templateName, true
 }
 
 func getOfflineRestartCandidates(status *marklogicv1.VolumeResizeStatus, statefulSetName string) []string {
@@ -1348,15 +1394,11 @@ func parseOrdinalFromName(name string) int {
 }
 
 func derivePodNameFromPVC(statefulSetName, pvcName string) string {
-	prefix := fmt.Sprintf("%s-%s-", dataDirPVCName, statefulSetName)
-	if !strings.HasPrefix(pvcName, prefix) {
+	ordinal := parseOrdinalFromName(pvcName)
+	if ordinal < 0 {
 		return ""
 	}
-	ordinal := strings.TrimPrefix(pvcName, prefix)
-	if ordinal == "" {
-		return ""
-	}
-	return fmt.Sprintf("%s-%s", statefulSetName, ordinal)
+	return fmt.Sprintf("%s-%d", statefulSetName, ordinal)
 }
 
 func hasResizeMarker(status *marklogicv1.VolumeResizeStatus, marker string) bool {
@@ -1433,12 +1475,14 @@ func resolveResizeStrategy(persistence *marklogicv1.Persistence) marklogicv1.Vol
 	return marklogicv1.VolumeResizeStrategyParallel
 }
 
-func (oc *OperatorContext) discoverPrimaryPVCs(sts *appsv1.StatefulSet) (*resizePVCDiscovery, error) {
+func (oc *OperatorContext) discoverPrimaryPVCs(sts *appsv1.StatefulSet, targets templateResizeTargets) (*resizePVCDiscovery, error) {
 	state := &resizePVCDiscovery{
 		expectedNames: []string{},
 		foundPVCs:     map[string]*corev1.PersistentVolumeClaim{},
 		missingPVCs:   []string{},
 		notBoundPVCs:  []string{},
+		minByTemplate: map[string]*resource.Quantity{},
+		targetByPVC:   map[string]resource.Quantity{},
 	}
 
 	replicas := int32(1)
@@ -1446,37 +1490,190 @@ func (oc *OperatorContext) discoverPrimaryPVCs(sts *appsv1.StatefulSet) (*resize
 		replicas = *sts.Spec.Replicas
 	}
 
-	for i := int32(0); i < replicas; i++ {
-		name := fmt.Sprintf("%s-%s-%d", dataDirPVCName, sts.Name, i)
-		state.expectedNames = append(state.expectedNames, name)
-		pvc := &corev1.PersistentVolumeClaim{}
-		err := oc.Client.Get(oc.Ctx, client.ObjectKey{Namespace: sts.Namespace, Name: name}, pvc)
-		if err != nil {
-			if apierrors.IsNotFound(err) {
-				state.missingPVCs = append(state.missingPVCs, name)
-				continue
-			}
-			return nil, err
-		}
-		state.foundPVCs[name] = pvc
-		if pvc.Status.Phase != corev1.ClaimBound {
-			state.notBoundPVCs = append(state.notBoundPVCs, name)
-		}
-
-		capacity := pvc.Status.Capacity[corev1.ResourceStorage]
-		if capacity.IsZero() {
-			capacity = pvc.Spec.Resources.Requests[corev1.ResourceStorage]
-		}
-		if capacity.IsZero() {
+	templateNames := make([]string, 0, len(targets))
+	for templateName := range targets {
+		templateNames = append(templateNames, templateName)
+	}
+	if len(templateNames) == 0 {
+		templateNames = getResizableTemplateNames(sts)
+	}
+	sort.Strings(templateNames)
+	for _, templateName := range templateNames {
+		templateTarget, hasTarget := targets[templateName]
+		if !hasTarget {
 			continue
 		}
-		capCopy := capacity.DeepCopy()
-		if state.minSize == nil || capCopy.Cmp(*state.minSize) < 0 {
-			state.minSize = &capCopy
+		for i := int32(0); i < replicas; i++ {
+			name := fmt.Sprintf("%s-%s-%d", templateName, sts.Name, i)
+			state.expectedNames = append(state.expectedNames, name)
+			state.targetByPVC[name] = templateTarget
+			pvc := &corev1.PersistentVolumeClaim{}
+			err := oc.Client.Get(oc.Ctx, client.ObjectKey{Namespace: sts.Namespace, Name: name}, pvc)
+			if err != nil {
+				if apierrors.IsNotFound(err) {
+					state.missingPVCs = append(state.missingPVCs, name)
+					continue
+				}
+				return nil, err
+			}
+			state.foundPVCs[name] = pvc
+			if pvc.Status.Phase != corev1.ClaimBound {
+				state.notBoundPVCs = append(state.notBoundPVCs, name)
+			}
+
+			capacity := pvc.Status.Capacity[corev1.ResourceStorage]
+			if capacity.IsZero() {
+				capacity = pvc.Spec.Resources.Requests[corev1.ResourceStorage]
+			}
+			if capacity.IsZero() {
+				continue
+			}
+			capCopy := capacity.DeepCopy()
+			if state.minSize == nil || capCopy.Cmp(*state.minSize) < 0 {
+				state.minSize = &capCopy
+			}
+			if existing, ok := state.minByTemplate[templateName]; !ok || existing == nil || capCopy.Cmp(*existing) < 0 {
+				state.minByTemplate[templateName] = &capCopy
+			}
 		}
 	}
 
 	return state, nil
+}
+
+func getResizableTemplateNames(sts *appsv1.StatefulSet) []string {
+	if sts == nil {
+		return []string{dataDirPVCName}
+	}
+	templateNames := make([]string, 0, len(sts.Spec.VolumeClaimTemplates))
+	for i := range sts.Spec.VolumeClaimTemplates {
+		template := sts.Spec.VolumeClaimTemplates[i]
+		if template.Name == "" {
+			continue
+		}
+		if template.Spec.Resources.Requests == nil {
+			continue
+		}
+		if _, hasStorageRequest := template.Spec.Resources.Requests[corev1.ResourceStorage]; !hasStorageRequest {
+			continue
+		}
+		templateNames = append(templateNames, template.Name)
+	}
+	if len(templateNames) == 0 {
+		templateNames = append(templateNames, dataDirPVCName)
+	}
+	return templateNames
+}
+
+func resolveResizeTargetsFromSpec(group *marklogicv1.MarklogicGroup) (templateResizeTargets, error) {
+	targets := templateResizeTargets{}
+	if group == nil {
+		return targets, nil
+	}
+	if group.Spec.Persistence != nil && group.Spec.Persistence.Enabled {
+		size, err := resource.ParseQuantity(group.Spec.Persistence.Size)
+		if err != nil {
+			return nil, fmt.Errorf("invalid persistence size %q", group.Spec.Persistence.Size)
+		}
+		targets[dataDirPVCName] = size
+	}
+	if group.Spec.AdditionalVolumeClaimTemplates != nil {
+		for _, tmpl := range *group.Spec.AdditionalVolumeClaimTemplates {
+			if tmpl.Name == "" || tmpl.Spec.Resources.Requests == nil {
+				continue
+			}
+			size, ok := tmpl.Spec.Resources.Requests[corev1.ResourceStorage]
+			if !ok || size.IsZero() {
+				continue
+			}
+			targets[tmpl.Name] = size
+		}
+	}
+	return targets, nil
+}
+
+func primaryResizeTarget(targets templateResizeTargets) resource.Quantity {
+	if target, ok := targets[dataDirPVCName]; ok {
+		return target
+	}
+	names := make([]string, 0, len(targets))
+	for n := range targets {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	if len(names) == 0 {
+		return resource.Quantity{}
+	}
+	return targets[names[0]]
+}
+
+func compareTargetsWithCurrent(state *resizePVCDiscovery, targets templateResizeTargets) (int, string) {
+	hasIncrease := false
+	for templateName, target := range targets {
+		current, ok := state.minByTemplate[templateName]
+		if !ok || current == nil {
+			hasIncrease = true
+			continue
+		}
+		cmp := target.Cmp(*current)
+		if cmp < 0 {
+			return -1, fmt.Sprintf("Shrink is not supported for %s: current=%s target=%s", templateName, current.String(), target.String())
+		}
+		if cmp > 0 {
+			hasIncrease = true
+		}
+	}
+	if hasIncrease {
+		return 1, ""
+	}
+	return 0, ""
+}
+
+func resizeTargetForPVCEntry(status *marklogicv1.VolumeResizeStatus, entry *marklogicv1.PVCResizeStatus) (resource.Quantity, error) {
+	if entry != nil && entry.RequestedSize != "" {
+		if target, err := resource.ParseQuantity(entry.RequestedSize); err == nil {
+			return target, nil
+		}
+	}
+	if status != nil && status.TargetSize != "" {
+		if target, err := resource.ParseQuantity(status.TargetSize); err == nil {
+			return target, nil
+		}
+	}
+	name := ""
+	if entry != nil {
+		name = entry.Name
+	}
+	return resource.Quantity{}, fmt.Errorf("unable to resolve resize target for pvc %s", name)
+}
+
+func desiredTemplateTargetsFromStatus(status *marklogicv1.VolumeResizeStatus, statefulSetName string) (templateResizeTargets, error) {
+	targets := templateResizeTargets{}
+	if status == nil {
+		return targets, fmt.Errorf("volume resize status is nil")
+	}
+	for i := range status.PVCStatuses {
+		entry := &status.PVCStatuses[i]
+		templateName, ok := getTemplateNameFromPVCName(statefulSetName, entry.Name)
+		if !ok {
+			continue
+		}
+		target, err := resizeTargetForPVCEntry(status, entry)
+		if err != nil {
+			return nil, err
+		}
+		if existing, ok := targets[templateName]; !ok || target.Cmp(existing) > 0 {
+			targets[templateName] = target
+		}
+	}
+	if len(targets) == 0 {
+		target, err := resource.ParseQuantity(status.TargetSize)
+		if err != nil {
+			return nil, fmt.Errorf("invalid target size %q", status.TargetSize)
+		}
+		targets[dataDirPVCName] = target
+	}
+	return targets, nil
 }
 
 func (oc *OperatorContext) validateStorageClassExpansionAllowed(foundPVCs map[string]*corev1.PersistentVolumeClaim) error {
