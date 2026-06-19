@@ -319,11 +319,11 @@ func (oc *OperatorContext) processResizeSubmission(status *marklogicv1.VolumeRes
 		if stsErr != nil {
 			return result.Error(stsErr)
 		}
-		targets, targetErr := resolveResizeTargetsFromSpec(oc.MarklogicGroup)
+		templateTargets, targetErr := desiredTemplateTargetsFromStatus(status, currentSts.Name)
 		if targetErr != nil {
 			return result.Error(targetErr)
 		}
-		pvcState, discoverErr := oc.discoverPrimaryPVCs(currentSts, targets)
+		pvcState, discoverErr := oc.discoverPrimaryPVCs(currentSts, templateTargets)
 		if discoverErr != nil {
 			return result.Error(discoverErr)
 		}
