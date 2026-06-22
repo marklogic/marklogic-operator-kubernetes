@@ -707,6 +707,7 @@ func TestResizeCheckpointClassificationOnlineAndOffline(t *testing.T) {
 
 	replacePVC(t, oc, newBoundPVC("datadir-dnode-0", "50Gi"))
 	offlinePVC := newBoundPVC("datadir-dnode-1", "50Gi")
+	offlinePVC.Status.Capacity[corev1.ResourceStorage] = resourceMustParse("20Gi")
 	offlinePVC.Status.Conditions = []corev1.PersistentVolumeClaimCondition{{
 		Type:   corev1.PersistentVolumeClaimFileSystemResizePending,
 		Status: corev1.ConditionTrue,

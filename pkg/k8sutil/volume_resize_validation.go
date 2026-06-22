@@ -438,21 +438,23 @@ func (oc *OperatorContext) processResizeWaiting(status *marklogicv1.VolumeResize
 		entry.RequestedSize = entryTarget.String()
 		entry.ObservedCapacity = observed.String()
 
-		if requested.Cmp(entryTarget) >= 0 && observed.Cmp(entryTarget) >= 0 {
+		if requested.Cmp(entryTarget) >= 0 {
 			if hasFileSystemResizePending(pvc) {
 				entry.State = marklogicv1.PVCResizeStateCheckpointed
 				entry.CheckpointType = marklogicv1.PVCResizeCheckpointTypeOfflinePending
 				entry.RestartRequired = true
 				entry.LastReason = ""
 				entry.LastMessage = "Offline checkpoint reached"
-			} else {
+				continue
+			}
+			if observed.Cmp(entryTarget) >= 0 {
 				entry.State = marklogicv1.PVCResizeStateCheckpointed
 				entry.CheckpointType = marklogicv1.PVCResizeCheckpointTypeOnlineComplete
 				entry.RestartRequired = false
 				entry.LastReason = ""
 				entry.LastMessage = "Online checkpoint reached"
+				continue
 			}
-			continue
 		}
 
 		entry.State = marklogicv1.PVCResizeStateWaitingForCheckpoint
@@ -747,7 +749,7 @@ func (oc *OperatorContext) processResizeVerification(status *marklogicv1.VolumeR
 		entry.RequestedSize = entryTarget.String()
 		entry.ObservedCapacity = observed.String()
 
-		if requested.Cmp(entryTarget) < 0 || observed.Cmp(entryTarget) < 0 {
+		if requested.Cmp(entryTarget) < 0 {
 			notFinalPVCs = append(notFinalPVCs, entry.Name)
 			continue
 		}
@@ -758,6 +760,11 @@ func (oc *OperatorContext) processResizeVerification(status *marklogicv1.VolumeR
 			entry.RestartRequired = true
 			entry.LastReason = ""
 			entry.LastMessage = "Filesystem resize still pending"
+			continue
+		}
+
+		if observed.Cmp(entryTarget) < 0 {
+			notFinalPVCs = append(notFinalPVCs, entry.Name)
 			continue
 		}
 
