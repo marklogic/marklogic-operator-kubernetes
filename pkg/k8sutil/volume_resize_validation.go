@@ -334,11 +334,13 @@ func (oc *OperatorContext) processResizeSubmission(status *marklogicv1.VolumeRes
 	for _, idx := range indices {
 		entry := &status.PVCStatuses[idx]
 		if isPVCCheckpointed(entry) {
+			oc.ReqLogger.Info("DEBUG: processResizeSubmission - PVC already checkpointed, skipping", "name", entry.Name)
 			continue
 		}
 
 		pvc := &corev1.PersistentVolumeClaim{}
 		if getErr := oc.Client.Get(oc.Ctx, client.ObjectKey{Namespace: oc.MarklogicGroup.Namespace, Name: entry.Name}, pvc); getErr != nil {
+			oc.ReqLogger.Info("DEBUG: processResizeSubmission - Failed to fetch PVC", "name", entry.Name, "error", getErr.Error())
 			oc.markPVCFailed(status, entry.Name, marklogicv1.VolumeResizeReasonResizeFailed, getErr.Error())
 			continue
 		}
@@ -350,25 +352,31 @@ func (oc *OperatorContext) processResizeSubmission(status *marklogicv1.VolumeRes
 		}
 		entryTarget, targetErr := resizeTargetForPVCEntry(status, entry)
 		if targetErr != nil {
+			oc.ReqLogger.Info("DEBUG: processResizeSubmission - Failed to resolve target", "name", entry.Name, "error", targetErr.Error())
 			oc.markPVCFailed(status, entry.Name, marklogicv1.VolumeResizeReasonInvalidResizeRequest, targetErr.Error())
 			continue
 		}
 		entry.RequestedSize = entryTarget.String()
 		entry.ObservedCapacity = observed.String()
 
+		oc.ReqLogger.Info("DEBUG: processResizeSubmission - PVC size check", "name", entry.Name, "requested", requested.String(), "target", entryTarget.String(), "observed", observed.String())
+
 		if requested.Cmp(entryTarget) >= 0 {
 			entry.State = marklogicv1.PVCResizeStateWaitingForCheckpoint
 			entry.LastReason = ""
 			entry.LastMessage = "Waiting for resize checkpoint"
+			oc.ReqLogger.Info("DEBUG: processResizeSubmission - Request already at target, waiting for checkpoint", "name", entry.Name)
 			continue
 		}
 
+		oc.ReqLogger.Info("DEBUG: processResizeSubmission - Submitting PVC resize patch", "name", entry.Name, "newSize", entryTarget.String())
 		patch := client.MergeFrom(pvc.DeepCopy())
 		if pvc.Spec.Resources.Requests == nil {
 			pvc.Spec.Resources.Requests = corev1.ResourceList{}
 		}
 		pvc.Spec.Resources.Requests[corev1.ResourceStorage] = entryTarget
 		if patchErr := oc.Client.Patch(oc.Ctx, pvc, patch); patchErr != nil {
+			oc.ReqLogger.Info("DEBUG: processResizeSubmission - Patch failed", "name", entry.Name, "error", patchErr.Error())
 			oc.markPVCFailed(status, entry.Name, marklogicv1.VolumeResizeReasonResizeFailed, patchErr.Error())
 			continue
 		}
@@ -377,6 +385,7 @@ func (oc *OperatorContext) processResizeSubmission(status *marklogicv1.VolumeRes
 		entry.State = marklogicv1.PVCResizeStateResizeSubmitted
 		entry.LastReason = ""
 		entry.LastMessage = "Resize request submitted"
+		oc.ReqLogger.Info("DEBUG: processResizeSubmission - Resize patch submitted successfully", "name", entry.Name)
 	}
 
 	oc.updateSequentialActivePVC(status)
@@ -762,9 +771,10 @@ func (oc *OperatorContext) processResizeVerification(status *marklogicv1.VolumeR
 			entry.RestartRequired = true
 			entry.LastReason = ""
 			entry.LastMessage = "Filesystem resize still pending"
-			if entry.State == marklogicv1.PVCResizeStateRestarted {
+			// If this PVC already has a checkpoint (offline or online), it means pod was restarted
+			// but filesystem resize is still pending - needs another restart
+			if isPVCCheckpointed(entry) {
 				needsRestartAgain = append(needsRestartAgain, entry.Name)
-				entry.State = marklogicv1.PVCResizeStateCheckpointed
 				entry.LastMessage = "Filesystem resize still pending after restart; scheduling another restart"
 			}
 			continue
@@ -846,11 +856,15 @@ func (oc *OperatorContext) newResizeStatus(pvcState *resizePVCDiscovery, targetS
 
 func (oc *OperatorContext) initializePVCStatuses(status *marklogicv1.VolumeResizeStatus, pvcState *resizePVCDiscovery) {
 	if len(status.PVCStatuses) == 0 {
+		oc.ReqLogger.Info("DEBUG: initializePVCStatuses - initializing from discovery", "expectedNames", pvcState.expectedNames, "count", len(pvcState.expectedNames))
 		status.PVCStatuses = make([]marklogicv1.PVCResizeStatus, 0, len(pvcState.expectedNames))
 		for _, name := range pvcState.expectedNames {
 			entry := marklogicv1.PVCResizeStatus{Name: name, State: marklogicv1.PVCResizeStatePending}
 			if target, ok := pvcState.targetByPVC[name]; ok {
 				entry.RequestedSize = target.String()
+				oc.ReqLogger.Info("DEBUG: initializePVCStatuses - initialized PVC with target", "name", name, "target", target.String())
+			} else {
+				oc.ReqLogger.Info("DEBUG: initializePVCStatuses - initialized PVC without target", "name", name)
 			}
 			status.PVCStatuses = append(status.PVCStatuses, entry)
 		}
