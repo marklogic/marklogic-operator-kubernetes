@@ -263,6 +263,12 @@ func createNSResizeCluster(ctx context.Context, client klient.Client, ns string)
 				Enabled: true,
 				Size:    resizeNSInitialSize,
 			},
+			AdditionalVolumeMounts: &[]corev1.VolumeMount{
+				{
+					Name:      resizeNSExtraPVCName,
+					MountPath: "/var/opt/MarkLogic/resize-logs",
+				},
+			},
 			AdditionalVolumeClaimTemplates: &[]corev1.PersistentVolumeClaim{
 				{
 					ObjectMeta: metav1.ObjectMeta{Name: resizeNSExtraPVCName},

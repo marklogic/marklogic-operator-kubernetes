@@ -1117,6 +1117,42 @@ func TestResizeVerificationRetryPathStallsThenResumes(t *testing.T) {
 	}
 }
 
+func TestResizeVerificationMarksRestartPendingForAdditionalRestart(t *testing.T) {
+	oc := newResizeTestContext(t, resizeTestInput{desiredSize: "50Gi", currentSize: "20Gi", updateStrategy: appsv1.OnDeleteStatefulSetStrategyType})
+	seedVerificationStatus(t, oc, "verify-restart-again", "50Gi", "")
+
+	status := getUpdatedGroup(t, oc).Status.VolumeResizeStatus
+	status.PVCStatuses[1].State = marklogicv1.PVCResizeStateRestarted
+	status.PVCStatuses[1].CheckpointType = marklogicv1.PVCResizeCheckpointTypeOfflinePending
+	status.PVCStatuses[1].RestartRequired = true
+	if err := oc.patchResizeStatus(status); err != nil {
+		t.Fatalf("failed to seed restarted pvc state: %v", err)
+	}
+
+	pvc := newBoundPVC("datadir-dnode-1", "50Gi")
+	pvc.Status.Capacity[corev1.ResourceStorage] = resourceMustParse("20Gi")
+	pvc.Status.Conditions = []corev1.PersistentVolumeClaimCondition{{
+		Type:   corev1.PersistentVolumeClaimFileSystemResizePending,
+		Status: corev1.ConditionTrue,
+	}}
+	replacePVC(t, oc, pvc)
+
+	if _, err := oc.ReconcileVolumeResizeValidation().Output(); err != nil {
+		t.Fatalf("unexpected error during verification restart-again pass: %v", err)
+	}
+
+	updated := getUpdatedGroup(t, oc).Status.VolumeResizeStatus
+	if updated.Phase != marklogicv1.VolumeResizePhaseRestartingPods {
+		t.Fatalf("expected RestartingPods phase, got %s", updated.Phase)
+	}
+	if updated.PVCStatuses[1].State != marklogicv1.PVCResizeStateRestartPending {
+		t.Fatalf("expected pvc state RestartPending, got %s", updated.PVCStatuses[1].State)
+	}
+	if updated.PVCStatuses[1].PodName == "" {
+		t.Fatalf("expected pod name to be set for restart")
+	}
+}
+
 func TestResizeVerificationTemplateLagRoutesBackToStatefulSetSync(t *testing.T) {
 	oc := newResizeTestContext(t, resizeTestInput{desiredSize: "50Gi", currentSize: "20Gi", updateStrategy: appsv1.OnDeleteStatefulSetStrategyType})
 	seedVerificationStatus(t, oc, "verify-template-lag", "50Gi", "")

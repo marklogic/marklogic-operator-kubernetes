@@ -775,6 +775,10 @@ func (oc *OperatorContext) processResizeVerification(status *marklogicv1.VolumeR
 			// but filesystem resize is still pending - needs another restart
 			if isPVCCheckpointed(entry) {
 				needsRestartAgain = append(needsRestartAgain, entry.Name)
+				entry.State = marklogicv1.PVCResizeStateRestartPending
+				if entry.PodName == "" {
+					entry.PodName = derivePodNameFromPVC(currentSts.Name, entry.Name)
+				}
 				entry.LastMessage = "Filesystem resize still pending after restart; scheduling another restart"
 			}
 			continue

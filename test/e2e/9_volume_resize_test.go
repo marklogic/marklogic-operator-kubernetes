@@ -248,6 +248,12 @@ func createResizeNamespaceAndCluster(ctx context.Context, t *testing.T, client k
 				Enabled: true,
 				Size:    resizeInitialSize,
 			},
+			AdditionalVolumeMounts: &[]corev1.VolumeMount{
+				{
+					Name:      resizeExtraPVCName,
+					MountPath: "/var/opt/MarkLogic/resize-logs",
+				},
+			},
 			AdditionalVolumeClaimTemplates: &[]corev1.PersistentVolumeClaim{
 				{
 					ObjectMeta: metav1.ObjectMeta{Name: resizeExtraPVCName},
