@@ -233,14 +233,6 @@ void runHelmNamespaceScopedE2eTests() {
     """
 }
 
-void runAllE2eTests() {
-    withEksCredentials {
-        sh """
-            make e2e-test-all IMG=${operatorRepo}:${VERSION} VERSION=${VERSION}
-        """
-    }
-}
-
 // Dynamically extracts dependent container image references from their canonical
 // sources and triggers the BlackDuck scan job with the full CONTAINER_IMAGES list.
 // PUBLISH_IMAGE=true also prepends the published operator registry image.
@@ -352,26 +344,28 @@ pipeline {
         }
 
         // -----------------------------------------------------------------------
-        // E2E Tests — branch builds run the full suite automatically:
-        // cluster-scoped E2E, Helm namespace-scoped E2E, and EKS E2E.
-        // The EKS lock is held only while the full suite executes.
+        // E2E Tests — runs on Minikube (default) or the shared EKS cluster.
+        // Minikube and EKS paths are unified into the same named stages.
+        // The EKS cluster lock is acquired only for EKS builds, so unrelated
+        // Minikube builds are never blocked. Cleanup is guaranteed via
+        // try/finally even when earlier stages throw.
         // -----------------------------------------------------------------------
         stage('E2E Tests') {
             steps {
                 script {
-                    def doSetup   = { runMinikubeSetup() }
-                    def doTests   = {
-                        lock(resource: 'jenkinsKubeNinjasEksCluster', inversePrecedence: true) {
-                            timeout(time: 3, unit: 'HOURS') {
-                                runAllE2eTests()
-                            }
-                        }
+                    if (params.TEST_ON_EKS && params.E2E_SCOPE != 'cluster') {
+                        error "E2E_SCOPE='${params.E2E_SCOPE}' is not supported when TEST_ON_EKS=true. Use E2E_SCOPE='cluster'."
                     }
-                    def doCleanup = {
+
+                    def doSetup    = { params.TEST_ON_EKS ? runEKSSetup()          : runMinikubeSetup() }
+                    def doTests    = { params.TEST_ON_EKS ? runEKSE2eTests()        : runE2eTests(params.E2E_SCOPE) }
+                    def doCleanup  = {
                         catchError(buildResult: 'SUCCESS', stageResult: 'FAILURE') {
-                            runMinikubeCleanup()
+                            if (params.TEST_ON_EKS) { runEKSCleanup() } else { runMinikubeCleanup() }
                         }
                     }
+                    def doIstioSetup  = { params.TEST_ON_EKS ? runEKSIstioSetup()      : runIstioMinikubeSetup() }
+                    def doIstioTests  = { params.TEST_ON_EKS ? runEKSIstioE2eTests()   : runIstioE2eTests() }
 
                     def testBody = {
                         try {
@@ -380,8 +374,36 @@ pipeline {
                         } finally {
                             stage('Cleanup')       { doCleanup() }
                         }
+                        // Istio stages are always declared so that Jenkins Stage View
+                        // shows a consistent set of columns across all run types.
+                        // When VERIFY_ISTIO_AMBIENT is false the stages are entered but
+                        // immediately skipped, preserving their position in the view.
+                        try {
+                            stage('Istio Setup') {
+                                if (params.E2E_SCOPE == 'cluster' && params.VERIFY_ISTIO_AMBIENT) { doIstioSetup() }
+                                else { echo "Istio tests skipped (E2E_SCOPE=${params.E2E_SCOPE}, VERIFY_ISTIO_AMBIENT=${params.VERIFY_ISTIO_AMBIENT})" }
+                            }
+                            stage('Run Istio e2e Tests') {
+                                if (params.E2E_SCOPE == 'cluster' && params.VERIFY_ISTIO_AMBIENT) { doIstioTests() }
+                                else { echo "Istio tests skipped (E2E_SCOPE=${params.E2E_SCOPE}, VERIFY_ISTIO_AMBIENT=${params.VERIFY_ISTIO_AMBIENT})" }
+                            }
+                        } finally {
+                            stage('Istio Cleanup') {
+                                if (params.E2E_SCOPE == 'cluster' && params.VERIFY_ISTIO_AMBIENT) { doCleanup() }
+                                else { echo "Istio tests skipped (E2E_SCOPE=${params.E2E_SCOPE}, VERIFY_ISTIO_AMBIENT=${params.VERIFY_ISTIO_AMBIENT})" }
+                            }
+                        }
                     }
-                    testBody()
+
+                    if (params.TEST_ON_EKS) {
+                        lock(resource: 'jenkinsKubeNinjasEksCluster', inversePrecedence: true) {
+                            timeout(time: 3, unit: 'HOURS') {
+                                testBody()
+                            }
+                        }
+                    } else {
+                        testBody()
+                    }
                 }
             }
         }

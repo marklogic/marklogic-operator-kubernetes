@@ -233,16 +233,6 @@ e2e-test-helm-namespace:
 	fi
 	E2E_DOCKER_IMAGE=$(IMG) go test -v -count=1 -timeout 45m ./test/e2e-helm
 
-.PHONY: e2e-test-all  ## Run cluster-scoped E2E, Helm namespace-scoped E2E, and EKS E2E tests in sequence.
-e2e-test-all:
-	@echo "=====Running cluster-scoped E2E, Helm E2E, and EKS E2E tests====="
-	@set -e; \
-	trap '$(MAKE) e2e-cleanup-eks' EXIT; \
-	$(MAKE) e2e-test-cluster; \
-	$(MAKE) e2e-test-helm-namespace; \
-	$(MAKE) e2e-setup-eks; \
-	$(MAKE) e2e-test-eks
-
 .PHONY: e2e-test-volume-resize  ## Run ONLY the cluster-scoped volume resize test (two namespaces in parallel)
 e2e-test-volume-resize:
 	@echo "=====Running cluster-scoped volume-resize e2e test (parallel, 2 namespaces)====="
