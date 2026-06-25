@@ -340,7 +340,7 @@ func (oc *OperatorContext) processResizeSubmission(status *marklogicv1.VolumeRes
 
 		pvc := &corev1.PersistentVolumeClaim{}
 		if getErr := oc.Client.Get(oc.Ctx, client.ObjectKey{Namespace: oc.MarklogicGroup.Namespace, Name: entry.Name}, pvc); getErr != nil {
-			oc.ReqLogger.Info("DEBUG: processResizeSubmission - Failed to fetch PVC", "name", entry.Name, "error", getErr.Error())
+			oc.ReqLogger.V(1).Info("processResizeSubmission: failed to fetch PVC", "name", entry.Name, "error", getErr.Error())
 			oc.markPVCFailed(status, entry.Name, marklogicv1.VolumeResizeReasonResizeFailed, getErr.Error())
 			continue
 		}
