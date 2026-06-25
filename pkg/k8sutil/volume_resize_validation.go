@@ -352,31 +352,31 @@ func (oc *OperatorContext) processResizeSubmission(status *marklogicv1.VolumeRes
 		}
 		entryTarget, targetErr := resizeTargetForPVCEntry(status, entry)
 		if targetErr != nil {
-			oc.ReqLogger.Info("DEBUG: processResizeSubmission - Failed to resolve target", "name", entry.Name, "error", targetErr.Error())
+			oc.ReqLogger.V(1).Info("processResizeSubmission: failed to resolve target", "name", entry.Name, "error", targetErr.Error())
 			oc.markPVCFailed(status, entry.Name, marklogicv1.VolumeResizeReasonInvalidResizeRequest, targetErr.Error())
 			continue
 		}
 		entry.RequestedSize = entryTarget.String()
 		entry.ObservedCapacity = observed.String()
 
-		oc.ReqLogger.Info("DEBUG: processResizeSubmission - PVC size check", "name", entry.Name, "requested", requested.String(), "target", entryTarget.String(), "observed", observed.String())
+		oc.ReqLogger.V(1).Info("processResizeSubmission: PVC size check", "name", entry.Name, "requested", requested.String(), "target", entryTarget.String(), "observed", observed.String())
 
 		if requested.Cmp(entryTarget) >= 0 {
 			entry.State = marklogicv1.PVCResizeStateWaitingForCheckpoint
 			entry.LastReason = ""
 			entry.LastMessage = "Waiting for resize checkpoint"
-			oc.ReqLogger.Info("DEBUG: processResizeSubmission - Request already at target, waiting for checkpoint", "name", entry.Name)
+			oc.ReqLogger.V(1).Info("processResizeSubmission: request already at target, waiting for checkpoint", "name", entry.Name)
 			continue
 		}
 
-		oc.ReqLogger.Info("DEBUG: processResizeSubmission - Submitting PVC resize patch", "name", entry.Name, "newSize", entryTarget.String())
+		oc.ReqLogger.V(1).Info("processResizeSubmission: submitting PVC resize patch", "name", entry.Name, "newSize", entryTarget.String())
 		patch := client.MergeFrom(pvc.DeepCopy())
 		if pvc.Spec.Resources.Requests == nil {
 			pvc.Spec.Resources.Requests = corev1.ResourceList{}
 		}
 		pvc.Spec.Resources.Requests[corev1.ResourceStorage] = entryTarget
 		if patchErr := oc.Client.Patch(oc.Ctx, pvc, patch); patchErr != nil {
-			oc.ReqLogger.Info("DEBUG: processResizeSubmission - Patch failed", "name", entry.Name, "error", patchErr.Error())
+			oc.ReqLogger.V(1).Info("processResizeSubmission: patch failed", "name", entry.Name, "error", patchErr.Error())
 			oc.markPVCFailed(status, entry.Name, marklogicv1.VolumeResizeReasonResizeFailed, patchErr.Error())
 			continue
 		}
@@ -385,7 +385,7 @@ func (oc *OperatorContext) processResizeSubmission(status *marklogicv1.VolumeRes
 		entry.State = marklogicv1.PVCResizeStateResizeSubmitted
 		entry.LastReason = ""
 		entry.LastMessage = "Resize request submitted"
-		oc.ReqLogger.Info("DEBUG: processResizeSubmission - Resize patch submitted successfully", "name", entry.Name)
+		oc.ReqLogger.V(1).Info("processResizeSubmission: resize patch submitted successfully", "name", entry.Name)
 	}
 
 	oc.updateSequentialActivePVC(status)
@@ -811,7 +811,7 @@ func (oc *OperatorContext) processResizeVerification(status *marklogicv1.VolumeR
 	oc.recalculatePVCProgress(status)
 	if len(needsRestartAgain) > 0 {
 		sort.Strings(needsRestartAgain)
-		oc.ReqLogger.Info("DEBUG: processResizeVerification - PVCs still pending after restart, triggering another restart", "pvcs", needsRestartAgain)
+		oc.ReqLogger.V(1).Info("processResizeVerification: PVCs still pending after restart, triggering another restart", "pvcs", needsRestartAgain)
 		oc.transitionResizePhase(status, marklogicv1.VolumeResizePhaseRestartingPods, "", fmt.Sprintf("Filesystem resize still pending after restart for PVCs: %s; scheduling another restart", strings.Join(needsRestartAgain, ",")))
 		oc.emitResizeEvent(corev1.EventTypeNormal, "VolumeResizeProgressing", status.Message)
 		if patchErr := oc.patchResizeStatus(status); patchErr != nil {
@@ -866,9 +866,9 @@ func (oc *OperatorContext) initializePVCStatuses(status *marklogicv1.VolumeResiz
 			entry := marklogicv1.PVCResizeStatus{Name: name, State: marklogicv1.PVCResizeStatePending}
 			if target, ok := pvcState.targetByPVC[name]; ok {
 				entry.RequestedSize = target.String()
-				oc.ReqLogger.Info("DEBUG: initializePVCStatuses - initialized PVC with target", "name", name, "target", target.String())
+				oc.ReqLogger.V(1).Info("initializePVCStatuses: initialized PVC with target", "name", name, "target", target.String())
 			} else {
-				oc.ReqLogger.Info("DEBUG: initializePVCStatuses - initialized PVC without target", "name", name)
+				oc.ReqLogger.V(1).Info("initializePVCStatuses: initialized PVC without target", "name", name)
 			}
 			status.PVCStatuses = append(status.PVCStatuses, entry)
 		}
@@ -1258,7 +1258,7 @@ func (oc *OperatorContext) syncStatefulSetPVCTemplates(status *marklogicv1.Volum
 
 	if len(templatesMissingFromStatefulSet) > 0 {
 		sort.Strings(templatesMissingFromStatefulSet)
-		oc.ReqLogger.Info("DEBUG: syncStatefulSetPVCTemplates - templates missing from StatefulSet", "statefulSet", currentSts.Name, "missing", templatesMissingFromStatefulSet, "available", getTemplateNamesFromSTS(currentSts))
+		oc.ReqLogger.V(1).Info("syncStatefulSetPVCTemplates: templates missing from StatefulSet", "statefulSet", currentSts.Name, "missing", templatesMissingFromStatefulSet, "available", getTemplateNamesFromSTS(currentSts))
 		return false, fmt.Errorf("statefulset %s is missing volumeClaimTemplates: %s", currentSts.Name, strings.Join(templatesMissingFromStatefulSet, ","))
 	}
 
@@ -1269,7 +1269,8 @@ func (oc *OperatorContext) syncStatefulSetPVCTemplates(status *marklogicv1.Volum
 	}
 
 	sort.Strings(templatesBelowTarget)
-	oc.ReqLogger.Info("DEBUG: syncStatefulSetPVCTemplates - templates below target, recreating StatefulSet", "statefulSet", currentSts.Name, "belowTarget", templatesBelowTarget, "allTemplates", getTemplateNamesFromSTS(currentSts))
+	oc.ReqLogger.V(1).Info("syncStatefulSetPVCTemplates: templates below target, recreating StatefulSet", "statefulSet", currentSts.Name, "belowTarget", templatesBelowTarget, "allTemplates", getTemplateNamesFromSTS(currentSts))
+	_ = templatesBelowTarget
 
 	addResizeMarker(status, resizeMarkerTemplateRecreateStarted)
 	if hasResizeMarker(status, resizeMarkerTemplateDeleted) {
@@ -1552,7 +1553,7 @@ func (oc *OperatorContext) discoverPrimaryPVCs(sts *appsv1.StatefulSet, targets 
 		templateNames = getResizableTemplateNames(sts)
 	}
 	sort.Strings(templateNames)
-	oc.ReqLogger.Info("DEBUG: discoverPrimaryPVCs - discovering PVCs", "templateNames", templateNames, "replicas", replicas, "stsName", sts.Name)
+	oc.ReqLogger.V(1).Info("discoverPrimaryPVCs: discovering PVCs", "templateNames", templateNames, "replicas", replicas, "stsName", sts.Name)
 	for _, templateName := range templateNames {
 		templateTarget, hasTarget := targets[templateName]
 		if !hasTarget {
@@ -1599,7 +1600,7 @@ func (oc *OperatorContext) discoverPrimaryPVCs(sts *appsv1.StatefulSet, targets 
 			templateStateMap[k] = v.String()
 		}
 	}
-	oc.ReqLogger.Info("DEBUG: discoverPrimaryPVCs - discovery complete", "found", len(state.foundPVCs), "expected", len(state.expectedNames), "missing", state.missingPVCs, "minByTemplate", templateStateMap)
+	oc.ReqLogger.V(1).Info("discoverPrimaryPVCs: discovery complete", "found", len(state.foundPVCs), "expected", len(state.expectedNames), "missing", state.missingPVCs, "minByTemplate", templateStateMap)
 	return state, nil
 }
 
@@ -1651,6 +1652,11 @@ func resolveResizeTargetsFromSpec(group *marklogicv1.MarklogicGroup) (templateRe
 			targets[tmpl.Name] = size
 		}
 	}
+	targetMap := make(map[string]string)
+	for k, v := range targets {
+		targetMap[k] = v.String()
+	}
+	_ = targetMap
 	return targets, nil
 }
 
