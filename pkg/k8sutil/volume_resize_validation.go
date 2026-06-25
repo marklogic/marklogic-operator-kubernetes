@@ -334,7 +334,7 @@ func (oc *OperatorContext) processResizeSubmission(status *marklogicv1.VolumeRes
 	for _, idx := range indices {
 		entry := &status.PVCStatuses[idx]
 		if isPVCCheckpointed(entry) {
-			oc.ReqLogger.Info("DEBUG: processResizeSubmission - PVC already checkpointed, skipping", "name", entry.Name)
+			oc.ReqLogger.V(1).Info("processResizeSubmission: PVC already checkpointed, skipping", "name", entry.Name)
 			continue
 		}
 
