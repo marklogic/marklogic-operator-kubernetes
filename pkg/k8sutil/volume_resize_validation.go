@@ -745,7 +745,7 @@ func (oc *OperatorContext) processResizeVerification(status *marklogicv1.VolumeR
 		if getErr := oc.Client.Get(oc.Ctx, client.ObjectKey{Namespace: oc.MarklogicGroup.Namespace, Name: entry.Name}, pvc); getErr != nil {
 			return oc.scheduleSyncRetryOrFail(status, marklogicv1.VolumeResizeReasonMarkLogicHealthCheckFailed, "Failed to fetch PVC during verification", getErr)
 		}
-		oc.ReqLogger.Info("DEBUG: processResizeVerification - PVC state", "name", entry.Name, "state", entry.State, "checkpointType", entry.CheckpointType, "restartRequired", entry.RestartRequired, "fileSystemResizePending", hasFileSystemResizePending(pvc))
+		oc.ReqLogger.V(1).Info("processResizeVerification: PVC state", "name", entry.Name, "state", entry.State, "checkpointType", entry.CheckpointType, "restartRequired", entry.RestartRequired, "fileSystemResizePending", hasFileSystemResizePending(pvc))
 
 		requested := pvc.Spec.Resources.Requests[corev1.ResourceStorage]
 		observed := pvc.Status.Capacity[corev1.ResourceStorage]
