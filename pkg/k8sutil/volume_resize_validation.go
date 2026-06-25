@@ -1651,11 +1651,6 @@ func resolveResizeTargetsFromSpec(group *marklogicv1.MarklogicGroup) (templateRe
 			targets[tmpl.Name] = size
 		}
 	}
-	targetMap := make(map[string]string)
-	for k, v := range targets {
-		targetMap[k] = v.String()
-	}
-	_ = targetMap
 	return targets, nil
 }
 
