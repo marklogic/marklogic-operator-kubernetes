@@ -169,7 +169,7 @@ Cloud-specific limitations such as rate limits, quota exhaustion, cooldown perio
 
 #### In Scope
 
-1.  Expansion of the primary persistence-backed PVC used by a MarkLogic group.
+1.  Expansion of the primary persistence-backed PVC and any configured `additionalVolumeClaimTemplates` PVCs used by a MarkLogic group.
     
 2.  Declarative resize triggered by increasing the requested storage size in the CR.
     
@@ -190,18 +190,16 @@ Cloud-specific limitations such as rate limits, quota exhaustion, cooldown perio
     
 3.  Cross-cluster storage orchestration outside the target MarkLogic resource.
     
-4.  Expansion of arbitrary `additionalVolumeClaimTemplates` in the first version, unless explicitly added in a later phase.
-    
-5.  Hard guarantees about zero service interruption in storage environments that require offline filesystem expansion.
+4.  Hard guarantees about zero service interruption in storage environments that require offline filesystem expansion.
 
-6.  Concurrent execution of resize with scale, upgrade, or other StatefulSet-mutating operations in v1.
+5.  Concurrent execution of resize with scale, upgrade, or other StatefulSet-mutating operations in v1.
     
 
 ## API and User Experience Contract
 
 ### **Trigger Model**
 
-Users trigger resize by modifying the effective persistence size on `MarklogicCluster`, either through `MarklogicCluster.spec.persistence.size` or a group-specific override such as `MarklogicCluster.spec.markLogicGroups[i].persistence.size`. The operator computes the effective desired size for each managed group and reconciles resize at the `MarklogicGroup` level, where the StatefulSet, Pods, and PVCs are managed.
+Users trigger resize by modifying the effective target sizes on `MarklogicCluster`: the primary persistence size (`MarklogicCluster.spec.persistence.size` or a group-specific override such as `MarklogicCluster.spec.markLogicGroups[i].persistence.size`) and/or storage requests in `additionalVolumeClaimTemplates` (cluster-level or group-level). The operator computes the effective desired target for each managed group and reconciles resize at the `MarklogicGroup` level, where the StatefulSet, Pods, and PVCs are managed.
 
   
 Example:
@@ -214,7 +212,7 @@ spec:
     resizeStrategy: parallel  # Options: 'parallel' (default) or 'sequential'
 ```
 
-The operator shall interpret an increase to the effective persistence size as a request to expand the persistent volumes associated with the target MarkLogic group.
+The operator shall interpret an increase to any effective target PVC template size as a request to expand the associated persistent volumes for the target MarkLogic group.
 
 The operator shall not treat an unchanged size as a new resize operation.
 
@@ -234,8 +232,9 @@ Detailed resize execution state is owned by `MarklogicGroup.status.volumeResizeS
 
 |              Field              |  Type   |                           Description                            |                      Notes                       |
 |---------------------------------|---------|------------------------------------------------------------------|--------------------------------------------------|
-|    spec.persistence.enabled     | boolean | Indicates whether persistence is enabled for the target workload | Resize is valid only when persistence is enabled |
+|    spec.persistence.enabled     | boolean | Indicates whether primary datadir persistence is enabled for the target workload | Controls the primary `datadir` PVC template only |
 |      spec.persistence.size      | string  |                  Desired persistent volume size                  |      Increasing this field triggers resize       |
+| spec.additionalVolumeClaimTemplates[].spec.resources.requests.storage | string | Desired size for an additional PVC template | Increasing this field triggers resize for that template's PVCs |
 | spec.persistence.resizeStrategy |  enum   |          Strategy the operator uses when resizing PVCs           |               Default is parallel                |
 
 #### Resize Strategy Values
@@ -591,19 +590,19 @@ Validate the resize request and the execution environment before making any chan
 
 Entry criteria:
 
-1.  The effective requested size for the target MarkLogic group is greater than the current size.
+1.  At least one effective target PVC template size for the target MarkLogic group is greater than the current observed size for that template.
     
 2.  No conflicting resize operation is already active for the same target group.
 
 Actions:
 
-1.  Resolve the effective persistence configuration for the target group.
+1.  Resolve the effective storage configuration for the target group, including primary persistence and any configured additional PVC templates.
     
 2.  Identify the PVCs owned by or associated with the group.
     
-3.  Verify that persistence is enabled.
+3.  Verify that at least one resizable PVC template target exists.
     
-4.  Verify that the requested size is greater than the current effective size.
+4.  Verify that each requested template target is greater than or equal to its current effective size.
     
 5.  Verify that all target PVCs are in `Bound` state.
     
@@ -640,7 +639,7 @@ Shared actions:
 
 1.  Determine which PVC or PVCs are eligible for resize submission in the current reconcile cycle.
     
-2.  Patch the target PVC request size to the desired `targetSize`.
+2.  Patch each target PVC request size to that PVC's desired target size.
     
 3.  Record progress in status.
     
@@ -691,9 +690,9 @@ A PVC is considered checkpointed for phase advancement when the resize request h
 
 Concretely, a PVC has reached the required checkpoint when one of the following is true:
 
-1.  **Online expansion complete:** `pvc.status.capacity[storage]` >= `targetSize` AND the PVC does not have a condition of type `FileSystemResizePending` with status `True`. In this case, no Pod restart is needed for this PVC.
+1.  **Online expansion complete:** `pvc.status.capacity[storage]` >= the PVC's desired target size AND the PVC does not have a condition of type `FileSystemResizePending` with status `True`. In this case, no Pod restart is needed for this PVC.
 
-2.  **Offline expansion pending:** `pvc.spec.resources.requests[storage]` == `targetSize` AND the PVC has a condition of type `FileSystemResizePending` with status `True`. This confirms the block-level expansion has been acknowledged and workload-side remount is still required.
+2.  **Offline expansion pending:** `pvc.spec.resources.requests[storage]` == the PVC's desired target size AND the PVC has a condition of type `FileSystemResizePending` with status `True`. This confirms the block-level expansion has been acknowledged and workload-side remount is still required.
 
 The operator must record per-PVC checkpoint type (online vs. offline) in `pvcStatuses` so the later restart-handling logic can determine whether any Pod restart is needed and which Pods are eligible for selective restart.
 
@@ -1143,7 +1142,7 @@ At minimum, the persisted recovery record must include:
 
 2.  `observedGeneration`
 
-3.  `currentSize` and `targetSize`
+3.  `currentSize`, `targetSize`, and per-PVC desired targets in `pvcStatuses[*].requestedSize`
 
 4.  The stable ordered target PVC list
 
@@ -2240,7 +2239,7 @@ The operator must preserve expected behavior for existing workloads that already
 
 Compatibility expectations:
 
-1.  Existing persisted workloads continue operating normally until the requested size increases
+1.  Existing persisted workloads continue operating normally until a requested size increases (primary persistence and/or additional PVC templates)
     
 2.  The feature does not require users to recreate workloads
     
@@ -2262,7 +2261,7 @@ The resize feature should be treated as a backward-compatible additive capabilit
 4.  Existing clients are not required to understand resize-specific status fields
     
 
-If future versions materially change the workflow contract, such as adding support for resizing `additionalVolumeClaimTemplates` or changing concurrent resize semantics, those changes should be documented explicitly as contract evolutions.
+If future versions materially change the workflow contract, such as changing concurrent resize semantics or introducing new target-selection rules, those changes should be documented explicitly as contract evolutions.
 
 ### Release Readiness Outcomes
 
@@ -2298,12 +2297,6 @@ Recommendation:
 Allow only one active resize execution per `MarklogicGroup`. Snapshot the active target size when the operation begins. If a larger desired size is submitted during the operation, defer it until the active operation completes or fails, then evaluate whether another resize is required.
 
 Additionally, if the new desired size is smaller than the active `targetSize` but still larger than `currentSize`, this constitutes a conflicting intent that cannot be satisfied while the active operation is in flight. The operator must not start a second operation. The active operation completes against its snapshotted target. The new smaller-but-still-larger desired size is evaluated only after the active operation reaches a terminal state.
-
-### Should Additional Volume Claim Templates Be Included in Scope?
-
-Recommendation:
-
-Keep v1 limited to the primary persistence-backed PVC. Additional volume claim templates should be a later feature because they expand the failure surface and may have different application-level restart implications.
 
 ### What Is the Authoritative Completion Signal?
 
@@ -2360,6 +2353,12 @@ Merge semantics for `resizeStrategy`:
 2.  If `resizeStrategy` is omitted at the group level but specified at the cluster level, the cluster-level value is inherited.
 3.  If `resizeStrategy` is omitted at both levels, the default is `parallel`.
 4.  This follows the same inheritance pattern as other persistence fields.
+
+Merge semantics for resize target scope:
+
+1.  The effective target set includes the primary `datadir` template when persistence is enabled for the group.
+2.  The effective target set also includes any additional PVC templates with explicit storage requests.
+3.  Group-level template definitions override inherited cluster-level template definitions by template name.
     
 
 ## Appendix and Examples
@@ -2376,7 +2375,7 @@ Merge semantics for `resizeStrategy`:
 |    Sequential strategy    |                            Resize one PVC at a time and wait for each before continuing                             |
 |        Checkpoint         | The state a PVC must reach before the resize workflow can advance past it. Concretely, either online expansion is complete (`status.capacity` >= target, no `FileSystemResizePending`) or offline expansion is acknowledged (`FileSystemResizePending` is present, confirming the block device was expanded and workload remount is required). |
 |       currentSize         | The minimum of `pvc.status.capacity[storage]` across all target PVCs at the time the resize operation begins        |
-|        targetSize         | The desired final volume size snapshotted from `spec.persistence.size` when the resize operation starts             |
+|        targetSize         | The primary operation target size snapshot (typically derived from persistence size); per-PVC targets are represented by `pvcStatuses[*].requestedSize` |
 | Safe partial-completion   | A state where PVCs have been expanded but the StatefulSet template has not yet been synchronized. This is a tolerable intermediate state: the workload continues to function with expanded storage, and template synchronization can be retried independently. |
 
 ### Example Resize Request
@@ -2390,6 +2389,14 @@ spec:
   persistence:
     enabled: true
     size: 100Gi
+  additionalVolumeClaimTemplates:
+    - metadata:
+        name: logs
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 50Gi
   markLogicGroups:
     - name: dnode
       replicas: 3
@@ -2407,15 +2414,15 @@ status:
         operationID: resize-20260331-dnode
         observedGeneration: 12
         phase: WaitingForPVCResize
-        message: Waiting for PVC checkpoint completion for 2 of 3 PVCs
+        message: Waiting for PVC checkpoint completion for 2 of 6 PVCs
         currentSize: 20Gi
         targetSize: 100Gi
         deferredTargetSize: 150Gi
         deferredObservedGeneration: 13
         resizeStrategy: sequential
         activePVC: datadir-dnode-1
-        pvcsCheckpointed: 1
-        totalPvcs: 3
+        pvcsCheckpointed: 2
+        totalPvcs: 6
         pvcStatuses:
             - name: datadir-dnode-0
               podName: dnode-0
@@ -2431,6 +2438,25 @@ status:
               state: WaitingForCheckpoint
               restartRequired: false
             - name: datadir-dnode-2
+              podName: dnode-2
+              requestedSize: 20Gi
+              observedCapacity: 20Gi
+              state: Pending
+              restartRequired: false
+            - name: logs-dnode-0
+              podName: dnode-0
+              requestedSize: 50Gi
+              observedCapacity: 50Gi
+              state: Checkpointed
+              checkpointType: OnlineComplete
+              restartRequired: false
+            - name: logs-dnode-1
+              podName: dnode-1
+              requestedSize: 50Gi
+              observedCapacity: 20Gi
+              state: WaitingForCheckpoint
+              restartRequired: false
+            - name: logs-dnode-2
               podName: dnode-2
               requestedSize: 20Gi
               observedCapacity: 20Gi
@@ -2453,8 +2479,8 @@ status:
         currentSize: 20Gi
         targetSize: 100Gi
         resizeStrategy: sequential
-        pvcsCheckpointed: 3
-        totalPvcs: 3
+        pvcsCheckpointed: 6
+        totalPvcs: 6
         pvcStatuses:
             - name: datadir-dnode-0
               podName: dnode-0
@@ -2474,6 +2500,27 @@ status:
               podName: dnode-2
               requestedSize: 100Gi
               observedCapacity: 100Gi
+              state: Checkpointed
+              checkpointType: OnlineComplete
+              restartRequired: false
+            - name: logs-dnode-0
+              podName: dnode-0
+              requestedSize: 50Gi
+              observedCapacity: 50Gi
+              state: Checkpointed
+              checkpointType: OnlineComplete
+              restartRequired: false
+            - name: logs-dnode-1
+              podName: dnode-1
+              requestedSize: 50Gi
+              observedCapacity: 50Gi
+              state: Checkpointed
+              checkpointType: OnlineComplete
+              restartRequired: false
+            - name: logs-dnode-2
+              podName: dnode-2
+              requestedSize: 50Gi
+              observedCapacity: 50Gi
               state: Checkpointed
               checkpointType: OnlineComplete
               restartRequired: false
@@ -2497,7 +2544,7 @@ status:
         targetSize: 100Gi
         resizeStrategy: parallel
         pvcsCheckpointed: 0
-        totalPvcs: 3
+        totalPvcs: 6
         pvcStatuses:
             - name: datadir-dnode-0
               podName: dnode-0
@@ -2520,6 +2567,27 @@ status:
               state: Failed
               lastReason: StorageClassNotExpandable
               lastMessage: StorageClass gp2 does not allow volume expansion
+            - name: logs-dnode-0
+              podName: dnode-0
+              requestedSize: 20Gi
+              observedCapacity: 20Gi
+              state: Failed
+              lastReason: StorageClassNotExpandable
+              lastMessage: StorageClass gp2 does not allow volume expansion
+            - name: logs-dnode-1
+              podName: dnode-1
+              requestedSize: 20Gi
+              observedCapacity: 20Gi
+              state: Failed
+              lastReason: StorageClassNotExpandable
+              lastMessage: StorageClass gp2 does not allow volume expansion
+            - name: logs-dnode-2
+              podName: dnode-2
+              requestedSize: 20Gi
+              observedCapacity: 20Gi
+              state: Failed
+              lastReason: StorageClassNotExpandable
+              lastMessage: StorageClass gp2 does not allow volume expansion
         retryCount: 0
         lastTransitionTime: "2026-03-31T10:14:02Z"
         firstStartedTime: "2026-03-31T10:13:10Z"
@@ -2535,13 +2603,13 @@ status:
         observedGeneration: 12
         phase: Stalled
         reason: PartialResizeFailure
-        message: 2 of 3 PVCs reached the required checkpoint; 1 PVC failed
+        message: 4 of 6 PVCs reached the required checkpoint; 2 PVCs failed
         currentSize: 20Gi
         targetSize: 100Gi
         resizeStrategy: sequential
         activePVC: datadir-dnode-2
-        pvcsCheckpointed: 2
-        totalPvcs: 3
+        pvcsCheckpointed: 4
+        totalPvcs: 6
         pvcStatuses:
             - name: datadir-dnode-0
               podName: dnode-0
@@ -2565,12 +2633,37 @@ status:
               restartRequired: false
               lastReason: StorageQuotaExceeded
               lastMessage: Provider rejected resize due to insufficient capacity
+            - name: logs-dnode-0
+              podName: dnode-0
+              requestedSize: 50Gi
+              observedCapacity: 50Gi
+              state: Checkpointed
+              checkpointType: OnlineComplete
+              restartRequired: false
+            - name: logs-dnode-1
+              podName: dnode-1
+              requestedSize: 50Gi
+              observedCapacity: 50Gi
+              state: Checkpointed
+              checkpointType: OnlineComplete
+              restartRequired: false
+            - name: logs-dnode-2
+              podName: dnode-2
+              requestedSize: 50Gi
+              observedCapacity: 20Gi
+              state: Failed
+              restartRequired: false
+              lastReason: StorageQuotaExceeded
+              lastMessage: Provider rejected resize due to insufficient capacity
         retryCount: 1
         nextRetryTime: "2026-03-31T10:23:00Z"
         warnings:
             - One PVC is blocked by provider quota
         failedPVCs:
             - name: datadir-dnode-2
+              reason: StorageQuotaExceeded
+              message: Provider rejected resize due to insufficient capacity
+            - name: logs-dnode-2
               reason: StorageQuotaExceeded
               message: Provider rejected resize due to insufficient capacity
         lastTransitionTime: "2026-03-31T10:22:00Z"

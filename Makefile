@@ -302,6 +302,10 @@ e2e-test-helm-volume-resize:
 	fi
 	E2E_DOCKER_IMAGE=$(IMG) go test -v -count=1 -timeout 30m ./test/e2e-helm -run TestVolumeResizeNamespaceScoped
 
+.PHONY: e2e-test-jenkins-volume-resize  ## Run ONLY volume resize tests on Jenkins (cluster-scoped + namespace-scoped via Helm). Optimized for CI/CD pipeline.
+e2e-test-jenkins-volume-resize: e2e-test-volume-resize e2e-test-helm-volume-resize
+	@echo "=====Jenkins volume resize tests complete (cluster-scoped + namespace-scoped)====="
+
 .PHONY: e2e-setup-minikube
 e2e-setup-minikube: kustomize controller-gen build docker-build
 	minikube version
