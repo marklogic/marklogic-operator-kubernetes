@@ -1270,7 +1270,6 @@ func (oc *OperatorContext) syncStatefulSetPVCTemplates(status *marklogicv1.Volum
 
 	sort.Strings(templatesBelowTarget)
 	oc.ReqLogger.V(1).Info("syncStatefulSetPVCTemplates: templates below target, recreating StatefulSet", "statefulSet", currentSts.Name, "belowTarget", templatesBelowTarget, "allTemplates", getTemplateNamesFromSTS(currentSts))
-	_ = templatesBelowTarget
 
 	addResizeMarker(status, resizeMarkerTemplateRecreateStarted)
 	if hasResizeMarker(status, resizeMarkerTemplateDeleted) {
