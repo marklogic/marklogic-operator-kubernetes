@@ -860,7 +860,7 @@ func (oc *OperatorContext) newResizeStatus(pvcState *resizePVCDiscovery, targetS
 
 func (oc *OperatorContext) initializePVCStatuses(status *marklogicv1.VolumeResizeStatus, pvcState *resizePVCDiscovery) {
 	if len(status.PVCStatuses) == 0 {
-		oc.ReqLogger.Info("DEBUG: initializePVCStatuses - initializing from discovery", "expectedNames", pvcState.expectedNames, "count", len(pvcState.expectedNames))
+		oc.ReqLogger.V(1).Info("initializePVCStatuses: initializing from discovery", "expectedNames", pvcState.expectedNames, "count", len(pvcState.expectedNames))
 		status.PVCStatuses = make([]marklogicv1.PVCResizeStatus, 0, len(pvcState.expectedNames))
 		for _, name := range pvcState.expectedNames {
 			entry := marklogicv1.PVCResizeStatus{Name: name, State: marklogicv1.PVCResizeStatePending}
