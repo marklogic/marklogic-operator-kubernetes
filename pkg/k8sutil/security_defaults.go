@@ -37,14 +37,14 @@ func getHAProxyContainerSecurityContextOrDefault(ctx *corev1.SecurityContext) *c
 
 // getMarkLogicContainerSecurityContextOrDefault returns the provided container security context,
 // or a secure default if nil is provided.
+// Identity fields are intentionally left unset to avoid overriding pod-level
+// runAs* settings when only podSecurityContext is provided.
 func getMarkLogicContainerSecurityContextOrDefault(ctx *corev1.SecurityContext) *corev1.SecurityContext {
 	if ctx != nil {
 		return ctx
 	}
 
 	return &corev1.SecurityContext{
-		RunAsUser:                int64Ptr(1000),
-		RunAsNonRoot:             boolPtr(true),
 		AllowPrivilegeEscalation: boolPtr(false),
 		ReadOnlyRootFilesystem:   boolPtr(false),
 		Capabilities: &corev1.Capabilities{

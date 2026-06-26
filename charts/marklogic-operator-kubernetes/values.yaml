@@ -39,12 +39,12 @@ scope:
   #        Requires ClusterRole/ClusterRoleBinding. Metrics can be secure or insecure.
   # type: "namespace"         — operator watches only specified namespace(s).
   #        Uses Role/RoleBinding per namespace. Metrics must be insecure (metrics.secure=false).
-  type: namespace
+  type: cluster
 
   # watchNamespaces: which namespace(s) to watch when scope.type = "namespace".
   # Accepts a single name, a comma-separated string, or a YAML list.
   # When empty, defaults to the release namespace.
-  watchNamespaces: "ml,ml1"
+  watchNamespaces: ""
 
 # Metrics endpoint security
 metrics:
@@ -52,4 +52,4 @@ metrics:
   #                            authentication enforced. Requires scope.type=cluster.
   # secure: false            — HTTP on :8080, no authentication. Safe for namespace scope
   #                            or development environments that have no cluster-level RBAC.
-  secure: false
+  secure: true

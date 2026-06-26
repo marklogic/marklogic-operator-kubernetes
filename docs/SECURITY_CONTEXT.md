@@ -34,11 +34,10 @@ When security context fields are not explicitly set in the CR, the operator appl
   - **runAsUser**: Not set (image default applies)
 
 - **MarkLogic Container (`spec.securityContext`)**
-  - `runAsUser: 1000` (MarkLogic UID - based on image default)
-  - `runAsNonRoot: true`
   - `allowPrivilegeEscalation: false`
   - `readOnlyRootFilesystem: false`
   - `capabilities.drop: ["ALL"]`
+  - **runAsUser/runAsNonRoot**: Not set by helper defaults (pod-level settings or image defaults apply unless explicitly set in CR)
 
 - **fluent-bit Container (`spec.logCollection.securityContext` and group override)**
   - `allowPrivilegeEscalation: false`
