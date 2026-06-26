@@ -1,0 +1,190 @@
+# Copyright (c) 2024-2026 Progress Software Corporation and/or its subsidiaries or affiliates. All Rights Reserved.
+
+# Example MarklogicCluster CR demonstrating HAProxy and fluent-bit securityContext configuration
+# This example shows how to restrict container privileges and run services with specific security contexts
+
+apiVersion: marklogic.progress.com/v1
+kind: MarklogicCluster
+metadata:
+  name: ml-secure-cluster
+  namespace: default
+  annotations: {}
+spec:
+  image: "progressofficial/marklogic-db:12.0.0-ubi9-rootless-2.2.2"
+  imagePullPolicy: IfNotPresent
+
+  clusterDomain: cluster.local
+
+  persistence:
+    enabled: true
+    size: 10Gi
+    storageClassName: "gp3"
+    accessModes:
+      - ReadWriteOnce
+
+  resources:
+    requests:
+      memory: "16Gi"
+      cpu: "4"
+    limits:
+      memory: "16Gi"
+      cpu: "4"
+
+  # Pod-level and container-level security context for MarkLogic main containers
+  podSecurityContext:
+    fsGroup: 2
+    fsGroupChangePolicy: "OnRootMismatch"
+  securityContext:
+    runAsUser: 1000
+    runAsNonRoot: true
+    allowPrivilegeEscalation: false
+
+  # ============================================================================
+  # HAProxy Configuration with SecurityContext
+  # ============================================================================
+  # HAProxy runs in its own Deployment and can have both pod-level and
+  # container-level security contexts
+  haproxy:
+    enabled: true
+    image: "haproxytech/haproxy-alpine:3.4.0"
+    replicas: 2
+    pathBasedRouting: false
+    frontendPort: 80
+
+    # Pod-level security context for HAProxy Deployment
+    # Applies to the entire pod
+    podSecurityContext:
+      fsGroup: 101  # HAProxy group ID for filesystem access
+      fsGroupChangePolicy: "OnRootMismatch"
+
+    # Container-level security context for HAProxy container
+    # Overrides pod-level settings for the container itself
+    securityContext:
+      runAsNonRoot: true
+      allowPrivilegeEscalation: false
+      readOnlyRootFilesystem: false
+      capabilities:
+        drop:
+          - ALL
+        add:
+          - NET_BIND_SERVICE  # Required for HAProxy to bind to ports
+
+    resources:
+      requests:
+        cpu: 250m
+        memory: 128Mi
+      limits:
+        cpu: 500m
+        memory: 256Mi
+
+    appServers:
+      - name: "app-service"
+        port: 8000
+        targetPort: 8000
+
+    stats:
+      enabled: true
+      port: 1024
+
+    ingress:
+      enabled: false
+
+  # ============================================================================
+  # LogCollection Configuration with SecurityContext for fluent-bit
+  # ============================================================================
+  # fluent-bit runs as a sidecar in the MarkLogic pod and shares the pod's
+  # pod-level security context but can have its own container-level context
+  logCollection:
+    enabled: true
+    image: "fluent/fluent-bit:2.1.10"  # Updated to a more secure version
+
+    # Container-level security context for fluent-bit sidecar
+    # fluent-bit shares the parent pod's podSecurityContext (see above)
+    # but can have its own container security context
+    securityContext:
+      allowPrivilegeEscalation: false
+      readOnlyRootFilesystem: true
+      capabilities:
+        drop:
+          - ALL
+
+    resources:
+      requests:
+        cpu: 100m
+        memory: 200Mi
+      limits:
+        cpu: 200m
+        memory: 500Mi
+
+    files:
+      errorLogs: true
+      accessLogs: true
+      requestLogs: true
+      crashLogs: true
+      auditLogs: true
+
+    outputs: |
+      [OUTPUT]
+          name  stdout
+          match *
+
+  # ============================================================================
+  # MarkLogic Groups
+  # ============================================================================
+  markLogicGroups:
+    - name: bootstrap
+      replicas: 1
+      isBootstrap: true
+
+      # Each group can override logCollection configuration
+      # including the securityContext for fluent-bit if needed
+      logCollection:
+        enabled: true
+        image: "fluent/fluent-bit:2.1.10"
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop:
+              - ALL
+        resources:
+          requests:
+            cpu: 100m
+            memory: 200Mi
+          limits:
+            cpu: 200m
+            memory: 500Mi
+        files:
+          errorLogs: true
+          accessLogs: true
+          requestLogs: false
+          crashLogs: true
+          auditLogs: false
+
+    - name: query
+      replicas: 2
+
+      # Inherit cluster-level logCollection config,
+      # or override with group-specific values
+      logCollection:
+        enabled: true
+        image: "fluent/fluent-bit:2.1.10"
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop:
+              - ALL
+        resources:
+          requests:
+            cpu: 150m
+            memory: 250Mi
+          limits:
+            cpu: 300m
+            memory: 600Mi
+        files:
+          errorLogs: true
+          accessLogs: true
+          requestLogs: true
+          crashLogs: true
+          auditLogs: false
