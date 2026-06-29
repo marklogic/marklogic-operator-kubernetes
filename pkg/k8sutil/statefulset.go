@@ -358,7 +358,7 @@ func generateContainerDef(name string, containerParams containerParameters) []co
 			Command:         []string{"/tini", "--", "/bin/bash", "/tmp/helm-scripts/cluster-init-wrapper.sh"},
 			Env:             getEnvironmentVariables(containerParams),
 			Lifecycle:       getLifeCycleWithoutPostStart(),
-			SecurityContext: containerParams.SecurityContext,
+			SecurityContext: getMarkLogicContainerSecurityContextOrDefault(containerParams.SecurityContext),
 			VolumeMounts:    getVolumeMount(containerParams),
 		},
 	}
@@ -386,6 +386,7 @@ func generateContainerDef(name string, containerParams containerParameters) []co
 			Command:         []string{"/fluent-bit/bin/fluent-bit"},
 			Args:            []string{"--config=/fluent-bit/etc/fluent-bit.yaml"},
 			Env:             getFluentBitEnvironmentVariables(),
+			SecurityContext: getFluentBitSecurityContextOrDefault(containerParams.LogCollection.SecurityContext),
 			VolumeMounts:    getFluentBitVolumeMount(containerParams),
 		}
 		if containerParams.LogCollection.Resources != nil {
