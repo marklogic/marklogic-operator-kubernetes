@@ -35,6 +35,9 @@ spec:
         - --metrics-secure=false
         - --leader-elect
         {{- end }}
+        {{- if .Values.webhook.enabled }}
+        - --webhook-port=9443
+        {{- end }}
         command:
         - /manager
         env:
@@ -44,6 +47,10 @@ spec:
           valueFrom:
             fieldRef:
               fieldPath: metadata.namespace
+        {{- if .Values.webhook.enabled }}
+        - name: ENABLE_NAMESPACE_WEBHOOK_VALIDATION
+          value: {{ .Values.webhook.namespaceValidation.enabled | quote }}
+        {{- end }}
         {{- if eq .Values.scope.type "namespace" }}
         {{- $ns := .Values.scope.watchNamespaces }}
         {{- if not $ns }}
@@ -83,6 +90,12 @@ spec:
           }}
         securityContext: {{- toYaml .Values.controllerManager.manager.containerSecurityContext
           | nindent 10 }}
+        {{- if .Values.webhook.enabled }}
+        volumeMounts:
+        - mountPath: /tmp/k8s-webhook-server/serving-certs
+          name: webhook-server-cert
+          readOnly: true
+        {{- end }}
       imagePullSecrets: {{ .Values.imagePullSecrets | default list | toJson }}
       nodeSelector: {{- toYaml .Values.controllerManager.nodeSelector | nindent 8 }}
       securityContext: {{- toYaml .Values.controllerManager.podSecurityContext | nindent
@@ -93,3 +106,9 @@ spec:
       tolerations: {{- toYaml .Values.controllerManager.tolerations | nindent 8 }}
       topologySpreadConstraints: {{- toYaml .Values.controllerManager.topologySpreadConstraints
         | nindent 8 }}
+      {{- if .Values.webhook.enabled }}
+      volumes:
+      - name: webhook-server-cert
+        secret:
+          secretName: {{ .Values.webhook.certs.secretName }}
+      {{- end }}

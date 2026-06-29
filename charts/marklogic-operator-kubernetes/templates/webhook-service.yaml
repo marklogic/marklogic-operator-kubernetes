@@ -1,0 +1,19 @@
+{{- if .Values.webhook.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Values.webhook.certs.serviceName }}
+  labels:
+    app.kubernetes.io/component: webhook
+    control-plane: controller-manager
+  {{- include "marklogic-operator-kubernetes.labels" . | nindent 4 }}
+spec:
+  ports:
+  - name: webhook
+    port: {{ .Values.webhook.certs.port }}
+    protocol: TCP
+    targetPort: 9443
+  selector:
+    control-plane: controller-manager
+  {{- include "marklogic-operator-kubernetes.selectorLabels" . | nindent 4 }}
+{{- end }}

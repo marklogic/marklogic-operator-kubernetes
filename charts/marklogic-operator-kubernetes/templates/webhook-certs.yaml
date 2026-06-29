@@ -1,0 +1,166 @@
+{{- if and .Values.webhook.enabled (eq .Values.webhook.certs.provider "selfSigned") }}
+{{- $secretName := .Values.webhook.certs.secretName }}
+{{- $serviceName := .Values.webhook.certs.serviceName }}
+{{- $namespace := .Release.Namespace }}
+{{- $validity := int .Values.webhook.certs.selfSigned.validityDays }}
+{{- $existing := lookup "v1" "Secret" $namespace $secretName }}
+{{- $tlsCrt := "" }}
+{{- $tlsKey := "" }}
+{{- $caCrt := "" }}
+{{- if and $existing (hasKey $existing.data "tls.crt") (hasKey $existing.data "tls.key") (hasKey $existing.data "ca.crt") }}
+  {{- $tlsCrt = (index $existing.data "tls.crt") }}
+  {{- $tlsKey = (index $existing.data "tls.key") }}
+  {{- $caCrt = (index $existing.data "ca.crt") }}
+{{- else }}
+  {{- $ca := genCA (printf "%s-webhook-ca" (include "marklogic-operator-kubernetes.fullname" .)) $validity }}
+  {{- $cert := genSignedCert $serviceName nil (list (printf "%s.%s" $serviceName $namespace) (printf "%s.%s.svc" $serviceName $namespace) (printf "%s.%s.svc.cluster.local" $serviceName $namespace)) $validity $ca }}
+  {{- $tlsCrt = b64enc $cert.Cert }}
+  {{- $tlsKey = b64enc $cert.Key }}
+  {{- $caCrt = b64enc $ca.Cert }}
+{{- end }}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ $secretName }}
+  labels:
+    app.kubernetes.io/component: webhook
+  {{- include "marklogic-operator-kubernetes.labels" . | nindent 4 }}
+type: kubernetes.io/tls
+data:
+  tls.crt: {{ $tlsCrt }}
+  tls.key: {{ $tlsKey }}
+  ca.crt: {{ $caCrt }}
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingWebhookConfiguration
+metadata:
+  name: marklogic-operator-validating-webhook
+  labels:
+    app.kubernetes.io/component: webhook
+  {{- include "marklogic-operator-kubernetes.labels" . | nindent 4 }}
+webhooks:
+- name: vmarklogicclusters.marklogic.progress.com
+  admissionReviewVersions:
+  - v1
+  sideEffects: None
+  failurePolicy: {{ .Values.webhook.failurePolicy }}
+  timeoutSeconds: {{ .Values.webhook.timeoutSeconds }}
+  rules:
+  - apiGroups:
+    - marklogic.progress.com
+    apiVersions:
+    - v1
+    operations:
+    - CREATE
+    - UPDATE
+    resources:
+    - marklogicclusters
+  clientConfig:
+    service:
+      namespace: {{ .Release.Namespace }}
+      name: {{ .Values.webhook.certs.serviceName }}
+      path: /validate-marklogic-progress-com-v1-marklogiccluster
+      port: {{ .Values.webhook.certs.port }}
+    caBundle: {{ $caCrt }}
+- name: vmarklogicgroups.marklogic.progress.com
+  admissionReviewVersions:
+  - v1
+  sideEffects: None
+  failurePolicy: {{ .Values.webhook.failurePolicy }}
+  timeoutSeconds: {{ .Values.webhook.timeoutSeconds }}
+  rules:
+  - apiGroups:
+    - marklogic.progress.com
+    apiVersions:
+    - v1
+    operations:
+    - CREATE
+    - UPDATE
+    resources:
+    - marklogicgroups
+  clientConfig:
+    service:
+      namespace: {{ .Release.Namespace }}
+      name: {{ .Values.webhook.certs.serviceName }}
+      path: /validate-marklogic-progress-com-v1-marklogicgroup
+      port: {{ .Values.webhook.certs.port }}
+    caBundle: {{ $caCrt }}
+{{- end }}
+---
+{{- if and .Values.webhook.enabled (eq .Values.webhook.certs.provider "certManager") .Values.webhook.certs.certManager.enabled }}
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ .Values.webhook.certs.certManager.certificateName }}
+  labels:
+    app.kubernetes.io/component: webhook
+  {{- include "marklogic-operator-kubernetes.labels" . | nindent 4 }}
+spec:
+  secretName: {{ .Values.webhook.certs.secretName }}
+  issuerRef:
+    kind: {{ .Values.webhook.certs.certManager.issuerRef.kind }}
+    name: {{ .Values.webhook.certs.certManager.issuerRef.name }}
+    group: {{ .Values.webhook.certs.certManager.issuerRef.group }}
+  duration: {{ .Values.webhook.certs.certManager.duration }}
+  renewBefore: {{ .Values.webhook.certs.certManager.renewBefore }}
+  dnsNames:
+  - {{ .Values.webhook.certs.serviceName }}
+  - {{ printf "%s.%s" .Values.webhook.certs.serviceName .Release.Namespace }}
+  - {{ printf "%s.%s.svc" .Values.webhook.certs.serviceName .Release.Namespace }}
+  - {{ printf "%s.%s.svc.cluster.local" .Values.webhook.certs.serviceName .Release.Namespace }}
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingWebhookConfiguration
+metadata:
+  name: marklogic-operator-validating-webhook
+  labels:
+    app.kubernetes.io/component: webhook
+  {{- include "marklogic-operator-kubernetes.labels" . | nindent 4 }}
+  annotations:
+    cert-manager.io/inject-ca-from: {{ printf "%s/%s" .Release.Namespace .Values.webhook.certs.certManager.certificateName }}
+webhooks:
+- name: vmarklogicclusters.marklogic.progress.com
+  admissionReviewVersions:
+  - v1
+  sideEffects: None
+  failurePolicy: {{ .Values.webhook.failurePolicy }}
+  timeoutSeconds: {{ .Values.webhook.timeoutSeconds }}
+  rules:
+  - apiGroups:
+    - marklogic.progress.com
+    apiVersions:
+    - v1
+    operations:
+    - CREATE
+    - UPDATE
+    resources:
+    - marklogicclusters
+  clientConfig:
+    service:
+      namespace: {{ .Release.Namespace }}
+      name: {{ .Values.webhook.certs.serviceName }}
+      path: /validate-marklogic-progress-com-v1-marklogiccluster
+      port: {{ .Values.webhook.certs.port }}
+- name: vmarklogicgroups.marklogic.progress.com
+  admissionReviewVersions:
+  - v1
+  sideEffects: None
+  failurePolicy: {{ .Values.webhook.failurePolicy }}
+  timeoutSeconds: {{ .Values.webhook.timeoutSeconds }}
+  rules:
+  - apiGroups:
+    - marklogic.progress.com
+    apiVersions:
+    - v1
+    operations:
+    - CREATE
+    - UPDATE
+    resources:
+    - marklogicgroups
+  clientConfig:
+    service:
+      namespace: {{ .Release.Namespace }}
+      name: {{ .Values.webhook.certs.serviceName }}
+      path: /validate-marklogic-progress-com-v1-marklogicgroup
+      port: {{ .Values.webhook.certs.port }}
+{{- end }}
