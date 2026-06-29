@@ -1,7 +1,0 @@
-{{- if and .Values.webhook.enabled (not (or (eq .Values.webhook.certs.provider "selfSigned") (eq .Values.webhook.certs.provider "certManager"))) }}
-{{- fail "Invalid configuration: webhook.certs.provider must be one of [selfSigned, certManager]." }}
-{{- end }}
-
-{{- if and .Values.webhook.enabled (eq .Values.webhook.certs.provider "certManager") (not .Values.webhook.certs.certManager.enabled) }}
-{{- fail "Invalid configuration: webhook.certs.provider=certManager requires webhook.certs.certManager.enabled=true." }}
-{{- end }}

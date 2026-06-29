@@ -64,7 +64,7 @@ func TestIsNamespaceAllowed(t *testing.T) {
 }
 
 func TestNamespaceScopeValidatorHandle(t *testing.T) {
-	validator := &namespaceScopeValidator{watchNamespaces: []string{"ml", "prod"}}
+	validator := &namespaceScopeValidator{watchNamespaces: []string{"ml", "prod"}, validationEnabled: true}
 
 	allowedResp := validator.Handle(t.Context(), admission.Request{
 		AdmissionRequest: admissionv1.AdmissionRequest{Namespace: "ml"},
@@ -84,5 +84,21 @@ func TestNamespaceScopeValidatorHandle(t *testing.T) {
 	}
 	if !strings.Contains(deniedResp.Result.Message, "ml,prod") {
 		t.Fatalf("expected denial message to contain allowed namespaces, got %q", deniedResp.Result.Message)
+	}
+}
+
+func TestNamespaceScopeValidatorHandle_ValidationDisabled(t *testing.T) {
+	// When validationEnabled=false the handler must return Allowed for any namespace,
+	// including non-watched ones, so the webhook paths answer without blocking CRs.
+	validator := &namespaceScopeValidator{watchNamespaces: []string{"ml", "prod"}, validationEnabled: false}
+
+	resp := validator.Handle(t.Context(), admission.Request{
+		AdmissionRequest: admissionv1.AdmissionRequest{Namespace: "dev"},
+	})
+	if !resp.Allowed {
+		t.Fatalf("expected non-watched namespace to be allowed when validation is disabled, got denied: %s", resp.Result.Message)
+	}
+	if !strings.Contains(resp.Result.Message, "disabled") {
+		t.Fatalf("expected message to mention 'disabled', got %q", resp.Result.Message)
 	}
 }

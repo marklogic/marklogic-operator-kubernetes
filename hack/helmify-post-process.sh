@@ -20,6 +20,7 @@ METRICS_AUTH_RBAC_FILE="${TEMPLATES_DIR}/metrics-auth-rbac.yaml"
 METRICS_READER_RBAC_FILE="${TEMPLATES_DIR}/metrics-reader-rbac.yaml"
 METRICS_SERVICE_FILE="${TEMPLATES_DIR}/metrics-service.yaml"
 PROXY_RBAC_FILE="${TEMPLATES_DIR}/proxy-rbac.yaml"
+VALIDATION_FILE="${TEMPLATES_DIR}/validation.yaml"
 WEBHOOK_SERVICE_FILE="${TEMPLATES_DIR}/webhook-service.yaml"
 WEBHOOK_CERTS_FILE="${TEMPLATES_DIR}/webhook-certs.yaml"
 WEBHOOK_VALIDATION_FILE="${TEMPLATES_DIR}/webhook-validation.yaml"
@@ -266,10 +267,16 @@ import sys
 path = sys.argv[1]
 with open(path, 'r') as f:
   content = f.read()
-content = content.replace('- --leader-elect\n', '- --leader-elect\n        - --webhook-port=9443\n')
-with open(path, 'w') as f:
-  f.write(content)
-print("  [deployment.yaml] Done (webhook arg).")
+anchor = '        {{- end }}\n        command:\n'
+insert = '        {{- end }}\n        {{- if .Values.webhook.enabled }}\n        - --webhook-port=9443\n        {{- end }}\n        command:\n'
+if anchor in content:
+  content = content.replace(anchor, insert, 1)
+  with open(path, 'w') as f:
+    f.write(content)
+  print("  [deployment.yaml] Done (webhook arg).")
+else:
+  print("  WARNING: metrics.secure end anchor not found for webhook arg injection.")
+  sys.exit(1)
 PYEOF
 else
   echo "  [deployment.yaml] webhook port arg already present – skipping."
@@ -283,7 +290,7 @@ path = sys.argv[1]
 with open(path, 'r') as f:
   content = f.read()
 anchor = '        - name: POD_NAMESPACE\n          valueFrom:\n            fieldRef:\n              fieldPath: metadata.namespace\n'
-insert = anchor + '        - name: ENABLE_NAMESPACE_WEBHOOK_VALIDATION\n          value: {{ .Values.webhook.namespaceValidation.enabled | quote }}\n'
+insert = anchor + '        {{- if .Values.webhook.enabled }}\n        - name: ENABLE_NAMESPACE_WEBHOOK_VALIDATION\n          value: {{ .Values.webhook.namespaceValidation.enabled | quote }}\n        {{- end }}\n'
 if anchor in content:
   content = content.replace(anchor, insert, 1)
   with open(path, 'w') as f:
@@ -305,10 +312,10 @@ with open(path, 'r') as f:
   content = f.read()
 
 container_anchor = '        securityContext: {{- toYaml .Values.controllerManager.manager.containerSecurityContext\n          | nindent 10 }}\n'
-container_insert = container_anchor + '        volumeMounts:\n        - mountPath: /tmp/k8s-webhook-server/serving-certs\n          name: webhook-server-cert\n          readOnly: true\n'
+container_insert = container_anchor + '        {{- if .Values.webhook.enabled }}\n        volumeMounts:\n        - mountPath: /tmp/k8s-webhook-server/serving-certs\n          name: webhook-server-cert\n          readOnly: true\n        {{- end }}\n'
 
 pod_anchor = '      topologySpreadConstraints: {{- toYaml .Values.controllerManager.topologySpreadConstraints\n        | nindent 8 }}\n'
-pod_insert = pod_anchor + '      volumes:\n      - name: webhook-server-cert\n        secret:\n          secretName: {{ .Values.webhook.certs.secretName }}\n'
+pod_insert = pod_anchor + '      {{- if .Values.webhook.enabled }}\n      volumes:\n      - name: webhook-server-cert\n        secret:\n          secretName: {{ .Values.webhook.certs.secretName }}\n      {{- end }}\n'
 
 changed = False
 if container_anchor in content:
@@ -956,7 +963,17 @@ webhooks:
 {{- end }}
 TMPL_EOF
 
-cat > "${WEBHOOK_VALIDATION_FILE}" << 'TMPL_EOF'
+# Keep webhook validation fail-rules in templates/validation.yaml only.
+# Remove legacy duplicate template if it exists to avoid drift.
+if [ -f "${WEBHOOK_VALIDATION_FILE}" ]; then
+  rm -f "${WEBHOOK_VALIDATION_FILE}"
+  echo "  [webhook templates] Removed duplicate webhook-validation.yaml (rules are in validation.yaml)."
+fi
+
+# Ensure webhook validation rules exist in the single source template.
+if [ -f "${VALIDATION_FILE}" ] && ! grep -q "webhook.certs.provider must be one of" "${VALIDATION_FILE}"; then
+  cat >> "${VALIDATION_FILE}" << 'TMPL_EOF'
+
 {{- if and .Values.webhook.enabled (not (or (eq .Values.webhook.certs.provider "selfSigned") (eq .Values.webhook.certs.provider "certManager"))) }}
 {{- fail "Invalid configuration: webhook.certs.provider must be one of [selfSigned, certManager]." }}
 {{- end }}
@@ -965,6 +982,11 @@ cat > "${WEBHOOK_VALIDATION_FILE}" << 'TMPL_EOF'
 {{- fail "Invalid configuration: webhook.certs.provider=certManager requires webhook.certs.certManager.enabled=true." }}
 {{- end }}
 TMPL_EOF
+  echo "  [validation.yaml] Added webhook validation rules."
+else
+  echo "  [validation.yaml] webhook validation rules already present – skipping."
+fi
+
 echo "  [webhook templates] Done."
 
 echo "=== Post-processing complete ==="

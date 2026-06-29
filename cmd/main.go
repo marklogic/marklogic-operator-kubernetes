@@ -21,7 +21,6 @@ import (
 	"flag"
 	"os"
 	"sort"
-	"strconv"
 	"strings"
 
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
@@ -239,12 +238,13 @@ func main() {
 		os.Exit(1)
 	}
 
-	if isNamespaceValidationWebhookEnabled() {
-		operatorwebhook.RegisterNamespaceScopeValidationWebhooks(webhookServer)
-		setupLog.Info("namespace scope validation webhooks registered")
-	} else {
-		setupLog.Info("namespace scope validation webhooks are disabled")
-	}
+	// Always register the webhook handlers so the ValidatingWebhookConfiguration
+	// paths are served regardless of whether namespace validation is enabled.
+	// The handler itself returns Allowed when ENABLE_NAMESPACE_WEBHOOK_VALIDATION=false,
+	// avoiding 404/connection errors that would block CR create/update under failurePolicy: Fail.
+	operatorwebhook.RegisterNamespaceScopeValidationWebhooks(webhookServer, watchNamespace)
+	setupLog.Info("namespace scope validation webhooks registered",
+		"validationEnabled", os.Getenv("ENABLE_NAMESPACE_WEBHOOK_VALIDATION"))
 	//+kubebuilder:scaffold:builder
 
 	if err := mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {
@@ -261,17 +261,4 @@ func main() {
 		setupLog.Error(err, "problem running manager")
 		os.Exit(1)
 	}
-}
-
-func isNamespaceValidationWebhookEnabled() bool {
-	v := strings.TrimSpace(os.Getenv("ENABLE_NAMESPACE_WEBHOOK_VALIDATION"))
-	if v == "" {
-		return true
-	}
-	enabled, err := strconv.ParseBool(v)
-	if err != nil {
-		setupLog.Error(err, "invalid ENABLE_NAMESPACE_WEBHOOK_VALIDATION value, defaulting to enabled", "value", v)
-		return true
-	}
-	return enabled
 }
