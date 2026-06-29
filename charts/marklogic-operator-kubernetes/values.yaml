@@ -53,3 +53,32 @@ metrics:
   # secure: false            — HTTP on :8080, no authentication. Safe for namespace scope
   #                            or development environments that have no cluster-level RBAC.
   secure: true
+
+# Admission webhook configuration
+webhook:
+  enabled: true
+  failurePolicy: Fail
+  timeoutSeconds: 10
+
+  namespaceValidation:
+    enabled: true
+
+  certs:
+    # selfSigned | certManager
+    provider: selfSigned
+    secretName: marklogic-operator-webhook-server-cert
+    serviceName: marklogic-operator-webhook-service
+    port: 9443
+
+    selfSigned:
+      validityDays: 365
+
+    certManager:
+      enabled: false
+      certificateName: marklogic-operator-webhook-serving-cert
+      issuerRef:
+        kind: ClusterIssuer
+        name: marklogic-operator-selfsigned
+        group: cert-manager.io
+      duration: 8760h
+      renewBefore: 720h

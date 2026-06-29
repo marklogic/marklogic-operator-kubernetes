@@ -20,6 +20,9 @@ METRICS_AUTH_RBAC_FILE="${TEMPLATES_DIR}/metrics-auth-rbac.yaml"
 METRICS_READER_RBAC_FILE="${TEMPLATES_DIR}/metrics-reader-rbac.yaml"
 METRICS_SERVICE_FILE="${TEMPLATES_DIR}/metrics-service.yaml"
 PROXY_RBAC_FILE="${TEMPLATES_DIR}/proxy-rbac.yaml"
+WEBHOOK_SERVICE_FILE="${TEMPLATES_DIR}/webhook-service.yaml"
+WEBHOOK_CERTS_FILE="${TEMPLATES_DIR}/webhook-certs.yaml"
+WEBHOOK_VALIDATION_FILE="${TEMPLATES_DIR}/webhook-validation.yaml"
 
 echo "=== helmify post-process: restoring scope + metrics-security support ==="
 
@@ -79,6 +82,44 @@ YAML_EOF
     echo "  [values.yaml] Done (metrics)."
 else
     echo "  [values.yaml] metrics already present – skipping."
+fi
+
+if ! grep -q "^webhook:" "${VALUES_FILE}"; then
+    echo "  [values.yaml] Adding webhook configuration..."
+    cat >> "${VALUES_FILE}" << 'YAML_EOF'
+
+# Admission webhook configuration
+webhook:
+  enabled: true
+  failurePolicy: Fail
+  timeoutSeconds: 10
+
+  namespaceValidation:
+    enabled: true
+
+  certs:
+    # selfSigned | certManager
+    provider: selfSigned
+    secretName: marklogic-operator-webhook-server-cert
+    serviceName: marklogic-operator-webhook-service
+    port: 9443
+
+    selfSigned:
+      validityDays: 365
+
+    certManager:
+      enabled: false
+      certificateName: marklogic-operator-webhook-serving-cert
+      issuerRef:
+        kind: ClusterIssuer
+        name: marklogic-operator-selfsigned
+        group: cert-manager.io
+      duration: 8760h
+      renewBefore: 720h
+YAML_EOF
+    echo "  [values.yaml] Done (webhook)."
+else
+    echo "  [values.yaml] webhook already present – skipping."
 fi
 
 # Strip manager.args block if helmify re-added it (hardcoded in deployment.yaml template)
@@ -215,6 +256,77 @@ print("  [deployment.yaml] Done (POD_NAMESPACE + WATCH_NAMESPACE).")
 PYEOF
 else
     echo "  [deployment.yaml] WATCH_NAMESPACE already present – skipping."
+fi
+
+# 2d. Add webhook-specific args/env/mounts/volumes used by the admission server.
+if ! grep -q -- "--webhook-port=9443" "${DEPLOYMENT_FILE}"; then
+  echo "  [deployment.yaml] Injecting webhook port arg..."
+  python3 - "${DEPLOYMENT_FILE}" << 'PYEOF'
+import sys
+path = sys.argv[1]
+with open(path, 'r') as f:
+  content = f.read()
+content = content.replace('- --leader-elect\n', '- --leader-elect\n        - --webhook-port=9443\n')
+with open(path, 'w') as f:
+  f.write(content)
+print("  [deployment.yaml] Done (webhook arg).")
+PYEOF
+else
+  echo "  [deployment.yaml] webhook port arg already present – skipping."
+fi
+
+if ! grep -q "ENABLE_NAMESPACE_WEBHOOK_VALIDATION" "${DEPLOYMENT_FILE}"; then
+  echo "  [deployment.yaml] Injecting ENABLE_NAMESPACE_WEBHOOK_VALIDATION env var..."
+  python3 - "${DEPLOYMENT_FILE}" << 'PYEOF'
+import sys
+path = sys.argv[1]
+with open(path, 'r') as f:
+  content = f.read()
+anchor = '        - name: POD_NAMESPACE\n          valueFrom:\n            fieldRef:\n              fieldPath: metadata.namespace\n'
+insert = anchor + '        - name: ENABLE_NAMESPACE_WEBHOOK_VALIDATION\n          value: {{ .Values.webhook.namespaceValidation.enabled | quote }}\n'
+if anchor in content:
+  content = content.replace(anchor, insert, 1)
+  with open(path, 'w') as f:
+    f.write(content)
+  print("  [deployment.yaml] Done (webhook env).")
+else:
+  print("  WARNING: could not find POD_NAMESPACE anchor for webhook env injection.")
+PYEOF
+else
+  echo "  [deployment.yaml] webhook env already present – skipping."
+fi
+
+if ! grep -q "serving-certs" "${DEPLOYMENT_FILE}"; then
+  echo "  [deployment.yaml] Injecting webhook cert volume mount + secret volume..."
+  python3 - "${DEPLOYMENT_FILE}" << 'PYEOF'
+import sys
+path = sys.argv[1]
+with open(path, 'r') as f:
+  content = f.read()
+
+container_anchor = '        securityContext: {{- toYaml .Values.controllerManager.manager.containerSecurityContext\n          | nindent 10 }}\n'
+container_insert = container_anchor + '        volumeMounts:\n        - mountPath: /tmp/k8s-webhook-server/serving-certs\n          name: webhook-server-cert\n          readOnly: true\n'
+
+pod_anchor = '      topologySpreadConstraints: {{- toYaml .Values.controllerManager.topologySpreadConstraints\n        | nindent 8 }}\n'
+pod_insert = pod_anchor + '      volumes:\n      - name: webhook-server-cert\n        secret:\n          secretName: {{ .Values.webhook.certs.secretName }}\n'
+
+changed = False
+if container_anchor in content:
+  content = content.replace(container_anchor, container_insert, 1)
+  changed = True
+if pod_anchor in content:
+  content = content.replace(pod_anchor, pod_insert, 1)
+  changed = True
+
+if changed:
+  with open(path, 'w') as f:
+    f.write(content)
+  print("  [deployment.yaml] Done (webhook mount/volume).")
+else:
+  print("  WARNING: could not find deployment anchors for webhook mount/volume injection.")
+PYEOF
+else
+  echo "  [deployment.yaml] webhook mount/volume already present – skipping."
 fi
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -648,5 +760,211 @@ else
         echo "  [metrics-service.yaml] metrics.secure conditional port already present – skipping."
     fi
 fi
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 7. Webhook templates – generated post-helmify so make helm does not overwrite.
+# ──────────────────────────────────────────────────────────────────────────────
+echo "  [webhook templates] Writing webhook service/certs/validation templates..."
+cat > "${WEBHOOK_SERVICE_FILE}" << 'TMPL_EOF'
+{{- if .Values.webhook.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Values.webhook.certs.serviceName }}
+  labels:
+    app.kubernetes.io/component: webhook
+    control-plane: controller-manager
+  {{- include "marklogic-operator-kubernetes.labels" . | nindent 4 }}
+spec:
+  ports:
+  - name: webhook
+    port: {{ .Values.webhook.certs.port }}
+    protocol: TCP
+    targetPort: 9443
+  selector:
+    control-plane: controller-manager
+  {{- include "marklogic-operator-kubernetes.selectorLabels" . | nindent 4 }}
+{{- end }}
+TMPL_EOF
+
+cat > "${WEBHOOK_CERTS_FILE}" << 'TMPL_EOF'
+{{- if and .Values.webhook.enabled (eq .Values.webhook.certs.provider "selfSigned") }}
+{{- $secretName := .Values.webhook.certs.secretName }}
+{{- $serviceName := .Values.webhook.certs.serviceName }}
+{{- $namespace := .Release.Namespace }}
+{{- $validity := int .Values.webhook.certs.selfSigned.validityDays }}
+{{- $existing := lookup "v1" "Secret" $namespace $secretName }}
+{{- $tlsCrt := "" }}
+{{- $tlsKey := "" }}
+{{- $caCrt := "" }}
+{{- if and $existing (hasKey $existing.data "tls.crt") (hasKey $existing.data "tls.key") (hasKey $existing.data "ca.crt") }}
+  {{- $tlsCrt = (index $existing.data "tls.crt") }}
+  {{- $tlsKey = (index $existing.data "tls.key") }}
+  {{- $caCrt = (index $existing.data "ca.crt") }}
+{{- else }}
+  {{- $ca := genCA (printf "%s-webhook-ca" (include "marklogic-operator-kubernetes.fullname" .)) $validity }}
+  {{- $cert := genSignedCert $serviceName nil (list (printf "%s.%s" $serviceName $namespace) (printf "%s.%s.svc" $serviceName $namespace) (printf "%s.%s.svc.cluster.local" $serviceName $namespace)) $validity $ca }}
+  {{- $tlsCrt = b64enc $cert.Cert }}
+  {{- $tlsKey = b64enc $cert.Key }}
+  {{- $caCrt = b64enc $ca.Cert }}
+{{- end }}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ $secretName }}
+  labels:
+    app.kubernetes.io/component: webhook
+  {{- include "marklogic-operator-kubernetes.labels" . | nindent 4 }}
+type: kubernetes.io/tls
+data:
+  tls.crt: {{ $tlsCrt }}
+  tls.key: {{ $tlsKey }}
+  ca.crt: {{ $caCrt }}
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingWebhookConfiguration
+metadata:
+  name: marklogic-operator-validating-webhook
+  labels:
+    app.kubernetes.io/component: webhook
+  {{- include "marklogic-operator-kubernetes.labels" . | nindent 4 }}
+webhooks:
+- name: vmarklogicclusters.marklogic.progress.com
+  admissionReviewVersions:
+  - v1
+  sideEffects: None
+  failurePolicy: {{ .Values.webhook.failurePolicy }}
+  timeoutSeconds: {{ .Values.webhook.timeoutSeconds }}
+  rules:
+  - apiGroups:
+    - marklogic.progress.com
+    apiVersions:
+    - v1
+    operations:
+    - CREATE
+    - UPDATE
+    resources:
+    - marklogicclusters
+  clientConfig:
+    service:
+      namespace: {{ .Release.Namespace }}
+      name: {{ .Values.webhook.certs.serviceName }}
+      path: /validate-marklogic-progress-com-v1-marklogiccluster
+      port: {{ .Values.webhook.certs.port }}
+    caBundle: {{ $caCrt }}
+- name: vmarklogicgroups.marklogic.progress.com
+  admissionReviewVersions:
+  - v1
+  sideEffects: None
+  failurePolicy: {{ .Values.webhook.failurePolicy }}
+  timeoutSeconds: {{ .Values.webhook.timeoutSeconds }}
+  rules:
+  - apiGroups:
+    - marklogic.progress.com
+    apiVersions:
+    - v1
+    operations:
+    - CREATE
+    - UPDATE
+    resources:
+    - marklogicgroups
+  clientConfig:
+    service:
+      namespace: {{ .Release.Namespace }}
+      name: {{ .Values.webhook.certs.serviceName }}
+      path: /validate-marklogic-progress-com-v1-marklogicgroup
+      port: {{ .Values.webhook.certs.port }}
+    caBundle: {{ $caCrt }}
+{{- end }}
+---
+{{- if and .Values.webhook.enabled (eq .Values.webhook.certs.provider "certManager") .Values.webhook.certs.certManager.enabled }}
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ .Values.webhook.certs.certManager.certificateName }}
+  labels:
+    app.kubernetes.io/component: webhook
+  {{- include "marklogic-operator-kubernetes.labels" . | nindent 4 }}
+spec:
+  secretName: {{ .Values.webhook.certs.secretName }}
+  issuerRef:
+    kind: {{ .Values.webhook.certs.certManager.issuerRef.kind }}
+    name: {{ .Values.webhook.certs.certManager.issuerRef.name }}
+    group: {{ .Values.webhook.certs.certManager.issuerRef.group }}
+  duration: {{ .Values.webhook.certs.certManager.duration }}
+  renewBefore: {{ .Values.webhook.certs.certManager.renewBefore }}
+  dnsNames:
+  - {{ .Values.webhook.certs.serviceName }}
+  - {{ printf "%s.%s" .Values.webhook.certs.serviceName .Release.Namespace }}
+  - {{ printf "%s.%s.svc" .Values.webhook.certs.serviceName .Release.Namespace }}
+  - {{ printf "%s.%s.svc.cluster.local" .Values.webhook.certs.serviceName .Release.Namespace }}
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingWebhookConfiguration
+metadata:
+  name: marklogic-operator-validating-webhook
+  labels:
+    app.kubernetes.io/component: webhook
+  {{- include "marklogic-operator-kubernetes.labels" . | nindent 4 }}
+  annotations:
+    cert-manager.io/inject-ca-from: {{ printf "%s/%s" .Release.Namespace .Values.webhook.certs.certManager.certificateName }}
+webhooks:
+- name: vmarklogicclusters.marklogic.progress.com
+  admissionReviewVersions:
+  - v1
+  sideEffects: None
+  failurePolicy: {{ .Values.webhook.failurePolicy }}
+  timeoutSeconds: {{ .Values.webhook.timeoutSeconds }}
+  rules:
+  - apiGroups:
+    - marklogic.progress.com
+    apiVersions:
+    - v1
+    operations:
+    - CREATE
+    - UPDATE
+    resources:
+    - marklogicclusters
+  clientConfig:
+    service:
+      namespace: {{ .Release.Namespace }}
+      name: {{ .Values.webhook.certs.serviceName }}
+      path: /validate-marklogic-progress-com-v1-marklogiccluster
+      port: {{ .Values.webhook.certs.port }}
+- name: vmarklogicgroups.marklogic.progress.com
+  admissionReviewVersions:
+  - v1
+  sideEffects: None
+  failurePolicy: {{ .Values.webhook.failurePolicy }}
+  timeoutSeconds: {{ .Values.webhook.timeoutSeconds }}
+  rules:
+  - apiGroups:
+    - marklogic.progress.com
+    apiVersions:
+    - v1
+    operations:
+    - CREATE
+    - UPDATE
+    resources:
+    - marklogicgroups
+  clientConfig:
+    service:
+      namespace: {{ .Release.Namespace }}
+      name: {{ .Values.webhook.certs.serviceName }}
+      path: /validate-marklogic-progress-com-v1-marklogicgroup
+      port: {{ .Values.webhook.certs.port }}
+{{- end }}
+TMPL_EOF
+
+cat > "${WEBHOOK_VALIDATION_FILE}" << 'TMPL_EOF'
+{{- if and .Values.webhook.enabled (not (or (eq .Values.webhook.certs.provider "selfSigned") (eq .Values.webhook.certs.provider "certManager"))) }}
+{{- fail "Invalid configuration: webhook.certs.provider must be one of [selfSigned, certManager]." }}
+{{- end }}
+
+{{- if and .Values.webhook.enabled (eq .Values.webhook.certs.provider "certManager") (not .Values.webhook.certs.certManager.enabled) }}
+{{- fail "Invalid configuration: webhook.certs.provider=certManager requires webhook.certs.certManager.enabled=true." }}
+{{- end }}
+TMPL_EOF
+echo "  [webhook templates] Done."
 
 echo "=== Post-processing complete ==="

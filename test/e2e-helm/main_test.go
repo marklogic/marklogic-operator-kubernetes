@@ -26,6 +26,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/marklogic/marklogic-operator-kubernetes/test/utils"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -57,6 +58,7 @@ var (
 	testEnv        env.Environment
 	dockerImage    = os.Getenv("E2E_DOCKER_IMAGE")
 	marklogicImage = os.Getenv("E2E_MARKLOGIC_IMAGE_VERSION")
+	webhookCerts   = normalizeWebhookCertProvider(os.Getenv("E2E_HELM_WEBHOOK_CERT_PROVIDER"))
 
 	// Shared credentials and container name used across all test files in this package.
 	adminUsername   = "admin"
@@ -167,6 +169,7 @@ func TestMain(m *testing.M) {
 	log.Printf("e2e-helm: docker image: %s", dockerImage)
 	log.Printf("e2e-helm: marklogic image: %s", marklogicImage)
 	log.Printf("e2e-helm: watched namespaces: %s", watchedNamespaces)
+	log.Printf("e2e-helm: webhook cert provider: %s", webhookCerts)
 
 	testEnv.Setup(
 		// Ensure the operator namespace is clean before installing.
@@ -190,6 +193,23 @@ func TestMain(m *testing.M) {
 			return ctx, nil
 		},
 		envfuncs.CreateNamespace(helmNS),
+
+		func(ctx context.Context, cfg *envconf.Config) (context.Context, error) {
+			if webhookCerts != "certmanager" {
+				return ctx, nil
+			}
+
+			log.Printf("Installing cert-manager for webhook certManager provider...")
+			if err := utils.InstallCertManager(); err != nil {
+				return ctx, fmt.Errorf("failed to install cert-manager: %w", err)
+			}
+
+			if err := ensureWebhookClusterIssuer(); err != nil {
+				return ctx, err
+			}
+
+			return ctx, nil
+		},
 
 		// Pre-create all watched namespaces so the Helm chart can create
 		// Role/RoleBinding in them during install.
@@ -243,6 +263,12 @@ func TestMain(m *testing.M) {
 				"--set", "metrics.secure=false",
 				"--wait",
 				"--timeout", "3m",
+			}
+			if webhookCerts == "certmanager" {
+				args = append(args,
+					"--set", "webhook.certs.provider=certManager",
+					"--set", "webhook.certs.certManager.enabled=true",
+				)
 			}
 			if dockerImage != "" {
 				// Reject shell metacharacters before incorporating the env var into args.
@@ -299,6 +325,14 @@ func TestMain(m *testing.M) {
 	)
 
 	testEnv.Finish(
+		func(ctx context.Context, cfg *envconf.Config) (context.Context, error) {
+			if webhookCerts == "certmanager" {
+				log.Printf("Uninstalling cert-manager...")
+				utils.UninstallCertManager()
+			}
+			return ctx, nil
+		},
+
 		// Uninstall the Helm release.
 		func(ctx context.Context, cfg *envconf.Config) (context.Context, error) {
 			log.Printf("Uninstalling Helm release %s", helmRelease)
@@ -496,6 +530,42 @@ func cleanupClusterScopedRBACArtifacts() error {
 		if err != nil {
 			return fmt.Errorf("failed deleting ClusterRole %s: %w: %s", name, err, strings.TrimSpace(string(deleteOut)))
 		}
+	}
+
+	return nil
+}
+
+func normalizeWebhookCertProvider(provider string) string {
+	if strings.EqualFold(provider, "certManager") || strings.EqualFold(provider, "certmanager") {
+		return "certmanager"
+	}
+	return "selfsigned"
+}
+
+func ensureWebhookClusterIssuer() error {
+	issuerManifest := `apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: marklogic-operator-selfsigned
+spec:
+  selfSigned: {}
+`
+
+	cmd := exec.Command("kubectl", "apply", "-f", "-")
+	cmd.Stdin = strings.NewReader(issuerManifest)
+	issuerOut, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("failed creating webhook cluster issuer: %w: %s", err, strings.TrimSpace(string(issuerOut)))
+	}
+
+	waitCmd := exec.Command(
+		"kubectl", "wait", "clusterissuer/marklogic-operator-selfsigned",
+		"--for=condition=Ready",
+		"--timeout=2m",
+	)
+	waitOut, err := waitCmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("failed waiting for webhook cluster issuer readiness: %w: %s", err, strings.TrimSpace(string(waitOut)))
 	}
 
 	return nil

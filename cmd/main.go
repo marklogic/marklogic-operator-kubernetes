@@ -21,6 +21,7 @@ import (
 	"flag"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
@@ -40,6 +41,7 @@ import (
 
 	marklogicv1 "github.com/marklogic/marklogic-operator-kubernetes/api/v1"
 	"github.com/marklogic/marklogic-operator-kubernetes/internal/controller"
+	operatorwebhook "github.com/marklogic/marklogic-operator-kubernetes/internal/webhook"
 	//+kubebuilder:scaffold:imports
 )
 
@@ -61,6 +63,7 @@ func main() {
 	var probeAddr string
 	var secureMetrics bool
 	var enableHTTP2 bool
+	var webhookPort int
 	var watchNamespace string
 	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8080",
 		"The address the metrics endpoint binds to. Use :8443 when --metrics-secure is true.")
@@ -73,6 +76,8 @@ func main() {
 			"When true, --metrics-bind-address should also be changed to :8443.")
 	flag.BoolVar(&enableHTTP2, "enable-http2", false,
 		"If set, HTTP/2 will be enabled for the metrics and webhook servers")
+	flag.IntVar(&webhookPort, "webhook-port", 9443,
+		"The port the webhook server binds to.")
 	flag.StringVar(&watchNamespace, "watch-namespace", "",
 		"Namespace(s) to watch for resources. If empty, watches all namespaces (cluster-scoped). "+
 			"Can be a single namespace or comma-separated list of namespaces. "+
@@ -142,6 +147,8 @@ func main() {
 	}
 
 	webhookServer := webhook.NewServer(webhook.Options{
+		Port:    webhookPort,
+		CertDir: "/tmp/k8s-webhook-server/serving-certs",
 		TLSOpts: tlsOpts,
 	})
 
@@ -231,6 +238,13 @@ func main() {
 		setupLog.Error(err, "unable to create controller", "controller", "MarklogicCluster")
 		os.Exit(1)
 	}
+
+	if isNamespaceValidationWebhookEnabled() {
+		operatorwebhook.RegisterNamespaceScopeValidationWebhooks(webhookServer)
+		setupLog.Info("namespace scope validation webhooks registered")
+	} else {
+		setupLog.Info("namespace scope validation webhooks are disabled")
+	}
 	//+kubebuilder:scaffold:builder
 
 	if err := mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {
@@ -247,4 +261,17 @@ func main() {
 		setupLog.Error(err, "problem running manager")
 		os.Exit(1)
 	}
+}
+
+func isNamespaceValidationWebhookEnabled() bool {
+	v := strings.TrimSpace(os.Getenv("ENABLE_NAMESPACE_WEBHOOK_VALIDATION"))
+	if v == "" {
+		return true
+	}
+	enabled, err := strconv.ParseBool(v)
+	if err != nil {
+		setupLog.Error(err, "invalid ENABLE_NAMESPACE_WEBHOOK_VALIDATION value, defaulting to enabled", "value", v)
+		return true
+	}
+	return enabled
 }

@@ -227,9 +227,9 @@ void runEKSIstioE2eTests() {
     }
 }
 
-void runHelmNamespaceScopedE2eTests() {
+void runHelmNamespaceScopedE2eTests(String webhookCertProvider = 'selfSigned') {
     sh """
-        make e2e-test-helm-namespace IMG=${operatorRepo}:${VERSION}
+        E2E_HELM_WEBHOOK_CERT_PROVIDER=${webhookCertProvider} make e2e-test-helm-namespace IMG=${operatorRepo}:${VERSION}
     """
 }
 
@@ -328,16 +328,24 @@ pipeline {
         booleanParam(name: 'TEST_ON_EKS', defaultValue: false, description: 'Run e2e tests on the EKS cluster (jenkins-kube-ninjas) instead of Minikube. Requires KUBE_NINJAS_OPS_AWS_JENKINS credentials on this agent.')
         string(name: 'EKS_MARKLOGIC_IMAGE_TAG', defaultValue: 'latest-12', description: 'MarkLogic image tag to pull from the EKS ECR registry when TEST_ON_EKS=true. The full ECR URL is constructed at runtime from the AWS account ID resolved via STS.', trim: true)
         booleanParam(name: 'VERIFY_HELM_NAMESPACE_SCOPED', defaultValue: false, description: 'Run namespace-scoped e2e tests via Helm chart install (validates Role/RoleBinding, no ClusterRole)')
+        booleanParam(name: 'VERIFY_HELM_NAMESPACE_SCOPED_CERT_MANAGER', defaultValue: false, description: 'Run an additional namespace-scoped Helm e2e pass using webhook cert provider=certManager (opt-in, does not change default Helm flow)')
+        booleanParam(name: 'RUN_ONLY_HELM_NS_E2E', defaultValue: false, description: 'Run only the Run-Helm-NS-e2e-Tests stage (skips all other stages).')
     }
 
     stages {
         stage('Pre-Build-Check') {
+            when {
+                expression { return params.RUN_ONLY_HELM_NS_E2E == false }
+            }
             steps {
                 preBuildCheck()
             }
         }
 
         stage('Run-tests') {
+            when {
+                expression { return params.RUN_ONLY_HELM_NS_E2E == false }
+            }
             steps {
                 runTests()
             }
@@ -351,6 +359,9 @@ pipeline {
         // try/finally even when earlier stages throw.
         // -----------------------------------------------------------------------
         stage('E2E Tests') {
+            when {
+                expression { return params.RUN_ONLY_HELM_NS_E2E == false }
+            }
             steps {
                 script {
                     if (params.TEST_ON_EKS && params.E2E_SCOPE != 'cluster') {
@@ -410,7 +421,7 @@ pipeline {
 
         stage('Helm-NS-Minikube-Setup') {
             when {
-                expression { return params.VERIFY_HELM_NAMESPACE_SCOPED != false && params.E2E_SCOPE == 'cluster' }
+                expression { return params.RUN_ONLY_HELM_NS_E2E == false && (params.VERIFY_HELM_NAMESPACE_SCOPED != false || params.VERIFY_HELM_NAMESPACE_SCOPED_CERT_MANAGER != false) && params.E2E_SCOPE == 'cluster' }
             }
             steps {
                 runMinikubeSetup()
@@ -419,16 +430,48 @@ pipeline {
 
         stage('Run-Helm-NS-e2e-Tests') {
             when {
-                expression { return params.VERIFY_HELM_NAMESPACE_SCOPED != false && params.E2E_SCOPE == 'cluster' }
+                expression { return params.RUN_ONLY_HELM_NS_E2E != false || ((params.VERIFY_HELM_NAMESPACE_SCOPED != false || params.VERIFY_HELM_NAMESPACE_SCOPED_CERT_MANAGER != false) && params.E2E_SCOPE == 'cluster') }
             }
             steps {
-                runHelmNamespaceScopedE2eTests()
+                script {
+                    def runSelfSigned = params.VERIFY_HELM_NAMESPACE_SCOPED
+                    def runCertManager = params.VERIFY_HELM_NAMESPACE_SCOPED_CERT_MANAGER
+
+                    if (params.RUN_ONLY_HELM_NS_E2E && !runSelfSigned && !runCertManager) {
+                        // In run-only mode, default to the baseline self-signed path if no explicit variant is selected.
+                        runSelfSigned = true
+                    }
+
+                    def executeHelmNsTests = {
+                        if (runSelfSigned) {
+                            echo "Running namespace-scoped Helm e2e tests with webhook cert provider=selfSigned"
+                            runHelmNamespaceScopedE2eTests('selfSigned')
+                        }
+                        if (runCertManager) {
+                            echo "Running namespace-scoped Helm e2e tests with webhook cert provider=certManager"
+                            runHelmNamespaceScopedE2eTests('certManager')
+                        }
+                    }
+
+                    if (params.RUN_ONLY_HELM_NS_E2E) {
+                        try {
+                            runMinikubeSetup()
+                            executeHelmNsTests()
+                        } finally {
+                            catchError(buildResult: 'SUCCESS', stageResult: 'FAILURE') {
+                                runMinikubeCleanup()
+                            }
+                        }
+                    } else {
+                        executeHelmNsTests()
+                    }
+                }
             }
         }
 
         stage('Helm-NS-Cleanup') {
             when {
-                expression { return params.VERIFY_HELM_NAMESPACE_SCOPED != false && params.E2E_SCOPE == 'cluster' }
+                expression { return params.RUN_ONLY_HELM_NS_E2E == false && (params.VERIFY_HELM_NAMESPACE_SCOPED != false || params.VERIFY_HELM_NAMESPACE_SCOPED_CERT_MANAGER != false) && params.E2E_SCOPE == 'cluster' }
             }
             steps {
                 catchError(buildResult: 'SUCCESS', stageResult: 'FAILURE') {
@@ -440,9 +483,12 @@ pipeline {
         // Publish image to internal registries (conditional)
         stage('Publish Image') {
             when {
-                    anyOf {
-                        branch 'develop'
-                        expression { return params.PUBLISH_IMAGE }
+                    allOf {
+                        expression { return params.RUN_ONLY_HELM_NS_E2E == false }
+                        anyOf {
+                            branch 'develop'
+                            expression { return params.PUBLISH_IMAGE }
+                        }
                     }
             }
             steps {
@@ -451,6 +497,9 @@ pipeline {
         }
 
         stage('Run-BlackDuck-Scan') {
+            when {
+                expression { return params.RUN_ONLY_HELM_NS_E2E == false }
+            }
 
             steps {
                 runBlackDuckScan()

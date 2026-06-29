@@ -1,10 +1,3 @@
-{{- /*
-Render-time validation: catch invalid value combinations before deploying.
-*/}}
-{{- if and (eq .Values.scope.type "namespace") .Values.metrics.secure }}
-{{- fail "Invalid configuration: metrics.secure=true is not supported when scope.type=namespace. The TokenReview/SubjectAccessReview ClusterRoles required for secure metrics are only rendered in cluster scope. Set metrics.secure=false when using namespace scope." }}
-{{- end }}
-
 {{- if and .Values.webhook.enabled (not (or (eq .Values.webhook.certs.provider "selfSigned") (eq .Values.webhook.certs.provider "certManager"))) }}
 {{- fail "Invalid configuration: webhook.certs.provider must be one of [selfSigned, certManager]." }}
 {{- end }}
