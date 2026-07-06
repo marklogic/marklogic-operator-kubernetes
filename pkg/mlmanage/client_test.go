@@ -4,6 +4,7 @@ package mlmanage
 
 import (
 	"context"
+	"crypto"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -177,6 +178,104 @@ func TestDoJSONRetriesWithDigestAuthChallenge(t *testing.T) {
 	if !strings.HasPrefix(authHeaders[1], "Digest ") {
 		t.Fatalf("expected second request to use digest auth, got %q", authHeaders[1])
 	}
+}
+
+func TestBuildDigestAuthorizationHeaderSupportsSHA256(t *testing.T) {
+	t.Parallel()
+
+	header := buildDigestAuthorizationHeader(
+		`Digest realm="manage", nonce="nonce123", qop="auth", algorithm=SHA-256`,
+		http.MethodGet,
+		"/manage/v2",
+		"user",
+		"password",
+	)
+	if header == "" {
+		t.Fatal("expected non-empty digest authorization header")
+	}
+	if !strings.Contains(header, "algorithm=SHA-256") {
+		t.Fatalf("expected SHA-256 algorithm in header, got %q", header)
+	}
+	if !strings.Contains(header, `response="`) {
+		t.Fatalf("expected digest response in header, got %q", header)
+	}
+
+	params := parseDigestAuthorizationHeaderForTest(t, header)
+	cnonce := params["cnonce"]
+	if cnonce == "" {
+		t.Fatalf("expected cnonce in header, got %q", header)
+	}
+	response := strings.Trim(params["response"], `"`)
+	ha1 := digestHex("user:manage:password", crypto.SHA256)
+	ha2 := digestHex("GET:/manage/v2", crypto.SHA256)
+	expected := digestHex(ha1+":nonce123:00000001:"+cnonce+":auth:"+ha2, crypto.SHA256)
+	if response != expected {
+		t.Fatalf("expected response %q, got %q", expected, response)
+	}
+}
+
+func TestBuildDigestAuthorizationHeaderSupportsSHA256Sess(t *testing.T) {
+	t.Parallel()
+
+	header := buildDigestAuthorizationHeader(
+		`Digest realm="manage", nonce="nonce123", qop="auth", algorithm=SHA-256-SESS`,
+		http.MethodGet,
+		"/manage/v2",
+		"user",
+		"password",
+	)
+	if header == "" {
+		t.Fatal("expected non-empty digest authorization header")
+	}
+	if !strings.Contains(header, "algorithm=SHA-256-SESS") {
+		t.Fatalf("expected SHA-256-SESS algorithm in header, got %q", header)
+	}
+
+	params := parseDigestAuthorizationHeaderForTest(t, header)
+	cnonce := params["cnonce"]
+	if cnonce == "" {
+		t.Fatalf("expected cnonce in header, got %q", header)
+	}
+	response := strings.Trim(params["response"], `"`)
+	ha1 := digestHex("user:manage:password", crypto.SHA256)
+	ha1 = digestHex(ha1+":nonce123:"+cnonce, crypto.SHA256)
+	ha2 := digestHex("GET:/manage/v2", crypto.SHA256)
+	expected := digestHex(ha1+":nonce123:00000001:"+cnonce+":auth:"+ha2, crypto.SHA256)
+	if response != expected {
+		t.Fatalf("expected response %q, got %q", expected, response)
+	}
+}
+
+func TestBuildDigestAuthorizationHeaderRejectsUnsupportedAlgorithm(t *testing.T) {
+	t.Parallel()
+
+	header := buildDigestAuthorizationHeader(
+		`Digest realm="manage", nonce="nonce123", qop="auth", algorithm=SHA-512`,
+		http.MethodGet,
+		"/manage/v2",
+		"user",
+		"password",
+	)
+	if header != "" {
+		t.Fatalf("expected empty header for unsupported algorithm, got %q", header)
+	}
+}
+
+func parseDigestAuthorizationHeaderForTest(t *testing.T, header string) map[string]string {
+	t.Helper()
+	if !strings.HasPrefix(header, "Digest ") {
+		t.Fatalf("expected Digest header, got %q", header)
+	}
+	params := make(map[string]string)
+	for _, part := range strings.Split(strings.TrimPrefix(header, "Digest "), ",") {
+		part = strings.TrimSpace(part)
+		key, value, ok := strings.Cut(part, "=")
+		if !ok {
+			continue
+		}
+		params[strings.TrimSpace(key)] = strings.Trim(strings.TrimSpace(value), `"`)
+	}
+	return params
 }
 
 func TestFetchClusterVersionParsesNestedVersion(t *testing.T) {
