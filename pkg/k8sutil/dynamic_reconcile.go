@@ -4,8 +4,8 @@ package k8sutil
 
 import (
 	"context"
+	"crypto/sha256"
 	"fmt"
-	"hash/fnv"
 	"net"
 	"reflect"
 	"regexp"
@@ -501,13 +501,12 @@ func (oc *OperatorContext) reconcileDynamicLifecycle(groupClient mlmanage.Client
 	if !found {
 		if joinedHost.Name != "" {
 			member = joinedHost
-			found = true
 		} else {
 			return oc.handleDynamicJoinFailure(hostStatuses, pod.Name, hostFQDN, desiredReplicas, localReadyReplicas, readyReplicas, fmt.Errorf("host %s is not yet registered in MarkLogic", hostFQDN))
 		}
 	}
 
-	hostStatuses, localReadyReplicas, readyReplicas, joinCandidates = oc.buildDynamicHostStatuses(pods, members, hostStatuses)
+	hostStatuses, localReadyReplicas, readyReplicas, _ = oc.buildDynamicHostStatuses(pods, members, hostStatuses)
 	hostStatuses = setDynamicHostStatus(hostStatuses, pod.Name, hostFQDN, dynamicHostStateJoined, "", member.HostID, 0)
 
 	if desiredReplicas <= readyReplicas {
@@ -1539,13 +1538,12 @@ func (oc *OperatorContext) reconcileDynamicScaleUp(groupClient mlmanage.Client, 
 	if !found {
 		if joinedHost.Name != "" {
 			member = joinedHost
-			found = true
 		} else {
 			return oc.handleDynamicJoinFailure(hostStatuses, pod.Name, hostFQDN, desiredReplicas, localReadyReplicas, readyReplicas, fmt.Errorf("host %s is not yet registered in MarkLogic", hostFQDN))
 		}
 	}
 
-	hostStatuses, localReadyReplicas, readyReplicas, joinCandidates = oc.buildDynamicHostStatuses(pods, members, hostStatuses)
+	hostStatuses, localReadyReplicas, readyReplicas, _ = oc.buildDynamicHostStatuses(pods, members, hostStatuses)
 	hostStatuses = setDynamicHostStatus(hostStatuses, pod.Name, hostFQDN, dynamicHostStateJoined, "", member.HostID, 0)
 
 	if desiredReplicas <= readyReplicas {
@@ -1704,24 +1702,13 @@ func (oc *OperatorContext) requestDynamicTokenWithHostFallback(groupClient mlman
 func (oc *OperatorContext) resolveDynamicClusterNameCandidates(groupClient mlmanage.Client, currentClusterName string) []string {
 	candidates := make([]string, 0, 4)
 	seen := make(map[string]struct{})
-	addCandidate := func(value string) {
-		candidate := strings.TrimSpace(value)
-		if candidate == "" || strings.EqualFold(candidate, currentClusterName) {
-			return
-		}
-		if _, exists := seen[candidate]; exists {
-			return
-		}
-		seen[candidate] = struct{}{}
-		candidates = append(candidates, candidate)
-	}
 
 	// ResolveClusterName (GET /manage/v2) returns the actual cluster name from the
 	// version envelope "name" field and is more authoritative than ResolveClusterNameCandidates
 	// (GET /manage/v2/clusters), which may return API-format envelope keys. Add it first
 	// so callers try the authoritative name before falling back to list candidates.
 	if resolvedClusterName, err := groupClient.ResolveClusterName(oc.Ctx); err == nil {
-		addCandidate(resolvedClusterName)
+		candidates = appendUniqueDynamicClusterCandidate(candidates, seen, currentClusterName, resolvedClusterName)
 	}
 
 	if resolver, ok := groupClient.(interface {
@@ -1729,12 +1716,24 @@ func (oc *OperatorContext) resolveDynamicClusterNameCandidates(groupClient mlman
 	}); ok {
 		if resolvedCandidates, err := resolver.ResolveClusterNameCandidates(oc.Ctx); err == nil {
 			for _, candidate := range resolvedCandidates {
-				addCandidate(candidate)
+				candidates = appendUniqueDynamicClusterCandidate(candidates, seen, currentClusterName, candidate)
 			}
 		}
 	}
 
 	return candidates
+}
+
+func appendUniqueDynamicClusterCandidate(candidates []string, seen map[string]struct{}, currentClusterName, value string) []string {
+	candidate := strings.TrimSpace(value)
+	if candidate == "" || strings.EqualFold(candidate, currentClusterName) {
+		return candidates
+	}
+	if _, exists := seen[candidate]; exists {
+		return candidates
+	}
+	seen[candidate] = struct{}{}
+	return append(candidates, candidate)
 }
 
 func (oc *OperatorContext) removeDynamicHostWithClusterFallback(groupClient mlmanage.Client, clusterName, hostID string) error {
@@ -2300,9 +2299,8 @@ func dynamicPVCRestartCleanupJobName(groupName, podName string) string {
 }
 
 func dynamicPVCRestartCleanupJobSuffix(name, podName string) string {
-	hasher := fnv.New32a()
-	_, _ = hasher.Write([]byte(name))
-	hash := fmt.Sprintf("%08x", hasher.Sum32())
+	sum := sha256.Sum256([]byte(name))
+	hash := fmt.Sprintf("%x", sum[:4])
 
 	ordinal := podOrdinal(podName)
 	if ordinal >= 0 && ordinal != int(^uint(0)>>1) {
