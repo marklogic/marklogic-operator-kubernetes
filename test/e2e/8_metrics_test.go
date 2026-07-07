@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -253,7 +254,8 @@ func TestMetricsEndpoint(t *testing.T) {
 			restCfg := c.Client().RESTConfig()
 			// Use the operator controller-manager SA — it has many permissions but
 			// is NOT bound to the metrics-reader ClusterRole, so the SAR check must deny it.
-			token := requestSAToken(ctx, t, restCfg, namespace, "marklogic-operator-controller-manager")
+			operatorSA := operatorServiceAccountName(ctx, t, c, namespace)
+			token := requestSAToken(ctx, t, restCfg, namespace, operatorSA)
 
 			pf, localAddr, cancel := startPortForward(t, namespace, metricsServiceName, localPort, remotePort)
 			defer func() {
@@ -377,4 +379,20 @@ func requestSAToken(ctx context.Context, t *testing.T, cfg *rest.Config, ns, saN
 		t.Fatalf("failed to obtain token for ServiceAccount %s/%s: %v", ns, saName, err)
 	}
 	return result.Status.Token
+}
+
+func operatorServiceAccountName(ctx context.Context, t *testing.T, c *envconf.Config, ns string) string {
+	t.Helper()
+
+	deployment := &appsv1.Deployment{}
+	if err := c.Client().Resources().Get(ctx, "marklogic-operator-controller-manager", ns, deployment); err != nil {
+		t.Fatalf("failed to get operator deployment in namespace %s: %v", ns, err)
+	}
+
+	serviceAccountName := strings.TrimSpace(deployment.Spec.Template.Spec.ServiceAccountName)
+	if serviceAccountName == "" {
+		return "default"
+	}
+
+	return serviceAccountName
 }
