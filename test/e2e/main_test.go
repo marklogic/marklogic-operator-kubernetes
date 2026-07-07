@@ -31,12 +31,15 @@ import (
 )
 
 var (
-	testEnv        env.Environment
-	dockerImage    = os.Getenv("E2E_DOCKER_IMAGE")
-	kustomizeVer   = os.Getenv("E2E_KUSTOMIZE_VERSION")
-	ctrlgenVer     = os.Getenv("E2E_CONTROLLER_TOOLS_VERSION")
-	marklogicImage = os.Getenv("E2E_MARKLOGIC_IMAGE_VERSION")
-	kubernetesVer  = os.Getenv("E2E_KUBERNETES_VERSION")
+	testEnv             env.Environment
+	dockerImage         = os.Getenv("E2E_DOCKER_IMAGE")
+	kustomizeVer        = os.Getenv("E2E_KUSTOMIZE_VERSION")
+	ctrlgenVer          = os.Getenv("E2E_CONTROLLER_TOOLS_VERSION")
+	marklogicImage      = os.Getenv("E2E_MARKLOGIC_IMAGE_VERSION")
+	kubernetesVer       = os.Getenv("E2E_KUBERNETES_VERSION")
+	operatorNamespace   = envOrDefault("E2E_OPERATOR_NAMESPACE", "marklogic-operator-system")
+	namespace           = operatorNamespace
+	useExistingOperator = strings.EqualFold(os.Getenv("E2E_USE_EXISTING_OPERATOR"), "true")
 
 	staleE2ENamespaces = []string{
 		"ml-dynamic-host",
@@ -56,8 +59,6 @@ var (
 )
 
 const (
-	namespace = "marklogic-operator-system"
-
 	// Keep CRD cleanup fast in local/CI e2e loops: do a short grace wait first,
 	// then escalate quickly to finalizer cleanup when termination is stuck.
 	// On minikube, CRD terminating/finalizer transitions can take noticeably
@@ -67,6 +68,13 @@ const (
 	crdCleanupPostFinalizeWaitAttempts = 90
 	crdCleanupPostFinalizeWaitInterval = 2 * time.Second
 )
+
+func envOrDefault(key, fallback string) string {
+	if value := os.Getenv(key); value != "" {
+		return value
+	}
+	return fallback
+}
 
 // namespaceLabels returns the labels to apply to test namespaces.
 // When Istio ambient mode is enabled, includes the ambient dataplane label.
@@ -169,20 +177,26 @@ func TestMain(m *testing.M) {
 	log.Printf("MarkLogic image: %s", marklogicImage)
 	log.Printf("Kubernetes version: %s", kubernetesVer)
 	log.Printf("Istio ambient mode: %v", isIstioAmbientEnabled())
+	log.Printf("Operator namespace: %s", operatorNamespace)
+	log.Printf("Reuse existing operator install: %v", useExistingOperator)
 
 	// Use Environment.Setup to configure pre-test setup
 	testEnv.Setup(
 		// Delete namespace if it exists from previous run
 		func(ctx context.Context, cfg *envconf.Config) (context.Context, error) {
-			log.Printf("Ensuring clean namespace: %s", namespace)
+			if useExistingOperator {
+				log.Printf("Reusing existing operator namespace: %s", operatorNamespace)
+				return ctx, nil
+			}
+			log.Printf("Ensuring clean namespace: %s", operatorNamespace)
 			client := cfg.Client()
-			ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: namespace}}
+			ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: operatorNamespace}}
 
 			// Try to get the namespace first
-			err := client.Resources().Get(ctx, namespace, "", ns)
+			err := client.Resources().Get(ctx, operatorNamespace, "", ns)
 			if err == nil {
 				// Namespace exists, delete it
-				log.Printf("Deleting existing namespace: %s", namespace)
+				log.Printf("Deleting existing namespace: %s", operatorNamespace)
 				if err := client.Resources().Delete(ctx, ns); err != nil {
 					log.Printf("Error deleting namespace (may already be deleting): %v", err)
 				}
@@ -190,7 +204,7 @@ func TestMain(m *testing.M) {
 				// Wait for namespace to be fully deleted (up to 60 seconds)
 				log.Printf("Waiting for namespace deletion to complete...")
 				for i := 0; i < 60; i++ {
-					err := client.Resources().Get(ctx, namespace, "", ns)
+					err := client.Resources().Get(ctx, operatorNamespace, "", ns)
 					if err != nil {
 						if apierrors.IsNotFound(err) {
 							// Namespace is gone
@@ -201,14 +215,14 @@ func TestMain(m *testing.M) {
 						return ctx, fmt.Errorf("error checking namespace deletion status: %w", err)
 					}
 					if i == 59 {
-						log.Printf("Namespace %s still deleting after initial wait; forcing namespace finalizer cleanup", namespace)
-						if err := forceFinalizeNamespace(namespace); err != nil {
-							return ctx, fmt.Errorf("timeout waiting for namespace %s to be deleted; force-finalize failed: %w", namespace, err)
+						log.Printf("Namespace %s still deleting after initial wait; forcing namespace finalizer cleanup", operatorNamespace)
+						if err := forceFinalizeNamespace(operatorNamespace); err != nil {
+							return ctx, fmt.Errorf("timeout waiting for namespace %s to be deleted; force-finalize failed: %w", operatorNamespace, err)
 						}
-						if err := waitForNamespaceDeletionByName(ctx, client, namespace, 90*time.Second); err != nil {
+						if err := waitForNamespaceDeletionByName(ctx, client, operatorNamespace, 90*time.Second); err != nil {
 							return ctx, err
 						}
-						log.Printf("Namespace %s force-deleted successfully", namespace)
+						log.Printf("Namespace %s force-deleted successfully", operatorNamespace)
 						break
 					}
 					time.Sleep(1 * time.Second)
@@ -223,7 +237,12 @@ func TestMain(m *testing.M) {
 
 			return ctx, nil
 		},
-		envfuncs.CreateNamespace(namespace),
+		func(ctx context.Context, cfg *envconf.Config) (context.Context, error) {
+			if useExistingOperator {
+				return ctx, nil
+			}
+			return envfuncs.CreateNamespace(operatorNamespace)(ctx, cfg)
+		},
 
 		// Ensure stale namespaces from interrupted prior runs do not cause
 		// namespace-already-exists conflicts in individual tests.
@@ -236,6 +255,9 @@ func TestMain(m *testing.M) {
 
 		// When Istio ambient mode is enabled, label the operator namespace
 		func(ctx context.Context, cfg *envconf.Config) (context.Context, error) {
+			if useExistingOperator {
+				return ctx, nil
+			}
 			if !isIstioAmbientEnabled() {
 				return ctx, nil
 			}
@@ -244,7 +266,7 @@ func TestMain(m *testing.M) {
 
 			// Patch the operator namespace to add the ambient label
 			operatorNs := &corev1.Namespace{}
-			if err := client.Resources().Get(ctx, namespace, "", operatorNs); err != nil {
+			if err := client.Resources().Get(ctx, operatorNamespace, "", operatorNs); err != nil {
 				return ctx, fmt.Errorf("failed to get operator namespace: %w", err)
 			}
 
@@ -253,7 +275,7 @@ func TestMain(m *testing.M) {
 			if err := client.Resources().Patch(ctx, operatorNs, k8s.Patch{PatchType: types.StrategicMergePatchType, Data: patchData}); err != nil {
 				return ctx, fmt.Errorf("failed to label operator namespace: %w", err)
 			}
-			log.Printf("Labeled namespace %s with istio.io/dataplane-mode=ambient", namespace)
+			log.Printf("Labeled namespace %s with istio.io/dataplane-mode=ambient", operatorNamespace)
 
 			return ctx, nil
 		},
@@ -327,6 +349,20 @@ func TestMain(m *testing.M) {
 
 		// generate and deploy resource configurations
 		func(ctx context.Context, cfg *envconf.Config) (context.Context, error) {
+			if useExistingOperator {
+				log.Println("Reusing existing operator installation; skipping deploy")
+				client := cfg.Client()
+				if err := wait.For(
+					conditions.New(client.Resources()).DeploymentConditionMatch(&appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: "marklogic-operator-controller-manager", Namespace: operatorNamespace}},
+						appsv1.DeploymentAvailable,
+						corev1.ConditionTrue),
+					wait.WithTimeout(3*time.Minute),
+					wait.WithInterval(10*time.Second),
+				); err != nil {
+					return ctx, err
+				}
+				return ctx, nil
+			}
 			log.Println("Building source components...")
 
 			log.Println("Cleaning stale MarkLogic custom resources before deploy...")
@@ -351,10 +387,10 @@ func TestMain(m *testing.M) {
 				// If it disappeared or is Terminating (concurrent cleanup), wait and recreate.
 				for i := 0; i < 60; i++ {
 					ns := &corev1.Namespace{}
-					nsErr := client.Resources().Get(ctx, namespace, "", ns)
+					nsErr := client.Resources().Get(ctx, operatorNamespace, "", ns)
 					if apierrors.IsNotFound(nsErr) {
-						log.Printf("Namespace %s not found before deploy attempt %d; recreating", namespace, attempt)
-						newNs := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: namespace}}
+						log.Printf("Namespace %s not found before deploy attempt %d; recreating", operatorNamespace, attempt)
+						newNs := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: operatorNamespace}}
 						_ = client.Resources().Create(ctx, newNs)
 						time.Sleep(2 * time.Second)
 						continue
@@ -364,7 +400,7 @@ func TestMain(m *testing.M) {
 						continue
 					}
 					if ns.Status.Phase == corev1.NamespaceTerminating || ns.DeletionTimestamp != nil {
-						log.Printf("Namespace %s is Terminating before deploy attempt %d; waiting...", namespace, attempt)
+						log.Printf("Namespace %s is Terminating before deploy attempt %d; waiting...", operatorNamespace, attempt)
 						time.Sleep(2 * time.Second)
 						continue
 					}
@@ -401,7 +437,7 @@ func TestMain(m *testing.M) {
 			// wait for controller-manager to be ready
 			log.Println("Waiting for controller-manager deployment to be available...")
 			if err := wait.For(
-				conditions.New(client.Resources()).DeploymentConditionMatch(&appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: "marklogic-operator-controller-manager", Namespace: namespace}},
+				conditions.New(client.Resources()).DeploymentConditionMatch(&appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: "marklogic-operator-controller-manager", Namespace: operatorNamespace}},
 					appsv1.DeploymentProgressing,
 					corev1.ConditionTrue),
 				wait.WithTimeout(3*time.Minute),
@@ -422,6 +458,9 @@ func TestMain(m *testing.M) {
 	testEnv.Finish(
 		// Clean up Istio ambient label from operator namespace
 		func(ctx context.Context, cfg *envconf.Config) (context.Context, error) {
+			if useExistingOperator {
+				return ctx, nil
+			}
 			if !isIstioAmbientEnabled() {
 				return ctx, nil
 			}
@@ -431,14 +470,14 @@ func TestMain(m *testing.M) {
 
 			// Remove label from operator namespace using Patch to avoid conflicts
 			operatorNs := &corev1.Namespace{}
-			if err := client.Resources().Get(ctx, namespace, "", operatorNs); err == nil {
+			if err := client.Resources().Get(ctx, operatorNamespace, "", operatorNs); err == nil {
 				if operatorNs.Labels != nil && operatorNs.Labels["istio.io/dataplane-mode"] != "" {
 					// Use Patch to remove label, avoiding resourceVersion conflicts
 					patchData := []byte(`{"metadata":{"labels":{"istio.io/dataplane-mode":null}}}`)
 					if err := client.Resources().Patch(ctx, operatorNs, k8s.Patch{PatchType: types.StrategicMergePatchType, Data: patchData}); err != nil {
 						log.Printf("Warning: failed to remove label from operator namespace: %v", err)
 					} else {
-						log.Printf("Removed Istio ambient label from %s namespace", namespace)
+						log.Printf("Removed Istio ambient label from %s namespace", operatorNamespace)
 					}
 				}
 			} else if !apierrors.IsNotFound(err) {
@@ -448,6 +487,9 @@ func TestMain(m *testing.M) {
 			return ctx, nil
 		},
 		func(ctx context.Context, cfg *envconf.Config) (context.Context, error) {
+			if useExistingOperator {
+				return ctx, nil
+			}
 			log.Println("Finishing tests, cleaning cluster ...")
 			if err := forceDeleteMarkLogicCustomResources(); err != nil {
 				log.Printf("Warning: failed to force-delete MarkLogic custom resources during cleanup: %v", err)
@@ -456,6 +498,12 @@ func TestMain(m *testing.M) {
 			return ctx, nil
 		},
 		envfuncs.DeleteNamespace(namespace),
+		func(ctx context.Context, cfg *envconf.Config) (context.Context, error) {
+			if useExistingOperator {
+				return ctx, nil
+			}
+			return envfuncs.DeleteNamespace(operatorNamespace)(ctx, cfg)
+		},
 	)
 
 	// Use Environment.Run to launch the test

@@ -1,0 +1,20 @@
+apiVersion: marklogic.progress.com/v1
+kind: MarklogicCluster
+metadata:
+  name: ml-dynamic-host
+  namespace: ml-dynamic-host
+spec:
+  image: "progressofficial/marklogic-db:12.0.0-ubi9-rootless-2.2.2"
+  markLogicGroups:
+  - name: bootstrap
+    isBootstrap: true
+    replicas: 1
+    groupConfig:
+      name: bootstrap
+  - name: dynamic
+    isDynamic: true
+    dynamic:
+      tokenDuration: PT15M
+    replicas: 1
+    groupConfig:
+      name: dynamic
