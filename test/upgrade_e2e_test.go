@@ -25,8 +25,9 @@ const (
 	defaultMarkLogicImage       = "progressofficial/marklogic-db:12.0.0-ubi9-rootless-2.2.2"
 	defaultHelmTimeout          = "10m"
 	defaultWorkloadWaitTimeout  = 25 * time.Minute
+	defaultNamespaceWaitTimeout = 2 * time.Minute
 	defaultClusterSuiteTimeout  = "60m"
-	defaultNamespaceSuiteTimeout = "45m"
+	defaultNamespaceSuiteTimeout = "60m"
 	defaultOperatorDeployment   = "marklogic-operator-controller-manager"
 
 	cleanupProbeSleep = 30 * time.Second
@@ -182,7 +183,7 @@ func (r *upgradeRunner) runClusterUpgradeScenario() {
 	r.ensureHelmRepo()
 	r.verifyClusterIsClean()
 	r.verifyChartInputs()
-	r.verifyDefaultTargetImageAvailable()
+	r.verifyTargetImageAvailable()
 
 	operatorNamespace := "mlop-upg-cluster-" + r.runID
 	baselineNamespace := "ml-upg-base-" + r.runID
@@ -236,7 +237,7 @@ func (r *upgradeRunner) runNamespaceUpgradeScenario() {
 	r.ensureHelmRepo()
 	r.verifyClusterIsClean()
 	r.verifyChartInputs()
-	r.verifyDefaultTargetImageAvailable()
+	r.verifyTargetImageAvailable()
 
 	operatorNamespace := "mlop-upg-ns-" + r.runID
 	primaryWatchedNamespace := "ml-upg-watch-a-" + r.runID
@@ -323,7 +324,7 @@ func (r *upgradeRunner) cleanupUpgradeTestResources() {
 	for _, namespace := range r.findUpgradeTestNamespaces() {
 		found = true
 		r.testingT.Logf("Deleting namespace %s", namespace)
-		r.runCommandAllowFailure("kubectl", "delete", "namespace", namespace, "--ignore-not-found", "--wait=false")
+		r.deleteNamespaceAndWait(namespace)
 	}
 
 	if !found {
@@ -411,18 +412,22 @@ func (r *upgradeRunner) parseTargetImage() {
 	r.targetImageFromChart = false
 }
 
-func (r *upgradeRunner) verifyDefaultTargetImageAvailable() {
-	if !r.targetImageFromChart {
-		return
-	}
-
+func (r *upgradeRunner) verifyTargetImageAvailable() {
 	r.requireTools("docker")
 
 	if r.commandSucceeds("docker", "manifest", "inspect", r.targetImageRef) {
 		return
 	}
 
-	r.testingT.Fatalf("target chart default image %s is not available in a registry; build/load a local image and rerun with E2E_UPGRADE_TARGET_IMAGE or E2E_DOCKER_IMAGE set", r.targetImageRef)
+	if r.commandSucceeds("docker", "image", "inspect", r.targetImageRef) {
+		return
+	}
+
+	if r.targetImageFromChart {
+		r.testingT.Fatalf("target chart default image %s is not available in a registry or local Docker cache; build/load a local image and rerun with E2E_UPGRADE_TARGET_IMAGE or E2E_DOCKER_IMAGE set", r.targetImageRef)
+	}
+
+	r.testingT.Fatalf("target upgrade image %s is not available in a registry or local Docker cache; build/load the image first or rerun with a valid local image such as marklogic-operator-kubernetes:e2e-local", r.targetImageRef)
 }
 
 func (r *upgradeRunner) registerScenario(name, release, operatorNamespace string, namespaces ...string) {
@@ -475,7 +480,7 @@ func (r *upgradeRunner) cleanupCurrentScenario() {
 	r.cleanupClusterScopedRBAC()
 
 	for _, namespace := range r.current.namespaces {
-		r.runCommandAllowFailure("kubectl", "delete", "namespace", namespace, "--ignore-not-found", "--wait=false")
+		r.deleteNamespaceAndWait(namespace)
 	}
 
 	r.current = scenarioState{}
@@ -529,6 +534,30 @@ func (r *upgradeRunner) waitForPodReady(namespace, podName string) {
 func (r *upgradeRunner) deployMarkLogicCluster(namespace, clusterName string) {
 	r.applyClusterManifest(namespace, clusterName)
 	r.waitForPodReady(namespace, "node-0")
+}
+
+func (r *upgradeRunner) deleteNamespaceAndWait(namespace string) {
+	r.runCommandAllowFailure("kubectl", "delete", "namespace", namespace, "--ignore-not-found", "--wait=false")
+	deadline := time.Now().Add(defaultNamespaceWaitTimeout)
+	for time.Now().Before(deadline) {
+		if !r.namespaceExists(namespace) {
+			return
+		}
+		time.Sleep(2 * time.Second)
+	}
+	r.testingT.Fatalf("timed out waiting for namespace %s to be deleted", namespace)
+}
+
+func (r *upgradeRunner) namespaceExists(namespace string) bool {
+	cmd := exec.Command("kubectl", "get", "namespace", namespace, "--ignore-not-found", "-o", "name")
+	cmd.Dir = r.repoRoot
+	cmd.Env = os.Environ()
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		r.testingT.Logf("command failed while checking namespace %s existence: %s", namespace, strings.TrimSpace(string(out)))
+		return true
+	}
+	return strings.TrimSpace(string(out)) != ""
 }
 
 func (r *upgradeRunner) applyClusterManifest(namespace, clusterName string) {

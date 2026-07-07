@@ -246,29 +246,49 @@ e2e-test-upgrade:
 .PHONY: e2e-test-upgrade-cluster  ## Run the cluster-scoped upgrade validation and then reuse the cluster-scoped e2e suite.
 e2e-test-upgrade-cluster:
 	@echo "=====Running cluster-scoped upgrade validation====="
-	@if kubectl config current-context 2>/dev/null | grep -q '^minikube$$'; then \
-		echo "=====Loading operator image $(IMG) into minikube====="; \
-		minikube image load $(IMG); \
+	@TARGET_IMG='$(IMG)'; \
+	if kubectl config current-context 2>/dev/null | grep -q '^minikube$$'; then \
+		if ! docker image inspect "$$TARGET_IMG" >/dev/null 2>&1; then \
+			if docker image inspect '$(LOCAL_E2E_IMG)' >/dev/null 2>&1; then \
+				echo "=====Requested image $$TARGET_IMG is not in local Docker; falling back to $(LOCAL_E2E_IMG) for minikube upgrade test====="; \
+				TARGET_IMG='$(LOCAL_E2E_IMG)'; \
+			else \
+				echo "=====Requested image $$TARGET_IMG is not in local Docker and fallback image $(LOCAL_E2E_IMG) is unavailable====="; \
+				exit 1; \
+			fi; \
+		fi; \
+		echo "=====Loading operator image $$TARGET_IMG into minikube====="; \
+		minikube image load "$$TARGET_IMG"; \
 	else \
 		echo "=====Current context is not minikube; skipping image load====="; \
-	fi
-	E2E_UPGRADE_SOURCE_VERSION=$(E2E_UPGRADE_SOURCE_VERSION) \
-	E2E_UPGRADE_TARGET_IMAGE=$(IMG) \
-	E2E_MARKLOGIC_IMAGE_VERSION=$(E2E_MARKLOGIC_IMAGE_VERSION) \
+	fi; \
+	E2E_UPGRADE_SOURCE_VERSION='$(E2E_UPGRADE_SOURCE_VERSION)' \
+	E2E_UPGRADE_TARGET_IMAGE="$$TARGET_IMG" \
+	E2E_MARKLOGIC_IMAGE_VERSION='$(E2E_MARKLOGIC_IMAGE_VERSION)' \
 	go test -tags upgradee2e -v -count=1 -timeout $(E2E_UPGRADE_CLUSTER_TEST_TIMEOUT) ./test -run '^TestUpgradeClusterScope$$'
 
 .PHONY: e2e-test-upgrade-helm-namespace  ## Run the namespace-scoped upgrade validation and then reuse the Helm namespace-scoped e2e suite.
 e2e-test-upgrade-helm-namespace:
 	@echo "=====Running namespace-scoped upgrade validation====="
-	@if kubectl config current-context 2>/dev/null | grep -q '^minikube$$'; then \
-		echo "=====Loading operator image $(IMG) into minikube====="; \
-		minikube image load $(IMG); \
+	@TARGET_IMG='$(IMG)'; \
+	if kubectl config current-context 2>/dev/null | grep -q '^minikube$$'; then \
+		if ! docker image inspect "$$TARGET_IMG" >/dev/null 2>&1; then \
+			if docker image inspect '$(LOCAL_E2E_IMG)' >/dev/null 2>&1; then \
+				echo "=====Requested image $$TARGET_IMG is not in local Docker; falling back to $(LOCAL_E2E_IMG) for minikube upgrade test====="; \
+				TARGET_IMG='$(LOCAL_E2E_IMG)'; \
+			else \
+				echo "=====Requested image $$TARGET_IMG is not in local Docker and fallback image $(LOCAL_E2E_IMG) is unavailable====="; \
+				exit 1; \
+			fi; \
+		fi; \
+		echo "=====Loading operator image $$TARGET_IMG into minikube====="; \
+		minikube image load "$$TARGET_IMG"; \
 	else \
 		echo "=====Current context is not minikube; skipping image load====="; \
-	fi
-	E2E_UPGRADE_SOURCE_VERSION=$(E2E_UPGRADE_SOURCE_VERSION) \
-	E2E_UPGRADE_TARGET_IMAGE=$(IMG) \
-	E2E_MARKLOGIC_IMAGE_VERSION=$(E2E_MARKLOGIC_IMAGE_VERSION) \
+	fi; \
+	E2E_UPGRADE_SOURCE_VERSION='$(E2E_UPGRADE_SOURCE_VERSION)' \
+	E2E_UPGRADE_TARGET_IMAGE="$$TARGET_IMG" \
+	E2E_MARKLOGIC_IMAGE_VERSION='$(E2E_MARKLOGIC_IMAGE_VERSION)' \
 	go test -tags upgradee2e -v -count=1 -timeout $(E2E_UPGRADE_HELM_NAMESPACE_TEST_TIMEOUT) ./test -run '^TestUpgradeNamespaceScope$$'
 
 .PHONY: e2e-test-upgrade-cleanup  ## Delete upgrade-test releases and namespaces, optionally filtered by E2E_UPGRADE_RUN_ID.
