@@ -40,19 +40,19 @@ helm repo update
 
 **For cluster-scoped deployment (default - watches all namespaces):**
 ```sh
-helm upgrade marklogic-operator marklogic-operator/marklogic-operator-kubernetes --version=1.2.0 --install --namespace marklogic-operator-system --create-namespace
+helm upgrade marklogic-operator marklogic-operator/marklogic-operator-kubernetes --version=1.3.0 --install --namespace marklogic-operator-system --create-namespace
 ```
 
 **For namespace-scoped deployment (watches only a specific namespace):**
 ```sh
 # Watch the same namespace where operator is deployed
-helm upgrade marklogic-operator marklogic-operator/marklogic-operator-kubernetes --version=1.2.0 --install --namespace marklogic-prod --create-namespace --set scope.type=namespace
+helm upgrade marklogic-operator marklogic-operator/marklogic-operator-kubernetes --version=1.3.0 --install --namespace marklogic-prod --create-namespace --set scope.type=namespace
 
 # Or watch a different namespace
-helm upgrade marklogic-operator marklogic-operator/marklogic-operator-kubernetes --version=1.2.0 --install --namespace marklogic-operator-system --create-namespace --set scope.type=namespace --set scope.watchNamespaces=marklogic-prod
+helm upgrade marklogic-operator marklogic-operator/marklogic-operator-kubernetes --version=1.3.0 --install --namespace marklogic-operator-system --create-namespace --set scope.type=namespace --set scope.watchNamespaces=marklogic-prod
 
 # Or watch multiple namespaces
-helm upgrade marklogic-operator marklogic-operator/marklogic-operator-kubernetes --version=1.2.0 --install --namespace marklogic-operator-system --create-namespace --set scope.type=namespace --set scope.watchNamespaces="prod,staging,dev"
+helm upgrade marklogic-operator marklogic-operator/marklogic-operator-kubernetes --version=1.3.0 --install --namespace marklogic-operator-system --create-namespace --set scope.type=namespace --set scope.watchNamespaces="prod,staging,dev"
 ```
 
 See [Operator Scope Configuration](./docs/operator-scope-configuration.md) for more deployment options and examples.
