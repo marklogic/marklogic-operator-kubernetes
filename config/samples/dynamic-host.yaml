@@ -4,7 +4,7 @@ metadata:
   name: ml-dynamic-host
   namespace: ml-dynamic-host
 spec:
-  image: "progressofficial/marklogic-db:12.0.0-ubi9-rootless-2.2.2"
+  image: "progressofficial/marklogic-db:12.0.3-ubi9-rootless-2.2.6"
   markLogicGroups:
   - name: bootstrap
     isBootstrap: true

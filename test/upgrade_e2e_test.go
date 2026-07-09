@@ -22,7 +22,7 @@ const (
 	defaultSourceChart          = "marklogic-operator/marklogic-operator-kubernetes"
 	defaultSourceVersion        = "1.2.0"
 	defaultTargetChart          = "charts/marklogic-operator-kubernetes"
-	defaultMarkLogicImage       = "progressofficial/marklogic-db:12.0.0-ubi9-rootless-2.2.2"
+	defaultMarkLogicImage       = "progressofficial/marklogic-db:12.0.3-ubi9-rootless-2.2.6"
 	defaultHelmTimeout          = "10m"
 	defaultWorkloadWaitTimeout  = 25 * time.Minute
 	defaultNamespaceWaitTimeout = 2 * time.Minute

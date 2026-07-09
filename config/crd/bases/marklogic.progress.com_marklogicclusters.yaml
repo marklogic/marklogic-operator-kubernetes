@@ -5106,7 +5106,7 @@ spec:
                     type: string
                 type: object
               image:
-                default: progressofficial/marklogic-db:12.0.0-ubi9-rootless-2.2.2
+                default: progressofficial/marklogic-db:12.0.3-ubi9-rootless-2.2.6
                 maxLength: 256
                 type: string
               imagePullPolicy:
