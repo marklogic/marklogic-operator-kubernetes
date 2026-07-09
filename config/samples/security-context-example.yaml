@@ -10,7 +10,7 @@ metadata:
   namespace: default
   annotations: {}
 spec:
-  image: "progressofficial/marklogic-db:12.0.3-ubi-rootless-2.2.6"
+  image: "progressofficial/marklogic-db:12.0.3-ubi9-rootless-2.2.6"
   imagePullPolicy: IfNotPresent
 
   clusterDomain: cluster.local
