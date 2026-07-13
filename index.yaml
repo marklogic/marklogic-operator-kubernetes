@@ -23,6 +23,16 @@ entries:
     version: 1.0.0-ea1
   marklogic-operator-kubernetes:
   - apiVersion: v2
+    appVersion: 1.3.0
+    created: "2026-07-13T20:54:02.75871242Z"
+    description: A Helm chart for MarkLogic Operator for Kubernetes
+    digest: b816fef002569101102694d9e96ceea358d683f40419f4c3485464c672edf5fc
+    name: marklogic-operator-kubernetes
+    type: application
+    urls:
+    - https://github.com/marklogic/marklogic-operator-kubernetes/releases/download/marklogic-operator-kubernetes-1.3.0/marklogic-operator-kubernetes-1.3.0.tgz
+    version: 1.3.0
+  - apiVersion: v2
     appVersion: 1.2.0
     created: "2026-03-06T20:04:07.835911395Z"
     description: A Helm chart for MarkLogic Operator for Kubernetes
@@ -62,4 +72,4 @@ entries:
     urls:
     - https://github.com/marklogic/marklogic-operator-kubernetes/releases/download/marklogic-operator-kubernetes-1.0.0/marklogic-operator-kubernetes-1.0.0.tgz
     version: 1.0.0
-generated: "2026-03-06T20:04:07.835936983Z"
+generated: "2026-07-13T20:54:02.758731719Z"
