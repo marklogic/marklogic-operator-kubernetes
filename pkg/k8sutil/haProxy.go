@@ -1,4 +1,4 @@
-// Copyright (c) 2024-2025 Progress Software Corporation and/or its subsidiaries or affiliates. All Rights Reserved.
+// Copyright (c) 2024-2026 Progress Software Corporation and/or its subsidiaries or affiliates. All Rights Reserved.
 
 package k8sutil
 
@@ -242,10 +242,12 @@ func (cc *ClusterContext) createHAProxyDeploymentDef(meta metav1.ObjectMeta) *ap
 					},
 				},
 				Spec: corev1.PodSpec{
+					SecurityContext: getHAProxyPodSecurityContextOrDefault(cr.Spec.HAProxy.PodSecurityContext),
 					Containers: []corev1.Container{
 						{
-							Name:  "haproxy",
-							Image: cr.Spec.HAProxy.Image,
+							Name:            "haproxy",
+							Image:           cr.Spec.HAProxy.Image,
+							SecurityContext: getHAProxyContainerSecurityContextOrDefault(cr.Spec.HAProxy.ContainerSecurityContext),
 							Resources: corev1.ResourceRequirements{
 								Requests: corev1.ResourceList{
 									"cpu":    resource.MustParse("250m"),

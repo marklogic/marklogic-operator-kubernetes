@@ -1,4 +1,4 @@
-// Copyright (c) 2024-2025 Progress Software Corporation and/or its subsidiaries or affiliates. All Rights Reserved.
+// Copyright (c) 2024-2026 Progress Software Corporation and/or its subsidiaries or affiliates. All Rights Reserved.
 
 package v1
 
@@ -22,12 +22,30 @@ type ContainerProbe struct {
 	FailureThreshold int32 `json:"failureThreshold,omitempty"`
 }
 
+// VolumeResizeStrategy defines how PVC resize requests are submitted.
+type VolumeResizeStrategy string
+
+const (
+	VolumeResizeStrategyParallel   VolumeResizeStrategy = "parallel"
+	VolumeResizeStrategySequential VolumeResizeStrategy = "sequential"
+)
+
+type DynamicGroupConfig struct {
+	// +kubebuilder:default:="PT15M"
+	// +kubebuilder:validation:Pattern="^$|^P(?:[0-9]+Y)?(?:[0-9]+M)?(?:[0-9]+W)?(?:[0-9]+D)?(?:T(?:[0-9]+H)?(?:[0-9]+M)?(?:[0-9]+(?:\\.[0-9]+)?S)?)?$"
+	// +kubebuilder:validation:XValidation:rule="self == '' || (self != 'P' && self != 'PT')",message="tokenDuration must include at least one ISO-8601 duration component"
+	TokenDuration string `json:"tokenDuration,omitempty"`
+}
+
 // Storage is the inteface to add pvc and pv support in marklogic
 type Persistence struct {
 	Enabled bool `json:"enabled,omitempty"`
 	// +kubebuilder:validation:Required
-	Size             string `json:"size,omitempty"`
-	StorageClassName string `json:"storageClassName,omitempty"`
+	Size string `json:"size,omitempty"`
+	// +kubebuilder:validation:Enum=parallel;sequential
+	// +kubebuilder:default:=parallel
+	ResizeStrategy   VolumeResizeStrategy `json:"resizeStrategy,omitempty"`
+	StorageClassName string               `json:"storageClassName,omitempty"`
 	// +kubebuilder:default:={ReadWriteOnce}
 	AccessModes []corev1.PersistentVolumeAccessMode `json:"accessModes,omitempty"`
 	Annotations map[string]string                   `json:"annotations,omitempty"`
@@ -64,6 +82,7 @@ type LogCollection struct {
 	// +kubebuilder:default:="fluent/fluent-bit:4.1.1"
 	Image            string                        `json:"image,omitempty"`
 	ImagePullSecrets []corev1.LocalObjectReference `json:"imagePullSecrets,omitempty"`
+	SecurityContext  *corev1.SecurityContext       `json:"securityContext,omitempty"`
 	// +kubebuilder:default:={"requests":{"cpu":"100m","memory":"200Mi"},"limits":{"cpu":"200m","memory":"500Mi"}}
 	Resources *corev1.ResourceRequirements `json:"resources,omitempty"`
 	// +kubebuilder:default:={errorLogs: true, accessLogs: true, requestLogs: true, crashLogs: true, auditLogs: true}
@@ -91,9 +110,11 @@ type NetworkPolicy struct {
 }
 type HAProxy struct {
 	Enabled bool `json:"enabled,omitempty"`
-	// +kubebuilder:default:="haproxytech/haproxy-alpine:3.2"
-	Image            string                        `json:"image,omitempty"`
-	ImagePullSecrets []corev1.LocalObjectReference `json:"imagePullSecrets,omitempty"`
+	// +kubebuilder:default:="haproxytech/haproxy-alpine:3.4.0"
+	Image                    string                        `json:"image,omitempty"`
+	ImagePullSecrets         []corev1.LocalObjectReference `json:"imagePullSecrets,omitempty"`
+	PodSecurityContext       *corev1.PodSecurityContext    `json:"podSecurityContext,omitempty"`
+	ContainerSecurityContext *corev1.SecurityContext       `json:"securityContext,omitempty"`
 	// +kubebuilder:default:=1
 	ReplicaCount int32 `json:"replicas,omitempty"`
 	// +kubebuilder:default:=80

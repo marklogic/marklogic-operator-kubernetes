@@ -1,4 +1,4 @@
-// Copyright (c) 2024-2025 Progress Software Corporation and/or its subsidiaries or affiliates. All Rights Reserved.
+// Copyright (c) 2024-2026 Progress Software Corporation and/or its subsidiaries or affiliates. All Rights Reserved.
 
 package k8sutil
 
@@ -18,6 +18,7 @@ import (
 
 type serviceParameters struct {
 	StsName     string
+	IsDynamic   bool
 	Ports       []corev1.ServicePort
 	Type        corev1.ServiceType
 	Annotations map[string]string
@@ -26,6 +27,7 @@ type serviceParameters struct {
 func generateServiceParams(cr *marklogicv1.MarklogicGroup) serviceParameters {
 	return serviceParameters{
 		StsName:     cr.Spec.Name,
+		IsDynamic:   cr.Spec.IsDynamic,
 		Type:        cr.Spec.Service.Type,
 		Ports:       cr.Spec.Service.AdditionalPorts,
 		Annotations: cr.Spec.Service.Annotations,
@@ -75,7 +77,7 @@ func generateServicePorts() []corev1.ServicePort {
 
 func generateServiceDef(serviceMeta metav1.ObjectMeta, ownerRef metav1.OwnerReference, params serviceParameters) *corev1.Service {
 	svcSpec := corev1.ServiceSpec{
-		Selector: getSelectorLabels(params.StsName),
+		Selector: getSelectorLabelsByComponent(params.StsName, params.IsDynamic),
 		Ports:    append(params.Ports, generateServicePorts()...),
 	}
 	if strings.HasSuffix(serviceMeta.Name, "-cluster") {
@@ -102,6 +104,7 @@ func (oc *OperatorContext) generateService(svcName string, cr *marklogicv1.Markl
 	for key, value := range groupLabels {
 		labels[key] = value
 	}
+	labels["app.kubernetes.io/component"] = getMarkLogicComponentLabel(cr.Spec.IsDynamic)
 	svcParams := generateServiceParams(cr)
 	svcObjectMeta := generateObjectMeta(svcName, cr.Namespace, labels, svcParams.Annotations)
 	service := generateServiceDef(svcObjectMeta, marklogicServerAsOwner(cr), svcParams)

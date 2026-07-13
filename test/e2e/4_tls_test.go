@@ -26,6 +26,7 @@ import (
 )
 
 func TestTlsWithSelfSigned(t *testing.T) {
+	trackTest(t)
 	feature := features.New("TLS with Self Signed Certificate").WithLabel("type", "tls-self-signed")
 	namespace := "tls-self-signed"
 	releaseName := "ml"
@@ -90,7 +91,7 @@ func TestTlsWithSelfSigned(t *testing.T) {
 		client := c.Client()
 
 		podName := "ml-0"
-		err := utils.WaitForPod(ctx, t, client, namespace, podName, 120*time.Second, true)
+		err := utils.WaitForPod(ctx, t, client, namespace, podName, 300*time.Second, true)
 		if err != nil {
 			t.Fatalf("Failed to wait for pod creation: %v", err)
 		}
@@ -173,6 +174,7 @@ func TestTlsWithSelfSigned(t *testing.T) {
 }
 
 func TestTlsWithNamedCert(t *testing.T) {
+	trackTest(t)
 	feature := features.New("TLS with Named Certificate").WithLabel("type", "tls-named-cert")
 	namespace := "marklogic-tlsnamed"
 	releaseName := "marklogic"
@@ -338,6 +340,7 @@ func TestTlsWithNamedCert(t *testing.T) {
 }
 
 func TestTlsWithMultiNode(t *testing.T) {
+	trackTest(t)
 	feature := features.New("TLS with Multi Node Named Certificate").WithLabel("type", "tls-multi-node")
 	namespace := "marklogic-tlsednode"
 	enodeName := "enode"

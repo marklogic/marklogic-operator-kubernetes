@@ -1,0 +1,39 @@
+name: Asana Release Automation
+
+on:
+  create:
+    # This ensures the workflow only triggers on branch creation, not tags
+
+jobs:
+  update-asana-checklist:
+    runs-on: ubuntu-latest
+    # Double-check that this is a branch and it matches our release naming convention
+    if: github.ref_type == 'branch' && startsWith(github.ref, 'refs/heads/release/')
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install Dependencies
+        run: pip install requests
+
+      - name: Extract Release Version
+        id: get_version
+        run: |
+          # Strip "refs/heads/release/" from the string to isolate the version (e.g., v1.4.0)
+          VERSION=${GITHUB_REF#refs/heads/release/}
+          echo "Extracted version: $VERSION"
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Check off Asana Subtask
+        env:
+          ASANA_PAT: ${{ secrets.ASANA_PAT }}
+          ASANA_PROJECT_GID: ${{ secrets.ASANA_PROJECT_GID }}
+          RELEASE_VERSION: ${{ steps.get_version.outputs.version }}
+          TARGET_SUBTASK_NAME: "Create Release Branch From develop"
+        run: python .github/scripts/asana_release_bot.py

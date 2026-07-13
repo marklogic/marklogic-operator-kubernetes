@@ -1,5 +1,5 @@
 /*
-Copyright (c) 2024-2025 Progress Software Corporation and/or its subsidiaries or affiliates. All Rights Reserved.
+Copyright (c) 2024-2026 Progress Software Corporation and/or its subsidiaries or affiliates. All Rights Reserved.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -27,12 +27,15 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/event"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
 
 // MarklogicGroupReconciler reconciles a MarklogicGroup object
@@ -54,6 +57,10 @@ const (
 //+kubebuilder:rbac:groups=marklogic.progress.com,resources=marklogicgroups/finalizers,verbs=update
 //+kubebuilder:rbac:groups=apps,resources=statefulsets;replicasets;deployments;daemonsets,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups=core,resources=pods;services;secrets;configmaps,verbs=get;list;watch;create;update;patch;delete
+//+kubebuilder:rbac:groups=core,resources=persistentvolumeclaims,verbs=get;list;watch;patch;update
+//+kubebuilder:rbac:groups=core,resources=persistentvolumeclaims/status,verbs=get
+//+kubebuilder:rbac:groups=storage.k8s.io,resources=storageclasses,verbs=get;list;watch
+//+kubebuilder:rbac:groups=core;events.k8s.io,resources=events,verbs=create;patch;update
 //+kubebuilder:rbac:groups=networking.k8s.io,resources=ingresses,verbs=get;list;watch;create;update;patch;delete
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
@@ -133,6 +140,8 @@ func markLogicGroupCreateUpdateDeletePredicate() predicate.Predicate {
 					return true // Reconcile if the spec has changed
 				}
 				return false // Reconcile on update of Service
+			case *corev1.Pod:
+				return true // Reconcile on pod updates for dynamic host finalizer lifecycle
 			default:
 				return false // Ignore updates for other types
 			}
@@ -154,7 +163,44 @@ func (r *MarklogicGroupReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		For(&marklogicv1.MarklogicGroup{}).
 		WithEventFilter(markLogicGroupCreateUpdateDeletePredicate()).
 		Owns(&appsv1.StatefulSet{}).
-		Owns(&corev1.Service{})
+		Owns(&corev1.Service{}).
+		Watches(&corev1.Pod{}, handler.EnqueueRequestsFromMapFunc(r.podToMarklogicGroup))
 
 	return builder.Complete(r)
+}
+
+// podToMarklogicGroup maps a Pod to its owning MarklogicGroup by traversing
+// the ownership chain: Pod -> StatefulSet -> MarklogicGroup.
+func (r *MarklogicGroupReconciler) podToMarklogicGroup(ctx context.Context, obj client.Object) []reconcile.Request {
+	pod, ok := obj.(*corev1.Pod)
+	if !ok {
+		return nil
+	}
+
+	// Find the StatefulSet that owns this pod
+	for _, ownerRef := range pod.GetOwnerReferences() {
+		if ownerRef.Kind != "StatefulSet" {
+			continue
+		}
+
+		// Get the StatefulSet
+		var sts appsv1.StatefulSet
+		if err := r.Get(ctx, types.NamespacedName{Name: ownerRef.Name, Namespace: pod.Namespace}, &sts); err != nil {
+			return nil
+		}
+
+		// Find the MarklogicGroup that owns the StatefulSet
+		for _, stsOwnerRef := range sts.GetOwnerReferences() {
+			if stsOwnerRef.Kind == "MarklogicGroup" {
+				return []reconcile.Request{
+					{NamespacedName: types.NamespacedName{
+						Name:      stsOwnerRef.Name,
+						Namespace: pod.Namespace,
+					}},
+				}
+			}
+		}
+	}
+
+	return nil
 }

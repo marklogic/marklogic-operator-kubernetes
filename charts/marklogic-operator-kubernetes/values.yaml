@@ -1,32 +1,5 @@
 controllerManager:
-  kubeRbacProxy:
-    args:
-    - --secure-listen-address=0.0.0.0:8443
-    - --upstream=http://127.0.0.1:8080/
-    - --logtostderr=true
-    - --v=0
-    containerSecurityContext:
-      allowPrivilegeEscalation: false
-      capabilities:
-        drop:
-        - ALL
-      readOnlyRootFilesystem: true
-      runAsNonRoot: true
-    image:
-      repository: quay.io/brancz/kube-rbac-proxy
-      tag: v0.15.0
-    resources:
-      limits:
-        cpu: 500m
-        memory: 128Mi
-      requests:
-        cpu: 5m
-        memory: 64Mi
   manager:
-    args:
-    - --health-probe-bind-address=:8081
-    - --metrics-bind-address=127.0.0.1:8080
-    - --leader-elect
     containerSecurityContext:
       allowPrivilegeEscalation: false
       capabilities:
@@ -36,7 +9,7 @@ controllerManager:
       runAsNonRoot: true
     image:
       repository: progressofficial/marklogic-operator-kubernetes
-      tag: 1.2.0
+      tag: 1.3.0
     resources:
       limits:
         cpu: 500m
@@ -53,14 +26,30 @@ controllerManager:
 imagePullSecrets: []
 kubernetesClusterDomain: cluster.local
 metricsService:
-  ports:
-  - name: https
-    port: 8443
-    protocol: TCP
-    targetPort: https
   type: ClusterIP
 serviceAccount:
   annotations: {}
   automount: true
   create: true
   name: ""
+
+# Operator scope configuration
+scope:
+  # type: "cluster" (default) — operator watches all namespaces.
+  #        Requires ClusterRole/ClusterRoleBinding. Metrics can be secure or insecure.
+  # type: "namespace"         — operator watches only specified namespace(s).
+  #        Uses Role/RoleBinding per namespace. Metrics must be insecure (metrics.secure=false).
+  type: cluster
+
+  # watchNamespaces: which namespace(s) to watch when scope.type = "namespace".
+  # Accepts a single name, a comma-separated string, or a YAML list.
+  # When empty, defaults to the release namespace.
+  watchNamespaces: ""
+
+# Metrics endpoint security
+metrics:
+  # secure: true  (default) — HTTPS on :8443, Kubernetes TokenReview/SubjectAccessReview
+  #                            authentication enforced. Requires scope.type=cluster.
+  # secure: false            — HTTP on :8080, no authentication. Safe for namespace scope
+  #                            or development environments that have no cluster-level RBAC.
+  secure: true

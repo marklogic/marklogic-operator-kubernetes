@@ -5,7 +5,7 @@
 # To re-generate a bundle for another specific version without changing the standard setup, you can:
 # - use the VERSION as arg of the bundle target (e.g make bundle VERSION=0.0.2)
 # - use environment variables to overwrite this value (e.g export VERSION=0.0.2)
-VERSION ?= 1.2.0
+VERSION ?= 1.3.0
 
 # Tool Versions
 KUSTOMIZE_VERSION ?= v5.5.0
@@ -23,10 +23,27 @@ VERIFY_HUGE_PAGES ?= false
 export E2E_DOCKER_IMAGE ?= $(IMG)
 export E2E_KUSTOMIZE_VERSION ?= $(KUSTOMIZE_VERSION)
 export E2E_CONTROLLER_TOOLS_VERSION ?= $(CONTROLLER_TOOLS_VERSION)
-export E2E_MARKLOGIC_IMAGE_VERSION ?= progressofficial/marklogic-db:12.0.0-ubi9-rootless-2.2.2
+export E2E_MARKLOGIC_IMAGE_VERSION ?= progressofficial/marklogic-db:12.0.3-ubi9-rootless-2.2.6
 export FLUENT_BIT_IMAGE ?= fluent/fluent-bit:4.1.1
 export E2E_KUBERNETES_VERSION ?= v1.31.13
 export E2E_ISTIO_AMBIENT ?= false
+export E2E_TEST_TIMEOUT ?= 60m
+export E2E_HELM_TEST_TIMEOUT ?= 45m
+E2E_UPGRADE_SOURCE_VERSION ?= 1.2.0
+E2E_UPGRADE_CLUSTER_TEST_TIMEOUT ?= 90m
+E2E_UPGRADE_HELM_NAMESPACE_TEST_TIMEOUT ?= 75m
+E2E_UPGRADE_CLEANUP_TIMEOUT ?= 15m
+
+# EKS / ECR configuration for Jenkins EKS test environment.
+# Set AWS_ACCOUNT_ID in the environment (or pass on the make command line).
+# Example: make e2e-setup-eks AWS_ACCOUNT_ID=123456789012
+# If not set, it is auto-derived via: aws sts get-caller-identity.
+EKS_CLUSTER_NAME ?= jenkins-kube-ninjas
+EKS_NODEGROUP_NAME ?= ml-worker
+EKS_REGION ?= us-west-1
+AWS_ACCOUNT_ID ?= $(shell aws sts get-caller-identity --query Account --output text 2>/dev/null)
+ECR_REGISTRY ?= $(AWS_ACCOUNT_ID).dkr.ecr.$(EKS_REGION).amazonaws.com
+ECR_OPERATOR_IMAGE ?= $(ECR_REGISTRY)/$(EKS_CLUSTER_NAME)/marklogic-kubernetes-operator:$(VERSION)
 
 
 # CHANNELS define the bundle channels used in the bundle.
@@ -73,6 +90,7 @@ endif
 # Image URL to use all building/pushing image targets
 # Image for dev: ml-marklogic-operator-dev.bed-artifactory.bedford.progress.com/marklogic-operator-kubernetes
 IMG ?= progressofficial/marklogic-operator-kubernetes:$(VERSION)
+LOCAL_E2E_IMG ?= marklogic-operator-kubernetes:e2e-local
 
 
 # Get the currently used golang install path (in GOPATH/bin, unless GOBIN is set)
@@ -131,6 +149,11 @@ fmt: ## Run go fmt against code.
 vet: ## Run go vet against code.
 	go vet ./...
 
+.PHONY: kill-envtest
+kill-envtest: ## Kill any stale envtest kube-apiserver and etcd processes left by interrupted test runs.
+	@pkill -f "$(LOCALBIN)/k8s/.*/kube-apiserver" 2>/dev/null || true
+	@pkill -f "$(LOCALBIN)/k8s/.*/etcd" 2>/dev/null || true
+
 .PHONY: test
 test: manifests generate fmt vet envtest ## Run tests.
 	KUBEBUILDER_ASSETS="$(shell $(ENVTEST) use $(ENVTEST_K8S_VERSION) --bin-dir $(LOCALBIN) -p path)" go test -v $$(go list ./... | grep -v /e2e) -coverprofile cover.out
@@ -147,9 +170,15 @@ ifeq ($(VERIFY_HUGE_PAGES), true)
 	@echo "=====Restart minikube cluster to apply hugepages value"
 	minikube stop
 	minikube start
+	@if kubectl config current-context 2>/dev/null | grep -q '^minikube$$'; then \
+		echo "=====Loading operator image $(IMG) into minikube====="; \
+		minikube image load $(IMG); \
+	else \
+		echo "=====Current context is not minikube; skipping image load====="; \
+	fi
 
 	@echo "=====Running e2e test including hugepages test"
-	go test -v -count=1 -timeout 30m ./test/e2e -verifyHugePages
+	IMG=$(IMG) go test -v -count=1 -timeout 60m ./test/e2e -verifyHugePages
 
 	@echo "=====Resetting hugepages value to 0"
 	sudo sysctl -w vm.nr_hugepages=0
@@ -159,13 +188,187 @@ ifeq ($(VERIFY_HUGE_PAGES), true)
 	minikube start
 else
 	@echo "=====Running e2e test without hugepages test"
-	go test -v -count=1 -timeout 30m ./test/e2e
+	@if kubectl config current-context 2>/dev/null | grep -q '^minikube$$'; then \
+		echo "=====Loading operator image $(IMG) into minikube====="; \
+		minikube image load $(IMG); \
+	else \
+		echo "=====Current context is not minikube; skipping image load====="; \
+	fi
+	IMG=$(IMG) go test -v -count=1 -timeout $(E2E_TEST_TIMEOUT) ./test/e2e
 endif
 
 .PHONY: e2e-test-istio  # Run Istio ambient mode e2e tests
 e2e-test-istio:
 	@echo "=====Running Istio ambient mode e2e tests"
-	E2E_ISTIO_AMBIENT=true go test -v -count=1 -timeout 30m ./test/e2e -run "Test(Istio|NonIstio)"
+	@if kubectl config current-context 2>/dev/null | grep -q '^minikube$$'; then \
+		echo "=====Loading operator image $(IMG) into minikube====="; \
+		minikube image load $(IMG); \
+	else \
+		echo "=====Current context is not minikube; skipping image load====="; \
+	fi
+	IMG=$(IMG) E2E_ISTIO_AMBIENT=true go test -v -count=1 -timeout 30m ./test/e2e -run "Test(Istio|NonIstio)"
+
+# NOTE: There is intentionally no `e2e-test-namespace` target here.
+# The `test/e2e` suite always deploys the operator via `make deploy`
+# (kustomize, ClusterRole/ClusterRoleBinding, secure metrics on :8443)
+# inside its TestMain, and does not honor E2E_SCOPE_TYPE / E2E_METRICS_SECURE
+# / WATCH_NAMESPACE patching. To validate namespace-scoped RBAC and the
+# insecure HTTP metrics endpoint, use `e2e-test-helm-namespace` below,
+# which installs the operator via the Helm chart with scope.type=namespace.
+
+.PHONY: e2e-test-cluster  ## Run e2e tests against a cluster-scoped operator install (alias for `e2e-test`)
+e2e-test-cluster:
+	@echo "=====Running e2e tests in cluster-scoped mode"
+	@if kubectl config current-context 2>/dev/null | grep -q '^minikube$$'; then \
+		echo "=====Loading operator image $(IMG) into minikube====="; \
+		minikube image load $(IMG); \
+	else \
+		echo "=====Current context is not minikube; skipping image load====="; \
+	fi
+	IMG=$(IMG) go test -v -count=1 -timeout $(E2E_TEST_TIMEOUT) ./test/e2e
+
+.PHONY: e2e-test-helm-namespace  ## Run namespace-scoped e2e tests via Helm chart install (validates Role/RoleBinding, no ClusterRole, insecure metrics on :8080)
+e2e-test-helm-namespace:
+	@echo "=====Running namespace-scoped e2e tests via Helm chart====="
+	@if kubectl config current-context 2>/dev/null | grep -q '^minikube$$'; then \
+		echo "=====Loading operator image $(IMG) into minikube====="; \
+		minikube image load $(IMG); \
+	else \
+		echo "=====Current context is not minikube; skipping image load====="; \
+	fi
+	E2E_DOCKER_IMAGE=$(IMG) go test -v -count=1 -timeout 45m ./test/e2e-helm
+
+.PHONY: e2e-test-upgrade  ## Run both upgrade validation scenarios (cluster + namespace) and then reuse the matching e2e suites.
+e2e-test-upgrade:
+	@$(MAKE) e2e-test-upgrade-cluster IMG=$(IMG)
+	@$(MAKE) e2e-test-upgrade-helm-namespace IMG=$(IMG)
+
+.PHONY: e2e-test-upgrade-cluster  ## Run the cluster-scoped upgrade validation and then reuse the cluster-scoped e2e suite.
+e2e-test-upgrade-cluster:
+	@echo "=====Running cluster-scoped upgrade validation====="
+	@TARGET_IMG='$(IMG)'; \
+	if kubectl config current-context 2>/dev/null | grep -q '^minikube$$'; then \
+		if ! docker image inspect "$$TARGET_IMG" >/dev/null 2>&1; then \
+			if docker image inspect '$(LOCAL_E2E_IMG)' >/dev/null 2>&1; then \
+				echo "=====Requested image $$TARGET_IMG is not in local Docker; falling back to $(LOCAL_E2E_IMG) for minikube upgrade test====="; \
+				TARGET_IMG='$(LOCAL_E2E_IMG)'; \
+			else \
+				echo "=====Requested image $$TARGET_IMG is not in local Docker and fallback image $(LOCAL_E2E_IMG) is unavailable====="; \
+				exit 1; \
+			fi; \
+		fi; \
+		echo "=====Loading operator image $$TARGET_IMG into minikube====="; \
+		minikube image load "$$TARGET_IMG"; \
+	else \
+		echo "=====Current context is not minikube; skipping image load====="; \
+	fi; \
+	E2E_UPGRADE_SOURCE_VERSION='$(E2E_UPGRADE_SOURCE_VERSION)' \
+	E2E_UPGRADE_TARGET_IMAGE="$$TARGET_IMG" \
+	E2E_MARKLOGIC_IMAGE_VERSION='$(E2E_MARKLOGIC_IMAGE_VERSION)' \
+	go test -tags upgradee2e -v -count=1 -timeout $(E2E_UPGRADE_CLUSTER_TEST_TIMEOUT) ./test -run '^TestUpgradeClusterScope$$'
+
+.PHONY: e2e-test-upgrade-helm-namespace  ## Run the namespace-scoped upgrade validation and then reuse the Helm namespace-scoped e2e suite.
+e2e-test-upgrade-helm-namespace:
+	@echo "=====Running namespace-scoped upgrade validation====="
+	@TARGET_IMG='$(IMG)'; \
+	if kubectl config current-context 2>/dev/null | grep -q '^minikube$$'; then \
+		if ! docker image inspect "$$TARGET_IMG" >/dev/null 2>&1; then \
+			if docker image inspect '$(LOCAL_E2E_IMG)' >/dev/null 2>&1; then \
+				echo "=====Requested image $$TARGET_IMG is not in local Docker; falling back to $(LOCAL_E2E_IMG) for minikube upgrade test====="; \
+				TARGET_IMG='$(LOCAL_E2E_IMG)'; \
+			else \
+				echo "=====Requested image $$TARGET_IMG is not in local Docker and fallback image $(LOCAL_E2E_IMG) is unavailable====="; \
+				exit 1; \
+			fi; \
+		fi; \
+		echo "=====Loading operator image $$TARGET_IMG into minikube====="; \
+		minikube image load "$$TARGET_IMG"; \
+	else \
+		echo "=====Current context is not minikube; skipping image load====="; \
+	fi; \
+	E2E_UPGRADE_SOURCE_VERSION='$(E2E_UPGRADE_SOURCE_VERSION)' \
+	E2E_UPGRADE_TARGET_IMAGE="$$TARGET_IMG" \
+	E2E_MARKLOGIC_IMAGE_VERSION='$(E2E_MARKLOGIC_IMAGE_VERSION)' \
+	go test -tags upgradee2e -v -count=1 -timeout $(E2E_UPGRADE_HELM_NAMESPACE_TEST_TIMEOUT) ./test -run '^TestUpgradeNamespaceScope$$'
+
+.PHONY: e2e-test-upgrade-cleanup  ## Delete upgrade-test releases and namespaces, optionally filtered by E2E_UPGRADE_RUN_ID.
+e2e-test-upgrade-cleanup:
+	@echo "=====Cleaning upgrade-test resources====="
+	E2E_UPGRADE_RUN_ID=$(E2E_UPGRADE_RUN_ID) \
+	go test -tags upgradee2e -v -count=1 -timeout $(E2E_UPGRADE_CLEANUP_TIMEOUT) ./test -run '^TestCleanupUpgradeResources$$'
+
+.PHONY: e2e-test-volume-resize  ## Run ONLY the cluster-scoped volume resize test (two namespaces in parallel)
+e2e-test-volume-resize:
+	@echo "=====Running cluster-scoped volume-resize e2e test (parallel, 2 namespaces)====="
+	IMG=$(IMG) go test -v -count=1 -timeout 30m ./test/e2e -run TestVolumeResizeClusterScoped
+
+.PHONY: e2e-test-dynamic-host  ## Run ONLY the cluster-scoped dynamic-host lifecycle test
+e2e-test-dynamic-host:
+	@if kubectl config current-context 2>/dev/null | grep -q '^minikube$$'; then \
+		echo "=====Detected minikube context; using local image flow to avoid remote pull failures====="; \
+		$(MAKE) e2e-test-dynamic-host-local; \
+	else \
+		echo "=====Running cluster-scoped dynamic-host lifecycle e2e test (controller image: $(IMG))====="; \
+		IMG=$(IMG) go test -v -count=1 -timeout 45m ./test/e2e -args --labels=\"type=dynamic-host\"; \
+	fi
+
+.PHONY: e2e-test-dynamic-host-local  ## Build/load local operator image (minikube context) and run ONLY dynamic-host lifecycle test
+e2e-test-dynamic-host-local:
+	@echo "=====Preparing local image for dynamic-host lifecycle e2e test (controller image: $(LOCAL_E2E_IMG))====="
+	@if docker image inspect $(LOCAL_E2E_IMG) >/dev/null 2>&1; then \
+		echo "=====Reusing existing local operator image $(LOCAL_E2E_IMG)====="; \
+	else \
+		echo "=====Local image not found; building $(LOCAL_E2E_IMG)====="; \
+		$(MAKE) docker-build IMG=$(LOCAL_E2E_IMG); \
+	fi
+	@if kubectl config current-context 2>/dev/null | grep -q '^minikube$$'; then \
+		echo "=====Loading local operator image into minikube====="; \
+		minikube image load $(LOCAL_E2E_IMG); \
+	else \
+		echo "=====Current context is not minikube; skipping minikube image load====="; \
+	fi
+	@echo "=====Running cluster-scoped dynamic-host lifecycle e2e test against local image====="
+	IMG=$(LOCAL_E2E_IMG) go test -v -count=1 -timeout 45m ./test/e2e -args --labels="type=dynamic-host"
+
+.PHONY: e2e-test-volume-resize-local  ## Build/load local operator image (minikube context) and run ONLY volume-resize test; ensures CSI hostpath is default SC
+e2e-test-volume-resize-local:
+	@echo "=====Preparing local image for volume-resize e2e test (controller image: $(LOCAL_E2E_IMG))====="
+	@if docker image inspect $(LOCAL_E2E_IMG) >/dev/null 2>&1; then \
+		echo "=====Reusing existing local operator image $(LOCAL_E2E_IMG)====="; \
+	else \
+		echo "=====Local image not found; building $(LOCAL_E2E_IMG)====="; \
+		$(MAKE) docker-build IMG=$(LOCAL_E2E_IMG); \
+	fi
+	@if kubectl config current-context 2>/dev/null | grep -q '^minikube$$'; then \
+		echo "=====Loading local operator image into minikube====="; \
+		minikube image load $(LOCAL_E2E_IMG); \
+		echo "=====Ensuring CSI hostpath driver is enabled for PVC expansion====="; \
+		minikube addons enable csi-hostpath-driver 2>/dev/null || true; \
+		kubectl patch storageclass standard \
+		  -p '{"metadata":{"annotations":{"storageclass.kubernetes.io/is-default-class":"false"}}}' 2>/dev/null || true; \
+		kubectl patch storageclass csi-hostpath-sc \
+		  -p '{"metadata":{"annotations":{"storageclass.kubernetes.io/is-default-class":"true"}}}' 2>/dev/null || true; \
+		kubectl patch storageclass csi-hostpath-sc -p '{"allowVolumeExpansion":true}' 2>/dev/null || true; \
+	else \
+		echo "=====Current context is not minikube; skipping minikube image load and storage class setup====="; \
+	fi
+	@echo "=====Running cluster-scoped volume-resize e2e test against local image====="
+	IMG=$(LOCAL_E2E_IMG) go test -v -count=1 -timeout 30m ./test/e2e -run TestVolumeResizeClusterScoped
+
+.PHONY: e2e-test-helm-volume-resize  ## Run ONLY the namespace-scoped volume resize test via Helm (two watched namespaces in parallel)
+e2e-test-helm-volume-resize:
+	@echo "=====Running namespace-scoped volume-resize e2e test via Helm (parallel, 2 watched namespaces)====="
+	@if kubectl config current-context 2>/dev/null | grep -q '^minikube$$'; then \
+		echo "=====Loading operator image $(IMG) into minikube====="; \
+		minikube image load $(IMG); \
+	else \
+		echo "=====Current context is not minikube; skipping image load====="; \
+	fi
+	E2E_DOCKER_IMAGE=$(IMG) go test -v -count=1 -timeout 30m ./test/e2e-helm -run TestVolumeResizeNamespaceScoped
+
+.PHONY: e2e-test-jenkins-volume-resize  ## Run ONLY volume resize tests on Jenkins (cluster-scoped + namespace-scoped via Helm). Optimized for CI/CD pipeline.
+e2e-test-jenkins-volume-resize: e2e-test-volume-resize e2e-test-helm-volume-resize
+	@echo "=====Jenkins volume resize tests complete (cluster-scoped + namespace-scoped)====="
 
 .PHONY: e2e-setup-minikube
 e2e-setup-minikube: kustomize controller-gen build docker-build
@@ -175,9 +378,21 @@ e2e-setup-minikube: kustomize controller-gen build docker-build
 	minikube addons enable ingress
 	minikube addons enable storage-provisioner
 	minikube addons enable default-storageclass
+	@echo "=====Enabling CSI hostpath driver (required for PVC volume expansion tests)"
+	minikube addons enable volumesnapshots
+	minikube addons enable csi-hostpath-driver
+	@echo "=====Making csi-hostpath-sc the default StorageClass (allowVolumeExpansion=true)"
+	kubectl patch storageclass standard       -p '{"metadata":{"annotations":{"storageclass.kubernetes.io/is-default-class":"false"}}}' || true
+	kubectl patch storageclass csi-hostpath-sc -p '{"metadata":{"annotations":{"storageclass.kubernetes.io/is-default-class":"true"}}}'
+	@echo "=====Ensuring csi-hostpath-sc has allowVolumeExpansion=true (some minikube versions ship it disabled)"
+	kubectl patch storageclass csi-hostpath-sc -p '{"allowVolumeExpansion":true}'
+	@echo "=====Verifying allowVolumeExpansion is set on csi-hostpath-sc"
+	@test "$$(kubectl get storageclass csi-hostpath-sc -o jsonpath='{.allowVolumeExpansion}')" = "true" \
+		|| (echo "ERROR: csi-hostpath-sc.allowVolumeExpansion is not true after patch" && exit 1)
+	kubectl get storageclass
 	minikube image load $(IMG)
 	minikube image load $(E2E_MARKLOGIC_IMAGE_VERSION)
-	minikube image load "docker.io/haproxytech/haproxy-alpine:3.2"
+	minikube image load "docker.io/haproxytech/haproxy-alpine:3.4.0"
 	minikube image load $(FLUENT_BIT_IMAGE)
 	minikube image ls
 
@@ -197,7 +412,7 @@ e2e-setup-minikube-istio: kustomize controller-gen build docker-build istioctl #
 	kubectl get pods -n istio-system
 	minikube image load $(IMG)
 	minikube image load $(E2E_MARKLOGIC_IMAGE_VERSION)
-	minikube image load "docker.io/haproxytech/haproxy-alpine:3.2"
+	minikube image load "docker.io/haproxytech/haproxy-alpine:3.4.0"
 	minikube image load $(FLUENT_BIT_IMAGE)
 	minikube image ls
 
@@ -205,7 +420,119 @@ e2e-setup-minikube-istio: kustomize controller-gen build docker-build istioctl #
 e2e-cleanup-minikube:
 	@echo "=====Delete minikube cluster"
 	minikube delete
-	
+
+##@ EKS Testing
+
+# Login to ECR. AWS_ACCOUNT_ID must be set in the environment.
+.PHONY: ecr-login
+ecr-login: ## Authenticate Docker to ECR.
+	aws ecr get-login-password --region $(EKS_REGION) | \
+	  $(CONTAINER_TOOL) login --username AWS --password-stdin $(ECR_REGISTRY)
+
+# Scale EKS worker nodes up to 3 and wait for them to be Ready.
+.PHONY: eks-scale-up
+eks-scale-up: ## Scale EKS worker nodes to 3.
+	@echo "=====Scaling EKS worker nodes to 3====="
+	eksctl scale nodegroup \
+	  --cluster $(EKS_CLUSTER_NAME) \
+	  --name $(EKS_NODEGROUP_NAME) \
+	  --nodes 3 \
+	  --nodes-min 0 \
+	  --nodes-max 6 \
+	  --region $(EKS_REGION)
+	@echo "=====Waiting for nodes to register====="
+	@until kubectl get nodes 2>/dev/null | grep -q Ready; do echo "Waiting for nodes to join..."; sleep 10; done
+	@echo "=====Waiting for terminating nodes to deregister====="
+	@until [ "$$(kubectl get nodes --no-headers 2>/dev/null | grep -c NotReady)" = "0" ]; do echo "Waiting for NotReady nodes to drain..."; sleep 10; done
+	@echo "=====Waiting for nodes to be Ready====="
+	kubectl wait --for=condition=Ready nodes --all --timeout=300s
+
+# Scale EKS worker nodes to 0 to minimise cost when the cluster is idle.
+.PHONY: eks-scale-down
+eks-scale-down: ## Scale EKS worker nodes to 0.
+	@echo "=====Scaling EKS worker nodes to 0====="
+	eksctl scale nodegroup \
+	  --cluster $(EKS_CLUSTER_NAME) \
+	  --name $(EKS_NODEGROUP_NAME) \
+	  --nodes 0 \
+	  --nodes-min 0 \
+	  --nodes-max 6 \
+	  --region $(EKS_REGION)
+	@echo "=====Waiting for all worker nodes to deregister====="
+	@until [ "$$(kubectl get nodes --no-headers 2>/dev/null | wc -l | tr -d ' ')" = "0" ]; do \
+	  echo "Waiting for nodes to terminate..."; sleep 15; \
+	done
+	@echo "=====All worker nodes terminated====="
+
+# Update the local kubeconfig to point kubectl at the EKS cluster.
+# Also installs a kubectl binary that matches the cluster's minor version to avoid
+# the >±1 skew warning (and potential API incompatibilities).
+.PHONY: eks-update-kubeconfig
+eks-update-kubeconfig: | $(LOCALBIN) ## Configure kubectl for the EKS cluster.
+	aws eks update-kubeconfig --name $(EKS_CLUSTER_NAME) --region $(EKS_REGION)
+	@echo "=====Installing kubectl matching cluster version====="
+	@K8S_VER=$$(aws eks describe-cluster --name $(EKS_CLUSTER_NAME) --region $(EKS_REGION) \
+	    --query "cluster.version" --output text); \
+	  echo "Cluster Kubernetes version: $$K8S_VER"; \
+	  curl -fsSL "https://dl.k8s.io/release/v$${K8S_VER}.0/bin/linux/amd64/kubectl" \
+	    -o $(LOCALBIN)/kubectl && chmod +x $(LOCALBIN)/kubectl; \
+	  $(LOCALBIN)/kubectl version --client
+
+# Build the operator image, push it to ECR, scale up workers, and update kubeconfig.
+# The test framework calls 'make deploy' internally, which uses IMG; we export
+# ECR_OPERATOR_IMAGE so that deployment targets the correct ECR image.
+.PHONY: e2e-setup-eks
+e2e-setup-eks: kustomize controller-gen build ecr-login eks-update-kubeconfig eks-scale-up ## Setup EKS cluster for e2e tests.
+	@echo "=====Building operator image for EKS====="
+	$(CONTAINER_TOOL) buildx build --platform="linux/amd64" -t $(ECR_OPERATOR_IMAGE) .
+	@echo "=====Pushing operator image to ECR====="
+	$(CONTAINER_TOOL) push $(ECR_OPERATOR_IMAGE)
+	@echo "=====Waiting for AWS Load Balancer Controller webhook to be ready====="
+	$(LOCALBIN)/kubectl wait --for=condition=Available deployment/aws-load-balancer-controller \
+	  -n kube-system --timeout=120s
+	@echo "=====EKS setup complete. Operator image: $(ECR_OPERATOR_IMAGE)====="
+
+# Run the standard e2e tests against the EKS cluster.
+# IMG is set to ECR_OPERATOR_IMAGE so that the test framework's internal 'make deploy'
+# deploys the correct image from ECR.
+.PHONY: e2e-test-eks
+e2e-test-eks: ## Run e2e tests on EKS.
+	@echo "=====Running e2e tests on EKS====="
+	PATH=$(LOCALBIN):$$PATH IMG=$(ECR_OPERATOR_IMAGE) E2E_DOCKER_IMAGE=$(ECR_OPERATOR_IMAGE) \
+	  go test -v -count=1 -timeout 60m ./test/e2e
+
+# Scale EKS worker nodes back to 0 after a test run.
+# Note: Kubernetes resources (operator, test namespaces) are removed by the
+# test framework's teardown during the test run itself. This target only scales
+# the nodegroup to 0 to minimise cost; the EKS control plane keeps running.
+.PHONY: e2e-cleanup-eks
+e2e-cleanup-eks: eks-scale-down ## Scale EKS worker nodes to 0 after e2e tests.
+	@echo "=====EKS worker nodes scaled to 0====="
+
+# Build, push, scale up, configure Istio ambient mode, ready for Istio e2e tests.
+.PHONY: e2e-setup-eks-istio
+e2e-setup-eks-istio: kustomize controller-gen build istioctl ecr-login eks-update-kubeconfig eks-scale-up ## Setup EKS cluster with Istio ambient mode.
+	@echo "=====Building operator image for EKS====="
+	$(CONTAINER_TOOL) buildx build --platform="linux/amd64" -t $(ECR_OPERATOR_IMAGE) .
+	@echo "=====Pushing operator image to ECR====="
+	$(CONTAINER_TOOL) push $(ECR_OPERATOR_IMAGE)
+	@echo "=====Waiting for AWS Load Balancer Controller webhook to be ready====="
+	$(LOCALBIN)/kubectl wait --for=condition=Available deployment/aws-load-balancer-controller \
+	  -n kube-system --timeout=120s
+	@echo "=====Installing Istio with ambient profile====="
+	$(ISTIOCTL) install --set profile=ambient -y
+	@echo "=====Waiting for Istio components to be ready====="
+	$(LOCALBIN)/kubectl wait --for=condition=Ready pods --all -n istio-system --timeout=120s
+	@echo "=====Istio ambient mode installed on EKS====="
+	$(LOCALBIN)/kubectl get pods -n istio-system
+
+# Run Istio ambient mode e2e tests on EKS.
+.PHONY: e2e-test-eks-istio
+e2e-test-eks-istio: ## Run Istio ambient mode e2e tests on EKS.
+	@echo "=====Running Istio ambient mode e2e tests on EKS====="
+	PATH=$(LOCALBIN):$$PATH IMG=$(ECR_OPERATOR_IMAGE) E2E_DOCKER_IMAGE=$(ECR_OPERATOR_IMAGE) E2E_ISTIO_AMBIENT=true \
+	  go test -v -count=1 -timeout 60m ./test/e2e -run "Test(Istio|NonIstio)"
+
 GOLANGCI_LINT = $(shell pwd)/bin/golangci-lint
 golangci-lint:
 	@[ -f $(GOLANGCI_LINT) ] || { \
@@ -237,7 +564,7 @@ run: manifests generate fmt vet ## Run a controller from your host.
 # More info: https://docs.docker.com/develop/develop-images/build_enhancements/
 .PHONY: docker-build
 docker-build: ## Build docker image with the manager. to build for linux, add --platform="linux/amd64"
-	$(CONTAINER_TOOL) buildx build --platform="linux/amd64" -t ${IMG} .
+	$(CONTAINER_TOOL) buildx build --platform="linux/amd64" --load -t ${IMG} .
 
 .PHONY: docker-push
 docker-push: ## Push docker image with the manager.
@@ -300,11 +627,19 @@ ISTIOCTL ?= $(LOCALBIN)/istioctl
 .PHONY: kustomize
 kustomize: $(KUSTOMIZE) ## Download kustomize locally if necessary. If wrong version is installed, it will be removed before downloading.
 $(KUSTOMIZE): $(LOCALBIN)
-	@if test -x $(LOCALBIN)/kustomize && ! $(LOCALBIN)/kustomize version | grep -q $(KUSTOMIZE_VERSION); then \
-		echo "$(LOCALBIN)/kustomize version is not expected $(KUSTOMIZE_VERSION). Removing it before installing."; \
-		rm -rf $(LOCALBIN)/kustomize; \
+	@if [ "$(KUSTOMIZE)" != "$(LOCALBIN)/kustomize" ]; then \
+		if [ ! -x "$(KUSTOMIZE)" ]; then \
+			echo "KUSTOMIZE is set to $(KUSTOMIZE) but that path is not executable."; \
+			exit 1; \
+		fi; \
+		echo "Using external kustomize at $(KUSTOMIZE)"; \
+	else \
+		if test -x $(LOCALBIN)/kustomize && ! $(LOCALBIN)/kustomize version | grep -q $(KUSTOMIZE_VERSION); then \
+			echo "$(LOCALBIN)/kustomize version is not expected $(KUSTOMIZE_VERSION). Removing it before installing."; \
+			rm -rf $(LOCALBIN)/kustomize; \
+		fi; \
+		test -s $(LOCALBIN)/kustomize || GOBIN=$(LOCALBIN) GO111MODULE=on go install sigs.k8s.io/kustomize/kustomize/v5@$(KUSTOMIZE_VERSION); \
 	fi
-	test -s $(LOCALBIN)/kustomize || GOBIN=$(LOCALBIN) GO111MODULE=on go install sigs.k8s.io/kustomize/kustomize/v5@$(KUSTOMIZE_VERSION)
 
 .PHONY: controller-gen
 controller-gen: $(CONTROLLER_GEN) ## Download controller-gen locally if necessary. If wrong version is installed, it will be overwritten.
@@ -431,10 +766,12 @@ HELMIFY ?= $(LOCALBIN)/helmify
 helmify: $(HELMIFY) ## Download helmify locally if necessary.
 $(HELMIFY): $(LOCALBIN)
 	test -s $(LOCALBIN)/helmify || GOBIN=$(LOCALBIN) go install github.com/arttor/helmify/cmd/helmify@latest
-    
+
+.PHONY: helm
 helm: manifests kustomize helmify
 	cd config/manager && $(KUSTOMIZE) edit set image controller=$(IMG)
 	$(KUSTOMIZE) build config/default | $(HELMIFY) -image-pull-secrets -original-name charts/marklogic-operator-kubernetes
+	bash hack/helmify-post-process.sh
 
 .PHONY: image-scan
 image-scan: docker-build

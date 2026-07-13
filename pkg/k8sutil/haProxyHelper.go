@@ -1,4 +1,4 @@
-// Copyright (c) 2024-2025 Progress Software Corporation and/or its subsidiaries or affiliates. All Rights Reserved.
+// Copyright (c) 2024-2026 Progress Software Corporation and/or its subsidiaries or affiliates. All Rights Reserved.
 
 package k8sutil
 
@@ -260,9 +260,9 @@ backend {{ .BackendName }}
   cookie haproxy insert indirect httponly nocache maxidle 30m maxlife 4h
   stick-table type string len 32 size 10k expire 4h
   stick store-response res.cook(HostId)
-  stick store-response res.cook(SessionId)
+  stick store-response res.cook(SessionID)
   stick match req.cook(HostId)
-  stick match req.cook(SessionId)
+  stick match req.cook(SessionID)
   default-server check`
 	for _, backends := range backendConfigs {
 		data := &HAProxyTemplate{

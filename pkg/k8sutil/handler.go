@@ -1,4 +1,4 @@
-// Copyright (c) 2024-2025 Progress Software Corporation and/or its subsidiaries or affiliates. All Rights Reserved.
+// Copyright (c) 2024-2026 Progress Software Corporation and/or its subsidiaries or affiliates. All Rights Reserved.
 
 package k8sutil
 
@@ -8,6 +8,15 @@ import (
 
 func (oc *OperatorContext) ReconsileMarklogicGroupHandler() (reconcile.Result, error) {
 	oc.ReqLogger.Info("handler::ReconsileMarklogicGroupHandler")
+
+	if oc.MarklogicGroup.Spec.IsDynamic && oc.MarklogicGroup.DeletionTimestamp != nil {
+		// During dynamic-group teardown, skip create/update reconcilers so
+		// finalizer cleanup can complete even when the namespace is terminating.
+		if dynamicResult := oc.ReconcileDynamicGroupConfig(); dynamicResult.Completed() {
+			return dynamicResult.Output()
+		}
+		return reconcile.Result{Requeue: true}, nil
+	}
 
 	if result := oc.ReconcileServices(); result.Completed() {
 		return result.Output()
@@ -27,7 +36,20 @@ func (oc *OperatorContext) ReconsileMarklogicGroupHandler() (reconcile.Result, e
 		}
 	}
 
+	if result := oc.ReconcileVolumeResizeValidation(); result.Completed() {
+		return result.Output()
+	}
+
 	result, err := oc.ReconcileStatefulset()
+	if err != nil {
+		return result, err
+	}
+
+	if oc.MarklogicGroup.Spec.IsDynamic {
+		if dynamicResult := oc.ReconcileDynamicGroupConfig(); dynamicResult.Completed() {
+			return dynamicResult.Output()
+		}
+	}
 
 	return result, err
 }

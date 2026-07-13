@@ -1,5 +1,5 @@
 #!/bin/bash
-# Copyright (c) 2024-2025 Progress Software Corporation and/or its subsidiaries or affiliates. All Rights Reserved.
+# Copyright (c) 2024-2026 Progress Software Corporation and/or its subsidiaries or affiliates. All Rights Reserved.
 
 MARKLOGIC_ADMIN_USERNAME="$(< /run/secrets/ml-secrets/username)"            
 MARKLOGIC_ADMIN_PASSWORD="$(< /run/secrets/ml-secrets/password)"
@@ -20,7 +20,7 @@ if [[ "$certType" == "named" ]]; then
     cp -f /tmp/ca-cert-secret/* /run/secrets/marklogic-certs/;
     cert_paths=$(find /tmp/server-cert-secrets/tls_*.crt)
     for cert_path in $cert_paths; do
-    cert_cn=$(openssl x509 -noout -subject -in $cert_path | sed -n 's/.*CN = \([^,]*\).*/\1/p')
+    cert_cn=$(openssl x509 -noout -subject -nameopt multiline -in $cert_path | grep 'commonName' | sed 's/.*= *//')
     log "Info: [copy-certs] FQDN for the certificate: $cert_cn"
     if [[ "$host_FQDN" == "$cert_cn" ]]; then
         log "Info: [copy-certs] found certificate for the server"

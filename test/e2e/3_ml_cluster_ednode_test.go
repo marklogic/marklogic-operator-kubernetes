@@ -74,6 +74,7 @@ var (
 )
 
 func TestMlClusterWithEdnode(t *testing.T) {
+	trackTest(t)
 	feature := features.New("MarklogicCluster Resource with 2 MarkLogicGroups (Ednode and dnode)").WithLabel("type", "ednode")
 
 	// Setup for MarklogicCluster creation
