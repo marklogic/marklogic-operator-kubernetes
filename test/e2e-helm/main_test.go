@@ -39,11 +39,17 @@ import (
 	e2eutils "sigs.k8s.io/e2e-framework/pkg/utils"
 )
 
-// helmNS is the namespace the operator is installed into.
-const helmNS = "marklogic-operator-system"
+func envOrDefault(key, fallback string) string {
+	if value := os.Getenv(key); value != "" {
+		return value
+	}
+	return fallback
+}
+
+var helmNS = envOrDefault("E2E_OPERATOR_NAMESPACE", "marklogic-operator-system")
 
 // helmRelease is the Helm release name used for install/uninstall.
-const helmRelease = "marklogic-operator"
+var helmRelease = envOrDefault("E2E_OPERATOR_RELEASE", "marklogic-operator")
 
 // helmChart is the path to the local chart (relative to repo root, where make runs).
 const helmChart = "charts/marklogic-operator-kubernetes"
@@ -51,12 +57,13 @@ const helmChart = "charts/marklogic-operator-kubernetes"
 // watchedNamespaces is the comma-separated list of namespaces the operator watches.
 // Every test namespace in this suite must appear here — the namespace-scoped operator
 // only has a Role/RoleBinding in these namespaces (no ClusterRole backstop).
-const watchedNamespaces = "ml-ns-test,ml-ns-ednode,ml-ns-tls,ml-ns-tls-named,ml-ns-tls-ednode,ml-ns-haproxy-path,ml-ns-haproxy,ml-ns-log,ml-ns-resize-a,ml-ns-resize-b"
+var watchedNamespaces = envOrDefault("E2E_WATCHED_NAMESPACES", "ml-ns-test,ml-ns-ednode,ml-ns-tls,ml-ns-tls-named,ml-ns-tls-ednode,ml-ns-haproxy-path,ml-ns-haproxy,ml-ns-log,ml-ns-resize-a,ml-ns-resize-b")
 
 var (
-	testEnv        env.Environment
-	dockerImage    = os.Getenv("E2E_DOCKER_IMAGE")
-	marklogicImage = os.Getenv("E2E_MARKLOGIC_IMAGE_VERSION")
+	testEnv             env.Environment
+	dockerImage         = os.Getenv("E2E_DOCKER_IMAGE")
+	marklogicImage      = os.Getenv("E2E_MARKLOGIC_IMAGE_VERSION")
+	useExistingOperator = strings.EqualFold(os.Getenv("E2E_USE_EXISTING_OPERATOR"), "true")
 
 	// Shared credentials and container name used across all test files in this package.
 	adminUsername   = "admin"
@@ -167,10 +174,16 @@ func TestMain(m *testing.M) {
 	log.Printf("e2e-helm: docker image: %s", dockerImage)
 	log.Printf("e2e-helm: marklogic image: %s", marklogicImage)
 	log.Printf("e2e-helm: watched namespaces: %s", watchedNamespaces)
+	log.Printf("e2e-helm: operator namespace: %s", helmNS)
+	log.Printf("e2e-helm: reuse existing operator install: %v", useExistingOperator)
 
 	testEnv.Setup(
 		// Ensure the operator namespace is clean before installing.
 		func(ctx context.Context, cfg *envconf.Config) (context.Context, error) {
+			if useExistingOperator {
+				log.Printf("Reusing existing operator namespace: %s", helmNS)
+				return ctx, nil
+			}
 			log.Printf("Ensuring clean operator namespace: %s", helmNS)
 			client := cfg.Client()
 			ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: helmNS}}
@@ -189,7 +202,12 @@ func TestMain(m *testing.M) {
 			}
 			return ctx, nil
 		},
-		envfuncs.CreateNamespace(helmNS),
+		func(ctx context.Context, cfg *envconf.Config) (context.Context, error) {
+			if useExistingOperator {
+				return ctx, nil
+			}
+			return envfuncs.CreateNamespace(helmNS)(ctx, cfg)
+		},
 
 		// Pre-create all watched namespaces so the Helm chart can create
 		// Role/RoleBinding in them during install.
@@ -220,6 +238,10 @@ func TestMain(m *testing.M) {
 		// scope.type=namespace  → Role/RoleBinding per watched namespace (no ClusterRole)
 		// metrics.secure=false  → HTTP :8080 (ClusterRole for TokenReview not available)
 		func(ctx context.Context, cfg *envconf.Config) (context.Context, error) {
+			if useExistingOperator {
+				log.Printf("Reusing existing operator installation in namespace %s", helmNS)
+				return ctx, nil
+			}
 			log.Printf("Installing operator via Helm (scope=namespace, metrics.secure=false)...")
 
 			if err := resetMarkLogicCRDsForHelmInstall(); err != nil {
@@ -301,6 +323,9 @@ func TestMain(m *testing.M) {
 	testEnv.Finish(
 		// Uninstall the Helm release.
 		func(ctx context.Context, cfg *envconf.Config) (context.Context, error) {
+			if useExistingOperator {
+				return ctx, nil
+			}
 			log.Printf("Uninstalling Helm release %s", helmRelease)
 			// #nosec G204 — helmRelease and helmNS are package constants
 			cmd := exec.Command("helm", "uninstall", helmRelease, "--namespace", helmNS, "--ignore-not-found")
@@ -311,10 +336,18 @@ func TestMain(m *testing.M) {
 			}
 			return ctx, nil
 		},
-		envfuncs.DeleteNamespace(helmNS),
+		func(ctx context.Context, cfg *envconf.Config) (context.Context, error) {
+			if useExistingOperator {
+				return ctx, nil
+			}
+			return envfuncs.DeleteNamespace(helmNS)(ctx, cfg)
+		},
 
 		// Delete all watched namespaces created during Setup.
 		func(ctx context.Context, cfg *envconf.Config) (context.Context, error) {
+			if useExistingOperator {
+				return ctx, nil
+			}
 			client := cfg.Client()
 			for _, ns := range strings.Split(watchedNamespaces, ",") {
 				if err := client.Resources().Delete(ctx, &corev1.Namespace{

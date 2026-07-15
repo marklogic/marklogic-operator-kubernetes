@@ -1,5 +1,5 @@
 /*
-Copyright (c) 2024-2025 Progress Software Corporation and/or its subsidiaries or affiliates. All Rights Reserved.
+Copyright (c) 2024-2026 Progress Software Corporation and/or its subsidiaries or affiliates. All Rights Reserved.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -47,7 +47,7 @@ const (
 	duration = time.Second * 10
 	interval = time.Millisecond * 250
 
-	imageName = "progressofficial/marklogic-db:12.0.0-ubi9-rootless-2.2.2"
+	imageName = "progressofficial/marklogic-db:12.0.3-ubi9-rootless-2.2.6"
 )
 
 var replicas = int32(2)

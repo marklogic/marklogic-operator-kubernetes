@@ -23,11 +23,16 @@ VERIFY_HUGE_PAGES ?= false
 export E2E_DOCKER_IMAGE ?= $(IMG)
 export E2E_KUSTOMIZE_VERSION ?= $(KUSTOMIZE_VERSION)
 export E2E_CONTROLLER_TOOLS_VERSION ?= $(CONTROLLER_TOOLS_VERSION)
-export E2E_MARKLOGIC_IMAGE_VERSION ?= progressofficial/marklogic-db:12.0.0-ubi9-rootless-2.2.2
+export E2E_MARKLOGIC_IMAGE_VERSION ?= progressofficial/marklogic-db:12.0.3-ubi9-rootless-2.2.6
 export FLUENT_BIT_IMAGE ?= fluent/fluent-bit:4.1.1
 export E2E_KUBERNETES_VERSION ?= v1.31.13
 export E2E_ISTIO_AMBIENT ?= false
 export E2E_TEST_TIMEOUT ?= 60m
+export E2E_HELM_TEST_TIMEOUT ?= 45m
+E2E_UPGRADE_SOURCE_VERSION ?= 1.2.0
+E2E_UPGRADE_CLUSTER_TEST_TIMEOUT ?= 90m
+E2E_UPGRADE_HELM_NAMESPACE_TEST_TIMEOUT ?= 75m
+E2E_UPGRADE_CLEANUP_TIMEOUT ?= 15m
 
 # EKS / ECR configuration for Jenkins EKS test environment.
 # Set AWS_ACCOUNT_ID in the environment (or pass on the make command line).
@@ -232,6 +237,65 @@ e2e-test-helm-namespace:
 		echo "=====Current context is not minikube; skipping image load====="; \
 	fi
 	E2E_DOCKER_IMAGE=$(IMG) go test -v -count=1 -timeout 45m ./test/e2e-helm
+
+.PHONY: e2e-test-upgrade  ## Run both upgrade validation scenarios (cluster + namespace) and then reuse the matching e2e suites.
+e2e-test-upgrade:
+	@$(MAKE) e2e-test-upgrade-cluster IMG=$(IMG)
+	@$(MAKE) e2e-test-upgrade-helm-namespace IMG=$(IMG)
+
+.PHONY: e2e-test-upgrade-cluster  ## Run the cluster-scoped upgrade validation and then reuse the cluster-scoped e2e suite.
+e2e-test-upgrade-cluster:
+	@echo "=====Running cluster-scoped upgrade validation====="
+	@TARGET_IMG='$(IMG)'; \
+	if kubectl config current-context 2>/dev/null | grep -q '^minikube$$'; then \
+		if ! docker image inspect "$$TARGET_IMG" >/dev/null 2>&1; then \
+			if docker image inspect '$(LOCAL_E2E_IMG)' >/dev/null 2>&1; then \
+				echo "=====Requested image $$TARGET_IMG is not in local Docker; falling back to $(LOCAL_E2E_IMG) for minikube upgrade test====="; \
+				TARGET_IMG='$(LOCAL_E2E_IMG)'; \
+			else \
+				echo "=====Requested image $$TARGET_IMG is not in local Docker and fallback image $(LOCAL_E2E_IMG) is unavailable====="; \
+				exit 1; \
+			fi; \
+		fi; \
+		echo "=====Loading operator image $$TARGET_IMG into minikube====="; \
+		minikube image load "$$TARGET_IMG"; \
+	else \
+		echo "=====Current context is not minikube; skipping image load====="; \
+	fi; \
+	E2E_UPGRADE_SOURCE_VERSION='$(E2E_UPGRADE_SOURCE_VERSION)' \
+	E2E_UPGRADE_TARGET_IMAGE="$$TARGET_IMG" \
+	E2E_MARKLOGIC_IMAGE_VERSION='$(E2E_MARKLOGIC_IMAGE_VERSION)' \
+	go test -tags upgradee2e -v -count=1 -timeout $(E2E_UPGRADE_CLUSTER_TEST_TIMEOUT) ./test -run '^TestUpgradeClusterScope$$'
+
+.PHONY: e2e-test-upgrade-helm-namespace  ## Run the namespace-scoped upgrade validation and then reuse the Helm namespace-scoped e2e suite.
+e2e-test-upgrade-helm-namespace:
+	@echo "=====Running namespace-scoped upgrade validation====="
+	@TARGET_IMG='$(IMG)'; \
+	if kubectl config current-context 2>/dev/null | grep -q '^minikube$$'; then \
+		if ! docker image inspect "$$TARGET_IMG" >/dev/null 2>&1; then \
+			if docker image inspect '$(LOCAL_E2E_IMG)' >/dev/null 2>&1; then \
+				echo "=====Requested image $$TARGET_IMG is not in local Docker; falling back to $(LOCAL_E2E_IMG) for minikube upgrade test====="; \
+				TARGET_IMG='$(LOCAL_E2E_IMG)'; \
+			else \
+				echo "=====Requested image $$TARGET_IMG is not in local Docker and fallback image $(LOCAL_E2E_IMG) is unavailable====="; \
+				exit 1; \
+			fi; \
+		fi; \
+		echo "=====Loading operator image $$TARGET_IMG into minikube====="; \
+		minikube image load "$$TARGET_IMG"; \
+	else \
+		echo "=====Current context is not minikube; skipping image load====="; \
+	fi; \
+	E2E_UPGRADE_SOURCE_VERSION='$(E2E_UPGRADE_SOURCE_VERSION)' \
+	E2E_UPGRADE_TARGET_IMAGE="$$TARGET_IMG" \
+	E2E_MARKLOGIC_IMAGE_VERSION='$(E2E_MARKLOGIC_IMAGE_VERSION)' \
+	go test -tags upgradee2e -v -count=1 -timeout $(E2E_UPGRADE_HELM_NAMESPACE_TEST_TIMEOUT) ./test -run '^TestUpgradeNamespaceScope$$'
+
+.PHONY: e2e-test-upgrade-cleanup  ## Delete upgrade-test releases and namespaces, optionally filtered by E2E_UPGRADE_RUN_ID.
+e2e-test-upgrade-cleanup:
+	@echo "=====Cleaning upgrade-test resources====="
+	E2E_UPGRADE_RUN_ID=$(E2E_UPGRADE_RUN_ID) \
+	go test -tags upgradee2e -v -count=1 -timeout $(E2E_UPGRADE_CLEANUP_TIMEOUT) ./test -run '^TestCleanupUpgradeResources$$'
 
 .PHONY: e2e-test-volume-resize  ## Run ONLY the cluster-scoped volume resize test (two namespaces in parallel)
 e2e-test-volume-resize:
@@ -500,7 +564,7 @@ run: manifests generate fmt vet ## Run a controller from your host.
 # More info: https://docs.docker.com/develop/develop-images/build_enhancements/
 .PHONY: docker-build
 docker-build: ## Build docker image with the manager. to build for linux, add --platform="linux/amd64"
-	$(CONTAINER_TOOL) buildx build --load -t ${IMG} .
+	$(CONTAINER_TOOL) buildx build --platform="linux/amd64" --load -t ${IMG} .
 
 .PHONY: docker-push
 docker-push: ## Push docker image with the manager.

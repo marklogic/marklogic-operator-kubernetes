@@ -1,4 +1,4 @@
-// Copyright (c) 2024-2025 Progress Software Corporation and/or its subsidiaries or affiliates. All Rights Reserved.
+// Copyright (c) 2024-2026 Progress Software Corporation and/or its subsidiaries or affiliates. All Rights Reserved.
 
 package k8sutil
 
@@ -11,6 +11,9 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 )
 
+// dynamicCredentialSecretSuffix is identifier metadata used for the generated
+// Kubernetes Secret name and the least-privilege MarkLogic username. It is not
+// credential material; the corresponding password is generated at reconcile time.
 const dynamicCredentialSecretSuffix = "-manage-admin"
 
 func (cc *ClusterContext) ReconcileSecret() result.ReconcileResult {
@@ -72,7 +75,7 @@ func dynamicCredentialSecretName(clusterName string) string {
 }
 
 func manageAdminUsername(clusterName string) string {
-	return clusterName + "-manage-admin"
+	return clusterName + dynamicCredentialSecretSuffix
 }
 
 func generateDynamicSecretData(clusterName string) map[string][]byte {

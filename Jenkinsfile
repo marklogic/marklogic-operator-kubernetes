@@ -137,7 +137,21 @@ void runMinikubeSetup() {
     """
 }
 
-void runE2eTests(String scope = 'cluster') {
+void runE2eTests(String scope = 'cluster', String installMode = 'fresh') {
+    if (!(installMode in ['fresh', 'upgrade'])) {
+        error "Unsupported E2E install mode '${installMode}'. Supported modes: fresh, upgrade"
+    }
+
+    if (installMode == 'upgrade') {
+        if (scope != 'cluster') {
+            error "Upgrade e2e flow only supports E2E_SCOPE='cluster'."
+        }
+        sh """
+            make e2e-test-upgrade-cluster IMG=${operatorRepo}:${VERSION}
+        """
+        return
+    }
+
     if (!(scope in ['cluster', 'dynamic-host', 'volume-resize'])) {
         error "Unsupported E2E scope '${scope}'. Supported scopes: cluster, dynamic-host, volume-resize"
     }
@@ -227,7 +241,18 @@ void runEKSIstioE2eTests() {
     }
 }
 
-void runHelmNamespaceScopedE2eTests() {
+void runHelmNamespaceScopedE2eTests(String installMode = 'fresh') {
+    if (!(installMode in ['fresh', 'upgrade'])) {
+        error "Unsupported E2E install mode '${installMode}'. Supported modes: fresh, upgrade"
+    }
+
+    if (installMode == 'upgrade') {
+        sh """
+            make e2e-test-upgrade-helm-namespace IMG=${operatorRepo}:${VERSION}
+        """
+        return
+    }
+
     sh """
         make e2e-test-helm-namespace IMG=${operatorRepo}:${VERSION}
     """
@@ -320,7 +345,8 @@ pipeline {
 
     parameters {
         string(name: 'E2E_MARKLOGIC_IMAGE_VERSION', defaultValue: 'ml-docker-db-dev-tierpoint.bed-artifactory.bedford.progress.com/marklogic/marklogic-server-ubi-rootless:latest-12', description: 'Docker image to use for tests.', trim: true)
-        string(name: 'VERSION', defaultValue: '1.2.0', description: 'Version to tag the image with.', trim: true)
+        string(name: 'VERSION', defaultValue: '1.3.0', description: 'Version to tag the image with.', trim: true)
+        choice(name: 'E2E_INSTALL_MODE', choices: ['fresh', 'upgrade'], description: 'Run the standard fresh-install e2e flow or the upgrade validation flow. Default is fresh.')
         choice(name: 'E2E_SCOPE', choices: ['cluster', 'dynamic-host', 'volume-resize'], description: 'E2E scope for Minikube runs. Use cluster for full suite; dynamic-host and volume-resize run focused targets.')
         booleanParam(name: 'PUBLISH_IMAGE', defaultValue: false, description: 'Publish image to internal registry')
         string(name: 'emailList', defaultValue: emailList, description: 'List of email for build notification', trim: true)
@@ -357,8 +383,17 @@ pipeline {
                         error "E2E_SCOPE='${params.E2E_SCOPE}' is not supported when TEST_ON_EKS=true. Use E2E_SCOPE='cluster'."
                     }
 
+                    if (params.E2E_INSTALL_MODE == 'upgrade') {
+                        if (params.TEST_ON_EKS) {
+                            error "E2E_INSTALL_MODE='upgrade' is only supported on the Minikube path right now. Use TEST_ON_EKS=false."
+                        }
+                        if (params.E2E_SCOPE != 'cluster') {
+                            error "E2E_INSTALL_MODE='upgrade' requires E2E_SCOPE='cluster'."
+                        }
+                    }
+
                     def doSetup    = { params.TEST_ON_EKS ? runEKSSetup()          : runMinikubeSetup() }
-                    def doTests    = { params.TEST_ON_EKS ? runEKSE2eTests()        : runE2eTests(params.E2E_SCOPE) }
+                    def doTests    = { params.TEST_ON_EKS ? runEKSE2eTests()        : runE2eTests(params.E2E_SCOPE, params.E2E_INSTALL_MODE) }
                     def doCleanup  = {
                         catchError(buildResult: 'SUCCESS', stageResult: 'FAILURE') {
                             if (params.TEST_ON_EKS) { runEKSCleanup() } else { runMinikubeCleanup() }
@@ -380,17 +415,17 @@ pipeline {
                         // immediately skipped, preserving their position in the view.
                         try {
                             stage('Istio Setup') {
-                                if (params.E2E_SCOPE == 'cluster' && params.VERIFY_ISTIO_AMBIENT) { doIstioSetup() }
-                                else { echo "Istio tests skipped (E2E_SCOPE=${params.E2E_SCOPE}, VERIFY_ISTIO_AMBIENT=${params.VERIFY_ISTIO_AMBIENT})" }
+                                if (params.E2E_INSTALL_MODE == 'fresh' && params.E2E_SCOPE == 'cluster' && params.VERIFY_ISTIO_AMBIENT) { doIstioSetup() }
+                                else { echo "Istio tests skipped (E2E_INSTALL_MODE=${params.E2E_INSTALL_MODE}, E2E_SCOPE=${params.E2E_SCOPE}, VERIFY_ISTIO_AMBIENT=${params.VERIFY_ISTIO_AMBIENT})" }
                             }
                             stage('Run Istio e2e Tests') {
-                                if (params.E2E_SCOPE == 'cluster' && params.VERIFY_ISTIO_AMBIENT) { doIstioTests() }
-                                else { echo "Istio tests skipped (E2E_SCOPE=${params.E2E_SCOPE}, VERIFY_ISTIO_AMBIENT=${params.VERIFY_ISTIO_AMBIENT})" }
+                                if (params.E2E_INSTALL_MODE == 'fresh' && params.E2E_SCOPE == 'cluster' && params.VERIFY_ISTIO_AMBIENT) { doIstioTests() }
+                                else { echo "Istio tests skipped (E2E_INSTALL_MODE=${params.E2E_INSTALL_MODE}, E2E_SCOPE=${params.E2E_SCOPE}, VERIFY_ISTIO_AMBIENT=${params.VERIFY_ISTIO_AMBIENT})" }
                             }
                         } finally {
                             stage('Istio Cleanup') {
-                                if (params.E2E_SCOPE == 'cluster' && params.VERIFY_ISTIO_AMBIENT) { doCleanup() }
-                                else { echo "Istio tests skipped (E2E_SCOPE=${params.E2E_SCOPE}, VERIFY_ISTIO_AMBIENT=${params.VERIFY_ISTIO_AMBIENT})" }
+                                if (params.E2E_INSTALL_MODE == 'fresh' && params.E2E_SCOPE == 'cluster' && params.VERIFY_ISTIO_AMBIENT) { doCleanup() }
+                                else { echo "Istio tests skipped (E2E_INSTALL_MODE=${params.E2E_INSTALL_MODE}, E2E_SCOPE=${params.E2E_SCOPE}, VERIFY_ISTIO_AMBIENT=${params.VERIFY_ISTIO_AMBIENT})" }
                             }
                         }
                     }
@@ -422,7 +457,7 @@ pipeline {
                 expression { return params.VERIFY_HELM_NAMESPACE_SCOPED != false && params.E2E_SCOPE == 'cluster' }
             }
             steps {
-                runHelmNamespaceScopedE2eTests()
+                runHelmNamespaceScopedE2eTests(params.E2E_INSTALL_MODE)
             }
         }
 

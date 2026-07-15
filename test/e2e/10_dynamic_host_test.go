@@ -32,7 +32,7 @@ const (
 	dynamicE2EClusterDomain   = "cluster.local"
 	dynamicE2ETokenDuration   = "PT15M"
 	dynamicE2EMLContainerName = "marklogic-server"
-	dynamicE2EDefaultImage    = "progressofficial/marklogic-db:12.0.0-ubi9-rootless-2.2.2"
+	dynamicE2EDefaultImage    = "progressofficial/marklogic-db:12.0.3-ubi9-rootless-2.2.6"
 
 	dynamicE2EBootstrapReadyTimeout = 10 * time.Minute
 	dynamicE2EStatusTimeout         = 12 * time.Minute

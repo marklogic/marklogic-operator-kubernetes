@@ -5,12 +5,15 @@ package mlmanage
 import (
 	"bytes"
 	"context"
+	"crypto"
 	"crypto/md5"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/tls"
 	"encoding/hex"
 	"encoding/json"
 	"encoding/xml"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -145,7 +148,11 @@ func (c *managementClient) ListHostsStatus(ctx context.Context) ([]HostStatus, e
 		}
 	}
 	if clusterVersion == "" {
-		clusterVersion, _ = c.fetchClusterVersion(ctx)
+		fetchedClusterVersion, fetchErr := c.fetchClusterVersion(ctx)
+		if fetchErr != nil {
+			return nil, fetchErr
+		}
+		clusterVersion = fetchedClusterVersion
 	}
 	if clusterVersion != "" {
 		for i := range hosts {
@@ -364,7 +371,7 @@ func (c *managementClient) RequestDynamicHostToken(ctx context.Context, clusterN
 	return token, nil
 }
 
-func (c *managementClient) JoinDynamicHost(ctx context.Context, hostFQDN, token string) error {
+func (c *managementClient) JoinDynamicHost(ctx context.Context, hostFQDN, token string) (err error) {
 	scheme := "http"
 	if strings.HasPrefix(c.baseURL, "https://") {
 		scheme = "https"
@@ -388,7 +395,7 @@ func (c *managementClient) JoinDynamicHost(ctx context.Context, hostFQDN, token 
 		return err
 	}
 	defer func() {
-		_ = resp.Body.Close()
+		err = errors.Join(err, resp.Body.Close())
 	}()
 
 	respBody, err := io.ReadAll(resp.Body)
@@ -464,7 +471,7 @@ func (c *managementClient) fetchClusterVersion(ctx context.Context) (string, err
 	return findFirstStringByKeys(payload, "version", "product-version"), nil
 }
 
-func (c *managementClient) doJSON(ctx context.Context, method, path string, query url.Values, body any, expectedStatus ...int) ([]byte, int, error) {
+func (c *managementClient) doJSON(ctx context.Context, method, path string, query url.Values, body any, expectedStatus ...int) (data []byte, statusCode int, err error) {
 	endpoint := c.baseURL + path
 	if len(query) > 0 {
 		endpoint = endpoint + "?" + query.Encode()
@@ -489,13 +496,14 @@ func (c *managementClient) doJSON(ctx context.Context, method, path string, quer
 		return nil, 0, err
 	}
 	defer func() {
-		_ = resp.Body.Close()
+		err = errors.Join(err, resp.Body.Close())
 	}()
 
-	data, err := io.ReadAll(resp.Body)
+	data, err = io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, resp.StatusCode, err
 	}
+	statusCode = resp.StatusCode
 
 	for _, code := range expectedStatus {
 		if resp.StatusCode == code {
@@ -505,7 +513,7 @@ func (c *managementClient) doJSON(ctx context.Context, method, path string, quer
 	return data, resp.StatusCode, fmt.Errorf("management api %s %s returned status %d: %s", method, path, resp.StatusCode, string(data))
 }
 
-func (c *managementClient) doXML(ctx context.Context, method, path string, query url.Values, body string, expectedStatus ...int) ([]byte, int, error) {
+func (c *managementClient) doXML(ctx context.Context, method, path string, query url.Values, body string, expectedStatus ...int) (data []byte, statusCode int, err error) {
 	endpoint := c.baseURL + path
 	if len(query) > 0 {
 		endpoint = endpoint + "?" + query.Encode()
@@ -526,13 +534,14 @@ func (c *managementClient) doXML(ctx context.Context, method, path string, query
 		return nil, 0, err
 	}
 	defer func() {
-		_ = resp.Body.Close()
+		err = errors.Join(err, resp.Body.Close())
 	}()
 
-	data, err := io.ReadAll(resp.Body)
+	data, err = io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, resp.StatusCode, err
 	}
+	statusCode = resp.StatusCode
 
 	for _, code := range expectedStatus {
 		if resp.StatusCode == code {
@@ -560,7 +569,9 @@ func (c *managementClient) doRequestWithAuth(ctx context.Context, method, endpoi
 	if digestHeader == "" {
 		return resp, nil
 	}
-	_ = resp.Body.Close()
+	if closeErr := resp.Body.Close(); closeErr != nil {
+		return nil, closeErr
+	}
 
 	digestReq, err := newRequest(ctx, method, endpoint, headers, body)
 	if err != nil {
@@ -600,6 +611,10 @@ func buildDigestAuthorizationHeader(wwwAuthenticate, method, uri, username, pass
 	if algorithm == "" {
 		algorithm = "MD5"
 	}
+	digestHash := digestHashForAlgorithm(algorithm)
+	if digestHash == 0 {
+		return ""
+	}
 	qop := chooseQOP(params["qop"])
 	if qop != "" && qop != "auth" {
 		return ""
@@ -607,17 +622,20 @@ func buildDigestAuthorizationHeader(wwwAuthenticate, method, uri, username, pass
 
 	cnonce := randomCNonce()
 	nc := "00000001"
-	ha1 := md5Hex(fmt.Sprintf("%s:%s:%s", username, realm, password))
+	ha1 := digestHex(fmt.Sprintf("%s:%s:%s", username, realm, password), digestHash)
 	if algorithm == "MD5-SESS" {
-		ha1 = md5Hex(fmt.Sprintf("%s:%s:%s", ha1, nonce, cnonce))
+		ha1 = digestHex(fmt.Sprintf("%s:%s:%s", ha1, nonce, cnonce), digestHash)
 	}
-	ha2 := md5Hex(fmt.Sprintf("%s:%s", method, uri))
+	if algorithm == "SHA-256-SESS" {
+		ha1 = digestHex(fmt.Sprintf("%s:%s:%s", ha1, nonce, cnonce), digestHash)
+	}
+	ha2 := digestHex(fmt.Sprintf("%s:%s", method, uri), digestHash)
 
 	var response string
 	if qop == "" {
-		response = md5Hex(fmt.Sprintf("%s:%s:%s", ha1, nonce, ha2))
+		response = digestHex(fmt.Sprintf("%s:%s:%s", ha1, nonce, ha2), digestHash)
 	} else {
-		response = md5Hex(fmt.Sprintf("%s:%s:%s:%s:%s:%s", ha1, nonce, nc, cnonce, qop, ha2))
+		response = digestHex(fmt.Sprintf("%s:%s:%s:%s:%s:%s", ha1, nonce, nc, cnonce, qop, ha2), digestHash)
 	}
 
 	fields := []string{
@@ -687,9 +705,28 @@ func randomCNonce() string {
 	return hex.EncodeToString(b[:])
 }
 
-func md5Hex(value string) string {
-	sum := md5.Sum([]byte(value))
-	return hex.EncodeToString(sum[:])
+func digestHashForAlgorithm(algorithm string) crypto.Hash {
+	switch strings.ToUpper(strings.TrimSpace(algorithm)) {
+	case "MD5", "MD5-SESS":
+		return crypto.MD5
+	case "SHA-256", "SHA-256-SESS":
+		return crypto.SHA256
+	default:
+		return 0
+	}
+}
+
+func digestHex(value string, digestHash crypto.Hash) string {
+	switch digestHash {
+	case crypto.MD5:
+		sum := md5.Sum([]byte(value))
+		return hex.EncodeToString(sum[:])
+	case crypto.SHA256:
+		sum := sha256.Sum256([]byte(value))
+		return hex.EncodeToString(sum[:])
+	default:
+		return ""
+	}
 }
 
 func escapeXMLText(value string) string {
@@ -785,22 +822,25 @@ func extractTotalHostsOffline(payload any) (int, bool) {
 }
 
 func quantityValueAsInt(value any) (int, bool) {
-	switch v := value.(type) {
-	case float64:
-		return int(v), true
-	case int:
-		return v, true
-	case map[string]any:
-		raw, exists := v["value"]
-		if !exists {
-			return 0, false
-		}
-		switch typed := raw.(type) {
-		case float64:
-			return int(typed), true
-		case int:
-			return typed, true
-		}
+	if floatValue, ok := value.(float64); ok {
+		return int(floatValue), true
+	}
+	if intValue, ok := value.(int); ok {
+		return intValue, true
+	}
+	valueMap, ok := value.(map[string]any)
+	if !ok {
+		return 0, false
+	}
+	raw, exists := valueMap["value"]
+	if !exists {
+		return 0, false
+	}
+	if floatValue, ok := raw.(float64); ok {
+		return int(floatValue), true
+	}
+	if intValue, ok := raw.(int); ok {
+		return intValue, true
 	}
 	return 0, false
 }
@@ -988,31 +1028,20 @@ func extractClusterNameCandidatesFromClusterList(payload any) []string {
 
 	candidates := make([]string, 0, 4)
 	seen := make(map[string]struct{})
-	addCandidate := func(value string) {
-		candidate := strings.TrimSpace(value)
-		if candidate == "" {
-			return
-		}
-		if _, exists := seen[candidate]; exists {
-			return
-		}
-		seen[candidate] = struct{}{}
-		candidates = append(candidates, candidate)
-	}
 
 	for _, key := range []string{"cluster-name", "idref", "nameref", "name", "cluster"} {
 		if value, exists := root[key]; exists {
-			addCandidate(toString(value))
+			candidates = appendUniqueClusterNameCandidate(candidates, seen, toString(value))
 		}
 	}
 
 	for _, listKey := range []string{"cluster-default-list", "cluster-list"} {
 		if listEnvelope, ok := root[listKey].(map[string]any); ok {
-			collectClusterNameCandidatesFromListItems(listEnvelope, addCandidate)
+			candidates = collectClusterNameCandidatesFromListItems(listEnvelope, candidates, seen)
 		}
 	}
 
-	collectClusterNameCandidatesFromListItems(root, addCandidate)
+	candidates = collectClusterNameCandidatesFromListItems(root, candidates, seen)
 
 	for key, value := range root {
 		child, ok := value.(map[string]any)
@@ -1029,38 +1058,52 @@ func extractClusterNameCandidatesFromClusterList(payload any) []string {
 			// (e.g. GET /manage/v2 returns {"local-cluster-default":{"name":"...-cluster",...}}).
 			// Prefer it over the API-format envelope key.
 			if innerName := strings.TrimSpace(firstString(child, "cluster-name", "nameref", "name")); innerName != "" {
-				addCandidate(innerName)
+				candidates = appendUniqueClusterNameCandidate(candidates, seen, innerName)
 			}
-			addCandidate(key)
+			candidates = appendUniqueClusterNameCandidate(candidates, seen, key)
 		}
 	}
 
 	return candidates
 }
 
-func collectClusterNameCandidatesFromListItems(node any, addCandidate func(string)) {
+func appendUniqueClusterNameCandidate(candidates []string, seen map[string]struct{}, value string) []string {
+	candidate := strings.TrimSpace(value)
+	if candidate == "" {
+		return candidates
+	}
+	if _, exists := seen[candidate]; exists {
+		return candidates
+	}
+	seen[candidate] = struct{}{}
+	return append(candidates, candidate)
+}
+
+func collectClusterNameCandidatesFromListItems(node any, candidates []string, seen map[string]struct{}) []string {
 	switch current := node.(type) {
 	case map[string]any:
 		for _, itemKey := range []string{"list-item", "cluster-item"} {
 			if item, ok := current[itemKey]; ok {
-				collectClusterNameCandidatesFromListItems(item, addCandidate)
+				candidates = collectClusterNameCandidatesFromListItems(item, candidates, seen)
 			}
 		}
 
 		for _, key := range []string{"cluster-name", "idref", "nameref"} {
 			if value, exists := current[key]; exists {
-				addCandidate(toString(value))
+				candidates = appendUniqueClusterNameCandidate(candidates, seen, toString(value))
 			}
 		}
 
 		for _, value := range current {
-			collectClusterNameCandidatesFromListItems(value, addCandidate)
+			candidates = collectClusterNameCandidatesFromListItems(value, candidates, seen)
 		}
 	case []any:
 		for _, value := range current {
-			collectClusterNameCandidatesFromListItems(value, addCandidate)
+			candidates = collectClusterNameCandidatesFromListItems(value, candidates, seen)
 		}
 	}
+
+	return candidates
 }
 
 func findClusterNameByVersionEnvelope(node map[string]any) string {
