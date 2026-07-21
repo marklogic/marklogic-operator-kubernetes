@@ -350,13 +350,12 @@ pipeline:
 	return fluentBitData
 }
 
-// normalizeYAMLIndentation processes user-provided YAML content and adjusts indentation
-// to match the target YAML structure. This is useful when embedding user YAML into templates.
+// normalizeYAMLIndentation embeds a YAML list fragment at the requested indentation while
+// preserving each nonblank line's relative indentation.
 //
 // Parameters:
 //   - yamlContent: The raw YAML content string to process
 //   - listItemIndent: Number of spaces for YAML list items (lines starting with "- ")
-//   - propertyIndent: Number of spaces for properties under list items
 //
 // Returns: A string with normalized indentation, ready to embed in a larger YAML structure
 //
@@ -364,65 +363,38 @@ pipeline:
 //
 //	input := "- name: loki\n  host: loki.svc\n  port: 3100"
 //	output := normalizeYAMLIndentation(input, 4, 6)
-func normalizeYAMLIndentation(yamlContent string, listItemIndent, propertyIndent int) string {
-	// Purpose: Re-indent user supplied YAML fragments representing top-level lists of items
-	// (filters, outputs, inputs, parsers) while supporting nested lists under a property key.
-	// Rules:
-	//   Top-level list items: listItemIndent spaces (e.g. 4)
-	//   Properties under a list item: propertyIndent spaces (e.g. 6)
-	//   Nested list items under a property that ends with ':' (e.g. add:, set:, rename:): propertyIndent + 2
-	//   We ignore original indentation entirely for consistency.
+func normalizeYAMLIndentation(yamlContent string, listItemIndent, _ int) string {
 	if yamlContent == "" {
 		return ""
 	}
 
 	lines := strings.Split(yamlContent, "\n")
 	processed := make([]string, 0, len(lines))
-	var lastNonEmpty string
-	inNestedList := false
+	minimumIndent := -1
 
 	for _, raw := range lines {
-		// Replace any tab with 4 spaces to avoid invalid YAML tokens
 		raw = strings.ReplaceAll(raw, "\t", "    ")
 		trimmed := strings.TrimSpace(raw)
-		if trimmed == "" { // skip blank lines
+		if trimmed == "" {
 			continue
 		}
 
-		indent := 0
-		isListItem := strings.HasPrefix(trimmed, "- ")
-
-		// Detect transition into nested list context: previous line is a property ending with ':'
-		// and current line is a list item
-		if isListItem && strings.HasSuffix(lastNonEmpty, ":") && !strings.HasPrefix(lastNonEmpty, "- ") {
-			inNestedList = true
+		indent := len(raw) - len(strings.TrimLeft(raw, " "))
+		if minimumIndent == -1 || indent < minimumIndent {
+			minimumIndent = indent
 		}
-
-		// Exit nested list context when we encounter a property line (not a list item)
-		// unless it's the parent property that started the list
-		if !isListItem && !strings.HasSuffix(trimmed, ":") {
-			inNestedList = false
-		}
-
-		// Also exit nested list when we hit a top-level list item (starts with '- name:')
-		if isListItem && strings.HasPrefix(trimmed, "- name:") {
-			inNestedList = false
-		}
-
-		switch {
-		case isListItem && inNestedList:
-			// nested list item (e.g. under add:, set:, rename:)
-			indent = propertyIndent + 2
-		case isListItem:
-			// top-level list item
-			indent = listItemIndent
-		default:
-			// property line (key: value or key:)
-			indent = propertyIndent
-		}
-
-		processed = append(processed, strings.Repeat(" ", indent)+trimmed)
-		lastNonEmpty = trimmed
 	}
+
+	for _, raw := range lines {
+		raw = strings.ReplaceAll(raw, "\t", "    ")
+		trimmed := strings.TrimSpace(raw)
+		if trimmed == "" {
+			continue
+		}
+
+		indent := len(raw) - len(strings.TrimLeft(raw, " "))
+		processed = append(processed, strings.Repeat(" ", listItemIndent+indent-minimumIndent)+trimmed)
+	}
+
 	return strings.Join(processed, "\n")
 }
