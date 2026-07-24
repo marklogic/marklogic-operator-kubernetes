@@ -487,9 +487,7 @@ pipeline {
 
         stage('Run-BlackDuck-Scan') {
             when {
-                anyOf {
-                        branch pattern: '^(develop|main|release.*)$', comparator: 'REGEXP'
-                    }
+                branch pattern: '^(develop|main|release.*)$', comparator: 'REGEXP'
             }
             steps {
                 runBlackDuckScan()
