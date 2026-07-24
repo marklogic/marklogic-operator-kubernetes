@@ -486,7 +486,13 @@ pipeline {
         }
 
         stage('Run-BlackDuck-Scan') {
-
+            when {
+                anyOf {
+                        branch 'develop'
+                        branch 'main'
+                        branch 'release*'
+                    }
+            }
             steps {
                 runBlackDuckScan()
             }
