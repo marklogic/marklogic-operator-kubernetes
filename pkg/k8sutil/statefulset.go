@@ -389,6 +389,7 @@ func generateContainerDef(name string, containerParams containerParameters) []co
 			SecurityContext: getFluentBitSecurityContextOrDefault(containerParams.LogCollection.SecurityContext),
 			VolumeMounts:    getFluentBitVolumeMount(containerParams),
 		}
+		fulentBitContainerDef.Env = append(fulentBitContainerDef.Env, containerParams.LogCollection.Env...)
 		if containerParams.LogCollection.Resources != nil {
 			fulentBitContainerDef.Resources = *containerParams.LogCollection.Resources
 		}

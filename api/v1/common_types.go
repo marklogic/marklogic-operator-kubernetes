@@ -85,6 +85,7 @@ type LogCollection struct {
 	SecurityContext  *corev1.SecurityContext       `json:"securityContext,omitempty"`
 	// +kubebuilder:default:={"requests":{"cpu":"100m","memory":"200Mi"},"limits":{"cpu":"200m","memory":"500Mi"}}
 	Resources *corev1.ResourceRequirements `json:"resources,omitempty"`
+	Env       []corev1.EnvVar              `json:"env,omitempty"`
 	// +kubebuilder:default:={errorLogs: true, accessLogs: true, requestLogs: true, crashLogs: true, auditLogs: true}
 	Files   LogFilesConfig `json:"files,omitempty"`
 	Outputs string         `json:"outputs,omitempty"`
