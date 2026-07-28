@@ -36,6 +36,9 @@ type Client interface {
 	JoinDynamicHost(ctx context.Context, hostFQDN, token string) error
 	ListGroupHosts(ctx context.Context, groupName string) ([]GroupHost, error)
 	RemoveDynamicHost(ctx context.Context, clusterName, hostID string) error
+	ImportCertificateAuthority(ctx context.Context, authorityPEM string) error
+	EnsureOAuthExternalSecurity(ctx context.Context, config OAuthExternalSecurityConfig) error
+	EnsureOAuthAppServer(ctx context.Context, config OAuthAppServerConfig) error
 }
 
 type ClientOptions struct {
@@ -62,6 +65,36 @@ type GroupHost struct {
 	Name   string
 	HostID string
 	Online bool
+}
+
+type OAuthExternalSecurityConfig struct {
+	Name                   string
+	Authentication         string
+	Authorization          string
+	CacheTimeout           int
+	FlowType               string
+	Vendor                 string
+	AuthorizationServerURI string
+	TokenServerURI         string
+	ClientID               string
+	ClientSecret           string
+	RedirectURI            string
+	TokenType              string
+	UsernameAttribute      string
+	RoleAttribute          string
+	JWTIssuerURI           string
+	JWTAlgorithm           string
+	JWKSURI                string
+}
+
+type OAuthAppServerConfig struct {
+	Name                   string
+	Group                  string
+	Root                   string
+	Port                   int
+	ContentDatabase        string
+	ExternalSecurityName   string
+	TLSCertificateTemplate string
 }
 
 type managementClient struct {
@@ -452,6 +485,153 @@ func (c *managementClient) RemoveDynamicHost(ctx context.Context, clusterName, h
 	return err
 }
 
+// ImportCertificateAuthority inserts a PEM-encoded certificate authority into the Security database.
+func (c *managementClient) ImportCertificateAuthority(ctx context.Context, authorityPEM string) error {
+	if strings.TrimSpace(authorityPEM) == "" {
+		return fmt.Errorf("certificate authority PEM is required")
+	}
+	_, _, err := c.doPlainText(ctx, http.MethodPost, "/manage/v2/certificate-authorities", nil, authorityPEM, http.StatusCreated)
+	return err
+}
+
+func (c *managementClient) EnsureOAuthExternalSecurity(ctx context.Context, config OAuthExternalSecurityConfig) error {
+	query := url.Values{}
+	query.Set("format", "json")
+	_, statusCode, err := c.doJSON(ctx, http.MethodGet, "/manage/v2/external-security/"+url.PathEscape(config.Name), query, nil, http.StatusOK, http.StatusNotFound)
+	if err != nil {
+		return err
+	}
+
+	payload, err := BuildOAuthExternalSecurityPayload(config)
+	if err != nil {
+		return err
+	}
+	if statusCode == http.StatusNotFound {
+		_, _, err = c.doJSON(ctx, http.MethodPost, "/manage/v2/external-security", nil, payload, http.StatusCreated)
+		return err
+	}
+
+	_, _, err = c.doJSON(ctx, http.MethodPut, "/manage/v2/external-security/"+url.PathEscape(config.Name)+"/properties", nil, payload, http.StatusNoContent)
+	return err
+}
+
+func (c *managementClient) EnsureOAuthAppServer(ctx context.Context, config OAuthAppServerConfig) error {
+	if err := validateOAuthAppServerConfig(config); err != nil {
+		return err
+	}
+	query := url.Values{}
+	query.Set("group-id", config.Group)
+	query.Set("format", "json")
+	_, statusCode, err := c.doJSON(ctx, http.MethodGet, "/manage/v2/servers/"+url.PathEscape(config.Name), query, nil, http.StatusOK, http.StatusNotFound)
+	if err != nil {
+		return err
+	}
+
+	payload := BuildOAuthAppServerPayload(config)
+	if statusCode == http.StatusNotFound {
+		query.Set("server-type", "http")
+		_, _, err = c.doJSON(ctx, http.MethodPost, "/manage/v2/servers", query, payload, http.StatusCreated, http.StatusAccepted)
+		return err
+	}
+
+	_, _, err = c.doJSON(ctx, http.MethodPut, "/manage/v2/servers/"+url.PathEscape(config.Name)+"/properties", query, payload, http.StatusAccepted, http.StatusNoContent)
+	return err
+}
+
+// BuildOAuthExternalSecurityPayload returns the Management API representation for an OAuth external security configuration.
+func BuildOAuthExternalSecurityPayload(config OAuthExternalSecurityConfig) (map[string]any, error) {
+	if err := validateOAuthExternalSecurityConfig(config); err != nil {
+		return nil, err
+	}
+
+	oauthServer := map[string]string{
+		"oauth-flow-type":          config.FlowType,
+		"oauth-vendor":             config.Vendor,
+		"oauth-client-id":          config.ClientID,
+		"oauth-token-type":         config.TokenType,
+		"oauth-username-attribute": config.UsernameAttribute,
+		"oauth-role-attribute":     config.RoleAttribute,
+		"oauth-jwt-alg":            config.JWTAlgorithm,
+		"oauth-jwks-uri":           config.JWKSURI,
+	}
+	for field, value := range map[string]string{
+		"oauth-authorization-server-uri": config.AuthorizationServerURI,
+		"oauth-token-server-uri":         config.TokenServerURI,
+		"oauth-client-secret":            config.ClientSecret,
+		"oauth-redirect-uri":             config.RedirectURI,
+		"oauth-jwt-issuer-uri":           config.JWTIssuerURI,
+	} {
+		if strings.TrimSpace(value) != "" {
+			oauthServer[field] = value
+		}
+	}
+
+	return map[string]any{
+		"external-security-name": config.Name,
+		"authentication":         config.Authentication,
+		"authorization":          config.Authorization,
+		"cache-timeout":          config.CacheTimeout,
+		"oauth-server":           oauthServer,
+	}, nil
+}
+
+func validateOAuthExternalSecurityConfig(config OAuthExternalSecurityConfig) error {
+	for field, value := range map[string]string{
+		"name":                     config.Name,
+		"authentication":           config.Authentication,
+		"authorization":            config.Authorization,
+		"OAuth flow type":          config.FlowType,
+		"OAuth vendor":             config.Vendor,
+		"OAuth client ID":          config.ClientID,
+		"OAuth token type":         config.TokenType,
+		"OAuth username attribute": config.UsernameAttribute,
+		"OAuth role attribute":     config.RoleAttribute,
+		"OAuth JWT algorithm":      config.JWTAlgorithm,
+		"OAuth JWKS URI":           config.JWKSURI,
+	} {
+		if strings.TrimSpace(value) == "" {
+			return fmt.Errorf("%s is required", field)
+		}
+	}
+	if config.CacheTimeout <= 0 {
+		return errors.New("OAuth cache timeout must be greater than zero")
+	}
+	return nil
+}
+
+// BuildOAuthAppServerPayload returns the Management API representation for an OAuth-protected HTTP App Server.
+func BuildOAuthAppServerPayload(config OAuthAppServerConfig) map[string]any {
+	return map[string]any{
+		"server-name":              config.Name,
+		"root":                     config.Root,
+		"port":                     config.Port,
+		"content-database":         config.ContentDatabase,
+		"authentication":           "oauth",
+		"internal-security":        false,
+		"external-security":        config.ExternalSecurityName,
+		"ssl-certificate-template": config.TLSCertificateTemplate,
+	}
+}
+
+func validateOAuthAppServerConfig(config OAuthAppServerConfig) error {
+	for field, value := range map[string]string{
+		"name":                     config.Name,
+		"group":                    config.Group,
+		"root":                     config.Root,
+		"content database":         config.ContentDatabase,
+		"external security":        config.ExternalSecurityName,
+		"TLS certificate template": config.TLSCertificateTemplate,
+	} {
+		if strings.TrimSpace(value) == "" {
+			return fmt.Errorf("OAuth App Server %s is required", field)
+		}
+	}
+	if config.Port < 1 || config.Port > 65535 {
+		return errors.New("OAuth App Server port must be between 1 and 65535")
+	}
+	return nil
+}
+
 func (c *managementClient) fetchClusterVersion(ctx context.Context) (string, error) {
 	query := url.Values{}
 	query.Set("format", "json")
@@ -543,6 +723,34 @@ func (c *managementClient) doXML(ctx context.Context, method, path string, query
 	}
 	statusCode = resp.StatusCode
 
+	for _, code := range expectedStatus {
+		if resp.StatusCode == code {
+			return data, resp.StatusCode, nil
+		}
+	}
+	return data, resp.StatusCode, fmt.Errorf("management api %s %s returned status %d: %s", method, path, resp.StatusCode, string(data))
+}
+
+func (c *managementClient) doPlainText(ctx context.Context, method, path string, query url.Values, body string, expectedStatus ...int) (data []byte, statusCode int, err error) {
+	endpoint := c.baseURL + path
+	if len(query) > 0 {
+		endpoint = endpoint + "?" + query.Encode()
+	}
+
+	headers := map[string]string{"Content-Type": "text/plain"}
+	resp, err := c.doRequestWithAuth(ctx, method, endpoint, headers, []byte(body))
+	if err != nil {
+		return nil, 0, err
+	}
+	defer func() {
+		err = errors.Join(err, resp.Body.Close())
+	}()
+
+	data, err = io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, resp.StatusCode, err
+	}
+	statusCode = resp.StatusCode
 	for _, code := range expectedStatus {
 		if resp.StatusCode == code {
 			return data, resp.StatusCode, nil

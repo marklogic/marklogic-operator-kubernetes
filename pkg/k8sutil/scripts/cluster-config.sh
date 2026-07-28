@@ -247,13 +247,20 @@ function init_marklogic {
 # return values: 0 - admin user successfully initialized
 ################################################################
 function wait_bootstrap_ready {
-    resp=$(curl -w '%{http_code}' -o /dev/null http://$MARKLOGIC_BOOTSTRAP_HOST:8001/admin/v1/timestamp )
+    local body
+    body=$(mktemp)
+    resp=$(curl -s -w '%{http_code}' -o "$body" http://$MARKLOGIC_BOOTSTRAP_HOST:8001/admin/v1/timestamp )
     if [[ "$MARKLOGIC_JOIN_TLS_ENABLED" == "true" ]]; then
-        # return 403 if tls is enabled
-        if [[ $resp -eq 403 ]]; then
+        # The bootstrap host is ready once its Admin endpoint stops serving the
+        # timestamp openly. MarkLogic 12.0.x rejects the plaintext request with
+        # 403 (HTTPS required), while 12.1+ responds 500 with XDMP-NOUSER
+        # (authentication required). Accept either as the TLS-enabled ready signal.
+        if [[ $resp -eq 403 ]] || { [[ $resp -eq 500 ]] && grep -q "XDMP-NOUSER" "$body"; }; then
             info "Bootstrap host is ready with TLS enabled"
+            rm -f "$body"
         else
             info "Calling Bootstrap host with response code:$resp. Bootstrap host is not ready with TLS enabled, try again in 10s"
+            rm -f "$body"
             sleep 10s
             wait_bootstrap_ready
             return 0
@@ -261,8 +268,10 @@ function wait_bootstrap_ready {
     else
         if [[ $resp -eq 401 ]]; then
             info "Bootstrap host is ready with no TLS"
+            rm -f "$body"
         else
             info "Calling Bootstrap host with response code:$resp. Bootstrap host is not ready, try again in 10s"
+            rm -f "$body"
             sleep 10s
             wait_bootstrap_ready
             return 0
