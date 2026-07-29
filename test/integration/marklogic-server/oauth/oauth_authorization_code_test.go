@@ -310,7 +310,7 @@ const authCodeFlowScript = `
 START_URL="$1"; CALLBACK_BASE="$2"; USER="$3"; PASS="$4"; CARRY="$5"
 JAR=$(mktemp); KCJAR=$(mktemp)
 
-H1=$(curl -sk -c "$JAR" -D - -o /dev/null "$START_URL")
+H1=$(curl -sS --fail -c "$JAR" -D - -o /dev/null "$START_URL")
 echo "STEP1_STATUS=$(printf '%s' "$H1" | head -1 | tr -d '\r')"
 LOC=$(printf '%s' "$H1" | tr -d '\r' | awk 'tolower($1)=="location:"{print $2; exit}')
 SID=$(awk '$6=="SessionID"{v=$7} END{print v}' "$JAR")
