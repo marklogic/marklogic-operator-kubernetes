@@ -495,14 +495,14 @@ func (c *managementClient) ImportCertificateAuthority(ctx context.Context, autho
 }
 
 func (c *managementClient) EnsureOAuthExternalSecurity(ctx context.Context, config OAuthExternalSecurityConfig) error {
-	query := url.Values{}
-	query.Set("format", "json")
-	_, statusCode, err := c.doJSON(ctx, http.MethodGet, "/manage/v2/external-security/"+url.PathEscape(config.Name), query, nil, http.StatusOK, http.StatusNotFound)
+	payload, err := BuildOAuthExternalSecurityPayload(config)
 	if err != nil {
 		return err
 	}
 
-	payload, err := BuildOAuthExternalSecurityPayload(config)
+	query := url.Values{}
+	query.Set("format", "json")
+	_, statusCode, err := c.doJSON(ctx, http.MethodGet, "/manage/v2/external-security/"+url.PathEscape(config.Name), query, nil, http.StatusOK, http.StatusNotFound)
 	if err != nil {
 		return err
 	}
