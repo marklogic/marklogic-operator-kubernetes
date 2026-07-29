@@ -2802,6 +2802,18 @@ func (f *fakeDynamicManagementClient) RemoveDynamicHost(ctx context.Context, clu
 	return nil
 }
 
+func (f *fakeDynamicManagementClient) ImportCertificateAuthority(ctx context.Context, authorityPEM string) error {
+	return nil
+}
+
+func (f *fakeDynamicManagementClient) EnsureOAuthExternalSecurity(ctx context.Context, config mlmanage.OAuthExternalSecurityConfig) error {
+	return nil
+}
+
+func (f *fakeDynamicManagementClient) EnsureOAuthAppServer(ctx context.Context, config mlmanage.OAuthAppServerConfig) error {
+	return nil
+}
+
 func upsertFakeGroupHost(hosts []mlmanage.GroupHost, candidate mlmanage.GroupHost) []mlmanage.GroupHost {
 	for i := range hosts {
 		if hosts[i].Name == candidate.Name {
