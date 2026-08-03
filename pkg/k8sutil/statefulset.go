@@ -389,7 +389,13 @@ func generateContainerDef(name string, containerParams containerParameters) []co
 			SecurityContext: getFluentBitSecurityContextOrDefault(containerParams.LogCollection.SecurityContext),
 			VolumeMounts:    getFluentBitVolumeMount(containerParams),
 		}
-		fulentBitContainerDef.Env = append(fulentBitContainerDef.Env, containerParams.LogCollection.Env...)
+		// Prevent user configuration from overriding operator-provided env vars.
+		for _, envVar := range containerParams.LogCollection.Env {
+			if envVar.Name == "POD_NAME" || envVar.Name == "NAMESPACE" {
+				continue
+			}
+			fulentBitContainerDef.Env = append(fulentBitContainerDef.Env, envVar)
+		}
 		if containerParams.LogCollection.Resources != nil {
 			fulentBitContainerDef.Resources = *containerParams.LogCollection.Resources
 		}
