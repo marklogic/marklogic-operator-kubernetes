@@ -379,7 +379,7 @@ func generateContainerDef(name string, containerParams containerParameters) []co
 	}
 
 	if containerParams.LogCollection != nil && containerParams.LogCollection.Enabled {
-		fulentBitContainerDef := corev1.Container{
+		fluentBitContainerDef := corev1.Container{
 			Name:            "fluent-bit",
 			Image:           containerParams.LogCollection.Image,
 			ImagePullPolicy: "IfNotPresent",
@@ -394,12 +394,12 @@ func generateContainerDef(name string, containerParams containerParameters) []co
 			if envVar.Name == "POD_NAME" || envVar.Name == "NAMESPACE" {
 				continue
 			}
-			fulentBitContainerDef.Env = append(fulentBitContainerDef.Env, envVar)
+			fluentBitContainerDef.Env = append(fluentBitContainerDef.Env, envVar)
 		}
 		if containerParams.LogCollection.Resources != nil {
-			fulentBitContainerDef.Resources = *containerParams.LogCollection.Resources
+			fluentBitContainerDef.Resources = *containerParams.LogCollection.Resources
 		}
-		containerDef = append(containerDef, fulentBitContainerDef)
+		containerDef = append(containerDef, fluentBitContainerDef)
 	}
 
 	return containerDef
