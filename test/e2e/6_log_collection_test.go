@@ -428,15 +428,7 @@ func TestLogCollectionSecretBackedEnvironment(t *testing.T) {
 			t.Fatalf("Failed to create MarklogicCluster: %s", err)
 		}
 
-		if err := wait.For(
-			conditions.New(client.Resources()).ResourceMatch(mlclusterSecretEnv, func(object k8s.Object) bool {
-				return true
-			}),
-			wait.WithTimeout(3*time.Minute),
-			wait.WithInterval(5*time.Second),
-		); err != nil {
-			t.Fatal(err)
-		}
+		// Create() already persists the resource in the API server; pod startup is validated in the assessment phase.
 		return ctx
 	})
 
