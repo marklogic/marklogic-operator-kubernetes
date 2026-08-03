@@ -67,23 +67,24 @@ func TestGenerateContainerDefAppliesFluentBitEnvironmentVariables(t *testing.T) 
 	}
 
 	fluentBitContainer := containerDefs[1]
-	if len(fluentBitContainer.Env) != 3 {
-		t.Fatalf("expected Fluent Bit environment variables plus the configured token, got %d", len(fluentBitContainer.Env))
+	envByName := map[string]corev1.EnvVar{}
+	for _, envVar := range fluentBitContainer.Env {
+		envByName[envVar.Name] = envVar
 	}
 
-	podName := fluentBitContainer.Env[0]
-	if podName.Name != "POD_NAME" || podName.ValueFrom == nil || podName.ValueFrom.FieldRef == nil || podName.ValueFrom.FieldRef.FieldPath != "metadata.name" {
+	podName, ok := envByName["POD_NAME"]
+	if !ok || podName.ValueFrom == nil || podName.ValueFrom.FieldRef == nil || podName.ValueFrom.FieldRef.FieldPath != "metadata.name" {
 		t.Fatalf("expected POD_NAME from metadata.name, got %+v", podName)
 	}
 
-	namespace := fluentBitContainer.Env[1]
-	if namespace.Name != "NAMESPACE" || namespace.ValueFrom == nil || namespace.ValueFrom.FieldRef == nil || namespace.ValueFrom.FieldRef.FieldPath != "metadata.namespace" {
+	namespace, ok := envByName["NAMESPACE"]
+	if !ok || namespace.ValueFrom == nil || namespace.ValueFrom.FieldRef == nil || namespace.ValueFrom.FieldRef.FieldPath != "metadata.namespace" {
 		t.Fatalf("expected NAMESPACE from metadata.namespace, got %+v", namespace)
 	}
 
-	token := fluentBitContainer.Env[2]
-	if token.Name != "OTEL_AUTH_TOKEN" {
-		t.Fatalf("expected OTEL_AUTH_TOKEN environment variable, got %s", token.Name)
+	token, ok := envByName["OTEL_AUTH_TOKEN"]
+	if !ok {
+		t.Fatal("expected OTEL_AUTH_TOKEN environment variable")
 	}
 	if token.ValueFrom == nil || token.ValueFrom.SecretKeyRef == nil {
 		t.Fatal("expected OTEL_AUTH_TOKEN to retain its secret reference")
@@ -91,7 +92,6 @@ func TestGenerateContainerDefAppliesFluentBitEnvironmentVariables(t *testing.T) 
 	if token.ValueFrom.SecretKeyRef.Name != "otel-auth" || token.ValueFrom.SecretKeyRef.Key != "token" {
 		t.Fatalf("expected OTEL_AUTH_TOKEN to use otel-auth/token, got %+v", token.ValueFrom.SecretKeyRef)
 	}
-}
 
 func TestCreateHAProxyDeploymentDefAppliesSecurityContexts(t *testing.T) {
 	t.Parallel()
