@@ -92,6 +92,7 @@ func TestGenerateContainerDefAppliesFluentBitEnvironmentVariables(t *testing.T) 
 	if token.ValueFrom.SecretKeyRef.Name != "otel-auth" || token.ValueFrom.SecretKeyRef.Key != "token" {
 		t.Fatalf("expected OTEL_AUTH_TOKEN to use otel-auth/token, got %+v", token.ValueFrom.SecretKeyRef)
 	}
+}
 
 func TestCreateHAProxyDeploymentDefAppliesSecurityContexts(t *testing.T) {
 	t.Parallel()
