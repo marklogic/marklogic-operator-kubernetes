@@ -103,6 +103,8 @@ kubectl get secret single-node-admin --namespace=<namespace-name> -o jsonpath='{
 
 For additional manifests to deploy a MarkLogic cluster inside a Kubernetes cluster, see [Operator manifest](https://docs.progress.com/bundle/marklogic-server-on-kubernetes/operator/Operator-manifest.html) in the documentation.
 
+For Fluent Bit log collection configuration, including secret-backed environment variables for authenticated OpenTelemetry exports, see [Fluent Bit Log Collection](./docs/log-collection.md).
+
 ## Clean Up
 
 #### Cleaning up MarkLogic Cluster

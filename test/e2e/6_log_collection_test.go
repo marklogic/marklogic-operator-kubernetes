@@ -338,6 +338,155 @@ func TestLogCollectionPartialLogs(t *testing.T) {
 	testEnv.Test(t, feature.Feature())
 }
 
+func TestLogCollectionSecretBackedEnvironment(t *testing.T) {
+	trackTest(t)
+	feature := features.New("Log Collection Secret-Backed Environment Test").WithLabel("type", "log-collection-secret-env")
+
+	replicas := int32(1)
+	adminUser := "admin"
+	adminPass := "Admin@8001"
+
+	mlclusterSecretEnv := &marklogicv1.MarklogicCluster{
+		TypeMeta: metav1.TypeMeta{
+			APIVersion: "marklogic.progress.com/v1",
+			Kind:       "MarklogicCluster",
+		},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "ml-secret-env",
+			Namespace: logCollectionNamespace,
+		},
+		Spec: marklogicv1.MarklogicClusterSpec{
+			Image: marklogicImage,
+			Auth: &marklogicv1.AdminAuth{
+				AdminUsername: &adminUser,
+				AdminPassword: &adminPass,
+			},
+			MarkLogicGroups: []*marklogicv1.MarklogicGroups{
+				{
+					Name:        logGroupName,
+					Replicas:    &replicas,
+					IsBootstrap: true,
+				},
+			},
+			LogCollection: &marklogicv1.LogCollection{
+				Enabled: true,
+				Image:   "fluent/fluent-bit:4.1.1",
+				Env: []corev1.EnvVar{
+					{
+						Name: "OTEL_AUTH_TOKEN",
+						ValueFrom: &corev1.EnvVarSource{
+							SecretKeyRef: &corev1.SecretKeySelector{
+								LocalObjectReference: corev1.LocalObjectReference{Name: "otel-auth"},
+								Key:                  "token",
+							},
+						},
+					},
+				},
+				Files:   marklogicv1.LogFilesConfig{ErrorLogs: true},
+				Outputs: "[OUTPUT]\n\tname stdout\n\tmatch *",
+			},
+		},
+	}
+
+	feature.Setup(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
+		client := c.Client()
+
+		ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: logCollectionNamespace}}
+		if err := client.Resources().Get(ctx, logCollectionNamespace, "", ns); err == nil {
+			if err := client.Resources().Delete(ctx, ns); err != nil {
+				t.Logf("Failed to delete existing namespace: %v", err)
+			}
+			if err := wait.For(
+				conditions.New(client.Resources()).ResourceDeleted(ns),
+				wait.WithTimeout(2*time.Minute),
+				wait.WithInterval(2*time.Second),
+			); err != nil {
+				t.Logf("Warning: namespace deletion timeout, proceeding anyway: %v", err)
+			}
+		}
+
+		namespace := &corev1.Namespace{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:   logCollectionNamespace,
+				Labels: namespaceLabels(),
+			},
+		}
+		if err := client.Resources().Create(ctx, namespace); err != nil {
+			t.Fatalf("Failed to create namespace: %s", err)
+		}
+
+		secret := &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{Name: "otel-auth", Namespace: logCollectionNamespace},
+			StringData: map[string]string{"token": "test-token"},
+		}
+		if err := client.Resources(logCollectionNamespace).Create(ctx, secret); err != nil {
+			t.Fatalf("Failed to create OpenTelemetry authentication secret: %s", err)
+		}
+
+		marklogicv1.AddToScheme(client.Resources(logCollectionNamespace).GetScheme())
+		if err := client.Resources(logCollectionNamespace).Create(ctx, mlclusterSecretEnv); err != nil {
+			t.Fatalf("Failed to create MarklogicCluster: %s", err)
+		}
+
+		// Create() already persists the resource in the API server; pod startup is validated in the assessment phase.
+		return ctx
+	})
+
+	feature.Assess("Fluent-bit references the OpenTelemetry authentication secret", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
+		client := c.Client()
+		podName := "lognode-0"
+		if err := utils.WaitForPod(ctx, t, client, logCollectionNamespace, podName, 120*time.Second); err != nil {
+			t.Fatalf("Failed to wait for pod creation: %v", err)
+		}
+
+		var pod corev1.Pod
+		if err := client.Resources().Get(ctx, podName, logCollectionNamespace, &pod); err != nil {
+			t.Fatalf("Failed to get pod: %v", err)
+		}
+
+		var fluentBitContainer *corev1.Container
+		for index := range pod.Spec.Containers {
+			if pod.Spec.Containers[index].Name == "fluent-bit" {
+				fluentBitContainer = &pod.Spec.Containers[index]
+				break
+			}
+		}
+		if fluentBitContainer == nil {
+			t.Fatal("Fluent-bit container not found")
+		}
+
+		for _, envVar := range fluentBitContainer.Env {
+			if envVar.Name != "OTEL_AUTH_TOKEN" {
+				continue
+			}
+			if envVar.ValueFrom == nil || envVar.ValueFrom.SecretKeyRef == nil {
+				t.Fatal("OTEL_AUTH_TOKEN is not sourced from a Secret")
+			}
+			if envVar.ValueFrom.SecretKeyRef.Name != "otel-auth" || envVar.ValueFrom.SecretKeyRef.Key != "token" {
+				t.Fatalf("Expected OTEL_AUTH_TOKEN to reference otel-auth/token, got %+v", envVar.ValueFrom.SecretKeyRef)
+			}
+			t.Log("Verified Fluent-bit references the OpenTelemetry authentication secret")
+			return ctx
+		}
+
+		t.Fatal("OTEL_AUTH_TOKEN environment variable not found on Fluent-bit")
+		return ctx
+	})
+
+	feature.Teardown(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
+		client := c.Client()
+		if err := client.Resources(logCollectionNamespace).Delete(ctx, mlclusterSecretEnv); err != nil {
+			t.Fatalf("Failed to delete MarklogicCluster: %s", err)
+		}
+		if err := client.Resources().Delete(ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: logCollectionNamespace}}); err != nil {
+			t.Fatalf("Failed to delete namespace: %s", err)
+		}
+		return ctx
+	})
+
+	testEnv.Test(t, feature.Feature())
+}
+
 // TestLogCollectionCustomResources tests custom resource configuration for fluent-bit
 func TestLogCollectionCustomResources(t *testing.T) {
 	trackTest(t)
