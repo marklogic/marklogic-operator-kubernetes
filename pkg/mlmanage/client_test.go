@@ -6,12 +6,107 @@ import (
 	"context"
 	"crypto"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 )
+
+type roundTripperFunc func(*http.Request) (*http.Response, error)
+
+func (fn roundTripperFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return fn(req)
+}
+
+type closeErrorReadCloser struct {
+	io.Reader
+	err error
+}
+
+func (body closeErrorReadCloser) Close() error {
+	return body.err
+}
+
+func TestJoinDynamicHostPreservesHTTPAndCloseErrors(t *testing.T) {
+	t.Parallel()
+
+	closeErr := errors.New("close response body")
+	client := &managementClient{
+		baseURL: "http://management.example.test",
+		httpClient: &http.Client{Transport: roundTripperFunc(func(*http.Request) (*http.Response, error) {
+			return &http.Response{
+				StatusCode: http.StatusBadRequest,
+				Body:       closeErrorReadCloser{Reader: strings.NewReader("invalid dynamic host token"), err: closeErr},
+				Header:     make(http.Header),
+			}, nil
+		})},
+	}
+
+	err := client.JoinDynamicHost(context.Background(), "node-1.example.test", "token")
+	if err == nil {
+		t.Fatal("expected JoinDynamicHost to return an error")
+	}
+	if !strings.Contains(err.Error(), "returned status 400: invalid dynamic host token") {
+		t.Fatalf("expected HTTP status error, got %v", err)
+	}
+	if !errors.Is(err, closeErr) {
+		t.Fatalf("expected joined close error, got %v", err)
+	}
+}
+
+func TestResponseHelpersPreserveHTTPAndCloseErrors(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		call func(*managementClient) ([]byte, int, error)
+	}{
+		{
+			name: "JSON",
+			call: func(client *managementClient) ([]byte, int, error) {
+				return client.doJSON(context.Background(), http.MethodGet, "/manage/v2", nil, nil, http.StatusOK)
+			},
+		},
+		{
+			name: "XML",
+			call: func(client *managementClient) ([]byte, int, error) {
+				return client.doXML(context.Background(), http.MethodGet, "/manage/v2", nil, "", http.StatusOK)
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			closeErr := errors.New("close response body")
+			client := &managementClient{
+				baseURL: "http://management.example.test",
+				httpClient: &http.Client{Transport: roundTripperFunc(func(*http.Request) (*http.Response, error) {
+					return &http.Response{
+						StatusCode: http.StatusInternalServerError,
+						Body:       closeErrorReadCloser{Reader: strings.NewReader("management failure"), err: closeErr},
+						Header:     make(http.Header),
+					}, nil
+				})},
+			}
+
+			_, statusCode, err := test.call(client)
+			if statusCode != http.StatusInternalServerError {
+				t.Fatalf("status code = %d, want %d", statusCode, http.StatusInternalServerError)
+			}
+			if err == nil {
+				t.Fatal("expected response helper to return an error")
+			}
+			if !strings.Contains(err.Error(), "returned status 500: management failure") {
+				t.Fatalf("expected HTTP status error, got %v", err)
+			}
+			if !errors.Is(err, closeErr) {
+				t.Fatalf("expected joined close error, got %v", err)
+			}
+		})
+	}
+}
 
 func TestRemoveDynamicHostUsesXMLBodyContract(t *testing.T) {
 	t.Parallel()
