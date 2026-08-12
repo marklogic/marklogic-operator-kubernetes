@@ -404,7 +404,7 @@ func (c *managementClient) RequestDynamicHostToken(ctx context.Context, clusterN
 	return token, nil
 }
 
-func (c *managementClient) JoinDynamicHost(ctx context.Context, hostFQDN, token string) (err error) {
+func (c *managementClient) JoinDynamicHost(ctx context.Context, hostFQDN, token string) error {
 	scheme := "http"
 	if strings.HasPrefix(c.baseURL, "https://") {
 		scheme = "https"
@@ -427,19 +427,20 @@ func (c *managementClient) JoinDynamicHost(ctx context.Context, hostFQDN, token 
 	if err != nil {
 		return err
 	}
-	defer func() {
-		err = errors.Join(err, resp.Body.Close())
-	}()
 
-	respBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return err
+	respBody, readErr := io.ReadAll(resp.Body)
+	closeErr := resp.Body.Close()
+	if readErr != nil {
+		return errors.Join(readErr, closeErr)
 	}
 	if resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusAccepted || resp.StatusCode == http.StatusNoContent {
-		return nil
+		return closeErr
 	}
 
-	return fmt.Errorf("dynamic host init POST /admin/v1/init returned status %d: %s", resp.StatusCode, string(respBody))
+	return errors.Join(
+		fmt.Errorf("dynamic host init POST /admin/v1/init returned status %d: %s", resp.StatusCode, string(respBody)),
+		closeErr,
+	)
 }
 
 func (c *managementClient) ListGroupHosts(ctx context.Context, groupName string) ([]GroupHost, error) {
@@ -675,22 +676,22 @@ func (c *managementClient) doJSON(ctx context.Context, method, path string, quer
 	if err != nil {
 		return nil, 0, err
 	}
-	defer func() {
-		err = errors.Join(err, resp.Body.Close())
-	}()
 
-	data, err = io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, resp.StatusCode, err
+	data, readErr := io.ReadAll(resp.Body)
+	closeErr := resp.Body.Close()
+	if readErr != nil {
+		return nil, resp.StatusCode, errors.Join(readErr, closeErr)
 	}
-	statusCode = resp.StatusCode
 
 	for _, code := range expectedStatus {
 		if resp.StatusCode == code {
-			return data, resp.StatusCode, nil
+			return data, resp.StatusCode, closeErr
 		}
 	}
-	return data, resp.StatusCode, fmt.Errorf("management api %s %s returned status %d: %s", method, path, resp.StatusCode, string(data))
+	return data, resp.StatusCode, errors.Join(
+		fmt.Errorf("management api %s %s returned status %d: %s", method, path, resp.StatusCode, string(data)),
+		closeErr,
+	)
 }
 
 func (c *managementClient) doXML(ctx context.Context, method, path string, query url.Values, body string, expectedStatus ...int) (data []byte, statusCode int, err error) {
@@ -713,22 +714,22 @@ func (c *managementClient) doXML(ctx context.Context, method, path string, query
 	if err != nil {
 		return nil, 0, err
 	}
-	defer func() {
-		err = errors.Join(err, resp.Body.Close())
-	}()
 
-	data, err = io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, resp.StatusCode, err
+	data, readErr := io.ReadAll(resp.Body)
+	closeErr := resp.Body.Close()
+	if readErr != nil {
+		return nil, resp.StatusCode, errors.Join(readErr, closeErr)
 	}
-	statusCode = resp.StatusCode
 
 	for _, code := range expectedStatus {
 		if resp.StatusCode == code {
-			return data, resp.StatusCode, nil
+			return data, resp.StatusCode, closeErr
 		}
 	}
-	return data, resp.StatusCode, fmt.Errorf("management api %s %s returned status %d: %s", method, path, resp.StatusCode, string(data))
+	return data, resp.StatusCode, errors.Join(
+		fmt.Errorf("management api %s %s returned status %d: %s", method, path, resp.StatusCode, string(data)),
+		closeErr,
+	)
 }
 
 func (c *managementClient) doPlainText(ctx context.Context, method, path string, query url.Values, body string, expectedStatus ...int) (data []byte, statusCode int, err error) {
@@ -742,21 +743,21 @@ func (c *managementClient) doPlainText(ctx context.Context, method, path string,
 	if err != nil {
 		return nil, 0, err
 	}
-	defer func() {
-		err = errors.Join(err, resp.Body.Close())
-	}()
 
-	data, err = io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, resp.StatusCode, err
+	data, readErr := io.ReadAll(resp.Body)
+	closeErr := resp.Body.Close()
+	if readErr != nil {
+		return nil, resp.StatusCode, errors.Join(readErr, closeErr)
 	}
-	statusCode = resp.StatusCode
 	for _, code := range expectedStatus {
 		if resp.StatusCode == code {
-			return data, resp.StatusCode, nil
+			return data, resp.StatusCode, closeErr
 		}
 	}
-	return data, resp.StatusCode, fmt.Errorf("management api %s %s returned status %d: %s", method, path, resp.StatusCode, string(data))
+	return data, resp.StatusCode, errors.Join(
+		fmt.Errorf("management api %s %s returned status %d: %s", method, path, resp.StatusCode, string(data)),
+		closeErr,
+	)
 }
 
 func (c *managementClient) doRequestWithAuth(ctx context.Context, method, endpoint string, headers map[string]string, body []byte) (*http.Response, error) {
