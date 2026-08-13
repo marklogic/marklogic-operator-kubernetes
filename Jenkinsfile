@@ -125,6 +125,9 @@ void resultNotification(status) {
 void publishTestResults() {
     junit allowEmptyResults:true, testResults: '**/test/test_results/*.xml'
     archiveArtifacts artifacts: '**/test/test_results/*.xml', allowEmptyArchive: true
+    // Archive shard-mode timing outputs without pulling minikube cache/home trees.
+    archiveArtifacts artifacts: '**/test/timing/out/minikube-parallel-*/timings.csv', allowEmptyArchive: true
+    archiveArtifacts artifacts: '**/test/timing/out/minikube-parallel-*/logs/*.log', allowEmptyArchive: true
 }
 
 void runTests() {
@@ -157,6 +160,23 @@ void runE2eTests(String scope = 'cluster', String installMode = 'fresh') {
     }
     sh """
         make e2e-test-${scope} IMG=${operatorRepo}:${VERSION}
+    """
+}
+
+void runMinikubeShardedE2eTests(String shardCount = '2', boolean runIstio = true, boolean runVolumeResize = true, boolean isolateMinikubeHome = true, String kubernetesVersion = 'v1.31.0') {
+    if (!(shardCount in ['2', '3'])) {
+        error "Unsupported Minikube shard count '${shardCount}'. Supported values: 2, 3"
+    }
+
+    sh """
+        SHARDS=${shardCount} \\
+        REPEATS=1 \\
+        RUN_ISTIO=${runIstio ? 1 : 0} \\
+        RUN_VOLUME_RESIZE=${runVolumeResize ? 1 : 0} \\
+        ISOLATE_MINIKUBE_HOME=${isolateMinikubeHome ? 1 : 0} \\
+        E2E_KUBERNETES_VERSION=${kubernetesVersion} \\
+        IMG=${operatorRepo}:${VERSION} \\
+        bash test/timing/minikube-true-parallel-pack.sh
     """
 }
 
@@ -348,6 +368,11 @@ pipeline {
         string(name: 'VERSION', defaultValue: '1.3.0', description: 'Version to tag the image with.', trim: true)
         choice(name: 'E2E_INSTALL_MODE', choices: ['fresh', 'upgrade'], description: 'Run the standard fresh-install e2e flow or the upgrade validation flow. Default is fresh.')
         choice(name: 'E2E_SCOPE', choices: ['cluster', 'dynamic-host', 'volume-resize'], description: 'E2E scope for Minikube runs. Use cluster for full suite; dynamic-host and volume-resize run focused targets.')
+        booleanParam(name: 'USE_MINIKUBE_SHARDS', defaultValue: false, description: 'Run Minikube e2e via profile-sharded parallel pack (cluster + Helm namespace suites).')
+        choice(name: 'MINIKUBE_SHARDS', choices: ['2', '3'], description: 'Number of Minikube shards for USE_MINIKUBE_SHARDS mode.')
+        booleanParam(name: 'RUN_VOLUME_RESIZE', defaultValue: true, description: 'Include volume-resize tests during sharded Minikube runs.')
+        booleanParam(name: 'ISOLATE_MINIKUBE_HOME', defaultValue: true, description: 'Use per-shard MINIKUBE_HOME during sharded Minikube runs to reduce shared-state contention.')
+        string(name: 'E2E_KUBERNETES_VERSION', defaultValue: 'v1.31.0', description: 'Kubernetes version for Minikube e2e setup path.', trim: true)
         booleanParam(name: 'PUBLISH_IMAGE', defaultValue: false, description: 'Publish image to internal registry')
         string(name: 'emailList', defaultValue: emailList, description: 'List of email for build notification', trim: true)
         booleanParam(name: 'VERIFY_ISTIO_AMBIENT', defaultValue: true, description: 'Run Istio ambient mode e2e tests (requires fresh minikube cluster with Istio)')
@@ -383,6 +408,18 @@ pipeline {
                         error "E2E_SCOPE='${params.E2E_SCOPE}' is not supported when TEST_ON_EKS=true. Use E2E_SCOPE='cluster'."
                     }
 
+                    if (params.USE_MINIKUBE_SHARDS) {
+                        if (params.TEST_ON_EKS) {
+                            error "USE_MINIKUBE_SHARDS is only supported on the Minikube path. Use TEST_ON_EKS=false."
+                        }
+                        if (params.E2E_INSTALL_MODE != 'fresh') {
+                            error "USE_MINIKUBE_SHARDS currently supports E2E_INSTALL_MODE='fresh' only."
+                        }
+                        if (params.E2E_SCOPE != 'cluster') {
+                            error "USE_MINIKUBE_SHARDS requires E2E_SCOPE='cluster'."
+                        }
+                    }
+
                     if (params.E2E_INSTALL_MODE == 'upgrade') {
                         if (params.TEST_ON_EKS) {
                             error "E2E_INSTALL_MODE='upgrade' is only supported on the Minikube path right now. Use TEST_ON_EKS=false."
@@ -394,6 +431,15 @@ pipeline {
 
                     def doSetup    = { params.TEST_ON_EKS ? runEKSSetup()          : runMinikubeSetup() }
                     def doTests    = { params.TEST_ON_EKS ? runEKSE2eTests()        : runE2eTests(params.E2E_SCOPE, params.E2E_INSTALL_MODE) }
+                    def doShardedTests = {
+                        runMinikubeShardedE2eTests(
+                            params.MINIKUBE_SHARDS,
+                            params.VERIFY_ISTIO_AMBIENT,
+                            params.RUN_VOLUME_RESIZE,
+                            params.ISOLATE_MINIKUBE_HOME,
+                            params.E2E_KUBERNETES_VERSION
+                        )
+                    }
                     def doCleanup  = {
                         catchError(buildResult: 'SUCCESS', stageResult: 'FAILURE') {
                             if (params.TEST_ON_EKS) { runEKSCleanup() } else { runMinikubeCleanup() }
@@ -403,29 +449,53 @@ pipeline {
                     def doIstioTests  = { params.TEST_ON_EKS ? runEKSIstioE2eTests()   : runIstioE2eTests() }
 
                     def testBody = {
-                        try {
-                            stage('Setup')         { doSetup() }
-                            stage('Run e2e Tests') { doTests() }
-                        } finally {
-                            stage('Cleanup')       { doCleanup() }
-                        }
-                        // Istio stages are always declared so that Jenkins Stage View
-                        // shows a consistent set of columns across all run types.
-                        // When VERIFY_ISTIO_AMBIENT is false the stages are entered but
-                        // immediately skipped, preserving their position in the view.
-                        try {
+                        if (params.USE_MINIKUBE_SHARDS && !params.TEST_ON_EKS) {
+                            stage('Setup') {
+                                echo 'Shard pack manages setup internally per shard.'
+                                if (!params.VERIFY_HELM_NAMESPACE_SCOPED) {
+                                    echo 'USE_MINIKUBE_SHARDS runs cluster + Helm namespace suites; VERIFY_HELM_NAMESPACE_SCOPED is ignored for this path.'
+                                }
+                            }
+                            stage('Run e2e Tests') {
+                                doShardedTests()
+                            }
+                            stage('Cleanup') {
+                                echo 'Shard pack manages cleanup internally per shard.'
+                            }
                             stage('Istio Setup') {
-                                if (params.E2E_INSTALL_MODE == 'fresh' && params.E2E_SCOPE == 'cluster' && params.VERIFY_ISTIO_AMBIENT) { doIstioSetup() }
-                                else { echo "Istio tests skipped (E2E_INSTALL_MODE=${params.E2E_INSTALL_MODE}, E2E_SCOPE=${params.E2E_SCOPE}, VERIFY_ISTIO_AMBIENT=${params.VERIFY_ISTIO_AMBIENT})" }
+                                echo "Istio for shard mode is handled inside the shard pack (RUN_ISTIO=${params.VERIFY_ISTIO_AMBIENT})."
                             }
                             stage('Run Istio e2e Tests') {
-                                if (params.E2E_INSTALL_MODE == 'fresh' && params.E2E_SCOPE == 'cluster' && params.VERIFY_ISTIO_AMBIENT) { doIstioTests() }
-                                else { echo "Istio tests skipped (E2E_INSTALL_MODE=${params.E2E_INSTALL_MODE}, E2E_SCOPE=${params.E2E_SCOPE}, VERIFY_ISTIO_AMBIENT=${params.VERIFY_ISTIO_AMBIENT})" }
+                                echo "Istio for shard mode is handled inside the shard pack (RUN_ISTIO=${params.VERIFY_ISTIO_AMBIENT})."
                             }
-                        } finally {
                             stage('Istio Cleanup') {
-                                if (params.E2E_INSTALL_MODE == 'fresh' && params.E2E_SCOPE == 'cluster' && params.VERIFY_ISTIO_AMBIENT) { doCleanup() }
-                                else { echo "Istio tests skipped (E2E_INSTALL_MODE=${params.E2E_INSTALL_MODE}, E2E_SCOPE=${params.E2E_SCOPE}, VERIFY_ISTIO_AMBIENT=${params.VERIFY_ISTIO_AMBIENT})" }
+                                echo 'Shard pack performs Istio cleanup in-shard when enabled.'
+                            }
+                        } else {
+                            try {
+                                stage('Setup')         { doSetup() }
+                                stage('Run e2e Tests') { doTests() }
+                            } finally {
+                                stage('Cleanup')       { doCleanup() }
+                            }
+                            // Istio stages are always declared so that Jenkins Stage View
+                            // shows a consistent set of columns across all run types.
+                            // When VERIFY_ISTIO_AMBIENT is false the stages are entered but
+                            // immediately skipped, preserving their position in the view.
+                            try {
+                                stage('Istio Setup') {
+                                    if (params.E2E_INSTALL_MODE == 'fresh' && params.E2E_SCOPE == 'cluster' && params.VERIFY_ISTIO_AMBIENT) { doIstioSetup() }
+                                    else { echo "Istio tests skipped (E2E_INSTALL_MODE=${params.E2E_INSTALL_MODE}, E2E_SCOPE=${params.E2E_SCOPE}, VERIFY_ISTIO_AMBIENT=${params.VERIFY_ISTIO_AMBIENT})" }
+                                }
+                                stage('Run Istio e2e Tests') {
+                                    if (params.E2E_INSTALL_MODE == 'fresh' && params.E2E_SCOPE == 'cluster' && params.VERIFY_ISTIO_AMBIENT) { doIstioTests() }
+                                    else { echo "Istio tests skipped (E2E_INSTALL_MODE=${params.E2E_INSTALL_MODE}, E2E_SCOPE=${params.E2E_SCOPE}, VERIFY_ISTIO_AMBIENT=${params.VERIFY_ISTIO_AMBIENT})" }
+                                }
+                            } finally {
+                                stage('Istio Cleanup') {
+                                    if (params.E2E_INSTALL_MODE == 'fresh' && params.E2E_SCOPE == 'cluster' && params.VERIFY_ISTIO_AMBIENT) { doCleanup() }
+                                    else { echo "Istio tests skipped (E2E_INSTALL_MODE=${params.E2E_INSTALL_MODE}, E2E_SCOPE=${params.E2E_SCOPE}, VERIFY_ISTIO_AMBIENT=${params.VERIFY_ISTIO_AMBIENT})" }
+                                }
                             }
                         }
                     }
@@ -445,7 +515,7 @@ pipeline {
 
         stage('Helm-NS-Minikube-Setup') {
             when {
-                expression { return params.VERIFY_HELM_NAMESPACE_SCOPED != false && params.E2E_SCOPE == 'cluster' }
+                expression { return params.USE_MINIKUBE_SHARDS == false && params.VERIFY_HELM_NAMESPACE_SCOPED != false && params.E2E_SCOPE == 'cluster' }
             }
             steps {
                 runMinikubeSetup()
@@ -454,7 +524,7 @@ pipeline {
 
         stage('Run-Helm-NS-e2e-Tests') {
             when {
-                expression { return params.VERIFY_HELM_NAMESPACE_SCOPED != false && params.E2E_SCOPE == 'cluster' }
+                expression { return params.USE_MINIKUBE_SHARDS == false && params.VERIFY_HELM_NAMESPACE_SCOPED != false && params.E2E_SCOPE == 'cluster' }
             }
             steps {
                 runHelmNamespaceScopedE2eTests(params.E2E_INSTALL_MODE)
@@ -463,7 +533,7 @@ pipeline {
 
         stage('Helm-NS-Cleanup') {
             when {
-                expression { return params.VERIFY_HELM_NAMESPACE_SCOPED != false && params.E2E_SCOPE == 'cluster' }
+                expression { return params.USE_MINIKUBE_SHARDS == false && params.VERIFY_HELM_NAMESPACE_SCOPED != false && params.E2E_SCOPE == 'cluster' }
             }
             steps {
                 catchError(buildResult: 'SUCCESS', stageResult: 'FAILURE') {
