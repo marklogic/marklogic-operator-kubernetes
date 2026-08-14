@@ -18,7 +18,7 @@ func TestGenerateContainerDefAppliesFluentBitSecurityContext(t *testing.T) {
 	containerDefs := generateContainerDef("marklogic-server", containerParameters{
 		LogCollection: &marklogicv1.LogCollection{
 			Enabled: true,
-			Image:   "fluent/fluent-bit:4.1.1",
+			Image:   "fluent/fluent-bit:5.1.0",
 			SecurityContext: &corev1.SecurityContext{
 				RunAsUser: &runAsUser,
 			},
@@ -47,7 +47,7 @@ func TestGenerateContainerDefAppliesFluentBitEnvironmentVariables(t *testing.T) 
 	containerDefs := generateContainerDef("marklogic-server", containerParameters{
 		LogCollection: &marklogicv1.LogCollection{
 			Enabled: true,
-			Image:   "fluent/fluent-bit:4.1.1",
+			Image:   "fluent/fluent-bit:5.1.0",
 			Env: []corev1.EnvVar{
 				{
 					Name: "OTEL_AUTH_TOKEN",
@@ -111,7 +111,7 @@ func TestCreateHAProxyDeploymentDefAppliesSecurityContexts(t *testing.T) {
 			ObjectMeta: metav1.ObjectMeta{Name: "ml-cluster", Namespace: "default"},
 			Spec: marklogicv1.MarklogicClusterSpec{
 				HAProxy: &marklogicv1.HAProxy{
-					Image:            "haproxytech/haproxy-alpine:3.4.0",
+					Image:            "haproxytech/haproxy-alpine:3.4.3",
 					PathBasedRouting: &pathBasedRouting,
 					PodSecurityContext: &corev1.PodSecurityContext{
 						FSGroup: &fsGroup,
