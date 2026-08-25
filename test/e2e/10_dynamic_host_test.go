@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -468,23 +469,39 @@ func skipIfDynamicHostUnsupported(t *testing.T) {
 	}
 }
 
-// marklogicImageMajorVersion extracts the leading major version number from a
-// MarkLogic image reference's tag, e.g. "...:12.0.3-ubi9-rootless-2.2.6" -> 12.
+// marklogicTagVersionRe extracts a MarkLogic image tag's major version:
+// "12.0.3-ubi9-rootless-2.2.6" -> 12, "v11.2.0" -> 11, "latest-11" -> 11.
+var marklogicTagVersionRe = regexp.MustCompile(`^(?:v?(\d+)(?:[.\-].*)?|latest-(\d+))$`)
+
+// marklogicImageMajorVersion extracts the MarkLogic major version number from a
+// MarkLogic image reference's tag, e.g. "...:12.0.3-ubi9-rootless-2.2.6" -> 12 or
+// "...:latest-11" -> 11.
 func marklogicImageMajorVersion(image string) (int, bool) {
-	idx := strings.LastIndex(image, ":")
-	if idx == -1 || idx == len(image)-1 {
+	// Drop any digest so sha256 colons don't confuse tag parsing.
+	ref := strings.SplitN(image, "@", 2)[0]
+
+	// The tag is whatever follows the last ":" that appears after the last "/"
+	// (so a registry host:port isn't mistaken for a tag), or the whole ref if
+	// it's a bare tag with no repository path.
+	tag := ""
+	if idx := strings.LastIndex(ref, ":"); idx != -1 && idx < len(ref)-1 && idx > strings.LastIndex(ref, "/") {
+		tag = ref[idx+1:]
+	} else if !strings.Contains(ref, "/") {
+		tag = ref
+	} else {
 		return 0, false
 	}
-	tag := strings.TrimPrefix(image[idx+1:], "v")
-	majorStr := tag
-	if dotIdx := strings.IndexAny(tag, ".-"); dotIdx != -1 {
-		majorStr = tag[:dotIdx]
+
+	m := marklogicTagVersionRe.FindStringSubmatch(tag)
+	if m == nil {
+		return 0, false
+	}
+	majorStr := m[1]
+	if majorStr == "" {
+		majorStr = m[2]
 	}
 	major, err := strconv.Atoi(majorStr)
-	if err != nil {
-		return 0, false
-	}
-	return major, true
+	return major, err == nil
 }
 
 func setDynamicReplicas(ctx context.Context, client klient.Client, replicas int32) error {
