@@ -449,14 +449,14 @@ pipeline {
                             export MINIKUBE_HOME='/space/minikube-cluster/'
 
                             echo '=====Starting cluster-scoped shard====='
-                            make e2e-setup-minikube IMG=${operatorRepo}:${VERSION} MINIKUBE_PROFILE=\"$MINIKUBE_PROFILE\" MINIKUBE_REUSE=true
+                            make e2e-setup-minikube IMG=${operatorRepo}:${VERSION} MINIKUBE_PROFILE=\"\$MINIKUBE_PROFILE\" MINIKUBE_REUSE=true
                             ${clusterTestCommand}
                             if [ '${runIstio}' = 'true' ]; then
-                                make e2e-test-istio IMG=${operatorRepo}:${VERSION} E2E_ISTIO_AMBIENT=true MINIKUBE_PROFILE=\"$MINIKUBE_PROFILE\"
+                                make e2e-test-istio IMG=${operatorRepo}:${VERSION} E2E_ISTIO_AMBIENT=true MINIKUBE_PROFILE=\"\$MINIKUBE_PROFILE\"
                             else
                                 echo '=====Istio tests skipped for cluster shard====='
                             fi
-                            make e2e-cleanup-minikube MINIKUBE_PROFILE=\"$MINIKUBE_PROFILE\" MINIKUBE_REUSE=true
+                            make e2e-cleanup-minikube MINIKUBE_PROFILE=\"\$MINIKUBE_PROFILE\" MINIKUBE_REUSE=true
                             echo '=====Cluster-scoped shard complete====='
                         }
 
@@ -466,9 +466,9 @@ pipeline {
                             export MINIKUBE_HOME='/space/minikube-namespace/'
 
                             echo '=====Starting namespace-scoped shard====='
-                            make e2e-setup-minikube IMG=${operatorRepo}:${VERSION} MINIKUBE_PROFILE=\"$MINIKUBE_PROFILE\" MINIKUBE_REUSE=true
+                            make e2e-setup-minikube IMG=${operatorRepo}:${VERSION} MINIKUBE_PROFILE=\"\$MINIKUBE_PROFILE\" MINIKUBE_REUSE=true
                             ${namespaceTestCommand}
-                            make e2e-cleanup-minikube MINIKUBE_PROFILE=\"$MINIKUBE_PROFILE\" MINIKUBE_REUSE=true
+                            make e2e-cleanup-minikube MINIKUBE_PROFILE=\"\$MINIKUBE_PROFILE\" MINIKUBE_REUSE=true
                             echo '=====Namespace-scoped shard complete====='
                         }
 
@@ -477,29 +477,29 @@ pipeline {
 
                         if [ '${runClusterScoped}' = 'true' ]; then
                             (run_cluster_shard) &
-                            cluster_pid=$!
+                            cluster_pid=\$!
                         fi
 
                         if [ '${runNamespaceScoped}' = 'true' ]; then
                             (run_namespace_shard) &
-                            namespace_pid=$!
+                            namespace_pid=\$!
                         fi
 
                         rc=0
 
-                        if [ -n "$cluster_pid" ]; then
-                            if ! wait "$cluster_pid"; then
+                        if [ -n "\$cluster_pid" ]; then
+                            if ! wait "\$cluster_pid"; then
                                 rc=1
                             fi
                         fi
 
-                        if [ -n "$namespace_pid" ]; then
-                            if ! wait "$namespace_pid"; then
+                        if [ -n "\$namespace_pid" ]; then
+                            if ! wait "\$namespace_pid"; then
                                 rc=1
                             fi
                         fi
 
-                        exit "$rc"
+                        exit "\$rc"
                     """
                 }
             }
