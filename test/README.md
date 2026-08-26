@@ -62,6 +62,22 @@ current-context. (The `e2e-test-upgrade-*` targets shell out to `kubectl`/`helm`
 directly and rely on the current-context instead, so avoid running those in
 parallel with other profiles from the same shell.)
 
+`e2e-setup-minikube` and `e2e-cleanup-minikube` also accept `MINIKUBE_REUSE`
+(default: `false`). With `MINIKUBE_REUSE=true`, setup only starts the profile if
+it isn't already running (skipping delete/recreate), and cleanup leaves it
+running instead of deleting it. This turns each `MINIKUBE_PROFILE` into a
+persistent "shard": running two profiles concurrently every time otherwise means
+two `minikube start`/`delete` calls contend for the same host-level locks
+(e.g. iptables/docker network setup) on every run, which can make parallel runs
+look serialized. With `MINIKUBE_REUSE=true` that cost is paid once, and each
+suite's own TestMain teardown still resets Kubernetes-level state between runs:
+
+```bash
+make e2e-setup-minikube MINIKUBE_PROFILE=e2e-cluster MINIKUBE_REUSE=true &
+make e2e-setup-minikube MINIKUBE_PROFILE=e2e-namespace MINIKUBE_REUSE=true &
+wait
+```
+
 ---
 
 ## EKS (CI / full test run)

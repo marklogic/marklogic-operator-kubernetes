@@ -39,6 +39,15 @@ export E2E_HELM_TEST_TIMEOUT ?= 45m
 # an explicit `-context` so parallel runs never race over kubectl's shared current-context.
 MINIKUBE_PROFILE ?= minikube
 
+# MINIKUBE_REUSE keeps an existing minikube profile ("shard") running instead of deleting and
+# recreating it on every setup/cleanup call. Two profiles doing `minikube start`/`delete`
+# concurrently on the same host can contend on host-level locks (e.g. iptables/docker network
+# setup), which serializes the very parallelism MINIKUBE_PROFILE is meant to provide. With
+# MINIKUBE_REUSE=true, e2e-setup-minikube only starts the profile if it isn't already running,
+# and e2e-cleanup-minikube leaves it running (Kubernetes-level state is still reset by each
+# suite's TestMain teardown), so parallel shards only pay the start/stop cost once.
+MINIKUBE_REUSE ?= false
+
 # E2E_SCOPE selects which operator install mode `make e2e-test` validates by default.
 # Namespace-scoped (Helm, scope.type=namespace) is the default going forward; set
 # E2E_SCOPE=cluster to run the cluster-scoped (kustomize/ClusterRole) suite instead.
@@ -398,8 +407,17 @@ e2e-test-jenkins-volume-resize: e2e-test-volume-resize e2e-test-helm-volume-resi
 .PHONY: e2e-setup-minikube
 e2e-setup-minikube: kustomize controller-gen build docker-build istioctl ## Setup a minikube cluster (profile: MINIKUBE_PROFILE) with Istio ambient mode pre-installed, ready for cluster-scoped, namespace-scoped and Istio e2e tests.
 	minikube version
+ifeq ($(MINIKUBE_REUSE), true)
+	@if minikube -p $(MINIKUBE_PROFILE) status >/dev/null 2>&1; then \
+		echo "=====Reusing existing minikube shard $(MINIKUBE_PROFILE) (MINIKUBE_REUSE=true)====="; \
+	else \
+		echo "=====Minikube shard $(MINIKUBE_PROFILE) not running; starting it====="; \
+		minikube -p $(MINIKUBE_PROFILE) start --driver=docker --kubernetes-version=$(E2E_KUBERNETES_VERSION) --memory=8192 --cpus=2; \
+	fi
+else
 	minikube -p $(MINIKUBE_PROFILE) delete || true
 	minikube -p $(MINIKUBE_PROFILE) start --driver=docker --kubernetes-version=$(E2E_KUBERNETES_VERSION) --memory=8192 --cpus=2
+endif
 	minikube -p $(MINIKUBE_PROFILE) addons enable ingress
 	minikube -p $(MINIKUBE_PROFILE) addons enable storage-provisioner
 	minikube -p $(MINIKUBE_PROFILE) addons enable default-storageclass
@@ -431,8 +449,12 @@ e2e-setup-minikube-istio: e2e-setup-minikube ## Deprecated: Istio ambient mode i
 
 .PHONY: e2e-cleanup-minikube
 e2e-cleanup-minikube:
+ifeq ($(MINIKUBE_REUSE), true)
+	@echo "=====MINIKUBE_REUSE=true; leaving minikube shard $(MINIKUBE_PROFILE) running for reuse (Kubernetes-level state is reset by each suite's own TestMain teardown)====="
+else
 	@echo "=====Delete minikube cluster (profile: $(MINIKUBE_PROFILE))"
 	minikube -p $(MINIKUBE_PROFILE) delete
+endif
 
 ##@ EKS Testing
 
