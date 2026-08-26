@@ -166,12 +166,9 @@ void runMinikubeCleanup() {
     '''
 }
 
-void runIstioMinikubeSetup() {
-    sh """
-        make e2e-setup-minikube-istio IMG=${operatorRepo}:${VERSION}
-    """
-}
-
+// Istio ambient mode is now installed by `make e2e-setup-minikube` itself (see Makefile),
+// so Istio e2e tests reuse the same minikube cluster as the rest of the suite instead of
+// requiring a dedicated cluster/shard to be spun up and torn down.
 void runIstioE2eTests() {
     sh """
         make e2e-test-istio IMG=${operatorRepo}:${VERSION} E2E_ISTIO_AMBIENT=true
@@ -350,10 +347,11 @@ pipeline {
         choice(name: 'E2E_SCOPE', choices: ['cluster', 'dynamic-host', 'volume-resize'], description: 'E2E scope for Minikube runs. Use cluster for full suite; dynamic-host and volume-resize run focused targets.')
         booleanParam(name: 'PUBLISH_IMAGE', defaultValue: false, description: 'Publish image to internal registry')
         string(name: 'emailList', defaultValue: emailList, description: 'List of email for build notification', trim: true)
-        booleanParam(name: 'VERIFY_ISTIO_AMBIENT', defaultValue: true, description: 'Run Istio ambient mode e2e tests (requires fresh minikube cluster with Istio)')
+        booleanParam(name: 'VERIFY_ISTIO_AMBIENT', defaultValue: true, description: 'Run Istio ambient mode e2e tests (Istio ambient mode is installed alongside the regular Minikube/EKS cluster; no dedicated cluster is created).')
         booleanParam(name: 'TEST_ON_EKS', defaultValue: false, description: 'Run e2e tests on the EKS cluster (jenkins-kube-ninjas) instead of Minikube. Requires KUBE_NINJAS_OPS_AWS_JENKINS credentials on this agent.')
         string(name: 'EKS_MARKLOGIC_IMAGE_TAG', defaultValue: 'latest-12', description: 'MarkLogic image tag to pull from the EKS ECR registry when TEST_ON_EKS=true. The full ECR URL is constructed at runtime from the AWS account ID resolved via STS.', trim: true)
-        booleanParam(name: 'VERIFY_HELM_NAMESPACE_SCOPED', defaultValue: false, description: 'Run namespace-scoped e2e tests via Helm chart install (validates Role/RoleBinding, no ClusterRole)')
+        booleanParam(name: 'VERIFY_CLUSTER_SCOPED', defaultValue: true, description: 'Run the cluster-scoped e2e suite (kustomize, ClusterRole/ClusterRoleBinding) in the main E2E Tests stage. Set to false to skip it.')
+        booleanParam(name: 'VERIFY_NAMESPACE_SCOPED', defaultValue: true, description: 'Run the namespace-scoped e2e suite via Helm chart install (validates Role/RoleBinding, no ClusterRole). Set to false to skip it.')
     }
 
     stages {
@@ -370,13 +368,21 @@ pipeline {
         }
 
         // -----------------------------------------------------------------------
-        // E2E Tests — runs on Minikube (default) or the shared EKS cluster.
+        // E2E Tests — cluster-scoped suite, runs on Minikube (default) or the shared
+        // EKS cluster. Gated by VERIFY_CLUSTER_SCOPED; independent of the
+        // namespace-scoped Helm stages below (gated by VERIFY_NAMESPACE_SCOPED).
         // Minikube and EKS paths are unified into the same named stages.
         // The EKS cluster lock is acquired only for EKS builds, so unrelated
         // Minikube builds are never blocked. Cleanup is guaranteed via
-        // try/finally even when earlier stages throw.
+        // try/finally even when earlier stages throw. Istio ambient mode (when
+        // VERIFY_ISTIO_AMBIENT=true) is installed as part of the same cluster setup
+        // and its tests run against that same cluster, so no dedicated Istio
+        // cluster/shard is created or torn down.
         // -----------------------------------------------------------------------
         stage('E2E Tests') {
+            when {
+                expression { return params.VERIFY_CLUSTER_SCOPED != false }
+            }
             steps {
                 script {
                     if (params.TEST_ON_EKS && params.E2E_SCOPE != 'cluster') {
@@ -392,41 +398,36 @@ pipeline {
                         }
                     }
 
-                    def doSetup    = { params.TEST_ON_EKS ? runEKSSetup()          : runMinikubeSetup() }
-                    def doTests    = { params.TEST_ON_EKS ? runEKSE2eTests()        : runE2eTests(params.E2E_SCOPE, params.E2E_INSTALL_MODE) }
-                    def doCleanup  = {
+                    def runIstio = params.E2E_INSTALL_MODE == 'fresh' && params.E2E_SCOPE == 'cluster' && params.VERIFY_ISTIO_AMBIENT
+
+                    // Istio ambient mode is installed as part of cluster setup itself (Minikube:
+                    // e2e-setup-minikube; EKS: e2e-setup-eks-istio when Istio is requested), so the
+                    // Istio e2e tests below reuse the very same cluster as the rest of the suite.
+                    // There is no dedicated Istio cluster/shard to spin up or tear down separately.
+                    def doSetup    = {
+                        if (params.TEST_ON_EKS) { runIstio ? runEKSIstioSetup() : runEKSSetup() }
+                        else                    { runMinikubeSetup() }
+                    }
+                    def doTests      = { params.TEST_ON_EKS ? runEKSE2eTests()      : runE2eTests(params.E2E_SCOPE, params.E2E_INSTALL_MODE) }
+                    def doIstioTests = { params.TEST_ON_EKS ? runEKSIstioE2eTests() : runIstioE2eTests() }
+                    def doCleanup    = {
                         catchError(buildResult: 'SUCCESS', stageResult: 'FAILURE') {
                             if (params.TEST_ON_EKS) { runEKSCleanup() } else { runMinikubeCleanup() }
                         }
                     }
-                    def doIstioSetup  = { params.TEST_ON_EKS ? runEKSIstioSetup()      : runIstioMinikubeSetup() }
-                    def doIstioTests  = { params.TEST_ON_EKS ? runEKSIstioE2eTests()   : runIstioE2eTests() }
 
                     def testBody = {
                         try {
                             stage('Setup')         { doSetup() }
                             stage('Run e2e Tests') { doTests() }
+                            // Stage is always declared so Jenkins Stage View shows a consistent
+                            // set of columns across all run types; it's a no-op when Istio isn't requested.
+                            stage('Run Istio e2e Tests') {
+                                if (runIstio) { doIstioTests() }
+                                else { echo "Istio tests skipped (E2E_INSTALL_MODE=${params.E2E_INSTALL_MODE}, E2E_SCOPE=${params.E2E_SCOPE}, VERIFY_ISTIO_AMBIENT=${params.VERIFY_ISTIO_AMBIENT})" }
+                            }
                         } finally {
                             stage('Cleanup')       { doCleanup() }
-                        }
-                        // Istio stages are always declared so that Jenkins Stage View
-                        // shows a consistent set of columns across all run types.
-                        // When VERIFY_ISTIO_AMBIENT is false the stages are entered but
-                        // immediately skipped, preserving their position in the view.
-                        try {
-                            stage('Istio Setup') {
-                                if (params.E2E_INSTALL_MODE == 'fresh' && params.E2E_SCOPE == 'cluster' && params.VERIFY_ISTIO_AMBIENT) { doIstioSetup() }
-                                else { echo "Istio tests skipped (E2E_INSTALL_MODE=${params.E2E_INSTALL_MODE}, E2E_SCOPE=${params.E2E_SCOPE}, VERIFY_ISTIO_AMBIENT=${params.VERIFY_ISTIO_AMBIENT})" }
-                            }
-                            stage('Run Istio e2e Tests') {
-                                if (params.E2E_INSTALL_MODE == 'fresh' && params.E2E_SCOPE == 'cluster' && params.VERIFY_ISTIO_AMBIENT) { doIstioTests() }
-                                else { echo "Istio tests skipped (E2E_INSTALL_MODE=${params.E2E_INSTALL_MODE}, E2E_SCOPE=${params.E2E_SCOPE}, VERIFY_ISTIO_AMBIENT=${params.VERIFY_ISTIO_AMBIENT})" }
-                            }
-                        } finally {
-                            stage('Istio Cleanup') {
-                                if (params.E2E_INSTALL_MODE == 'fresh' && params.E2E_SCOPE == 'cluster' && params.VERIFY_ISTIO_AMBIENT) { doCleanup() }
-                                else { echo "Istio tests skipped (E2E_INSTALL_MODE=${params.E2E_INSTALL_MODE}, E2E_SCOPE=${params.E2E_SCOPE}, VERIFY_ISTIO_AMBIENT=${params.VERIFY_ISTIO_AMBIENT})" }
-                            }
                         }
                     }
 
@@ -443,9 +444,10 @@ pipeline {
             }
         }
 
+        // Namespace-scoped (Helm) e2e suite — gated by VERIFY_NAMESPACE_SCOPED.
         stage('Helm-NS-Minikube-Setup') {
             when {
-                expression { return params.VERIFY_HELM_NAMESPACE_SCOPED != false && params.E2E_SCOPE == 'cluster' }
+                expression { return params.VERIFY_NAMESPACE_SCOPED != false }
             }
             steps {
                 runMinikubeSetup()
@@ -454,7 +456,7 @@ pipeline {
 
         stage('Run-Helm-NS-e2e-Tests') {
             when {
-                expression { return params.VERIFY_HELM_NAMESPACE_SCOPED != false && params.E2E_SCOPE == 'cluster' }
+                expression { return params.VERIFY_NAMESPACE_SCOPED != false }
             }
             steps {
                 runHelmNamespaceScopedE2eTests(params.E2E_INSTALL_MODE)
@@ -463,7 +465,7 @@ pipeline {
 
         stage('Helm-NS-Cleanup') {
             when {
-                expression { return params.VERIFY_HELM_NAMESPACE_SCOPED != false && params.E2E_SCOPE == 'cluster' }
+                expression { return params.VERIFY_NAMESPACE_SCOPED != false }
             }
             steps {
                 catchError(buildResult: 'SUCCESS', stageResult: 'FAILURE') {
