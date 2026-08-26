@@ -192,11 +192,11 @@ endif
 .PHONY: e2e-test-istio  # Run Istio ambient mode e2e tests
 e2e-test-istio:
 	@echo "=====Running Istio ambient mode e2e tests"
-	@if kubectl config current-context 2>/dev/null | grep -q '^$(MINIKUBE_PROFILE)$$'; then \
+	@if minikube -p $(MINIKUBE_PROFILE) status >/dev/null 2>&1; then \
 		echo "=====Loading operator image $(IMG) into minikube profile $(MINIKUBE_PROFILE)====="; \
 		minikube -p $(MINIKUBE_PROFILE) image load $(IMG); \
 	else \
-		echo "=====Current context is not $(MINIKUBE_PROFILE); skipping image load====="; \
+		echo "=====Minikube profile $(MINIKUBE_PROFILE) not found or not running; skipping image load====="; \
 	fi
 	IMG=$(IMG) E2E_ISTIO_AMBIENT=true go test -v -count=1 -timeout 30m ./test/e2e -run "Test(Istio|NonIstio)" -context=$(MINIKUBE_PROFILE)
 
@@ -219,11 +219,11 @@ ifeq ($(VERIFY_HUGE_PAGES), true)
 	@echo "=====Restart minikube cluster to apply hugepages value"
 	minikube -p $(MINIKUBE_PROFILE) stop
 	minikube -p $(MINIKUBE_PROFILE) start
-	@if kubectl config current-context 2>/dev/null | grep -q '^$(MINIKUBE_PROFILE)$$'; then \
+	@if minikube -p $(MINIKUBE_PROFILE) status >/dev/null 2>&1; then \
 		echo "=====Loading operator image $(IMG) into minikube profile $(MINIKUBE_PROFILE)====="; \
 		minikube -p $(MINIKUBE_PROFILE) image load $(IMG); \
 	else \
-		echo "=====Current context is not $(MINIKUBE_PROFILE); skipping image load====="; \
+		echo "=====Minikube profile $(MINIKUBE_PROFILE) not found or not running; skipping image load====="; \
 	fi
 
 	@echo "=====Running e2e test including hugepages test"
@@ -237,11 +237,11 @@ ifeq ($(VERIFY_HUGE_PAGES), true)
 	minikube -p $(MINIKUBE_PROFILE) start
 else
 	@echo "=====Running e2e test without hugepages test"
-	@if kubectl config current-context 2>/dev/null | grep -q '^$(MINIKUBE_PROFILE)$$'; then \
+	@if minikube -p $(MINIKUBE_PROFILE) status >/dev/null 2>&1; then \
 		echo "=====Loading operator image $(IMG) into minikube profile $(MINIKUBE_PROFILE)====="; \
 		minikube -p $(MINIKUBE_PROFILE) image load $(IMG); \
 	else \
-		echo "=====Current context is not $(MINIKUBE_PROFILE); skipping image load====="; \
+		echo "=====Minikube profile $(MINIKUBE_PROFILE) not found or not running; skipping image load====="; \
 	fi
 	IMG=$(IMG) go test -v -count=1 -timeout $(E2E_TEST_TIMEOUT) ./test/e2e -context=$(MINIKUBE_PROFILE)
 endif
@@ -249,13 +249,13 @@ endif
 .PHONY: e2e-test-helm-namespace  ## Run namespace-scoped e2e tests via Helm chart install (validates Role/RoleBinding, no ClusterRole, insecure metrics on :8080)
 e2e-test-helm-namespace:
 	@echo "=====Running namespace-scoped e2e tests via Helm chart====="
-	@if kubectl config current-context 2>/dev/null | grep -q '^$(MINIKUBE_PROFILE)$$'; then \
+	@if minikube -p $(MINIKUBE_PROFILE) status >/dev/null 2>&1; then \
 		echo "=====Loading operator image $(IMG) into minikube profile $(MINIKUBE_PROFILE)====="; \
 		minikube -p $(MINIKUBE_PROFILE) image load $(IMG); \
 	else \
-		echo "=====Current context is not $(MINIKUBE_PROFILE); skipping image load====="; \
+		echo "=====Minikube profile $(MINIKUBE_PROFILE) not found or not running; skipping image load====="; \
 	fi
-	E2E_DOCKER_IMAGE=$(IMG) go test -v -count=1 -timeout 45m ./test/e2e-helm -context=$(MINIKUBE_PROFILE)
+	E2E_DOCKER_IMAGE=$(IMG) go test -v -count=1 -timeout $(E2E_HELM_TEST_TIMEOUT) ./test/e2e-helm -context=$(MINIKUBE_PROFILE)
 
 .PHONY: e2e-test-upgrade  ## Run both upgrade validation scenarios (cluster + namespace) and then reuse the matching e2e suites.
 e2e-test-upgrade:
@@ -269,7 +269,7 @@ e2e-test-upgrade:
 e2e-test-upgrade-cluster:
 	@echo "=====Running cluster-scoped upgrade validation (minikube profile: $(MINIKUBE_PROFILE))====="
 	@TARGET_IMG='$(IMG)'; \
-	if kubectl config current-context 2>/dev/null | grep -q '^$(MINIKUBE_PROFILE)$$'; then \
+	if minikube -p $(MINIKUBE_PROFILE) status >/dev/null 2>&1; then \
 		if ! docker image inspect "$$TARGET_IMG" >/dev/null 2>&1; then \
 			if docker image inspect '$(LOCAL_E2E_IMG)' >/dev/null 2>&1; then \
 				echo "=====Requested image $$TARGET_IMG is not in local Docker; falling back to $(LOCAL_E2E_IMG) for minikube upgrade test====="; \
@@ -282,7 +282,7 @@ e2e-test-upgrade-cluster:
 		echo "=====Loading operator image $$TARGET_IMG into minikube profile $(MINIKUBE_PROFILE)====="; \
 		minikube -p $(MINIKUBE_PROFILE) image load "$$TARGET_IMG"; \
 	else \
-		echo "=====Current context is not $(MINIKUBE_PROFILE); skipping image load====="; \
+		echo "=====Minikube profile $(MINIKUBE_PROFILE) not found or not running; skipping image load====="; \
 	fi; \
 	E2E_UPGRADE_SOURCE_VERSION='$(E2E_UPGRADE_SOURCE_VERSION)' \
 	E2E_UPGRADE_TARGET_IMAGE="$$TARGET_IMG" \
@@ -296,7 +296,7 @@ e2e-test-upgrade-cluster:
 e2e-test-upgrade-helm-namespace:
 	@echo "=====Running namespace-scoped upgrade validation (minikube profile: $(MINIKUBE_PROFILE))====="
 	@TARGET_IMG='$(IMG)'; \
-	if kubectl config current-context 2>/dev/null | grep -q '^$(MINIKUBE_PROFILE)$$'; then \
+	if minikube -p $(MINIKUBE_PROFILE) status >/dev/null 2>&1; then \
 		if ! docker image inspect "$$TARGET_IMG" >/dev/null 2>&1; then \
 			if docker image inspect '$(LOCAL_E2E_IMG)' >/dev/null 2>&1; then \
 				echo "=====Requested image $$TARGET_IMG is not in local Docker; falling back to $(LOCAL_E2E_IMG) for minikube upgrade test====="; \
@@ -309,7 +309,7 @@ e2e-test-upgrade-helm-namespace:
 		echo "=====Loading operator image $$TARGET_IMG into minikube profile $(MINIKUBE_PROFILE)====="; \
 		minikube -p $(MINIKUBE_PROFILE) image load "$$TARGET_IMG"; \
 	else \
-		echo "=====Current context is not $(MINIKUBE_PROFILE); skipping image load====="; \
+		echo "=====Minikube profile $(MINIKUBE_PROFILE) not found or not running; skipping image load====="; \
 	fi; \
 	E2E_UPGRADE_SOURCE_VERSION='$(E2E_UPGRADE_SOURCE_VERSION)' \
 	E2E_UPGRADE_TARGET_IMAGE="$$TARGET_IMG" \
@@ -329,8 +329,8 @@ e2e-test-volume-resize:
 
 .PHONY: e2e-test-dynamic-host  ## Run ONLY the cluster-scoped dynamic-host lifecycle test
 e2e-test-dynamic-host:
-	@if kubectl config current-context 2>/dev/null | grep -q '^$(MINIKUBE_PROFILE)$$'; then \
-		echo "=====Detected minikube context; using local image flow to avoid remote pull failures====="; \
+	@if minikube -p $(MINIKUBE_PROFILE) status >/dev/null 2>&1; then \
+		echo "=====Minikube profile $(MINIKUBE_PROFILE) detected; using local image flow to avoid remote pull failures====="; \
 		$(MAKE) e2e-test-dynamic-host-local MINIKUBE_PROFILE=$(MINIKUBE_PROFILE); \
 	else \
 		echo "=====Running cluster-scoped dynamic-host lifecycle e2e test (controller image: $(IMG))====="; \
@@ -346,11 +346,11 @@ e2e-test-dynamic-host-local:
 		echo "=====Local image not found; building $(LOCAL_E2E_IMG)====="; \
 		$(MAKE) docker-build IMG=$(LOCAL_E2E_IMG); \
 	fi
-	@if kubectl config current-context 2>/dev/null | grep -q '^$(MINIKUBE_PROFILE)$$'; then \
+	@if minikube -p $(MINIKUBE_PROFILE) status >/dev/null 2>&1; then \
 		echo "=====Loading local operator image into minikube profile $(MINIKUBE_PROFILE)====="; \
 		minikube -p $(MINIKUBE_PROFILE) image load $(LOCAL_E2E_IMG); \
 	else \
-		echo "=====Current context is not $(MINIKUBE_PROFILE); skipping minikube image load====="; \
+		echo "=====Minikube profile $(MINIKUBE_PROFILE) not found or not running; skipping minikube image load====="; \
 	fi
 	@echo "=====Running cluster-scoped dynamic-host lifecycle e2e test against local image====="
 	IMG=$(LOCAL_E2E_IMG) go test -v -count=1 -timeout 45m ./test/e2e -args --labels="type=dynamic-host" --context=$(MINIKUBE_PROFILE)
@@ -364,7 +364,7 @@ e2e-test-volume-resize-local:
 		echo "=====Local image not found; building $(LOCAL_E2E_IMG)====="; \
 		$(MAKE) docker-build IMG=$(LOCAL_E2E_IMG); \
 	fi
-	@if kubectl config current-context 2>/dev/null | grep -q '^$(MINIKUBE_PROFILE)$$'; then \
+	@if minikube -p $(MINIKUBE_PROFILE) status >/dev/null 2>&1; then \
 		echo "=====Loading local operator image into minikube profile $(MINIKUBE_PROFILE)====="; \
 		minikube -p $(MINIKUBE_PROFILE) image load $(LOCAL_E2E_IMG); \
 		echo "=====Ensuring CSI hostpath driver is enabled for PVC expansion====="; \
@@ -375,7 +375,7 @@ e2e-test-volume-resize-local:
 		  -p '{"metadata":{"annotations":{"storageclass.kubernetes.io/is-default-class":"true"}}}' 2>/dev/null || true; \
 		kubectl --context=$(MINIKUBE_PROFILE) patch storageclass csi-hostpath-sc -p '{"allowVolumeExpansion":true}' 2>/dev/null || true; \
 	else \
-		echo "=====Current context is not $(MINIKUBE_PROFILE); skipping minikube image load and storage class setup====="; \
+		echo "=====Minikube profile $(MINIKUBE_PROFILE) not found or not running; skipping minikube image load and storage class setup====="; \
 	fi
 	@echo "=====Running cluster-scoped volume-resize e2e test against local image====="
 	IMG=$(LOCAL_E2E_IMG) go test -v -count=1 -timeout 30m ./test/e2e -run TestVolumeResizeClusterScoped -context=$(MINIKUBE_PROFILE)
@@ -383,11 +383,11 @@ e2e-test-volume-resize-local:
 .PHONY: e2e-test-helm-volume-resize  ## Run ONLY the namespace-scoped volume resize test via Helm (two watched namespaces in parallel)
 e2e-test-helm-volume-resize:
 	@echo "=====Running namespace-scoped volume-resize e2e test via Helm (parallel, 2 watched namespaces)====="
-	@if kubectl config current-context 2>/dev/null | grep -q '^$(MINIKUBE_PROFILE)$$'; then \
+	@if minikube -p $(MINIKUBE_PROFILE) status >/dev/null 2>&1; then \
 		echo "=====Loading operator image $(IMG) into minikube profile $(MINIKUBE_PROFILE)====="; \
 		minikube -p $(MINIKUBE_PROFILE) image load $(IMG); \
 	else \
-		echo "=====Current context is not $(MINIKUBE_PROFILE); skipping image load====="; \
+		echo "=====Minikube profile $(MINIKUBE_PROFILE) not found or not running; skipping image load====="; \
 	fi
 	E2E_DOCKER_IMAGE=$(IMG) go test -v -count=1 -timeout 30m ./test/e2e-helm -run TestVolumeResizeNamespaceScoped -context=$(MINIKUBE_PROFILE)
 

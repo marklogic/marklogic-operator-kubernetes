@@ -131,13 +131,13 @@ void runTests() {
     sh "make test"
 }
 
-void runMinikubeSetup() {
+void runMinikubeSetup(String profile = 'minikube') {
     sh """
-        make e2e-setup-minikube IMG=${operatorRepo}:${VERSION}
+        make e2e-setup-minikube IMG=${operatorRepo}:${VERSION} MINIKUBE_PROFILE=${profile}
     """
 }
 
-void runE2eTests(String scope = 'cluster', String installMode = 'fresh') {
+void runE2eTests(String scope = 'cluster', String installMode = 'fresh', String profile = 'minikube') {
     if (!(installMode in ['fresh', 'upgrade'])) {
         error "Unsupported E2E install mode '${installMode}'. Supported modes: fresh, upgrade"
     }
@@ -147,7 +147,7 @@ void runE2eTests(String scope = 'cluster', String installMode = 'fresh') {
             error "Upgrade e2e flow only supports E2E_SCOPE='cluster'."
         }
         sh """
-            make e2e-test-upgrade-cluster IMG=${operatorRepo}:${VERSION}
+            make e2e-test-upgrade-cluster IMG=${operatorRepo}:${VERSION} MINIKUBE_PROFILE=${profile}
         """
         return
     }
@@ -156,22 +156,22 @@ void runE2eTests(String scope = 'cluster', String installMode = 'fresh') {
         error "Unsupported E2E scope '${scope}'. Supported scopes: cluster, dynamic-host, volume-resize"
     }
     sh """
-        make e2e-test-${scope} IMG=${operatorRepo}:${VERSION}
+        make e2e-test-${scope} IMG=${operatorRepo}:${VERSION} MINIKUBE_PROFILE=${profile}
     """
 }
 
-void runMinikubeCleanup() {
-    sh '''
-        make e2e-cleanup-minikube
-    '''
+void runMinikubeCleanup(String profile = 'minikube') {
+    sh """
+        make e2e-cleanup-minikube MINIKUBE_PROFILE=${profile}
+    """
 }
 
 // Istio ambient mode is now installed by `make e2e-setup-minikube` itself (see Makefile),
 // so Istio e2e tests reuse the same minikube cluster as the rest of the suite instead of
 // requiring a dedicated cluster/shard to be spun up and torn down.
-void runIstioE2eTests() {
+void runIstioE2eTests(String profile = 'minikube') {
     sh """
-        make e2e-test-istio IMG=${operatorRepo}:${VERSION} E2E_ISTIO_AMBIENT=true
+        make e2e-test-istio IMG=${operatorRepo}:${VERSION} E2E_ISTIO_AMBIENT=true MINIKUBE_PROFILE=${profile}
     """
 }
 
@@ -238,20 +238,20 @@ void runEKSIstioE2eTests() {
     }
 }
 
-void runHelmNamespaceScopedE2eTests(String installMode = 'fresh') {
+void runHelmNamespaceScopedE2eTests(String installMode = 'fresh', String profile = 'minikube') {
     if (!(installMode in ['fresh', 'upgrade'])) {
         error "Unsupported E2E install mode '${installMode}'. Supported modes: fresh, upgrade"
     }
 
     if (installMode == 'upgrade') {
         sh """
-            make e2e-test-upgrade-helm-namespace IMG=${operatorRepo}:${VERSION}
+            make e2e-test-upgrade-helm-namespace IMG=${operatorRepo}:${VERSION} MINIKUBE_PROFILE=${profile}
         """
         return
     }
 
     sh """
-        make e2e-test-helm-namespace IMG=${operatorRepo}:${VERSION}
+        make e2e-test-helm-namespace IMG=${operatorRepo}:${VERSION} MINIKUBE_PROFILE=${profile}
     """
 }
 
@@ -350,8 +350,8 @@ pipeline {
         booleanParam(name: 'VERIFY_ISTIO_AMBIENT', defaultValue: true, description: 'Run Istio ambient mode e2e tests (Istio ambient mode is installed alongside the regular Minikube/EKS cluster; no dedicated cluster is created).')
         booleanParam(name: 'TEST_ON_EKS', defaultValue: false, description: 'Run e2e tests on the EKS cluster (jenkins-kube-ninjas) instead of Minikube. Requires KUBE_NINJAS_OPS_AWS_JENKINS credentials on this agent.')
         string(name: 'EKS_MARKLOGIC_IMAGE_TAG', defaultValue: 'latest-12', description: 'MarkLogic image tag to pull from the EKS ECR registry when TEST_ON_EKS=true. The full ECR URL is constructed at runtime from the AWS account ID resolved via STS.', trim: true)
-        booleanParam(name: 'VERIFY_CLUSTER_SCOPED', defaultValue: true, description: 'Run the cluster-scoped e2e suite (kustomize, ClusterRole/ClusterRoleBinding) in the main E2E Tests stage. Set to false to skip it.')
-        booleanParam(name: 'VERIFY_NAMESPACE_SCOPED', defaultValue: true, description: 'Run the namespace-scoped e2e suite via Helm chart install (validates Role/RoleBinding, no ClusterRole). Set to false to skip it.')
+        booleanParam(name: 'VERIFY_CLUSTER_SCOPED', defaultValue: true, description: 'Run the cluster-scoped e2e suite (kustomize, ClusterRole/ClusterRoleBinding). Runs in parallel with the namespace-scoped suite on its own minikube profile. Set to false to skip it.')
+        booleanParam(name: 'VERIFY_NAMESPACE_SCOPED', defaultValue: true, description: 'Run the namespace-scoped e2e suite via Helm chart install (validates Role/RoleBinding, no ClusterRole). Runs in parallel with the cluster-scoped suite on its own minikube profile. Set to false to skip it.')
     }
 
     stages {
@@ -368,35 +368,43 @@ pipeline {
         }
 
         // -----------------------------------------------------------------------
-        // E2E Tests — cluster-scoped suite, runs on Minikube (default) or the shared
-        // EKS cluster. Gated by VERIFY_CLUSTER_SCOPED; independent of the
-        // namespace-scoped Helm stages below (gated by VERIFY_NAMESPACE_SCOPED).
-        // Minikube and EKS paths are unified into the same named stages.
-        // The EKS cluster lock is acquired only for EKS builds, so unrelated
-        // Minikube builds are never blocked. Cleanup is guaranteed via
-        // try/finally even when earlier stages throw. Istio ambient mode (when
-        // VERIFY_ISTIO_AMBIENT=true) is installed as part of the same cluster setup
-        // and its tests run against that same cluster, so no dedicated Istio
-        // cluster/shard is created or torn down.
+        // E2E Tests — cluster-scoped and namespace-scoped suites run in parallel
+        // branches, each independently gated (VERIFY_CLUSTER_SCOPED /
+        // VERIFY_NAMESPACE_SCOPED) and pinned to its own minikube profile, plus its
+        // own KUBECONFIG and MINIKUBE_HOME, so the two branches never read or write
+        // the same kubeconfig/minikube metadata while running concurrently.
+        // The EKS cluster lock is acquired only for the cluster-scoped branch when
+        // TEST_ON_EKS=true, so unrelated Minikube builds are never blocked. Cleanup
+        // is guaranteed via try/finally in each branch even when earlier stages
+        // throw. Istio ambient mode (cluster-scoped branch only, when
+        // VERIFY_ISTIO_AMBIENT=true) is installed as part of that branch's own
+        // cluster setup, so it reuses the same cluster instead of needing a
+        // dedicated cluster/shard.
         // -----------------------------------------------------------------------
         stage('E2E Tests') {
-            when {
-                expression { return params.VERIFY_CLUSTER_SCOPED != false }
-            }
             steps {
                 script {
-                    if (params.TEST_ON_EKS && params.E2E_SCOPE != 'cluster') {
-                        error "E2E_SCOPE='${params.E2E_SCOPE}' is not supported when TEST_ON_EKS=true. Use E2E_SCOPE='cluster'."
+                    if (params.VERIFY_CLUSTER_SCOPED != false) {
+                        if (params.TEST_ON_EKS && params.E2E_SCOPE != 'cluster') {
+                            error "E2E_SCOPE='${params.E2E_SCOPE}' is not supported when TEST_ON_EKS=true. Use E2E_SCOPE='cluster'."
+                        }
+
+                        if (params.E2E_INSTALL_MODE == 'upgrade') {
+                            if (params.TEST_ON_EKS) {
+                                error "E2E_INSTALL_MODE='upgrade' is only supported on the Minikube path right now. Use TEST_ON_EKS=false."
+                            }
+                            if (params.E2E_SCOPE != 'cluster') {
+                                error "E2E_INSTALL_MODE='upgrade' requires E2E_SCOPE='cluster'."
+                            }
+                        }
                     }
 
-                    if (params.E2E_INSTALL_MODE == 'upgrade') {
-                        if (params.TEST_ON_EKS) {
-                            error "E2E_INSTALL_MODE='upgrade' is only supported on the Minikube path right now. Use TEST_ON_EKS=false."
-                        }
-                        if (params.E2E_SCOPE != 'cluster') {
-                            error "E2E_INSTALL_MODE='upgrade' requires E2E_SCOPE='cluster'."
-                        }
-                    }
+                    def clusterMinikubeProfile   = 'e2e-cluster'
+                    def namespaceMinikubeProfile = 'e2e-namespace'
+                    // Separate kubeconfig file and minikube data dir per branch: two concurrent
+                    // `minikube start` runs must never write to the same kubeconfig/state.
+                    def clusterBranchEnv   = ["MINIKUBE_PROFILE=${clusterMinikubeProfile}", 'KUBECONFIG=/space/.kube-config-cluster', 'MINIKUBE_HOME=/space/minikube-cluster/']
+                    def namespaceBranchEnv = ["MINIKUBE_PROFILE=${namespaceMinikubeProfile}", 'KUBECONFIG=/space/.kube-config-namespace', 'MINIKUBE_HOME=/space/minikube-namespace/']
 
                     def runIstio = params.E2E_INSTALL_MODE == 'fresh' && params.E2E_SCOPE == 'cluster' && params.VERIFY_ISTIO_AMBIENT
 
@@ -406,70 +414,69 @@ pipeline {
                     // There is no dedicated Istio cluster/shard to spin up or tear down separately.
                     def doSetup    = {
                         if (params.TEST_ON_EKS) { runIstio ? runEKSIstioSetup() : runEKSSetup() }
-                        else                    { runMinikubeSetup() }
+                        else                    { runMinikubeSetup(clusterMinikubeProfile) }
                     }
-                    def doTests      = { params.TEST_ON_EKS ? runEKSE2eTests()      : runE2eTests(params.E2E_SCOPE, params.E2E_INSTALL_MODE) }
-                    def doIstioTests = { params.TEST_ON_EKS ? runEKSIstioE2eTests() : runIstioE2eTests() }
+                    def doTests      = { params.TEST_ON_EKS ? runEKSE2eTests()      : runE2eTests(params.E2E_SCOPE, params.E2E_INSTALL_MODE, clusterMinikubeProfile) }
+                    def doIstioTests = { params.TEST_ON_EKS ? runEKSIstioE2eTests() : runIstioE2eTests(clusterMinikubeProfile) }
                     def doCleanup    = {
                         catchError(buildResult: 'SUCCESS', stageResult: 'FAILURE') {
-                            if (params.TEST_ON_EKS) { runEKSCleanup() } else { runMinikubeCleanup() }
+                            if (params.TEST_ON_EKS) { runEKSCleanup() } else { runMinikubeCleanup(clusterMinikubeProfile) }
                         }
                     }
 
-                    def testBody = {
-                        try {
-                            stage('Setup')         { doSetup() }
-                            stage('Run e2e Tests') { doTests() }
-                            // Stage is always declared so Jenkins Stage View shows a consistent
-                            // set of columns across all run types; it's a no-op when Istio isn't requested.
-                            stage('Run Istio e2e Tests') {
-                                if (runIstio) { doIstioTests() }
-                                else { echo "Istio tests skipped (E2E_INSTALL_MODE=${params.E2E_INSTALL_MODE}, E2E_SCOPE=${params.E2E_SCOPE}, VERIFY_ISTIO_AMBIENT=${params.VERIFY_ISTIO_AMBIENT})" }
+                    def clusterScopedBranch = {
+                        withEnv(clusterBranchEnv) {
+                            def body = {
+                                try {
+                                    stage('Setup')         { doSetup() }
+                                    stage('Run e2e Tests') { doTests() }
+                                    // Stage is always declared so Jenkins Stage View shows a consistent
+                                    // set of columns across all run types; it's a no-op when Istio isn't requested.
+                                    stage('Run Istio e2e Tests') {
+                                        if (runIstio) { doIstioTests() }
+                                        else { echo "Istio tests skipped (E2E_INSTALL_MODE=${params.E2E_INSTALL_MODE}, E2E_SCOPE=${params.E2E_SCOPE}, VERIFY_ISTIO_AMBIENT=${params.VERIFY_ISTIO_AMBIENT})" }
+                                    }
+                                } finally {
+                                    stage('Cleanup')       { doCleanup() }
+                                }
                             }
-                        } finally {
-                            stage('Cleanup')       { doCleanup() }
+
+                            if (params.TEST_ON_EKS) {
+                                lock(resource: 'jenkinsKubeNinjasEksCluster', inversePrecedence: true) {
+                                    timeout(time: 3, unit: 'HOURS') {
+                                        body()
+                                    }
+                                }
+                            } else {
+                                body()
+                            }
                         }
                     }
 
-                    if (params.TEST_ON_EKS) {
-                        lock(resource: 'jenkinsKubeNinjasEksCluster', inversePrecedence: true) {
-                            timeout(time: 3, unit: 'HOURS') {
-                                testBody()
+                    def namespaceScopedBranch = {
+                        withEnv(namespaceBranchEnv) {
+                            try {
+                                stage('Helm-NS-Minikube-Setup') { runMinikubeSetup(namespaceMinikubeProfile) }
+                                stage('Run-Helm-NS-e2e-Tests')  { runHelmNamespaceScopedE2eTests(params.E2E_INSTALL_MODE, namespaceMinikubeProfile) }
+                            } finally {
+                                stage('Helm-NS-Cleanup') {
+                                    catchError(buildResult: 'SUCCESS', stageResult: 'FAILURE') {
+                                        runMinikubeCleanup(namespaceMinikubeProfile)
+                                    }
+                                }
                             }
                         }
+                    }
+
+                    def branches = [:]
+                    if (params.VERIFY_CLUSTER_SCOPED != false)   { branches['cluster-scoped']   = clusterScopedBranch }
+                    if (params.VERIFY_NAMESPACE_SCOPED != false) { branches['namespace-scoped'] = namespaceScopedBranch }
+
+                    if (branches.isEmpty()) {
+                        echo 'Both VERIFY_CLUSTER_SCOPED and VERIFY_NAMESPACE_SCOPED are false; skipping e2e tests.'
                     } else {
-                        testBody()
+                        parallel(branches)
                     }
-                }
-            }
-        }
-
-        // Namespace-scoped (Helm) e2e suite — gated by VERIFY_NAMESPACE_SCOPED.
-        stage('Helm-NS-Minikube-Setup') {
-            when {
-                expression { return params.VERIFY_NAMESPACE_SCOPED != false }
-            }
-            steps {
-                runMinikubeSetup()
-            }
-        }
-
-        stage('Run-Helm-NS-e2e-Tests') {
-            when {
-                expression { return params.VERIFY_NAMESPACE_SCOPED != false }
-            }
-            steps {
-                runHelmNamespaceScopedE2eTests(params.E2E_INSTALL_MODE)
-            }
-        }
-
-        stage('Helm-NS-Cleanup') {
-            when {
-                expression { return params.VERIFY_NAMESPACE_SCOPED != false }
-            }
-            steps {
-                catchError(buildResult: 'SUCCESS', stageResult: 'FAILURE') {
-                    runMinikubeCleanup()
                 }
             }
         }
