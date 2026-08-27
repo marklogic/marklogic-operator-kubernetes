@@ -434,11 +434,11 @@ pipeline {
                     def namespaceMinikubeProfile = 'e2e-namespace'
                     def runIstio = params.E2E_INSTALL_MODE == 'fresh' && params.E2E_SCOPE == 'cluster' && params.VERIFY_ISTIO_AMBIENT
                     def clusterTestCommand = params.E2E_INSTALL_MODE == 'upgrade'
-                        ? "make e2e-test-upgrade-cluster IMG=${operatorRepo}:${VERSION} MINIKUBE_PROFILE=\\$MINIKUBE_PROFILE"
-                        : "make e2e-test-${params.E2E_SCOPE} IMG=${operatorRepo}:${VERSION} MINIKUBE_PROFILE=\\$MINIKUBE_PROFILE"
+                        ? "make e2e-test-upgrade-cluster IMG=${operatorRepo}:${VERSION} MINIKUBE_PROFILE=${clusterMinikubeProfile}"
+                        : "make e2e-test-${params.E2E_SCOPE} IMG=${operatorRepo}:${VERSION} MINIKUBE_PROFILE=${clusterMinikubeProfile}"
                     def namespaceTestCommand = params.E2E_INSTALL_MODE == 'upgrade'
-                        ? "make e2e-test-upgrade-helm-namespace IMG=${operatorRepo}:${VERSION} MINIKUBE_PROFILE=\\$MINIKUBE_PROFILE"
-                        : "make e2e-test-helm-namespace IMG=${operatorRepo}:${VERSION} MINIKUBE_PROFILE=\\$MINIKUBE_PROFILE"
+                        ? "make e2e-test-upgrade-helm-namespace IMG=${operatorRepo}:${VERSION} MINIKUBE_PROFILE=${namespaceMinikubeProfile}"
+                        : "make e2e-test-helm-namespace IMG=${operatorRepo}:${VERSION} MINIKUBE_PROFILE=${namespaceMinikubeProfile}"
 
                     sh """
                         set -euo pipefail
@@ -449,14 +449,14 @@ pipeline {
                             export MINIKUBE_HOME='/space/minikube-cluster/'
 
                             echo '=====Starting cluster-scoped shard====='
-                            make e2e-setup-minikube IMG=${operatorRepo}:${VERSION} MINIKUBE_PROFILE=\"\$MINIKUBE_PROFILE\" MINIKUBE_REUSE=true
+                            make e2e-setup-minikube IMG=${operatorRepo}:${VERSION} MINIKUBE_PROFILE=${clusterMinikubeProfile} MINIKUBE_REUSE=true
                             ${clusterTestCommand}
                             if [ '${runIstio}' = 'true' ]; then
-                                make e2e-test-istio IMG=${operatorRepo}:${VERSION} E2E_ISTIO_AMBIENT=true MINIKUBE_PROFILE=\"\$MINIKUBE_PROFILE\"
+                                make e2e-test-istio IMG=${operatorRepo}:${VERSION} E2E_ISTIO_AMBIENT=true MINIKUBE_PROFILE=${clusterMinikubeProfile}
                             else
                                 echo '=====Istio tests skipped for cluster shard====='
                             fi
-                            make e2e-cleanup-minikube MINIKUBE_PROFILE=\"\$MINIKUBE_PROFILE\" MINIKUBE_REUSE=true
+                            make e2e-cleanup-minikube MINIKUBE_PROFILE=${clusterMinikubeProfile} MINIKUBE_REUSE=true
                             echo '=====Cluster-scoped shard complete====='
                         }
 
@@ -466,9 +466,9 @@ pipeline {
                             export MINIKUBE_HOME='/space/minikube-namespace/'
 
                             echo '=====Starting namespace-scoped shard====='
-                            make e2e-setup-minikube IMG=${operatorRepo}:${VERSION} MINIKUBE_PROFILE=\"\$MINIKUBE_PROFILE\" MINIKUBE_REUSE=true
+                            make e2e-setup-minikube IMG=${operatorRepo}:${VERSION} MINIKUBE_PROFILE=${namespaceMinikubeProfile} MINIKUBE_REUSE=true
                             ${namespaceTestCommand}
-                            make e2e-cleanup-minikube MINIKUBE_PROFILE=\"\$MINIKUBE_PROFILE\" MINIKUBE_REUSE=true
+                            make e2e-cleanup-minikube MINIKUBE_PROFILE=${namespaceMinikubeProfile} MINIKUBE_REUSE=true
                             echo '=====Namespace-scoped shard complete====='
                         }
 
