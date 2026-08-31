@@ -144,7 +144,7 @@ void runE2eTests(String scope = 'cluster', String installMode = 'fresh', String 
 
     if (installMode == 'upgrade') {
         if (scope != 'cluster') {
-            error "Upgrade e2e flow only supports E2E_SCOPE='cluster'."
+            error "Upgrade e2e flow only supports the cluster suite target."
         }
         sh """
             make e2e-test-upgrade-cluster IMG=${operatorRepo}:${VERSION} MINIKUBE_PROFILE=${profile}
@@ -326,10 +326,10 @@ pipeline {
     
     triggers {
         // Trigger nightly builds on the develop branch
-        parameterizedCron( env.BRANCH_NAME == 'develop' ? '''00 05 * * * % E2E_MARKLOGIC_IMAGE_VERSION=ml-docker-db-dev-tierpoint.bed-artifactory.bedford.progress.com/marklogic/marklogic-server-ubi-rootless:latest-12
-                                     00 05 * * * % E2E_MARKLOGIC_IMAGE_VERSION=ml-docker-db-dev-tierpoint.bed-artifactory.bedford.progress.com/marklogic/marklogic-server-ubi-rootless:latest-11; PUBLISH_IMAGE=false
-                                     00 07 * * * % E2E_MARKLOGIC_IMAGE_VERSION=ml-docker-db-dev-tierpoint.bed-artifactory.bedford.progress.com/marklogic/marklogic-server-ubi-rootless:latest-12; VERIFY_ISTIO_AMBIENT=true
-                                     30 05 * * * % E2E_RUNTIME=eks; E2E_TEST_SELECTION=cluster-only; VERIFY_ISTIO_AMBIENT=true''' : '')
+        parameterizedCron( env.BRANCH_NAME == 'develop' ? '''00 05 * * * % E2E_MARKLOGIC_IMAGE_VERSION=ml-docker-db-dev-tierpoint.bed-artifactory.bedford.progress.com/marklogic/marklogic-server-ubi-rootless:latest-12; E2E_SCOPE=both
+                 00 05 * * * % E2E_MARKLOGIC_IMAGE_VERSION=ml-docker-db-dev-tierpoint.bed-artifactory.bedford.progress.com/marklogic/marklogic-server-ubi-rootless:latest-11; PUBLISH_IMAGE=false; E2E_SCOPE=both
+                 00 07 * * * % E2E_MARKLOGIC_IMAGE_VERSION=ml-docker-db-dev-tierpoint.bed-artifactory.bedford.progress.com/marklogic/marklogic-server-ubi-rootless:latest-12; VERIFY_ISTIO_AMBIENT=true; E2E_SCOPE=both
+                 30 05 * * * % E2E_RUNTIME=eks; E2E_SCOPE=cluster; VERIFY_ISTIO_AMBIENT=true''' : '')
     }
 
     environment {
@@ -344,9 +344,8 @@ pipeline {
         string(name: 'E2E_MARKLOGIC_IMAGE_VERSION', defaultValue: 'ml-docker-db-dev-tierpoint.bed-artifactory.bedford.progress.com/marklogic/marklogic-server-ubi-rootless:latest-12', description: 'Docker image to use for tests.', trim: true)
         string(name: 'VERSION', defaultValue: '1.3.0', description: 'Version to tag the image with.', trim: true)
         choice(name: 'E2E_INSTALL_MODE', choices: ['fresh', 'upgrade'], description: 'Run the standard fresh-install e2e flow or the upgrade validation flow. Default is fresh.')
-        choice(name: 'E2E_SCOPE', choices: ['cluster', 'dynamic-host', 'volume-resize'], description: 'Cluster-suite target used when cluster-scoped tests are selected.')
+        choice(name: 'E2E_SCOPE', choices: ['namespace-only', 'cluster', 'both', 'dynamic-host', 'volume-resize'], description: 'Combined test selector: namespace-only runs Helm namespace suite, cluster runs full cluster suite, both runs cluster+namespace in parallel minikube shards, dynamic-host and volume-resize run focused cluster tests.')
         choice(name: 'E2E_RUNTIME', choices: ['minikube', 'eks'], description: 'Execution runtime for e2e tests. minikube runs profile-parallel shards; eks runs the EKS suite only.')
-        choice(name: 'E2E_TEST_SELECTION', choices: ['namespace-only', 'cluster-only', 'both'], description: 'Select which e2e suites to run. both runs cluster and namespace suites in parallel Minikube profiles.')
         booleanParam(name: 'PUBLISH_IMAGE', defaultValue: false, description: 'Publish image to internal registry')
         string(name: 'emailList', defaultValue: emailList, description: 'List of email for build notification', trim: true)
         booleanParam(name: 'VERIFY_ISTIO_AMBIENT', defaultValue: true, description: 'Run Istio ambient mode e2e tests (Istio ambient mode is installed alongside the regular Minikube/EKS cluster; no dedicated cluster is created).')
@@ -377,36 +376,33 @@ pipeline {
             steps {
                 script {
                     def runOnEks = params.E2E_RUNTIME == 'eks'
-                    def runClusterScoped = params.E2E_TEST_SELECTION in ['cluster-only', 'both']
-                    def runNamespaceScoped = params.E2E_TEST_SELECTION in ['namespace-only', 'both']
+                    def runClusterScoped = params.E2E_SCOPE in ['cluster', 'both', 'dynamic-host', 'volume-resize']
+                    def runNamespaceScoped = params.E2E_SCOPE in ['namespace-only', 'both']
+                    def clusterScope = params.E2E_SCOPE in ['dynamic-host', 'volume-resize'] ? params.E2E_SCOPE : 'cluster'
 
                     if (!runClusterScoped && !runNamespaceScoped) {
-                        echo "No e2e suites selected (E2E_TEST_SELECTION=${params.E2E_TEST_SELECTION}); skipping e2e tests."
+                        echo "No e2e suites selected (E2E_SCOPE=${params.E2E_SCOPE}); skipping e2e tests."
                         return
-                    }
-
-                    if (!runClusterScoped && params.E2E_SCOPE != 'cluster') {
-                        echo "E2E_SCOPE='${params.E2E_SCOPE}' is ignored when E2E_TEST_SELECTION='${params.E2E_TEST_SELECTION}'."
                     }
 
                     if (params.E2E_INSTALL_MODE == 'upgrade') {
                         if (runOnEks) {
                             error "E2E_INSTALL_MODE='upgrade' is only supported on the Minikube path right now. Use E2E_RUNTIME='minikube'."
                         }
-                        if (runClusterScoped && params.E2E_SCOPE != 'cluster') {
-                            error "E2E_INSTALL_MODE='upgrade' requires E2E_SCOPE='cluster' when E2E_TEST_SELECTION includes cluster tests."
+                        if (clusterScope != 'cluster') {
+                            error "E2E_INSTALL_MODE='upgrade' supports E2E_SCOPE values: cluster, namespace-only, both."
                         }
                     }
 
                     if (runOnEks) {
                         if (!runClusterScoped) {
-                            error "E2E_RUNTIME='eks' requires E2E_TEST_SELECTION to include cluster tests."
+                            error "E2E_RUNTIME='eks' requires E2E_SCOPE to include cluster tests."
                         }
                         if (runNamespaceScoped) {
-                            error "E2E_RUNTIME='eks' does not support namespace-scoped tests. Set E2E_TEST_SELECTION='cluster-only'."
+                            error "E2E_RUNTIME='eks' does not support namespace-scoped tests. Set E2E_SCOPE='cluster'."
                         }
-                        if (params.E2E_SCOPE != 'cluster') {
-                            error "E2E_SCOPE='${params.E2E_SCOPE}' is not supported when E2E_RUNTIME='eks'. Use E2E_SCOPE='cluster'."
+                        if (clusterScope != 'cluster') {
+                            error "E2E_RUNTIME='eks' does not support focused plans '${params.E2E_SCOPE}'. Use E2E_SCOPE='cluster'."
                         }
 
                         def runIstioOnEKS = params.E2E_INSTALL_MODE == 'fresh' && params.VERIFY_ISTIO_AMBIENT
@@ -436,10 +432,10 @@ pipeline {
 
                     def clusterMinikubeProfile = 'e2e-cluster'
                     def namespaceMinikubeProfile = 'e2e-namespace'
-                    def runIstio = params.E2E_INSTALL_MODE == 'fresh' && params.E2E_SCOPE == 'cluster' && params.VERIFY_ISTIO_AMBIENT
+                    def runIstio = params.E2E_INSTALL_MODE == 'fresh' && runClusterScoped && clusterScope == 'cluster' && params.VERIFY_ISTIO_AMBIENT
                     def clusterTestCommand = params.E2E_INSTALL_MODE == 'upgrade'
                         ? "make e2e-test-upgrade-cluster IMG=${operatorRepo}:${VERSION} MINIKUBE_PROFILE=${clusterMinikubeProfile}"
-                        : "make e2e-test-${params.E2E_SCOPE} IMG=${operatorRepo}:${VERSION} MINIKUBE_PROFILE=${clusterMinikubeProfile}"
+                        : "make e2e-test-${clusterScope} IMG=${operatorRepo}:${VERSION} MINIKUBE_PROFILE=${clusterMinikubeProfile}"
                     def namespaceTestCommand = params.E2E_INSTALL_MODE == 'upgrade'
                         ? "make e2e-test-upgrade-helm-namespace IMG=${operatorRepo}:${VERSION} MINIKUBE_PROFILE=${namespaceMinikubeProfile}"
                         : "make e2e-test-helm-namespace IMG=${operatorRepo}:${VERSION} MINIKUBE_PROFILE=${namespaceMinikubeProfile}"

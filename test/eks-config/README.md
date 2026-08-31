@@ -172,7 +172,7 @@ tags to ECR.
    Jenkins.
 2. Click **Build with Parameters**.
 3. Set **`E2E_RUNTIME=eks`** — Minikube shards are skipped and EKS stages run.
-4. Set **`E2E_TEST_SELECTION=cluster-only`** (required for EKS mode).
+4. Set **`E2E_SCOPE=cluster`** (required for EKS mode).
 5. Optionally set **`VERIFY_ISTIO_AMBIENT=true`** to also run Istio ambient-mode tests.
 
 ### Nightly scheduled run
@@ -181,7 +181,7 @@ The pipeline runs automatically at **05:30 UTC** daily with:
 
 ```
 E2E_RUNTIME=eks
-E2E_TEST_SELECTION=cluster-only
+E2E_SCOPE=cluster
 VERIFY_ISTIO_AMBIENT=true
 E2E_MARKLOGIC_IMAGE_VERSION=${AWS_ACCOUNT_ID}.dkr.ecr.us-west-1.amazonaws.com/jenkins-kube-ninjas/marklogic-server-ubi-rootless:latest-12
 ```
