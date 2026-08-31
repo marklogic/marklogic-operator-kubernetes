@@ -43,7 +43,8 @@ MINIKUBE_PROFILE ?= minikube
 # recreating it on every setup/cleanup call. Two profiles doing `minikube start`/`delete`
 # concurrently on the same host can contend on host-level locks (e.g. iptables/docker network
 # setup), which serializes the very parallelism MINIKUBE_PROFILE is meant to provide. With
-# MINIKUBE_REUSE=true, e2e-setup-minikube only starts the profile if it isn't already running,
+# MINIKUBE_REUSE=true, e2e-setup-minikube checks the profile host state and starts it whenever
+# it is not Running.
 # and e2e-cleanup-minikube leaves it running (Kubernetes-level state is still reset by each
 # suite's TestMain teardown), so parallel shards only pay the start/stop cost once.
 MINIKUBE_REUSE ?= false
@@ -408,16 +409,19 @@ e2e-test-jenkins-volume-resize: e2e-test-volume-resize e2e-test-helm-volume-resi
 e2e-setup-minikube: kustomize controller-gen build docker-build istioctl ## Setup a minikube cluster (profile: MINIKUBE_PROFILE) with Istio ambient mode pre-installed, ready for cluster-scoped, namespace-scoped and Istio e2e tests.
 	minikube version
 ifeq ($(MINIKUBE_REUSE), true)
-	@if minikube -p $(MINIKUBE_PROFILE) status >/dev/null 2>&1; then \
+	@HOST_STATE="$$(minikube -p $(MINIKUBE_PROFILE) status --format='{{.Host}}' 2>/dev/null || echo Unknown)"; \
+	if [ "$$HOST_STATE" = "Running" ]; then \
 		echo "=====Reusing existing minikube shard $(MINIKUBE_PROFILE) (MINIKUBE_REUSE=true)====="; \
 	else \
-		echo "=====Minikube shard $(MINIKUBE_PROFILE) not running; starting it====="; \
+		echo "=====Minikube shard $(MINIKUBE_PROFILE) host state is '$$HOST_STATE'; starting it====="; \
 		minikube -p $(MINIKUBE_PROFILE) start --driver=docker --kubernetes-version=$(E2E_KUBERNETES_VERSION) --memory=8192 --cpus=2; \
 	fi
 else
 	minikube -p $(MINIKUBE_PROFILE) delete || true
 	minikube -p $(MINIKUBE_PROFILE) start --driver=docker --kubernetes-version=$(E2E_KUBERNETES_VERSION) --memory=8192 --cpus=2
 endif
+	@HOST_STATE="$$(minikube -p $(MINIKUBE_PROFILE) status --format='{{.Host}}' 2>/dev/null || echo Unknown)"; \
+	[ "$$HOST_STATE" = "Running" ] || (echo "ERROR: minikube profile $(MINIKUBE_PROFILE) failed to reach Running state (Host=$$HOST_STATE)" && exit 1)
 	minikube -p $(MINIKUBE_PROFILE) addons enable ingress
 	minikube -p $(MINIKUBE_PROFILE) addons enable storage-provisioner
 	minikube -p $(MINIKUBE_PROFILE) addons enable default-storageclass
