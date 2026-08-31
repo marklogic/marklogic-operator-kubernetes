@@ -269,6 +269,132 @@ v1 scope, since the API makes it trivial rather than risky.
 
 ---
 
+## Session 5 — CSI abstractions: written position (JIRA Nice 10)
+
+No live testing; this is the design question the epic flagged ("further research is required to
+assess whether Kubernetes CSI abstractions are a viable integration option"). Answering it does
+not require a cluster, only a decision about what CSI would and would not replace.
+
+**Verdict: `Defer`. CSI is neither an alternative to nor a prerequisite for the MarkLogic-native
+credential path. It is a complementary, separately-scoped capability.**
+
+Reasoning:
+
+1.  **It solves a different problem.** A CSI driver (Mountpoint for S3, BlobFuse, s3fs) presents a
+    bucket as a POSIX mount. MarkLogic's native S3/Azure support instead speaks the object APIs
+    directly, and the credentials endpoint validated in Sessions 2–3 is what enables that. Making
+    a bucket appear as a directory does nothing to configure MarkLogic's native path, so CSI
+    cannot substitute for this feature — a cluster with a CSI mount and no credentials still
+    cannot run an S3 backup addressed by an `s3://` URI.
+2.  **The scenarios the epic names are native-path scenarios.** Scheduled backups to S3/Azure —
+    the epic's primary motivator — are configured in MarkLogic with object-storage URIs, not
+    filesystem paths. Routing those through a mount would be working against the product.
+3.  **Object-storage-as-filesystem is a poor fit for MarkLogic's I/O.** Forest data assumes
+    filesystem semantics (in-place updates, fsync durability, byte-range rewrites, locking) that
+    object stores emulate imperfectly or not at all. Pointing forest data directories at a CSI
+    mount is exactly the kind of unsupported configuration *Requirement Review* #2 already rules
+    out, and it would be riskier than the native path rather than safer.
+4.  **Where it could add value, it is orthogonal.** CSI is plausible for adjacent, append-or-
+    read-mostly uses — staging ingest corpora, exporting logs, sharing read-only reference data —
+    none of which involve MarkLogic's object storage credentials and none of which are blocked by
+    this feature. Those would be ordinary `volumes`/`volumeMounts` on the pod spec, requiring no
+    operator-specific API.
+5.  **It carries its own credential problem.** CSI drivers authenticate through their own
+    mechanisms (driver-specific secrets, IRSA on the node/pod). Adopting CSI would add a second,
+    parallel credential surface rather than reusing the one being built here, so it is additive
+    complexity, not a simplification.
+
+**Conclusion:** CSI stays a follow-up research item, unchanged from the SPEC's existing position,
+and it did not block or alter the MarkLogic-native credential path. If it is ever picked up, it
+should be scoped as a general volume-mounting capability rather than as part of object storage
+credential configuration.
+
+---
+
+## Session 6 — AWS keyless (IRSA): verified **not possible** (JIRA Nice 8)
+
+Revisiting the `Defer` verdict from Todo D1. No EKS cluster was needed: the question is settled by
+MarkLogic's own documentation plus the contents of the image the operator ships. The outcome is
+stronger than "unvalidated" — **the SPEC's stated mechanism does not exist.**
+
+### Evidence 1 — MarkLogic does not use the AWS credential provider chain
+
+The SPEC claimed: *"When the AWS credential set is empty, MarkLogic uses the standard AWS
+credential provider chain."* The MarkLogic 12 documentation
+([Configure AWS credentials](https://docs.progress.com/bundle/marklogic-server-on-aws-12/page/topics/managing-marklogic-server-on-ec2/configuring-marklogic-for-amazon-simple-storage-service--s3-/configure-aws-credentials.html))
+states a MarkLogic-specific order of precedence with exactly three entries:
+
+> 1. Credentials configured in the MarkLogic Security database
+> 2. Environment variables
+> 3. IAM Role
+
+This is not the AWS SDK provider chain. Notably absent is any web-identity-token step — which is
+the *only* mechanism IRSA uses.
+
+### Evidence 2 — the IAM Role step is gated, and the gate is closed in containers
+
+[Configure an IAM role with an AWS access policy](https://docs.progress.com/bundle/marklogic-server-on-aws-12/page/topics/managing-marklogic-server-on-ec2/configuring-marklogic-for-amazon-simple-storage-service--s3-/configure-aws-credentials/configuring-an-iam-role-with-an-aws-access-policy.html)
+(identical text in the v10, v11, and v12 bundles):
+
+> IAM roles are only used on the server if the `MARKLOGIC_AWS_ROLE` environment variable is set.
+> This happens automatically for you **unless you disable the EC2 configuration (such as setting
+> `MARKLOGIC_EC2_HOST=0`), in which case the server will not use the `MARKLOGIC_AWS_ROLE`
+> variable.**
+
+And `MARKLOGIC_AWS_ROLE` "is fetched from the IAM Role associated with the instance" — i.e. from
+EC2 instance metadata, which is the **instance-profile** mechanism, not IRSA.
+
+The rootless image the operator pins sets that gate closed at build time. From
+`marklogic/marklogic-docker`, `dockerFiles/marklogic-server-ubi-rootless:base`:
+
+```
+MARKLOGIC_JOIN_TLS_ENABLED=false \
+MARKLOGIC_EC2_HOST=0 \
+TZ=UTC
+```
+
+`src/scripts/start-marklogic-rootless.sh` writes that value into `/etc/marklogic.conf`, and the
+image's own test suite asserts the result:
+
+```robot
+Verify That marklogic.conf contains    MARKLOGIC_PID_FILE    MARKLOGIC_UMASK    MARKLOGIC_USER    MARKLOGIC_EC2_HOST=0
+```
+
+So in the operator's image, EC2 configuration is disabled by default, and per the documentation
+above the server therefore ignores IAM roles entirely.
+
+### Evidence 3 — no web identity support anywhere
+
+A keyword search of `marklogic/marklogic-docker` for `AWS_WEB_IDENTITY_TOKEN_FILE`, `AWS_ROLE_ARN`,
+and `web-identity` returns **nothing**. A documentation search for `MARKLOGIC_AWS_ROLE` returns
+6 results across v10/v11/v12, all EC2-centric; none mention EKS, IRSA, service accounts, or
+projected tokens. The operator repo sets none of these variables either (`MARKLOGIC_EC2_HOST`,
+`MARKLOGIC_AWS_ROLE`, `AWS_ROLE_ARN`, `AWS_WEB_IDENTITY_TOKEN_FILE` — zero matches).
+
+### Conclusion
+
+**Verdict: `No-Go` for IRSA, not merely `Defer`.** IRSA requires the consumer to exchange a
+projected service-account token via STS `AssumeRoleWithWebIdentity`. MarkLogic has no such step in
+its credential resolution order and no support for the associated environment variables. Empty
+credentials do not fall through to the AWS SDK chain, because MarkLogic does not use that chain.
+
+A *related but different* mode may be reachable: overriding `MARKLOGIC_EC2_HOST=1` in the pod so
+MarkLogic re-enables EC2 configuration and picks up `MARKLOGIC_AWS_ROLE` from IMDS. This is
+untested and comes with real caveats:
+
+- it yields the **node's** instance-profile role, not a pod-scoped identity, so every pod on the
+  node shares the same S3 access — a security downgrade relative to IRSA, and arguably worse than
+  a scoped Kubernetes Secret;
+- it depends on pods being able to reach IMDS (`169.254.169.254`), which EKS clusters frequently
+  block via a hop limit of 1 specifically to prevent this;
+- it re-enables MarkLogic's broader EC2 bootstrap behavior inside a container, which the image
+  authors deliberately turned off.
+
+That variant is the only thing an EKS test could still tell us, and it is not what the SPEC
+proposed. Recommend not pursuing it without a product-side statement that it is supported.
+
+---
+
 ## Findings Matrix
 
 | # | JIRA Acceptance Criterion | Status | Evidence / Conclusion |
@@ -277,12 +403,14 @@ v1 scope, since the API makes it trivial rather than risky.
 | Must 2 | Confirm minimum privileges; dedicated least-privilege user practicality | **Confirmed** | `manage-admin` alone → `403` (not `401` as documented). `manage-admin`+`security` → success. Granular `manage`+`manage-admin`+`credentials-set-{aws,azure}` → success, confirmed per-provider scoped. A dedicated least-privilege user is practical for v1 using the granular privilege combination. |
 | Must 3 | Validate complete Secret-backed static credential flow | **Confirmed** | Both providers apply successfully with the corrected (body-`type`) request shape; re-applying identical material is idempotent at the MarkLogic level (`204` both times, no error). |
 | Must 4 | Validate fingerprinting approach | **Confirmed as necessary, not yet prototyped in Go** | Live evidence (Session 2, Test 4) proves `GET`-based comparison cannot work: identical `secret-key` input produces different ciphertext output on each apply. This validates the SPEC's fingerprint-based approach as the *only* viable option, but the Go-level details (salt stability across restarts, canonical field ordering, Secret-watch-triggered reconciliation) still require code-level prototyping — not exercised in this session. |
-| Must 5 | Resolve supported-usage boundary (credentials-only vs. backups/forests) | **Confirmed — no new evidence needed** | Already resolved by design reasoning in SPEC's Requirement Review #2; nothing observed in this research contradicts that decision. |
+| Must 5 | Resolve supported-usage boundary (credentials-only vs. backups/forests) | **Confirmed** | Resolved by design reasoning in SPEC's Requirement Review #2; nothing observed here contradicts it. The SPEC's *Out of Scope* list now also states that the forest, backup, region, and endpoint behaviors are excluded as **unvalidated**, not merely unwanted, as Must 5 requires. |
 | Must 6 | Findings matrix produced | **This table** | — |
-| Must 7 | Validate status/condition model | **Partially informed** | Live error shapes observed: `{"errorResponse":{"statusCode","status","messageCode","message"}}` for `400`/`403`. These map cleanly to the SPEC's planned `reason`/`message` status fields. Distinguishing `403` (insufficient privilege) from `401` (bad credentials) should be reflected as distinct failure reasons rather than collapsed into one `ManagementAPIError` reason. |
-| Nice 8 | AWS IRSA/instance-role prototype | **Not attempted** | Requires a real EKS cluster and IAM role; out of reach in this local Docker-only research session. Remains deferred per the JIRA's Secrets-only framing. |
-| Nice 9 | Azure managed identity investigation | **Not attempted** | Requires Azure infrastructure; out of reach in this session. Remains deferred. |
-| Nice 10 | CSI abstraction research | **Not attempted** | Design/research question, not a live-cluster test; no new evidence gathered this session. |
+| Must 7 | Validate status/condition model | **Model designed; not yet exercised** | Observed error shapes (`{"errorResponse":{"statusCode","status","messageCode","message"}}`) drove an eight-reason failure vocabulary with a retriability column in the SPEC's *Status Contract*, splitting `401` (bad admin credential) from `403` (missing MarkLogic privilege) so the most likely misconfiguration is diagnosable from status alone. A *Phase Semantics* table was added, including that `Disabled` means "unmanaged", not "unconfigured". Remaining: exercise every reason against a live controller (see Todo C3). |
+| Nice 8 | AWS IRSA/instance-role prototype | **`No-Go` — verified impossible** | Session 6. No EKS needed. MarkLogic's credential order has exactly three steps (security DB → env vars → IAM Role) and is **not** the AWS SDK provider chain, so empty credentials do not fall through to IRSA. The IAM Role step is gated on `MARKLOGIC_AWS_ROLE`, which the docs say is ignored when `MARKLOGIC_EC2_HOST=0` — and the operator's rootless image hard-sets exactly that. No web-identity support exists in the image or docs. The SPEC's stated mechanism does not exist. |
+| Nice 9 | Azure managed identity investigation | **`Defer`** | Not attempted — needs Azure infrastructure. Already out of v1 scope regardless. Scoped to image `12.0.3-ubi9-rootless-2.2.6`; other supported versions untested. |
+| Nice 10 | CSI abstraction research | **`Defer` — position recorded** | Session 5. CSI is complementary, not an alternative: it cannot configure MarkLogic's native object APIs, the epic's backup scenario is native-path, forest-on-mount is the unsupported pattern Requirement Review #2 already excludes, and CSI brings a second credential surface of its own. Did not block the native path. |
+| — | Credential revocation via `DELETE` | **Confirmed working — deliberately deferred** | Session 4. Deferred on API-design grounds (removal is ambiguous between "revoke" and "stop managing"), not effort. |
+| — | Least-privilege MarkLogic user | **Decision: use bootstrap admin in v1** | Session 3 proved a dedicated user is practical; deferred as a hardening path because the operator already holds the bootstrap admin credential, so a second user adds lifecycle surface without reducing capability. |
 
 ## Corrections Needed in `[SPEC]Object Storage.md` — **applied**
 
@@ -336,42 +464,51 @@ These are the four corrections listed in the previous section, restated as actio
       `session-token` are returned in plaintext. Added *Security NFR* #5 covering the
       `session-token` plaintext exposure and its link to Requirement Review #6.
 
-### B. Fold the new findings into the SPEC (behavior the SPEC does not yet describe)
+### B. Fold the new findings into the SPEC (behavior the SPEC did not describe)
 
-- [ ] **B1 — Idempotency evidence.** Record in *Requirement Review* or *Credential Application*
-      that re-applying identical material returns `204` with no error, so the operator's
-      skip-if-unchanged optimization is a cost optimization, not a correctness requirement.
-- [ ] **B2 — "Never configured" detection.** Document that `GET ?type=<provider>` returns
-      `{"<provider>": null}` before anything is set, and decide whether the controller uses this
-      to distinguish `Disabled`/never-configured from configured-with-older-material. Affects the
-      `Disabled` phase semantics in the *Status Contract*.
-- [ ] **B3 — Distinct failure reasons.** Split the single `ManagementAPIError` reason in the
-      *Status Contract* into at least `InsufficientPrivilege` (`403`), `AuthenticationFailed`
-      (`401`), and `InvalidPayload` (`400`), mapping from the observed
-      `{"errorResponse":{"statusCode","status","messageCode","message"}}` shape. Closes the
-      actionability half of **JIRA Must 7**.
-- [ ] **B4 — Error-body handling rule.** The observed error bodies echo `messageCode`/`message`
-      but not payload values; confirm this holds for every failure mode the controller can hit,
-      then state the rule in the SPEC (surface `messageCode` + `message`, never the request body).
-- [ ] **B5 — Per-provider privilege scoping.** Update *Security NFR* #4 and *Follow-Ups* to reflect
-      that `credentials-set-aws` and `credentials-set-azure` are independently scoped, so a
-      deployment can grant only the providers it actually configures.
-- [ ] **B6 — Least-privilege user decision.** **JIRA Must 2** requires an explicit decision, not
-      just evidence. Session 3 proved a dedicated least-privilege user is *practical*; record the
-      **decision** — v1 uses the bootstrap admin credential with the least-privilege user as a
-      documented hardening path, or v1 provisions the dedicated user. Currently the SPEC assumes
-      the former without citing the evidence.
-- [ ] **B7 — `DELETE` / revocation scope decision.** Session 4 showed `DELETE` is trivial
-      (`204`, requires a `Content-Type` header despite having no body). Decide explicitly whether
-      credential revocation on provider-block removal moves from *Follow-Ups* into v1, and update
-      *Validation Rules* #6 accordingly. Leaving it deferred is acceptable, but the decision must
-      be recorded rather than inherited.
-- [ ] **B8 — Link findings from the SPEC.** **JIRA Must 6** explicitly requires the functional
-      spec's *Requirement Review* section to link this findings document. Add the cross-link and
-      flip the *Validation Status* table rows from `Pending POC` to `Confirmed` (Must 1, 2, 3) with
-      a pointer to the relevant session.
+**All applied to `[SPEC]Object Storage.md`.**
+
+- [x] **B1 — Idempotency evidence.** Added *Requirement Review* #9: MarkLogic accepts a redundant
+      re-apply with `204`, so skip-if-unchanged is a cost/noise optimization rather than a
+      correctness property. *Credential Application* AC2 now says so explicitly, which lowers the
+      risk profile of any fingerprint bug.
+- [x] **B2 — "Never configured" detection.** Added *Requirement Review* #10 and a new *Phase
+      Semantics* table in the *Status Contract*. The `{"<provider>": null}` response gives a way to
+      tell "never configured" from "configured but fingerprint unknown" (relevant after status loss
+      or operator upgrade). Also pinned down that `Disabled` means "not managed by the operator",
+      **not** "not configured in MarkLogic" — a distinction that only exists because v1 does not
+      revoke on removal.
+- [x] **B3 — Distinct failure reasons.** Replaced the single `ManagementAPIError` with an
+      eight-row *Failure Reasons* table carrying a retriability column: `BootstrapNotReady`,
+      `SecretNotFound`, `SecretKeyMissing`, `InvalidPayload` (`400`), `AuthenticationFailed`
+      (`401`), `InsufficientPrivilege` (`403`), `ManagementAPIUnreachable`, and
+      `ManagementAPIError` as catch-all. Closes the actionability half of **JIRA Must 7**.
+- [x] **B4 — Error-body handling rule.** *Controller Workflow* step 6 now specifies that messages
+      are built from the status code plus `errorResponse.messageCode`/`message` only, and that the
+      response body is treated as untrusted regardless — so the no-secret-leakage guarantee does
+      not depend on MarkLogic's error text staying the way it is today.
+- [x] **B5 — Per-provider privilege scoping.** *Security NFR* #4, *Requirement Review* #3, and
+      *Follow-Ups* now record that `credentials-set-aws`/`credentials-set-azure` are independently
+      scoped, making the granular privilege set the tighter hardening option.
+- [x] **B6 — Least-privilege user decision.** Recorded in *Requirement Review* #3: **v1 uses the
+      bootstrap admin credential.** Rationale — a dedicated user is confirmed practical, but the
+      operator already holds the bootstrap admin credential for other reconcile steps, so an extra
+      MarkLogic user adds lifecycle surface without reducing what the operator can do. Kept as a
+      hardening path.
+- [x] **B7 — `DELETE` / revocation scope decision.** Recorded in *Validation Rules* #6: **stays
+      out of v1.** Rationale — the blocker is not effort but ambiguity: spec removal could mean
+      "revoke" or "stop managing", and guessing wrong silently breaks running backups. That makes
+      it an API-design question (it needs an explicit opt-in signal), which is a better reason to
+      defer than the "risky API" assumption it replaces.
+- [x] **B8 — Link findings from the SPEC.** *Validation Status* now points at this document as the
+      authoritative evidence record, rows are flipped from `Pending POC` to their real verdicts,
+      and new rows were added for claims the table never tracked: Secret-watch triggering,
+      multi-host propagation, the status/reason model, and revocation.
 
 ### C. Close the still-unvalidated research questions
+
+These are the only items that still need hands-on work. The SPEC's *Task Breakdown* has been
+updated so each has an explicit home in implementation, but none are validated yet.
 
 - [ ] **C1 — Fingerprinting Go prototype (JIRA Must 4, the only Must still open).** Live evidence
       proved `GET`-based comparison is impossible, which validates *that* fingerprinting is needed
@@ -384,44 +521,60 @@ These are the four corrections listed in the previous section, restated as actio
         fingerprint;
       - a change to *every* credential field individually produces a different fingerprint;
       - assertions that raw values never reach status, events, logs, or error strings.
+
+      Mitigating context from B1: because MarkLogic accepts redundant re-applies cleanly, a
+      fingerprint defect degrades to extra writes and noisy rotation events rather than data loss —
+      so this is a correctness-of-behavior question, not a safety blocker. *Task Breakdown* item 3
+      now carries the salt-source decision and the per-field test requirements.
 - [ ] **C2 — Secret-watch reconciliation trigger (JIRA Must 4, second half).** A fingerprint is not
       a watch. Confirm the mechanism that makes a Secret edit wake the `MarklogicCluster`
       controller — `Watches` on `v1.Secret` with a handler mapping back to referencing clusters,
       versus a periodic resync — and record the RBAC and cache implications (the operator's
       namespace scoping is described in `docs/operator-scope-configuration.md`). Without this,
-      the *Credential Rotation* acceptance criteria cannot be met.
+      the *Credential Rotation* acceptance criteria cannot be met. A `Watches` task has been added
+      to *Task Breakdown* item 4, but the approach is not yet validated against the operator's
+      actual cache configuration.
 - [ ] **C3 — Status/condition model validation (JIRA Must 7).** Currently "partially informed."
       Confirm the full field set against the failure modes actually reachable in-cluster
       (missing Secret, missing key, bootstrap not ready, `403`, `400`, transient network error),
       and confirm each maps to a distinct, actionable `reason`. Depends on B3.
-- [ ] **C4 — Record the out-of-scope boundary explicitly (JIRA Must 5).** The credentials-only
-      decision is made, but Must 5 also requires explicitly recording *which* forest, backup,
-      region, and endpoint behaviors are out of scope **because they were not validated**. The
-      SPEC's *Out of Scope* list covers forests, CSI, managed identity, STS rotation, and region,
-      but does not state that these are unvalidated rather than merely unwanted. Add that framing,
-      and confirm the epic's "supports configuring storage access for backups" is satisfied at the
-      access layer only.
+- [x] **C4 — Record the out-of-scope boundary explicitly (JIRA Must 5).** Done. The SPEC's
+      *Out of Scope* list now states that forest, backup, region, and endpoint behaviors are
+      excluded **because they were not validated**, not merely because they are unwanted, and
+      confirms the epic's "supports configuring storage access for backups" is satisfied at the
+      *access* layer only. Revocation and AWS keyless were added to the same list.
 
-### D. Deferred "Nice to Have" items — record the decision, not the work
+### D. Deferred "Nice to Have" items — decisions recorded
 
-Each of these needs a written `Go` / `No-Go` / `Defer` line in the findings matrix so the story
-can close cleanly. None require the work itself if v1 is Secrets-only.
+Each needed a written `Go` / `No-Go` / `Defer` verdict so the story can close. **All three are
+`Defer`**, and the SPEC has been made internally consistent with that outcome.
 
-- [ ] **D1 — AWS IRSA prototype (Nice 8).** Not attempted (needs EKS + IAM). Either schedule the
-      prototype or record `Defer` and remove the conditional "AWS keyless ships in v1 if the POC
-      confirms it" language from the SPEC's *Compatibility*, *Validation Status*, *Accepted Scope
-      Summary*, and *Platform Compatibility* #2 — the SPEC currently leaves AWS keyless in an
-      unresolved conditional state in four places, and `authType=instanceRole` appears in the CRD
-      enum, *Spec Fields*, *Controller Workflow* step 5, and the status contract. If the answer is
-      `Defer`, decide whether `instanceRole` stays in the v1 CRD enum (rejected at validation) or
-      is removed entirely.
-- [ ] **D2 — Azure managed identity (Nice 9).** Not attempted. The SPEC already says "Confirmed
-      deferred," so this only needs the matching `Defer` verdict and the tested image versions
-      recorded in the matrix.
-- [ ] **D3 — CSI abstractions (Nice 10).** Not attempted; it is a design question, not a live test.
-      Produce a short written position (viable alternative / complementary / not applicable) so the
-      epic's "further research is required" note is answered, and confirm it did not block the
-      MarkLogic-native path.
+- [x] **D1 — AWS IRSA prototype (Nice 8): `No-Go` (upgraded from `Defer`).** Originally deferred as
+      "not attempted, needs EKS". **Session 6 closed it without an EKS cluster: the mechanism the
+      SPEC described does not exist.** MarkLogic does not use the AWS SDK credential provider
+      chain, and its IAM-role step is disabled by the `MARKLOGIC_EC2_HOST=0` that the operator's
+      own image hard-sets. The SPEC's conditional language has been removed from *Compatibility*,
+      *Validation Status*, *Accepted Scope Summary*, *In Scope*, and *Platform Compatibility* #2,
+      and AWS keyless moved to *Out of Scope* — now on evidence rather than on absence of evidence.
+
+      **`instanceRole` is kept in the API as a reserved-but-rejected value**, mirroring how Azure
+      already treats `managedIdentity`. Removing it outright would make a future addition a
+      breaking enum change; reserving it means enabling it later only relaxes a validation rule.
+      *Controller Workflow* step 5 no longer implements a keyless path (CRD validation rejects the
+      value before the controller sees it), the status contract no longer carries an empty-
+      fingerprint special case, and the IRSA sample was dropped from the task list.
+
+      Knock-on effect worth flagging: *Requirement Review* #6 recommended IRSA as the answer for
+      expiring STS tokens. With keyless now ruled out rather than merely postponed, **v1 has no
+      answer for temporary credentials** — an expired `sessionToken` stays expired until something
+      external updates the Secret. That is now stated plainly rather than being papered over by a
+      recommendation pointing at functionality that cannot be built as described.
+- [x] **D2 — Azure managed identity (Nice 9): `Defer`.** Not attempted; requires Azure
+      infrastructure. Already out of scope in the SPEC regardless of outcome. Tested version scope
+      is recorded in E1.
+- [x] **D3 — CSI abstractions (Nice 10): `Defer` — see Session 5 below** for the written position.
+      Confirmed it did not block the MarkLogic-native credential path, which is fully validated
+      independently of it.
 
 ### E. Wrap up the research story
 
@@ -435,13 +588,16 @@ can close cleanly. None require the work itself if v1 is Secrets-only.
       `GET` from a non-bootstrap host to verify the credential set propagates. This underpins the
       SPEC's central "reconcile once against the bootstrap host" design choice, which is currently
       taken from documentation rather than observation.
-- [ ] **E3 — Capture the POC code.** The JIRA allows throwaway code but the story's value depends on
-      it being reviewable. Commit the curl/script harness used in Sessions 1–4 (with credentials
-      stripped) under `test/` or `docs/spec/`, or state that the commands in this document are the
-      deliverable.
+- [x] **E3 — Capture the POC code.** **Decision: the commands in Sessions 1–4 of this document are
+      the deliverable.** They are complete, copy-pasteable, and carry their observed output inline,
+      which an extracted script would not. Extracting them into a separate harness would add a file
+      to maintain for throwaway research the JIRA explicitly says need not ship. The only
+      credentials appearing here are the throwaway local ones (`admin:admin123`, `Passw0rd123!`)
+      and obviously fake key material (`AKIATESTKEY...`); no real secrets are present.
 - [ ] **E4 — Tear down the research environment.** Remove the `ml-objstor-poc` container and the
       test roles/users (`objstor-manageadmin-user`, `objstor-manageadmin-security-user`,
-      `objstor-privonly-aws-user`, and their roles) once the findings are accepted.
+      `objstor-privonly-aws-user`, and their roles). **Do this last** — E1 and E2 still need a live
+      instance, so the container should survive until those are either done or explicitly dropped.
 - [ ] **E5 — Refresh the matrix and close.** After A–D, update the Findings Matrix so no row reads
       "Not attempted" or "Partially informed" without an accompanying decision, then mark the
       research story complete and unblock the implementation stories in the SPEC's *Task Breakdown*.
