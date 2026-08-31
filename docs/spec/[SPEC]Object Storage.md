@@ -55,7 +55,7 @@ Before the design, the following observations refine the original business requi
 
 5.  **Region is not part of the credentials API.** The AWS credentials structure carries only `access-key`, `secret-key`, and `session-token`. AWS region for S3 is resolved by MarkLogic through its own configuration/environment, not through this endpoint. The spec exposes an optional informational `region` field but documents that region wiring for S3 forests/backups is an environment concern, not something this endpoint sets.
 
-6.  **AWS temporary credentials (`session-token`) expire.** If users supply STS session tokens, they are short-lived. v1 accepts an optional `sessionToken` for completeness but does not rotate it — the operator re-applies only when the referenced Secret changes, so an expired token stays expired until something updates the Secret. Since MarkLogic does not support IRSA (see Compatibility), **there is no keyless alternative to fall back on**: deployments needing temporary credentials must drive Secret updates externally (for example an external secrets operator or a token-refreshing controller). Long-lived IAM user keys are the supported v1 path.
+6.  **AWS temporary credentials (`session-token`) are excluded from v1.** MarkLogic's credentials structure accepts an optional `session-token` for STS credentials, but the operator does not expose it. Three findings compound: the token is short-lived, the operator only re-applies when the referenced Secret changes (so an expired token stays expired until something external rewrites the Secret), and MarkLogic returns it in **plaintext** on read. The keyless mode that would normally cover this scenario does not exist (see Compatibility). Supporting the field would therefore mean shipping an option that works for a few hours and leaks in the meantime. **v1 accepts long-lived IAM user keys only.** Deployments that require STS credentials should drive Secret updates through an external mechanism and can revisit this once a rotation story exists.
 
 7.  **CSI abstractions are out of scope for v1.** Mounting object storage as a filesystem via a CSI driver is a fundamentally different integration than MarkLogic-native S3/Azure access and is not required to satisfy the acceptance criteria. It is recorded as a future research item, consistent with the requirement's own note.
 
@@ -103,10 +103,11 @@ Content-Type: application/json
 {
   "type": "aws",
   "access-key": "AWS-ACCESS-KEY",
-  "secret-key": "AWS-SECRET-KEY",
-  "session-token": "OPTIONAL-STS-TOKEN"
+  "secret-key": "AWS-SECRET-KEY"
 }
 ```
+
+MarkLogic also accepts an optional `session-token` field for STS credentials. **v1 never sends it** — see Requirement Review #6.
 
 ```http
 PUT /manage/v2/credentials/properties
@@ -207,7 +208,7 @@ Acceptance criteria:
 2.  Only fingerprints (salted SHA-256) and Secret references are persisted in status.
 3.  The operator reads referenced Secrets with least-privilege RBAC scoped to the operator's namespace access model.
 4.  The admin-capable credential used for credential application is the existing bootstrap credential; an optional dedicated credential is documented as a hardening path. Two combinations are confirmed sufficient: the `manage-admin` + `security` roles, or the granular `manage` + `manage-admin` + `credentials-set-aws` and/or `credentials-set-azure` privileges. The granular form is the tighter option because it avoids the broad `security` role **and** is scoped per provider — a deployment that only uses S3 can grant `credentials-set-aws` alone, and a caller holding only that privilege is refused (`403`) when attempting to configure Azure.
-5.  **MarkLogic returns `session-token` in plaintext** from `GET /manage/v2/credentials/properties`, unlike `secret-key` which it stores encrypted. Any caller with sufficient Management API privilege can therefore read back a supplied STS token, and the operator cannot mask this. Combined with Requirement Review #6, it is a second reason to avoid `sessionToken` in v1: deployments that do supply one should treat Management API access as equivalent to holding the token itself.
+5.  **MarkLogic returns `session-token` in plaintext** from `GET /manage/v2/credentials/properties`, unlike `secret-key` which it stores encrypted. Any caller with sufficient Management API privilege can read it back, and the operator could not mask it. This is one of the reasons `sessionToken` is excluded from v1 entirely (Requirement Review #6) rather than merely discouraged — the operator does not send the field, so there is nothing to leak.
 
 #### Reliability
 
@@ -237,7 +238,7 @@ Acceptance criteria:
 2.  CSI-based object storage mounting.
 3.  AWS keyless access via IRSA / instance profile — not supported by MarkLogic as described; see Compatibility.
 4.  Azure managed identity (deferred pending MarkLogic support confirmation).
-5.  Continuous rotation of expiring AWS STS session tokens.
+5.  AWS STS session tokens (`sessionToken`) — excluded from the v1 API surface, not merely unrotated; see Requirement Review #6.
 6.  Region/endpoint provisioning for S3 (an environment concern outside the credentials API).
 7.  Revoking credentials when a provider block is removed (see Validation Rules #6).
 
@@ -281,7 +282,6 @@ type: Opaque
 stringData:
   accessKey: AKIA...
   secretKey: wJalr...
-  # sessionToken: optional STS token
 ---
 apiVersion: v1
 kind: Secret
@@ -324,7 +324,7 @@ spec:
 | Field | Type | Required | Description | Default |
 |---|---|---|---|---|
 | `authType` | enum (`secret`) | No | How AWS credentials are provided (`instanceRole` reserved, rejected in v1) | `secret` |
-| `secretName` | string | Conditional | Name of the Secret holding `accessKey`, `secretKey`, and optional `sessionToken`. Required when `authType=secret` | unset |
+| `secretName` | string | Conditional | Name of the Secret holding `accessKey` and `secretKey`. Required when `authType=secret` | unset |
 | `region` | string | No | Informational AWS region; documented as an environment concern, not written to the credentials API | unset |
 
 #### `objectStorage.azure` (AzureObjectStorage)
@@ -338,7 +338,7 @@ spec:
 
 | Provider | Secret keys | Notes |
 |---|---|---|
-| AWS | `accessKey`, `secretKey`, optional `sessionToken` | All keys omitted is invalid for `authType=secret` |
+| AWS | `accessKey`, `secretKey` | Both required for `authType=secret`. `sessionToken` is **not** supported in v1 |
 | Azure | `storageAccount`, `storageKey` | Both required for `authType=secret` |
 
 ### Validation Rules
@@ -409,6 +409,34 @@ Distinguishing `401` from `403` matters operationally: `401` points at the opera
 
 The cluster resource may also mirror an aggregate condition (for example `ObjectStorageReady`) into `status.conditions`, but the per-provider block above is authoritative.
 
+## Fingerprinting
+
+`appliedFingerprint` lets the operator answer "has the referenced Secret changed since I last applied it?" without storing credential material and without reading it back from MarkLogic (which is impossible — see Requirement Review #4).
+
+### Why the hash is salted
+
+`status` is readable by any principal with `get` on the `MarklogicCluster` and is stored in etcd. An unsalted `SHA-256` of credential material would act as a verification oracle: an observer could test candidate values offline and confirm a guess. That is a real risk rather than a theoretical one for the lower-entropy fields — `storageAccount` is a short human-chosen name and `accessKey` has a fixed `AKIA`-prefixed shape. Salting also prevents cross-cluster correlation: without it, two clusters sharing credentials would publish identical fingerprints, disclosing that fact to anyone able to read both.
+
+### Salt source
+
+The salt is derived from `MarklogicCluster.metadata.uid`.
+
+| Property | Behavior |
+|---|---|
+| Stable across controller restarts | Yes — the UID lives on the CR, not in controller memory |
+| Stable across controller replicas | Yes — no per-process or per-node state |
+| Unique per cluster | Yes — defeats cross-cluster correlation |
+| Additional resources required | None |
+| Changes when | The `MarklogicCluster` is deleted and recreated |
+
+The rejected alternatives: a **build-time constant** is shared across every installation, so it provides no correlation protection and invalidates every stored fingerprint on operator upgrade, causing a simultaneous re-apply across all managed clusters. A **generated Secret** works but introduces a resource to create, grant RBAC for, and back up, whose loss silently triggers the same mass re-apply.
+
+The UID's one failure mode is benign: recreating the CR changes the salt, so the first reconcile re-applies credentials. That is correct behavior, since a recreated CR has no valid claim about what a previous cluster had applied.
+
+### Computation
+
+The fingerprint is computed over the resolved material in canonical field order, so logically identical credentials always produce the same value. Only the resulting digest is persisted; raw material never enters status, events, logs, or error strings.
+
 ## Controller Workflow
 
 1.  **Gate on readiness.** The `MarklogicCluster` controller only attempts object storage configuration after the cluster is initialized and the bootstrap host is reachable and secured.
@@ -434,7 +462,7 @@ Tasks are grouped by area and ordered to allow incremental, testable delivery.
 ### 2. Management Client (`pkg/mlmanage`)
 
 - [ ] Add `EnsureAWSCredentials(ctx, AWSCredentials) error` and `EnsureAzureCredentials(ctx, AzureCredentials) error` to the `Client` interface.
-- [ ] Add `AWSCredentials` (`AccessKey`, `SecretKey`, `SessionToken`) and `AzureCredentials` (`StorageAccount`, `StorageKey`) config structs.
+- [ ] Add `AWSCredentials` (`AccessKey`, `SecretKey`) and `AzureCredentials` (`StorageAccount`, `StorageKey`) config structs. `SessionToken` is deliberately omitted — see Requirement Review #6.
 - [ ] Implement `PUT /manage/v2/credentials/properties` with the provider selected by a `"type": "aws"|"azure"` field in the request body, following the existing `doJSON` idempotent `Ensure*` pattern, expecting `204 No Content`.
 - [ ] Add `BuildAWSCredentialsPayload` / `BuildAzureCredentialsPayload` with validation (reject empty required fields) mirroring `BuildOAuthExternalSecurityPayload`; both must emit the `type` field, since Azure fails with `400` without it.
 - [ ] Ensure error strings never include request/response bodies that may contain secrets; build messages from the HTTP status code plus `errorResponse.messageCode` / `errorResponse.message` only.
@@ -442,16 +470,17 @@ Tasks are grouped by area and ordered to allow incremental, testable delivery.
 
 ### 3. Secret Handling and Fingerprinting
 
-- [ ] Add a helper to resolve provider material from a referenced Secret (`accessKey`/`secretKey`/`sessionToken`, `storageAccount`/`storageKey`) with clear missing-key errors that name the key but never its value.
-- [ ] Decide and document the fingerprint salt source (generated Secret, build-time constant, or cluster-derived) and its behavior across controller restarts and multiple replicas, including what happens to `appliedFingerprint` if the salt ever changes.
-- [ ] Add a salted SHA-256 fingerprint helper over resolved material with canonical field ordering; keep the salt internal and never persist raw material.
-- [ ] Add unit tests confirming the fingerprint changes when *any* material field changes individually, that adding or removing the optional `sessionToken` changes it, and that raw values are never returned in strings/logs.
+- [ ] Add a helper to resolve provider material from a referenced Secret (`accessKey`/`secretKey`, `storageAccount`/`storageKey`) with clear missing-key errors that name the key but never its value.
+- [x] Derive the fingerprint salt from `MarklogicCluster.metadata.uid` (see Fingerprinting above); no separate salt Secret is provisioned.
+- [x] Add a salted SHA-256 fingerprint helper over resolved material with canonical field ordering; never persist raw material. Implemented in `pkg/objectstorage/fingerprint.go` as HMAC-SHA256 with length-prefixed encoding.
+- [x] Add unit tests confirming the fingerprint changes when *any* material field changes individually, that two clusters with identical credentials produce different fingerprints, and that raw values are never returned in strings/logs.
 
 ### 4. Controller Reconciliation (`internal/controller` / `pkg/k8sutil`)
 
 - [ ] Add an object storage reconcile step to the `MarklogicCluster` controller, gated on cluster readiness and bootstrap reachability.
 - [ ] Implement per-provider flow: resolve → fingerprint → skip-if-unchanged → apply → update status → emit event.
-- [ ] Add a `Watches` on `v1.Secret` mapping referencing `MarklogicCluster`s back into the reconcile queue, so a Secret edit triggers rotation without waiting for resync. Verify the RBAC and cache implications against the operator's namespace scoping (`docs/operator-scope-configuration.md`).
+- [x] Add a `Watches` on `v1.Secret` mapping referencing `MarklogicCluster`s back into the reconcile queue, so a Secret edit triggers rotation without waiting for resync. No RBAC or cache changes were required (Secrets are already cached and already granted `watch`). **Note:** the controller's `WithEventFilter` predicate is global and defaults to dropping updates, so an explicit `case *corev1.Secret:` is required or the watch never fires on rotation.
+- [ ] Extend `clusterReferencesSecret` to include `spec.objectStorage.<provider>.secretName` once those API types exist; it currently matches only `spec.auth.secretName`.
 - [ ] Reconcile AWS and Azure independently so a failure in one does not block the other.
 - [ ] Requeue per the retriability column of the Status Contract's Failure Reasons table, so non-retriable misconfigurations do not hot-loop.
 - [ ] Emit Kubernetes events for apply-success, apply-failure, and rotation.

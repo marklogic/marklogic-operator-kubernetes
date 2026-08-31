@@ -402,7 +402,7 @@ proposed. Recommend not pursuing it without a product-side statement that it is 
 | Must 1 | Confirm `PUT`/`GET` behavior, response codes, payload shape, masking | **Confirmed — SPEC needs correction** | Response code is `204`, not `201`. `type` must be in the JSON body, not the query string (Azure fails with `400` otherwise — a functional bug in the current SPEC's documented request shape). `secret-key` is encrypted (non-deterministic ciphertext), not masked with a placeholder. `session-token` is returned in **plaintext**, unmasked. |
 | Must 2 | Confirm minimum privileges; dedicated least-privilege user practicality | **Confirmed** | `manage-admin` alone → `403` (not `401` as documented). `manage-admin`+`security` → success. Granular `manage`+`manage-admin`+`credentials-set-{aws,azure}` → success, confirmed per-provider scoped. A dedicated least-privilege user is practical for v1 using the granular privilege combination. |
 | Must 3 | Validate complete Secret-backed static credential flow | **Confirmed** | Both providers apply successfully with the corrected (body-`type`) request shape; re-applying identical material is idempotent at the MarkLogic level (`204` both times, no error). |
-| Must 4 | Validate fingerprinting approach | **Confirmed as necessary, not yet prototyped in Go** | Live evidence (Session 2, Test 4) proves `GET`-based comparison cannot work: identical `secret-key` input produces different ciphertext output on each apply. This validates the SPEC's fingerprint-based approach as the *only* viable option, but the Go-level details (salt stability across restarts, canonical field ordering, Secret-watch-triggered reconciliation) still require code-level prototyping — not exercised in this session. |
+| Must 4 | Validate fingerprinting approach | **Confirmed and implemented** | Live evidence (Session 2, Test 4) proves `GET`-based comparison cannot work: identical `secret-key` input produces different ciphertext output on each apply, making fingerprinting the *only* viable option. Both halves are now built and tested: the salted digest ([pkg/objectstorage](pkg/objectstorage/fingerprint.go), salt from `metadata.uid`, HMAC-SHA256 with length-prefixed canonical encoding) and the Secret watch that triggers reconciliation ([cluster controller](internal/controller/marklogiccluster_controller.go)). See Todos C1 and C2. |
 | Must 5 | Resolve supported-usage boundary (credentials-only vs. backups/forests) | **Confirmed** | Resolved by design reasoning in SPEC's Requirement Review #2; nothing observed here contradicts it. The SPEC's *Out of Scope* list now also states that the forest, backup, region, and endpoint behaviors are excluded as **unvalidated**, not merely unwanted, as Must 5 requires. |
 | Must 6 | Findings matrix produced | **This table** | — |
 | Must 7 | Validate status/condition model | **Model designed; not yet exercised** | Observed error shapes (`{"errorResponse":{"statusCode","status","messageCode","message"}}`) drove an eight-reason failure vocabulary with a retriability column in the SPEC's *Status Contract*, splitting `401` (bad admin credential) from `403` (missing MarkLogic privilege) so the most likely misconfiguration is diagnosable from status alone. A *Phase Semantics* table was added, including that `Disabled` means "unmanaged", not "unconfigured". Remaining: exercise every reason against a live controller (see Todo C3). |
@@ -411,6 +411,8 @@ proposed. Recommend not pursuing it without a product-side statement that it is 
 | Nice 10 | CSI abstraction research | **`Defer` — position recorded** | Session 5. CSI is complementary, not an alternative: it cannot configure MarkLogic's native object APIs, the epic's backup scenario is native-path, forest-on-mount is the unsupported pattern Requirement Review #2 already excludes, and CSI brings a second credential surface of its own. Did not block the native path. |
 | — | Credential revocation via `DELETE` | **Confirmed working — deliberately deferred** | Session 4. Deferred on API-design grounds (removal is ambiguous between "revoke" and "stop managing"), not effort. |
 | — | Least-privilege MarkLogic user | **Decision: use bootstrap admin in v1** | Session 3 proved a dedicated user is practical; deferred as a hardening path because the operator already holds the bootstrap admin credential, so a second user adds lifecycle surface without reducing capability. |
+| — | AWS `sessionToken` (STS) support | **Decision: dropped from v1** | Three findings compound: the token expires, the operator only re-applies on Secret change (so it stays expired), and Session 2 showed MarkLogic returns it in plaintext on `GET`. With IRSA ruled out (Session 6), there is no keyless alternative either — supporting the field would ship an option that works for hours and leaks meanwhile. v1 accepts long-lived IAM user keys only. |
+| — | Fingerprint salt source | **Decision: derive from `MarklogicCluster.metadata.uid`** | Stable across restarts and replicas, unique per cluster (defeats cross-cluster correlation), no extra resource. Build-time constant rejected (shared across installs; upgrade invalidates all fingerprints → mass re-apply); generated Secret rejected (extra resource to manage and back up). |
 
 ## Corrections Needed in `[SPEC]Object Storage.md` — **applied**
 
@@ -510,30 +512,66 @@ These are the four corrections listed in the previous section, restated as actio
 These are the only items that still need hands-on work. The SPEC's *Task Breakdown* has been
 updated so each has an explicit home in implementation, but none are validated yet.
 
-- [ ] **C1 — Fingerprinting Go prototype (JIRA Must 4, the only Must still open).** Live evidence
-      proved `GET`-based comparison is impossible, which validates *that* fingerprinting is needed
-      but not *how* it behaves in the operator. Still to prototype in Go:
-      - salt stability across controller restarts and across replicas (where the salt lives — a
-        generated Secret, a fixed build-time constant, or derived from cluster identity — and what
-        happens to `appliedFingerprint` when the salt changes);
-      - canonical field ordering so equivalent material always fingerprints identically;
-      - optional-field behavior, in particular that adding/removing `sessionToken` changes the
-        fingerprint;
-      - a change to *every* credential field individually produces a different fingerprint;
-      - assertions that raw values never reach status, events, logs, or error strings.
+- [x] **C1 — Fingerprinting prototype (JIRA Must 4).** Implemented as real, tested code in
+      [pkg/objectstorage/fingerprint.go](pkg/objectstorage/fingerprint.go) with
+      [tests](pkg/objectstorage/fingerprint_test.go). All pass under `go test ./pkg/objectstorage/...`.
+
+      **Salt source: `MarklogicCluster.metadata.uid`.** Stable across controller restarts and
+      replicas, unique per cluster (so it also defeats cross-cluster correlation of identical
+      credentials), and needs no extra resource. A build-time constant was rejected because it is
+      shared across installations and would invalidate every stored fingerprint on operator
+      upgrade, triggering a simultaneous re-apply across all managed clusters; a generated Secret
+      was rejected as an extra resource to create, grant RBAC for, and back up, whose loss causes
+      the same mass re-apply.
+
+      Design decisions made while implementing:
+      - **HMAC-SHA256, not `SHA256(salt || data)`.** The salt is the HMAC key, which sidesteps
+        length-extension concerns and is the standard construction for keyed digests.
+      - **Length-prefixed encoding.** Naive concatenation is not injective: `{"ab": "c"}` and
+        `{"a": "bc"}` would produce the same digest. Each key and value is prefixed with its
+        length. There is a regression test for exactly this collision.
+      - **Provider is mixed into the digest**, so AWS and Azure material that happens to share
+        values cannot collide.
+      - **Canonical ordering by sorted key**, since Go randomises map iteration order per range —
+        the determinism test loops 100 times to actually exercise that.
+      - **`String()` returns `[REDACTED]`** on both material types. This is a stronger guarantee
+        than "remember not to log it": `%v`, `%+v`, `%s`, and pointer forms are all covered by
+        `fmt.Stringer`, and there is a test asserting every one of them.
 
       Mitigating context from B1: because MarkLogic accepts redundant re-applies cleanly, a
-      fingerprint defect degrades to extra writes and noisy rotation events rather than data loss —
-      so this is a correctness-of-behavior question, not a safety blocker. *Task Breakdown* item 3
-      now carries the salt-source decision and the per-field test requirements.
-- [ ] **C2 — Secret-watch reconciliation trigger (JIRA Must 4, second half).** A fingerprint is not
-      a watch. Confirm the mechanism that makes a Secret edit wake the `MarklogicCluster`
-      controller — `Watches` on `v1.Secret` with a handler mapping back to referencing clusters,
-      versus a periodic resync — and record the RBAC and cache implications (the operator's
-      namespace scoping is described in `docs/operator-scope-configuration.md`). Without this,
-      the *Credential Rotation* acceptance criteria cannot be met. A `Watches` task has been added
-      to *Task Breakdown* item 4, but the approach is not yet validated against the operator's
-      actual cache configuration.
+      fingerprint defect degrades to extra writes and noisy rotation events rather than data loss.
+- [x] **C2 — Secret-watch reconciliation trigger (JIRA Must 4, second half).** Implemented in
+      [internal/controller/marklogiccluster_controller.go](internal/controller/marklogiccluster_controller.go)
+      with [tests](internal/controller/marklogiccluster_secret_watch_test.go). A fingerprint is not
+      a watch; this is the mechanism that makes a Secret edit wake the controller.
+
+      **Finding 1 — the watch is nearly free.** The concern was that watching Secrets would force
+      controller-runtime to cache every Secret in scope, which in the operator's default
+      cluster-scoped mode ([cmd/main.go](cmd/main.go)) means every Secret in the cluster. It turns
+      out that cost is **already being paid**: [pkg/k8sutil/secret.go](pkg/k8sutil/secret.go)
+      already calls `client.Get` on `corev1.Secret` through the manager's cached client, which
+      starts a Secret informer regardless. The watch adds event handling, not cache footprint.
+
+      **Finding 2 — no RBAC change needed.** [config/rbac/role.yaml](config/rbac/role.yaml) already
+      grants `watch` on `secrets`.
+
+      **Finding 3 — a trap that would have shipped silently.** The controller applies its predicate
+      via `WithEventFilter`, which is **global to every watch**, and its `UpdateFunc` ends in
+      `default: return false`. Adding `Watches(&corev1.Secret{}, ...)` on its own would therefore
+      have compiled, looked correct, and **never fired on rotation** — the one event it exists to
+      catch — because Secret updates fall through to the default branch. An explicit
+      `case *corev1.Secret:` was required. The group controller hit the same thing and carries a
+      `case *corev1.Pod:` for the same reason. There is a dedicated regression test naming this.
+
+      **Design notes.** The predicate compares only `Data`, so metadata-only Secret churn
+      (resourceVersion bumps, label edits) does not trigger reconciles. The mapper filters to
+      clusters that actually reference the Secret and is backed by the cache, so it costs no API
+      calls. It currently matches `spec.auth.secretName`; object storage Secret names join the same
+      helper (`clusterReferencesSecret`) when `spec.objectStorage` lands.
+
+      **Behavior change to be aware of:** rotating the admin auth Secret now triggers a cluster
+      reconcile where previously it did not. That is desirable and reconcile is idempotent, but it
+      is a change to existing shipping behavior, not purely additive groundwork.
 - [ ] **C3 — Status/condition model validation (JIRA Must 7).** Currently "partially informed."
       Confirm the full field set against the failure modes actually reachable in-cluster
       (missing Secret, missing key, bootstrap not ready, `403`, `400`, transient network error),
@@ -546,8 +584,9 @@ updated so each has an explicit home in implementation, but none are validated y
 
 ### D. Deferred "Nice to Have" items — decisions recorded
 
-Each needed a written `Go` / `No-Go` / `Defer` verdict so the story can close. **All three are
-`Defer`**, and the SPEC has been made internally consistent with that outcome.
+Each needed a written `Go` / `No-Go` / `Defer` verdict so the story can close. **D1 is `No-Go`
+(ruled out on evidence); D2 and D3 are `Defer`.** The SPEC has been made internally consistent
+with those outcomes.
 
 - [x] **D1 — AWS IRSA prototype (Nice 8): `No-Go` (upgraded from `Defer`).** Originally deferred as
       "not attempted, needs EKS". **Session 6 closed it without an EKS cluster: the mechanism the
@@ -572,7 +611,7 @@ Each needed a written `Go` / `No-Go` / `Defer` verdict so the story can close. *
 - [x] **D2 — Azure managed identity (Nice 9): `Defer`.** Not attempted; requires Azure
       infrastructure. Already out of scope in the SPEC regardless of outcome. Tested version scope
       is recorded in E1.
-- [x] **D3 — CSI abstractions (Nice 10): `Defer` — see Session 5 below** for the written position.
+- [x] **D3 — CSI abstractions (Nice 10): `Defer` — see Session 5 above** for the written position.
       Confirmed it did not block the MarkLogic-native credential path, which is fully validated
       independently of it.
 
@@ -601,3 +640,94 @@ Each needed a written `Go` / `No-Go` / `Defer` verdict so the story can close. *
 - [ ] **E5 — Refresh the matrix and close.** After A–D, update the Findings Matrix so no row reads
       "Not attempted" or "Partially informed" without an accompanying decision, then mark the
       research story complete and unblock the implementation stories in the SPEC's *Task Breakdown*.
+
+---
+
+## Change Inventory (draft commit)
+
+Recorded so the draft commit can be re-cut cleanly later. Everything below landed in a **single
+draft commit**; the intended final split is given at the end.
+
+### Documentation
+
+| File | Change |
+|---|---|
+| `docs/spec/[SPEC]Object Storage.md` | Corrections A1–A4, findings B1–B8, scope decisions D1–D3, the `sessionToken` removal, and a new *Fingerprinting* section. |
+| `docs/spec/[STEPS] Object Storage.md` | Sessions 5 and 6, the Remaining Todos list (A–E), decision rows in the Findings Matrix, and this inventory. |
+
+Substantive SPEC edits, by section:
+
+- **Compatibility** — rewritten. AWS keyless is `No-Go` (mechanism does not exist), not deferred.
+- **Requirement Review** — #3 privileges + least-privilege decision; #4 ciphertext not masking;
+  #6 `sessionToken` excluded; new #9 (redundant re-apply is safe) and #10 (`null` = never
+  configured).
+- **Validation Status** — every row re-verdicted; new rows for Secret-watch, multi-host
+  propagation, the status model, and revocation.
+- **Background** — `204` not `201`; body `type` not query string; `403` not `401`;
+  *Keyless Access* replaced by *Credential Resolution Order (and why keyless is unavailable)*.
+- **Requirements** — `sessionToken` removed from the Secret key contract and spec fields;
+  `instanceRole` reserved-but-rejected; Out of Scope expanded with the unvalidated framing.
+- **Status Contract** — new *Phase Semantics* and eight-row *Failure Reasons* tables.
+- **Fingerprinting** — new section: why salted, salt source, rejected alternatives, computation.
+- **Controller Workflow** — step 4 `204`; step 5 no longer a keyless path; step 6 error-body rule.
+- **Task Breakdown** — items 2, 3, 4, 7, 8 updated; implemented items ticked.
+
+### New code
+
+| File | Purpose |
+|---|---|
+| `pkg/objectstorage/fingerprint.go` | `Fingerprint()`, `AWSMaterial`, `AzureMaterial`. HMAC-SHA256 keyed on the cluster UID, length-prefixed canonical encoding, provider mixed into the digest, `String()` → `[REDACTED]`. |
+| `pkg/objectstorage/fingerprint_test.go` | Determinism (100 iterations, to defeat Go's randomised map ordering), per-field change detection, salt scoping, provider scoping, boundary-collision regression, no-leak assertions, redaction across `%v`/`%+v`/`%s`/pointer forms. |
+| `internal/controller/marklogiccluster_secret_watch_test.go` | Mapper tests (referencing / unreferenced / cross-namespace / non-Secret input) and predicate tests, including the regression guard for the `WithEventFilter` trap. |
+
+### Modified code
+
+`internal/controller/marklogiccluster_controller.go`:
+
+1.  `Watches(&corev1.Secret{}, handler.EnqueueRequestsFromMapFunc(r.secretToMarklogicClusters))`.
+2.  `secretToMarklogicClusters` — cache-backed `List` scoped to the Secret's namespace, filtered
+    to clusters that actually reference it.
+3.  `clusterReferencesSecret` — currently matches `spec.auth.secretName` only; the extension point
+    for `spec.objectStorage.<provider>.secretName`.
+4.  `case *corev1.Secret:` in the predicate's `UpdateFunc`, comparing `Data` only.
+5.  Imports: `corev1`, `types`, `handler`, `reconcile`.
+
+### Behavior change (call out in the final commit)
+
+Rotating the Secret named by `spec.auth.secretName` now triggers a `MarklogicCluster` reconcile
+where it previously did not. Reconcile is idempotent so this is safe, but it alters existing
+shipping behavior rather than only adding new paths — it is the one part of this change with
+runtime impact on current users.
+
+### What was *not* changed
+
+- No API types added — `spec.objectStorage` does not exist yet, so no CRD regeneration, no
+  `zz_generated.deepcopy.go` churn, and no `make manifests` run was needed.
+- No RBAC change — `config/rbac/role.yaml` already grants `watch` on `secrets`.
+- No `pkg/mlmanage` client work — `EnsureAWSCredentials` / `EnsureAzureCredentials` remain unbuilt.
+- No Helm chart, sample, or `config/` changes.
+
+### Verification run
+
+```sh
+go build ./...
+go vet ./internal/controller/... ./pkg/objectstorage/...
+go test ./pkg/objectstorage/... -count=1
+go test ./internal/controller/... -run 'TestSecretToMarklogicClusters|TestClusterPredicate' -count=1
+```
+
+All passed. The `-run` filter is deliberate: it keeps the envtest-backed Ginkgo suite (`TestAPIs`)
+out of the loop, since these are pure unit tests using the fake client.
+
+### Intended final commit split
+
+The draft is one commit for convenience. When re-cut, prefer three, so the only change with
+runtime impact is visible in the log instead of buried under a large docs diff:
+
+1.  `record object storage credentials research findings` — both spec documents.
+2.  `add salted fingerprinting for object storage credentials` — `pkg/objectstorage/`.
+3.  `watch Secrets on MarklogicCluster for credential rotation` — controller + test, with the
+    behavior-change note in the body.
+
+Repo convention is `MLE-XXXXX: summary (#PR)`; the ticket number for this story still needs to be
+filled in.
