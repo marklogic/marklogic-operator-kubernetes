@@ -180,14 +180,18 @@ func (r *MarklogicClusterReconciler) secretToMarklogicClusters(ctx context.Conte
 }
 
 // clusterReferencesSecret reports whether the cluster sources credential
-// material from the named Secret. Object storage provider Secrets are added
-// here once spec.objectStorage exists.
+// material from the named Secret.
 func clusterReferencesSecret(mlc *marklogicv1.MarklogicCluster, secretName string) bool {
 	if secretName == "" {
 		return false
 	}
 	if mlc.Spec.Auth != nil && mlc.Spec.Auth.SecretName != nil && *mlc.Spec.Auth.SecretName == secretName {
 		return true
+	}
+	for _, name := range mlc.Spec.ObjectStorage.ReferencedSecretNames() {
+		if name == secretName {
+			return true
+		}
 	}
 	return false
 }

@@ -61,6 +61,34 @@ func TestSecretToMarklogicClustersEnqueuesReferencingClusters(t *testing.T) {
 	}
 }
 
+// Rotating an object storage provider Secret must wake the controller just as
+// the admin auth Secret does, otherwise credential rotation cannot work.
+func TestSecretToMarklogicClustersEnqueuesObjectStorageSecrets(t *testing.T) {
+	t.Parallel()
+
+	scheme := secretWatchScheme(t)
+	cluster := clusterWithAuthSecret("cluster", "ml", "ml-admin")
+	cluster.Spec.ObjectStorage = &marklogicv1.ObjectStorageConfig{
+		AWS:   &marklogicv1.AWSObjectStorage{SecretName: "ml-s3-credentials"},
+		Azure: &marklogicv1.AzureObjectStorage{SecretName: "ml-azure-credentials"},
+	}
+
+	reconciler := &MarklogicClusterReconciler{
+		Client: fake.NewClientBuilder().WithScheme(scheme).WithObjects(cluster).Build(),
+		Scheme: scheme,
+	}
+
+	for _, secretName := range []string{"ml-admin", "ml-s3-credentials", "ml-azure-credentials"} {
+		t.Run(secretName, func(t *testing.T) {
+			secret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: secretName, Namespace: "ml"}}
+			requests := reconciler.secretToMarklogicClusters(context.Background(), secret)
+			if len(requests) != 1 || requests[0].Name != "cluster" {
+				t.Fatalf("expected cluster to be enqueued for %q, got %v", secretName, requests)
+			}
+		})
+	}
+}
+
 func TestSecretToMarklogicClustersIgnoresUnreferencedSecrets(t *testing.T) {
 	t.Parallel()
 

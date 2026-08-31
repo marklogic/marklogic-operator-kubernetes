@@ -89,6 +89,11 @@ type MarklogicClusterSpec struct {
 	// +kubebuilder:validation:XValidation:rule="size(self) >= 5 && size(oldSelf) >= 5 ? self[4].name == oldSelf[4].name : true", message="Name of MarkLogikGroup must not be changed"
 	// +kubebuilder:validation:XValidation:rule="size(self.filter(x, x.isBootstrap == true)) == 1", message="Exactly one MarkLogicGroup must have isBootstrap set to true"
 	MarkLogicGroups []*MarklogicGroups `json:"markLogicGroups,omitempty"`
+
+	// Cluster-wide object storage credentials. MarkLogic stores one credential set per
+	// provider for the whole cluster, so this is not a per-group setting.
+	// +optional
+	ObjectStorage *ObjectStorageConfig `json:"objectStorage,omitempty"`
 }
 
 // +kubebuilder:validation:XValidation:rule="!has(self.dynamic) || self.isDynamic == true", message="dynamic can only be set when isDynamic is true"
@@ -147,6 +152,8 @@ type MarklogicClusterStatus struct {
 	// INSERT ADDITIONAL STATUS FIELD - define observed state of cluster
 	// Important: Run "make" to regenerate code after modifying this file
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
+	// +optional
+	ObjectStorage *ObjectStorageStatus `json:"objectStorage,omitempty"`
 }
 
 //+kubebuilder:object:root=true

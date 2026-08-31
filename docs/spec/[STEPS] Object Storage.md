@@ -395,6 +395,90 @@ proposed. Recommend not pursuing it without a product-side statement that it is 
 
 ---
 
+## Session 7 — E2: multi-host propagation, confirmed on a real two-host cluster
+
+Closes Todo E2. Until now every test ran against a single self-initialized host, so the SPEC's
+central design choice — "credentials are cluster-wide, reconcile once against the bootstrap host"
+— rested on documentation rather than observation.
+
+### Environment
+
+Two containers of the same pinned image on a user-defined Docker network:
+
+```sh
+docker network create ml-objstor-net
+
+docker run -d --name ml-node1 --hostname ml-node1 --network ml-objstor-net --dns-search=. \
+  -p 18000-18002:8000-8002 \
+  -e MARKLOGIC_INIT=true -e MARKLOGIC_ADMIN_USERNAME=admin -e MARKLOGIC_ADMIN_PASSWORD=admin123 \
+  progressofficial/marklogic-db:12.0.3-ubi9-rootless-2.2.6
+
+docker run -d --name ml-node2 --hostname ml-node2 --network ml-objstor-net --dns-search=. \
+  -p 18010-18012:8000-8002 \
+  -e MARKLOGIC_INIT=true -e MARKLOGIC_JOIN_CLUSTER=true -e MARKLOGIC_BOOTSTRAP_HOST=ml-node1 \
+  -e MARKLOGIC_ADMIN_USERNAME=admin -e MARKLOGIC_ADMIN_PASSWORD=admin123 \
+  progressofficial/marklogic-db:12.0.3-ubi9-rootless-2.2.6
+```
+
+Both nodes then report the same two-host cluster (`ml-node1` marked `bootstrap`, `ml-node2`).
+
+**`--dns-search=.` is required and the reason is worth recording.** On the first attempt the host
+machine's DHCP search domain leaked into the containers, so MarkLogic registered itself as
+`ml-node2.libpubwifi.aclibrary.org`. That FQDN does not resolve on the Docker network, and the
+node wedged rather than failing fast:
+
+```
+SVC-SOCHN: Socket hostname error: getaddrinfo ml-node2.libpubwifi.aclibrary.org: Name or service not known
+...
+Warning: Hung 247 sec
+Warning: Canary thread sleep was 190180 ms
+```
+
+The join had already been recorded on the bootstrap, so `/manage/v2/hosts` listed two hosts while
+the second was unusable — a *partially joined* state that looks healthy from the bootstrap's point
+of view. Worth remembering when diagnosing operator-managed clusters: host count alone is not a
+liveness signal.
+
+### Results
+
+| # | Action | Observed |
+|---|---|---|
+| 1 | Baseline read on both nodes | `{"aws":null}` / `{"azure":null}` on both |
+| 2 | `PUT` aws on **bootstrap** | `204`; node2 immediately returns `access-key: AKIAPROPAGATION01` |
+| 3 | `PUT` azure on **bootstrap** | `204`; node2 immediately returns `storage-account: propagationacct` |
+| 4 | `PUT` aws on **non-bootstrap** | `204`; **node1 returns `access-key: AKIAREVERSE00002`** |
+| 5 | `DELETE` aws on bootstrap | `204`; node2 returns `{"aws":null}`, while azure remains set |
+
+### Conclusions
+
+1.  **Credentials are genuinely cluster-wide.** Writing on one host is visible on the other for
+    both providers, with no propagation delay observable at a 2-second granularity. The SPEC's
+    "one credential set per provider per cluster" model is confirmed against real multi-host
+    behavior, not just documentation.
+2.  **`DELETE` propagates too**, and clears only the targeted provider — Azure survived the AWS
+    delete. Provider independence now holds on a multi-host cluster, not only single-host.
+3.  **Any host accepts the write, not just the bootstrap.** Step 4 is the surprise: a `PUT` to the
+    non-bootstrap host returned `204` and propagated back to the bootstrap. The SPEC currently
+    *mandates* reconciling against the bootstrap host. That is a safe default and worth keeping —
+    it matches the existing `Ensure*` security operations and keeps behavior predictable — but it
+    is now known to be a **convention rather than a MarkLogic requirement**. See the follow-up
+    note below.
+4.  **Ciphertext is stable across reads.** The same stored `storage-key` returned an identical
+    blob in steps 3 and 5. This refines the Session 2 finding: the non-determinism comes from
+    *re-encryption on each write*, not from the read path. Fingerprinting is still required, but
+    the reason is precisely "every write re-encrypts", not "reads are unstable".
+
+### Follow-up worth considering (not a v1 change)
+
+Because any host accepts the write, a future hardening could fall back to another host when the
+bootstrap is unreachable, instead of parking the provider in `phase=Pending` with
+`reason=BootstrapNotReady`. That would make object storage configuration resilient to bootstrap
+downtime. Deliberately **not** proposed for v1: it widens the failure surface and diverges from
+how every other `Ensure*` operation in the operator behaves. Recorded here so the option is not
+lost.
+
+---
+
 ## Findings Matrix
 
 | # | JIRA Acceptance Criterion | Status | Evidence / Conclusion |
@@ -412,6 +496,7 @@ proposed. Recommend not pursuing it without a product-side statement that it is 
 | — | Credential revocation via `DELETE` | **Confirmed working — deliberately deferred** | Session 4. Deferred on API-design grounds (removal is ambiguous between "revoke" and "stop managing"), not effort. |
 | — | Least-privilege MarkLogic user | **Decision: use bootstrap admin in v1** | Session 3 proved a dedicated user is practical; deferred as a hardening path because the operator already holds the bootstrap admin credential, so a second user adds lifecycle surface without reducing capability. |
 | — | AWS `sessionToken` (STS) support | **Decision: dropped from v1** | Three findings compound: the token expires, the operator only re-applies on Secret change (so it stays expired), and Session 2 showed MarkLogic returns it in plaintext on `GET`. With IRSA ruled out (Session 6), there is no keyless alternative either — supporting the field would ship an option that works for hours and leaks meanwhile. v1 accepts long-lived IAM user keys only. |
+| — | Cluster-wide propagation (multi-host) | **Confirmed on a real two-host cluster** | Session 7. Writes on the bootstrap are visible on the non-bootstrap host for both providers, with no observable delay; `DELETE` propagates too and clears only the targeted provider. Also found: **any host accepts the write**, not just the bootstrap — so targeting the bootstrap is a convention, not a MarkLogic requirement. |
 | — | Fingerprint salt source | **Decision: derive from `MarklogicCluster.metadata.uid`** | Stable across restarts and replicas, unique per cluster (defeats cross-cluster correlation), no extra resource. Build-time constant rejected (shared across installs; upgrade invalidates all fingerprints → mass re-apply); generated Secret rejected (extra resource to manage and back up). |
 
 ## Corrections Needed in `[SPEC]Object Storage.md` — **applied**
@@ -622,11 +707,11 @@ with those outcomes.
       asks for behavior "on the MarkLogic image versions supported by the operator" (plural).
       Re-run the Session 2 and Session 3 checks against the other supported image versions, or
       record explicitly that findings are scoped to this one version.
-- [ ] **E2 — Multi-host sanity check.** Every test used a single self-initialized host. Confirm the
-      cluster-wide claim holds on a real multi-host cluster: apply against the bootstrap host and
-      `GET` from a non-bootstrap host to verify the credential set propagates. This underpins the
-      SPEC's central "reconcile once against the bootstrap host" design choice, which is currently
-      taken from documentation rather than observation.
+- [x] **E2 — Multi-host sanity check.** Done — see Session 7. A real two-host cluster confirms
+      credentials set on the bootstrap are readable from the non-bootstrap host for both
+      providers, that `DELETE` propagates, and that provider independence holds across hosts.
+      Surfaced one design-relevant surprise: **any host accepts the write**, so "reconcile against
+      the bootstrap" is a convention rather than a MarkLogic constraint.
 - [x] **E3 — Capture the POC code.** **Decision: the commands in Sessions 1–4 of this document are
       the deliverable.** They are complete, copy-pasteable, and carry their observed output inline,
       which an extracted script would not. Extracting them into a separate harness would add a file
@@ -719,8 +804,90 @@ go test ./internal/controller/... -run 'TestSecretToMarklogicClusters|TestCluste
 All passed. The `-run` filter is deliberate: it keeps the envtest-backed Ginkgo suite (`TestAPIs`)
 out of the loop, since these are pure unit tests using the fake client.
 
-### Intended final commit split
+### Second batch — API types (after the draft commit)
 
+Task Breakdown item 1, landed after `c50adb1`:
+
+| File | Change |
+|---|---|
+| `api/v1/objectstorage_types.go` | New. `ObjectStorageConfig`, `AWSObjectStorage`, `AzureObjectStorage`, `ObjectStorageStatus`, `ObjectStorageProviderStatus`, the `ObjectStoragePhase` and `ObjectStorageFailureReason` enums, and `ReferencedSecretNames()`. |
+| `api/v1/objectstorage_types_test.go` | New. Table tests for `ReferencedSecretNames`. |
+| `api/v1/marklogiccluster_types.go` | `spec.objectStorage` and `status.objectStorage` wired in. |
+| `api/v1/zz_generated.deepcopy.go` | Regenerated. |
+| `config/crd/bases/...marklogicclusters.yaml` | Regenerated. |
+| `charts/.../templates/marklogiccluster-crd.yaml` | Regenerated, +148 lines. |
+| `internal/controller/marklogiccluster_controller.go` | `clusterReferencesSecret` now also matches provider Secrets. |
+| `internal/controller/marklogiccluster_secret_watch_test.go` | Added coverage for object storage Secret rotation. |
+
+Two notes worth keeping:
+
+- **`make manifests` is not enough.** The Helm chart ships its own copy of the CRDs under
+  `charts/marklogic-operator-kubernetes/templates/`, regenerated only by `make helm` (which runs
+  kustomize + helmify + `hack/helmify-post-process.sh`). Skipping it leaves Helm installs on a
+  stale schema that silently drops `spec.objectStorage` — the CRD would accept the field being
+  absent and the operator would simply never see it. Verified `make helm` touched only the cluster
+  CRD template and caused no other chart churn.
+- **The reserved auth values are rejected with real messages, not a bare enum error.** `authType`
+  permits `secret` plus the reserved value per provider, and a CEL rule rejects the reserved one
+  with an explanation (for AWS, that MarkLogic does not use the AWS credential provider chain).
+  A bare `Enum=secret` would have produced "Unsupported value" with no indication of why.
+
+### Third batch — management client (Task Breakdown item 2)
+
+| File | Change |
+|---|---|
+| `pkg/mlmanage/credentials.go` | New. `AWSCredentials`, `AzureCredentials`, `EnsureAWSCredentials`, `EnsureAzureCredentials`, the payload builders, and the `CredentialsError` type. |
+| `pkg/mlmanage/credentials_test.go` | New. Stub-server tests for request shape, validation, status handling, leak safety, and transport failure. |
+| `pkg/mlmanage/client.go` | Two methods added to the `Client` interface. |
+| `pkg/k8sutil/dynamic_reconcile_test.go`, `internal/controller/marklogicgroup_controller_test.go` | Existing stubs extended to satisfy the widened interface. |
+
+Three decisions worth keeping:
+
+- **`doJSON`'s error could not be reused.** It embeds the raw response body in the message
+  (`returned status %d: %s`). For every other endpoint that is helpful; for this one the body is a
+  reflection risk, so `putCredentials` discards that error and builds a `CredentialsError` from the
+  status code plus MarkLogic's `errorResponse.messageCode` / `message` only. A test proves the point
+  by pointing the client at a server that echoes the request body back and asserting no credential
+  material reaches `err.Error()`.
+- **`CredentialsError.StatusCode == 0` means "no response".** That is what lets the controller tell
+  `ManagementAPIUnreachable` apart from an HTTP-level rejection, without string-matching. The
+  status-code → `ObjectStorageFailureReason` mapping deliberately stays in the controller so
+  `pkg/mlmanage` does not import `api/v1`.
+- **Widening `Client` costs two stub updates.** `fakeDynamicManagementClient` and
+  `stubDynamicManagementClient` both implement the full interface, so each needed the two new
+  methods. A narrower `CredentialsClient` interface would have avoided that and would let future
+  object storage tests stub 2 methods instead of ~17 — worth reconsidering if the stub burden grows.
+
+### Fourth batch — Secret resolution and reconcile (Task Breakdown items 3, 4, 5)
+
+| File | Change |
+|---|---|
+| `pkg/k8sutil/objectstorage_reconcile.go` | New. `ReconcileObjectStorage`, per-provider resolve/fingerprint/apply, status construction, failure-reason mapping, requeue policy, and the bootstrap-host client. |
+| `pkg/k8sutil/objectstorage_reconcile_test.go` | New. Fake-client tests covering both providers, skip-if-unchanged, rotation, provider independence, Secret problems, readiness gating, leak safety, reason mapping, and requeue policy. |
+| `pkg/k8sutil/handler.go` | `ReconcileObjectStorage` wired into `ReconsileMarklogicClusterHandler`, after HAProxy. |
+
+Decisions and observations:
+
+- **Requeue is driven by the reason, not by "did it fail".** `InvalidPayload` and
+  `InsufficientPrivilege` are terminal until a human intervenes, so they are not requeued;
+  everything else is. Without this the operator would hot-loop against a `403` forever, which is
+  the single most likely misconfiguration given Requirement Review #3.
+- **Empty Secret values count as missing.** `secretValue` trims and treats blank as absent, so a
+  Secret key present with an empty value yields `SecretKeyMissing` rather than being sent to
+  MarkLogic and rejected as `InvalidPayload`. There is a test for the whitespace-only case.
+- **Skip-if-unchanged needs the *previous* status, so status must survive the reconcile.** The
+  fingerprint is compared against `status.objectStorage.<provider>.appliedFingerprint`, which means
+  a status write that silently fails would turn every reconcile into a re-apply. Per B1 that is
+  noisy rather than dangerous, but it is why the status update error is propagated as
+  `result.Error` rather than logged and ignored.
+- **The bootstrap-host FQDN is rebuilt, not read.** There is no cluster-level field holding it;
+  `marklogicServer.go` computes `<group>-0.<group>.<ns>.svc.<domain>` when creating child groups,
+  so the reconcile derives it the same way. If that formula ever changes, both places must change
+  together — a latent coupling worth knowing about.
+- **`NewObjectStorageManagementClient` is a package variable** so tests can substitute a stub,
+  matching the existing `NewDynamicManagementClient` pattern.
+
+### Intended final commit split
 The draft is one commit for convenience. When re-cut, prefer three, so the only change with
 runtime impact is visible in the log instead of buried under a large docs diff:
 

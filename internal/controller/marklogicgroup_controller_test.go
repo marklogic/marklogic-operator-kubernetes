@@ -2814,6 +2814,14 @@ func (f *fakeDynamicManagementClient) EnsureOAuthAppServer(ctx context.Context, 
 	return nil
 }
 
+func (f *fakeDynamicManagementClient) EnsureAWSCredentials(ctx context.Context, config mlmanage.AWSCredentials) error {
+	return nil
+}
+
+func (f *fakeDynamicManagementClient) EnsureAzureCredentials(ctx context.Context, config mlmanage.AzureCredentials) error {
+	return nil
+}
+
 func upsertFakeGroupHost(hosts []mlmanage.GroupHost, candidate mlmanage.GroupHost) []mlmanage.GroupHost {
 	for i := range hosts {
 		if hosts[i].Name == candidate.Name {

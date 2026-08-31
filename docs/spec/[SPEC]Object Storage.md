@@ -43,7 +43,9 @@ Before the design, the following observations refine the original business requi
 
 ### Issues and Clarifications
 
-1.  **Credentials are cluster-wide, not per-group.** The Management API endpoint `PUT /manage/v2/credentials/properties` sets one AWS credential set and one Azure credential set for the whole cluster. The feature must therefore live on `MarklogicCluster` and be reconciled against the bootstrap host, not fanned out per `MarklogicGroup`. Modeling it per group would misrepresent MarkLogic behavior.
+1.  **Credentials are cluster-wide, not per-group.** The Management API endpoint `PUT /manage/v2/credentials/properties` sets one AWS credential set and one Azure credential set for the whole cluster. The feature must therefore live on `MarklogicCluster` and be reconciled against a single host, not fanned out per `MarklogicGroup`. Modeling it per group would misrepresent MarkLogic behavior. Confirmed on a two-host cluster (STEPS Session 7): a write on one host is immediately readable from the other, and a `DELETE` clears it cluster-wide.
+
+    v1 reconciles against the **bootstrap host** specifically. Note that this is a convention, not a constraint — Session 7 showed a non-bootstrap host accepts the write and propagates it just as well. Targeting the bootstrap keeps this operation consistent with the other `Ensure*` security operations and keeps behavior predictable; falling back to another host when the bootstrap is down is recorded as a possible hardening, not v1 behavior.
 
 2.  **"Supported forest storage scenarios" must be scoped down.** MarkLogic's stable, well-defined surface for object storage is *credential configuration*. The operator directly configuring object-storage-backed forests (fast/large data directories, journaling, replica forests) involves version- and scenario-specific constraints and is error-prone to automate generically. v1 therefore scopes the operator to **credential configuration** — which is the prerequisite that unblocks backups and any supported forest-on-object-storage usage the administrator then configures — and does **not** create object-storage forests on the user's behalf. This keeps the acceptance criterion "supports configuring storage access for backups and supported forest storage scenarios" satisfied at the *access* layer while avoiding unsupported automation.
 
@@ -51,7 +53,7 @@ Before the design, the following observations refine the original business requi
 
     **Decision (v1):** apply object storage credentials using the existing admin-capable bootstrap credential. A dedicated least-privilege credential is *practical* — the granular `manage` + `manage-admin` + `credentials-set-{aws,azure}` combination works without the broad `security` role — but provisioning and lifecycle-managing an extra MarkLogic user is additional surface that does not change what the operator can do, since the operator already holds the bootstrap admin credential for other reconcile steps. It is therefore documented as an optional hardening path rather than v1 behavior. See `docs/spec/[STEPS] Object Storage.md`, Session 3.
 
-4.  **Drift detection cannot rely on reading the secret back.** The Management API does not return secret material in a comparable form. `GET` returns `secret-key` as an opaque blob encrypted with MarkLogic's internal credentials key, and that ciphertext is **non-deterministic** — re-applying the identical `secret-key` produces a different blob on every read. Comparing the stored value against the intended value is therefore impossible, not merely inadvisable. Instead the operator computes a fingerprint (salted SHA-256) of the resolved secret material it applied and stores only that fingerprint in status. A change in the referenced Secret changes the fingerprint and triggers re-application. This also delivers rotation support. Note that `access-key` and `session-token` are returned in **plaintext** by `GET`; only `secret-key` is encrypted.
+4.  **Drift detection cannot rely on reading the secret back.** The Management API does not return secret material in a comparable form. `GET` returns `secret-key` as an opaque blob encrypted with MarkLogic's internal credentials key, and **every write re-encrypts** — re-applying the identical `secret-key` produces a different blob. (The blob is stable across repeated *reads* of the same stored value; the non-determinism is in the write path.) Comparing the stored value against the intended value is therefore impossible, not merely inadvisable. Instead the operator computes a fingerprint (salted SHA-256) of the resolved secret material it applied and stores only that fingerprint in status. A change in the referenced Secret changes the fingerprint and triggers re-application. This also delivers rotation support. Note that `access-key` and `session-token` are returned in **plaintext** by `GET`; only `secret-key` is encrypted.
 
 5.  **Region is not part of the credentials API.** The AWS credentials structure carries only `access-key`, `secret-key`, and `session-token`. AWS region for S3 is resolved by MarkLogic through its own configuration/environment, not through this endpoint. The spec exposes an optional informational `region` field but documents that region wiring for S3 forests/backups is an environment concern, not something this endpoint sets.
 
@@ -80,7 +82,7 @@ All evidence to date comes from a single MarkLogic image (`progressofficial/mark
 | Secret changes reliably trigger reconciliation | **Open** | A fingerprint is not a watch mechanism. The `Watches`-on-Secret wiring and its RBAC/cache implications are still unvalidated; the Credential Rotation criteria depend on it. |
 | Per-provider status and failure-reason model | **Confirmed — expanded** | STEPS Session 2–3 error shapes drove the Failure Reasons table in the Status Contract, notably splitting `401` from `403`. |
 | Credentials-only vs. backup/forest configuration boundary | **Confirmed** | Resolved in "Issues and Clarifications" #2 above; v1 is credential configuration only, and the forest/backup/region/endpoint behaviors in Out of Scope are unvalidated as well as unbuilt. |
-| Cluster-wide (not per-host) credential propagation | **Assumed, not observed** | Documented MarkLogic behavior and the basis for the "reconcile once against the bootstrap host" design, but every test ran against a single host. Worth confirming on a multi-host cluster. |
+| Cluster-wide (not per-host) credential propagation | **Confirmed** | STEPS Session 7, on a real two-host cluster. Writes on the bootstrap are visible on the non-bootstrap host for both providers, `DELETE` propagates, and provider independence holds across hosts. Also observed: any host accepts the write, so targeting the bootstrap is a deliberate convention rather than a MarkLogic requirement. |
 | AWS IRSA / instance-role keyless access | **`No-Go` — verified impossible** | STEPS Session 6. MarkLogic does not use the AWS SDK credential provider chain, has no web-identity step, and its IAM-role path is disabled by the `MARKLOGIC_EC2_HOST=0` set in the operator's own image. Ruled out on evidence, not deferred for lack of it. |
 | Azure managed identity | **Not attempted — deferred** | Requires Azure infrastructure. Out of scope for v1 regardless; see Out of Scope. |
 | CSI volume abstractions | **Confirmed deferred** | Recorded as a future research item, not a v1 blocker. |
@@ -453,11 +455,12 @@ Tasks are grouped by area and ordered to allow incremental, testable delivery.
 
 ### 1. API and CRD
 
-- [ ] Add `ObjectStorageConfig`, `AWSObjectStorage`, and `AzureObjectStorage` types to `api/v1/common_types.go` (or a new `objectstorage_types.go`), with kubebuilder validation markers and enums.
-- [ ] Add `ObjectStorage *ObjectStorageConfig` to `MarklogicClusterSpec` in `api/v1/marklogiccluster_types.go`.
-- [ ] Add `ObjectStorageStatus` (per-provider) and wire it into `MarklogicClusterStatus`.
-- [ ] Add CEL `XValidation` rules: `secretName` required when `authType=secret`; `authType` restricted to `secret` for both providers in v1, with explanatory messages for the reserved `instanceRole` / `managedIdentity` values.
-- [ ] Run `make generate manifests` to regenerate deepcopy and CRD YAML; verify `config/crd/bases` and `zz_generated.deepcopy.go`.
+- [x] Add `ObjectStorageConfig`, `AWSObjectStorage`, and `AzureObjectStorage` types in `api/v1/objectstorage_types.go`, with kubebuilder validation markers and enums.
+- [x] Add `ObjectStorage *ObjectStorageConfig` to `MarklogicClusterSpec` in `api/v1/marklogiccluster_types.go`.
+- [x] Add `ObjectStorageStatus` (per-provider) and wire it into `MarklogicClusterStatus`, including the `ObjectStoragePhase` and `ObjectStorageFailureReason` enums.
+- [x] Add CEL `XValidation` rules: `secretName` required when `authType=secret`; `authType` restricted to `secret` for both providers in v1, with explanatory messages for the reserved `instanceRole` / `managedIdentity` values.
+- [x] Run `make generate manifests` to regenerate deepcopy and CRD YAML; verify `config/crd/bases` and `zz_generated.deepcopy.go`.
+- [x] Run `make helm` as well — the chart ships its own copy of the CRDs in `charts/marklogic-operator-kubernetes/templates/`, which `make manifests` does **not** update. Skipping it leaves Helm installs on a stale schema that silently drops `spec.objectStorage`.
 
 ### 2. Management Client (`pkg/mlmanage`)
 
@@ -470,27 +473,27 @@ Tasks are grouped by area and ordered to allow incremental, testable delivery.
 
 ### 3. Secret Handling and Fingerprinting
 
-- [ ] Add a helper to resolve provider material from a referenced Secret (`accessKey`/`secretKey`, `storageAccount`/`storageKey`) with clear missing-key errors that name the key but never its value.
+- [x] Add a helper to resolve provider material from a referenced Secret (`accessKey`/`secretKey`, `storageAccount`/`storageKey`) with clear missing-key errors that name the key but never its value.
 - [x] Derive the fingerprint salt from `MarklogicCluster.metadata.uid` (see Fingerprinting above); no separate salt Secret is provisioned.
 - [x] Add a salted SHA-256 fingerprint helper over resolved material with canonical field ordering; never persist raw material. Implemented in `pkg/objectstorage/fingerprint.go` as HMAC-SHA256 with length-prefixed encoding.
 - [x] Add unit tests confirming the fingerprint changes when *any* material field changes individually, that two clusters with identical credentials produce different fingerprints, and that raw values are never returned in strings/logs.
 
 ### 4. Controller Reconciliation (`internal/controller` / `pkg/k8sutil`)
 
-- [ ] Add an object storage reconcile step to the `MarklogicCluster` controller, gated on cluster readiness and bootstrap reachability.
-- [ ] Implement per-provider flow: resolve → fingerprint → skip-if-unchanged → apply → update status → emit event.
+- [x] Add an object storage reconcile step to the `MarklogicCluster` controller, gated on cluster readiness and bootstrap reachability.
+- [x] Implement per-provider flow: resolve → fingerprint → skip-if-unchanged → apply → update status → emit event.
 - [x] Add a `Watches` on `v1.Secret` mapping referencing `MarklogicCluster`s back into the reconcile queue, so a Secret edit triggers rotation without waiting for resync. No RBAC or cache changes were required (Secrets are already cached and already granted `watch`). **Note:** the controller's `WithEventFilter` predicate is global and defaults to dropping updates, so an explicit `case *corev1.Secret:` is required or the watch never fires on rotation.
-- [ ] Extend `clusterReferencesSecret` to include `spec.objectStorage.<provider>.secretName` once those API types exist; it currently matches only `spec.auth.secretName`.
-- [ ] Reconcile AWS and Azure independently so a failure in one does not block the other.
-- [ ] Requeue per the retriability column of the Status Contract's Failure Reasons table, so non-retriable misconfigurations do not hot-loop.
-- [ ] Emit Kubernetes events for apply-success, apply-failure, and rotation.
-- [ ] Add structured, secret-safe logging for each transition.
+- [x] Extend `clusterReferencesSecret` to include `spec.objectStorage.<provider>.secretName` via `ObjectStorageConfig.ReferencedSecretNames()`, so rotating a provider Secret wakes the controller.
+- [x] Reconcile AWS and Azure independently so a failure in one does not block the other.
+- [x] Requeue per the retriability column of the Status Contract's Failure Reasons table, so non-retriable misconfigurations do not hot-loop.
+- [x] Emit Kubernetes events for apply-success and apply-failure.
+- [x] Add structured, secret-safe logging for each transition.
 
 ### 5. Status and Events
 
-- [ ] Populate `status.objectStorage.<provider>` (phase, reason, message, appliedFingerprint, authType, lastAppliedTime).
+- [x] Populate `status.objectStorage.<provider>` (phase, reason, message, appliedFingerprint, authType, lastAppliedTime).
 - [ ] Optionally mirror an aggregate `ObjectStorageReady` condition into `status.conditions`.
-- [ ] Verify no secret material reaches status, events, or logs (assert in tests).
+- [x] Verify no secret material reaches status, events, or logs (assert in tests).
 
 ### 6. Helm Chart
 
@@ -505,9 +508,9 @@ Tasks are grouped by area and ordered to allow incremental, testable delivery.
 
 ### 8. Tests
 
-- [ ] Unit tests: payload builders, secret resolution, fingerprint behavior, and validation.
-- [ ] Client tests: `EnsureAWSCredentials` / `EnsureAzureCredentials` against a stub server asserting method, path, and body shape including the `type` field (mirroring `TestEnsureOAuthExternalSecurityCreatesConfiguration`).
-- [ ] Controller tests: readiness gating, skip-if-unchanged, rotation on secret change, independent per-provider failure, and secret-safe status/logs.
+- [x] Unit tests: payload builders, secret resolution, fingerprint behavior, and validation.
+- [x] Client tests: `EnsureAWSCredentials` / `EnsureAzureCredentials` against a stub server asserting method, path, and body shape including the `type` field (mirroring `TestEnsureOAuthExternalSecurityCreatesConfiguration`), plus status-code handling and an assertion that credential material never reaches the error string.
+- [x] Controller tests: readiness gating, skip-if-unchanged, rotation on secret change, independent per-provider failure, and secret-safe status/logs.
 - [ ] Integration test (under `test/integration`) applying credentials against a running MarkLogic and verifying via the Management API that the provider is configured (without asserting secret values).
 - [ ] CRD validation tests for the CEL rules.
 
@@ -515,5 +518,6 @@ Tasks are grouped by area and ordered to allow incremental, testable delivery.
 
 - [ ] Azure managed identity support pending MarkLogic version confirmation.
 - [ ] Optional dedicated least-privilege credential for credential application — either the `manage-admin` + `security` roles or, preferably, the per-provider `manage` + `manage-admin` + `credentials-set-{aws,azure}` privileges (both confirmed working; see Requirement Review #3).
+- [ ] Fall back to a non-bootstrap host when the bootstrap is unreachable, instead of parking the provider in `BootstrapNotReady`. Confirmed possible (STEPS Session 7): any host accepts the credential write. Deferred because it widens the failure surface and diverges from the other `Ensure*` operations.
 - [ ] Research CSI-based object storage mounting as an alternative integration.
 - [ ] Credential revocation when a provider block is removed from the spec. The API side is trivial (`DELETE` with a `Content-Type` header, returns `204`); the open question is the opt-in signal that disambiguates "revoke" from "stop managing" — see Validation Rules #6.
