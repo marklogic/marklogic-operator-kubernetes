@@ -171,15 +171,17 @@ tags to ECR.
 1. Open the `KubeNinjas/marklogic-operator-kubernetes/Operator_CI` pipeline in
    Jenkins.
 2. Click **Build with Parameters**.
-3. Check **`TEST_ON_EKS`** — all Minikube stages are skipped; EKS stages run instead.
-4. Optionally check **`VERIFY_ISTIO_AMBIENT`** to also run Istio ambient-mode tests.
+3. Set **`E2E_RUNTIME=eks`** — Minikube shards are skipped and EKS stages run.
+4. Set **`E2E_TEST_SELECTION=cluster-only`** (required for EKS mode).
+5. Optionally set **`VERIFY_ISTIO_AMBIENT=true`** to also run Istio ambient-mode tests.
 
 ### Nightly scheduled run
 
 The pipeline runs automatically at **05:30 UTC** daily with:
 
 ```
-TEST_ON_EKS=true
+E2E_RUNTIME=eks
+E2E_TEST_SELECTION=cluster-only
 VERIFY_ISTIO_AMBIENT=true
 E2E_MARKLOGIC_IMAGE_VERSION=${AWS_ACCOUNT_ID}.dkr.ecr.us-west-1.amazonaws.com/jenkins-kube-ninjas/marklogic-server-ubi-rootless:latest-12
 ```
