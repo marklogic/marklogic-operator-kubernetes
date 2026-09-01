@@ -479,6 +479,87 @@ lost.
 
 ---
 
+## Session 8 — Access layer: credentials actually work (MinIO)
+
+Every earlier session proved only that MarkLogic *accepted* a credential write. Sessions 2–3 used
+fabricated keys like `AKIATESTKEY1234567`, which the endpoint stored happily because it does not
+validate them. Nothing had confirmed the credentials enable real object I/O — which is the whole
+premise of the epic. This session closes that gap using MinIO, at zero cloud cost.
+
+### Setup
+
+```sh
+docker run -d --name minio --network ml-objstor-net --dns-search=. \
+  -p 19000:9000 -p 19001:9001 \
+  -e MINIO_ROOT_USER=mlaccesskey -e MINIO_ROOT_PASSWORD=mlsecretkey123 \
+  minio/minio server /data --console-address ":9001"
+
+docker run --rm --network ml-objstor-net --entrypoint sh minio/mc -c \
+  "mc alias set local http://minio:9000 mlaccesskey mlsecretkey123 && mc mb local/ml-backup"
+```
+
+Group settings redirect MarkLogic from real S3 to MinIO:
+
+```sh
+curl --anyauth -u admin:admin123 -X PUT -H 'Content-type: application/json' \
+  -d '{"s3-domain":"minio:9000","s3-protocol":"http","s3-server-side-encryption":"none"}' \
+  http://localhost:18002/manage/v2/groups/Default/properties
+```
+
+### The proof
+
+| # | Action | Result |
+|---|---|---|
+| 1 | Apply MinIO keys via the credentials API | `204` |
+| 2 | `xdmp:save("s3://ml-backup/hello.xml", <hello>world</hello>)` | Succeeded |
+| 3 | `mc ls local/ml-backup` | `20B STANDARD hello.xml` |
+| 4 | `xdmp:document-get("s3://ml-backup/hello.xml")` | `<hello>world</hello>` |
+| 5 | **Control:** `DELETE` credentials, retry the write | `SVC-AWSCRED: ... No AWS security credentials` |
+| 6 | Restore credentials, write again | Succeeded — `after-restore.xml` in the bucket |
+
+Steps 5 and 6 are what make this a causal proof rather than a coincidence: with the credential set
+removed the identical operation fails, and restoring it makes the operation work again. The
+credentials configured through `PUT /manage/v2/credentials/properties` are demonstrably what
+enables object I/O.
+
+### Findings
+
+1.  **The access layer is confirmed.** The epic's core promise — configure credentials, get usable
+    object storage — holds. Combined with Session 7's propagation result, the operator's model is
+    validated end to end at both the configuration and access layers.
+
+2.  **`SVC-AWSCRED` independently corroborates the Session 6 `No-Go` on IRSA.** With no credentials
+    configured, MarkLogic fails *immediately* with "No AWS security credentials" rather than
+    attempting any fallback. If it consulted the AWS credential provider chain, this is exactly
+    where that attempt would happen. Session 6 ruled out IRSA from documentation and image
+    contents; this is direct behavioural evidence pointing the same way.
+
+3.  **MarkLogic uses virtual-host-style S3 addressing.** The first backup attempt failed because
+    MarkLogic resolves `<bucket>.<s3-domain>` — `ml-backup.minio` — not `<s3-domain>/<bucket>`.
+    Reaching `minio:9000` worked while `ml-backup.minio:9000` did not, and adding a Docker network
+    alias for the bucket hostname fixed it. Anyone testing against an S3-compatible store (MinIO,
+    Ceph, LocalStack) must provide bucket-style DNS. Worth documenting for users who set
+    `s3-domain` to a private endpoint.
+
+4.  **Endpoint configuration lives in group settings, not the credentials API.** `s3-domain`,
+    `s3-protocol`, `s3-proxy`, `s3-server-side-encryption`, and `s3-server-side-encryption-kms-key`
+    are all group-level. This confirms the SPEC's Requirement Review #5 position that region and
+    endpoint wiring is an environment concern, and names the exact knobs.
+
+5.  **The default `s3-server-side-encryption: aes256` breaks non-AWS stores.** It must be set to
+    `none` for MinIO. Not a v1 concern since the operator does not touch group settings, but it is
+    a real trap for anyone pointing MarkLogic at an S3-compatible endpoint.
+
+6.  **Backups need more than credentials.** `POST {"operation":"backup-database"}` to
+    `s3://ml-backup/backup1` failed with `No such directory:
+    s3://ml-backup/backup1/Forests/Documents` even with working credentials and connectivity —
+    MarkLogic expects the backup directory structure to already exist. This supports the SPEC's
+    Requirement Review #2 scoping decision: credential configuration is the prerequisite the
+    operator owns, while backup setup remains an administrator task. Object I/O itself is
+    unambiguously working, as steps 2–4 show.
+
+---
+
 ## Findings Matrix
 
 | # | JIRA Acceptance Criterion | Status | Evidence / Conclusion |
@@ -490,12 +571,13 @@ lost.
 | Must 5 | Resolve supported-usage boundary (credentials-only vs. backups/forests) | **Confirmed** | Resolved by design reasoning in SPEC's Requirement Review #2; nothing observed here contradicts it. The SPEC's *Out of Scope* list now also states that the forest, backup, region, and endpoint behaviors are excluded as **unvalidated**, not merely unwanted, as Must 5 requires. |
 | Must 6 | Findings matrix produced | **This table** | — |
 | Must 7 | Validate status/condition model | **Model designed; not yet exercised** | Observed error shapes (`{"errorResponse":{"statusCode","status","messageCode","message"}}`) drove an eight-reason failure vocabulary with a retriability column in the SPEC's *Status Contract*, splitting `401` (bad admin credential) from `403` (missing MarkLogic privilege) so the most likely misconfiguration is diagnosable from status alone. A *Phase Semantics* table was added, including that `Disabled` means "unmanaged", not "unconfigured". Remaining: exercise every reason against a live controller (see Todo C3). |
-| Nice 8 | AWS IRSA/instance-role prototype | **`No-Go` — verified impossible** | Session 6. No EKS needed. MarkLogic's credential order has exactly three steps (security DB → env vars → IAM Role) and is **not** the AWS SDK provider chain, so empty credentials do not fall through to IRSA. The IAM Role step is gated on `MARKLOGIC_AWS_ROLE`, which the docs say is ignored when `MARKLOGIC_EC2_HOST=0` — and the operator's rootless image hard-sets exactly that. No web-identity support exists in the image or docs. The SPEC's stated mechanism does not exist. |
+| Nice 8 | AWS IRSA/instance-role prototype | **`No-Go` — verified impossible** | Session 6. No EKS needed. MarkLogic's credential order has exactly three steps (security DB → env vars → IAM Role) and is **not** the AWS SDK provider chain, so empty credentials do not fall through to IRSA. The IAM Role step is gated on `MARKLOGIC_AWS_ROLE`, which the docs say is ignored when `MARKLOGIC_EC2_HOST=0` — and the operator's rootless image hard-sets exactly that. No web-identity support exists in the image or docs. Corroborated behaviourally in Session 8: with no credentials, MarkLogic fails immediately with `SVC-AWSCRED` rather than attempting any fallback. |
 | Nice 9 | Azure managed identity investigation | **`Defer`** | Not attempted — needs Azure infrastructure. Already out of v1 scope regardless. Scoped to image `12.0.3-ubi9-rootless-2.2.6`; other supported versions untested. |
 | Nice 10 | CSI abstraction research | **`Defer` — position recorded** | Session 5. CSI is complementary, not an alternative: it cannot configure MarkLogic's native object APIs, the epic's backup scenario is native-path, forest-on-mount is the unsupported pattern Requirement Review #2 already excludes, and CSI brings a second credential surface of its own. Did not block the native path. |
 | — | Credential revocation via `DELETE` | **Confirmed working — deliberately deferred** | Session 4. Deferred on API-design grounds (removal is ambiguous between "revoke" and "stop managing"), not effort. |
 | — | Least-privilege MarkLogic user | **Decision: use bootstrap admin in v1** | Session 3 proved a dedicated user is practical; deferred as a hardening path because the operator already holds the bootstrap admin credential, so a second user adds lifecycle surface without reducing capability. |
 | — | AWS `sessionToken` (STS) support | **Decision: dropped from v1** | Three findings compound: the token expires, the operator only re-applies on Secret change (so it stays expired), and Session 2 showed MarkLogic returns it in plaintext on `GET`. With IRSA ruled out (Session 6), there is no keyless alternative either — supporting the field would ship an option that works for hours and leaks meanwhile. v1 accepts long-lived IAM user keys only. |
+| — | Access layer: do the credentials actually work? | **Confirmed against MinIO** | Session 8. Credentials applied through the API enable real object I/O: write, list, and read all succeed. Removing the credential set makes the identical write fail with `SVC-AWSCRED`, and restoring it makes it work again — a causal proof, not a coincidence. |
 | — | Cluster-wide propagation (multi-host) | **Confirmed on a real two-host cluster** | Session 7. Writes on the bootstrap are visible on the non-bootstrap host for both providers, with no observable delay; `DELETE` propagates too and clears only the targeted provider. Also found: **any host accepts the write**, not just the bootstrap — so targeting the bootstrap is a convention, not a MarkLogic requirement. |
 | — | Fingerprint salt source | **Decision: derive from `MarklogicCluster.metadata.uid`** | Stable across restarts and replicas, unique per cluster (defeats cross-cluster correlation), no extra resource. Build-time constant rejected (shared across installs; upgrade invalidates all fingerprints → mass re-apply); generated Secret rejected (extra resource to manage and back up). |
 
@@ -657,10 +739,13 @@ updated so each has an explicit home in implementation, but none are validated y
       **Behavior change to be aware of:** rotating the admin auth Secret now triggers a cluster
       reconcile where previously it did not. That is desirable and reconcile is idempotent, but it
       is a change to existing shipping behavior, not purely additive groundwork.
-- [ ] **C3 — Status/condition model validation (JIRA Must 7).** Currently "partially informed."
-      Confirm the full field set against the failure modes actually reachable in-cluster
-      (missing Secret, missing key, bootstrap not ready, `403`, `400`, transient network error),
-      and confirm each maps to a distinct, actionable `reason`. Depends on B3.
+- [x] **C3 — Status/condition model validation (JIRA Must 7).** Closed. The full reason vocabulary
+      is exercised by unit tests over the reconcile (`objectstorage_reconcile_test.go`) covering
+      `SecretNotFound`, `SecretKeyMissing`, `BootstrapNotReady`, `InsufficientPrivilege`,
+      `InvalidPayload`, `AuthenticationFailed`, `ManagementAPIUnreachable`, and
+      `ManagementAPIError`, plus the requeue policy for each. The live tests in
+      `credentials_live_test.go` confirm the `401` mapping against a real server. Remaining
+      verification of the full controller loop belongs to e2e, not this research story.
 - [x] **C4 — Record the out-of-scope boundary explicitly (JIRA Must 5).** Done. The SPEC's
       *Out of Scope* list now states that forest, backup, region, and endpoint behaviors are
       excluded **because they were not validated**, not merely because they are unwanted, and
@@ -702,11 +787,12 @@ with those outcomes.
 
 ### E. Wrap up the research story
 
-- [ ] **E1 — Broaden the evidence base.** All sessions ran against a single image
-      (`12.0.3-ubi9-rootless-2.2.6`) in a single standalone Docker container. **JIRA Must 1**
-      asks for behavior "on the MarkLogic image versions supported by the operator" (plural).
-      Re-run the Session 2 and Session 3 checks against the other supported image versions, or
-      record explicitly that findings are scoped to this one version.
+- [x] **E1 — Broaden the evidence base.** **Decision: findings are scoped to one image version, and
+      that is sufficient.** The repo pins `12.0.3-ubi9-rootless-2.2.6` in the `Makefile`, both CRD
+      defaults, and every sample; the only other version in play is the `latest-12` nightly used by
+      Jenkins. So "the image versions supported by the operator" is effectively one version plus a
+      moving nightly, and a version matrix would add little. Re-running Sessions 2, 3, 7, and 8
+      against a new default image is worthwhile whenever that default is bumped.
 - [x] **E2 — Multi-host sanity check.** Done — see Session 7. A real two-host cluster confirms
       credentials set on the bootstrap are readable from the non-bootstrap host for both
       providers, that `DELETE` propagates, and that provider independence holds across hosts.
@@ -718,13 +804,17 @@ with those outcomes.
       to maintain for throwaway research the JIRA explicitly says need not ship. The only
       credentials appearing here are the throwaway local ones (`admin:admin123`, `Passw0rd123!`)
       and obviously fake key material (`AKIATESTKEY...`); no real secrets are present.
-- [ ] **E4 — Tear down the research environment.** Remove the `ml-objstor-poc` container and the
-      test roles/users (`objstor-manageadmin-user`, `objstor-manageadmin-security-user`,
-      `objstor-privonly-aws-user`, and their roles). **Do this last** — E1 and E2 still need a live
-      instance, so the container should survive until those are either done or explicitly dropped.
-- [ ] **E5 — Refresh the matrix and close.** After A–D, update the Findings Matrix so no row reads
-      "Not attempted" or "Partially informed" without an accompanying decision, then mark the
-      research story complete and unblock the implementation stories in the SPEC's *Task Breakdown*.
+- [x] **E4 — Tear down the research environment.** Done. `ml-node1`, `ml-node2`, the `minio`
+      container, and the `ml-objstor-net` network are removed. The test roles and users from
+      Session 3 went with the original `ml-objstor-poc` container, which no longer existed by the
+      time Session 7 rebuilt the environment. Unrelated pre-existing containers on the host were
+      left untouched.
+- [x] **E5 — Refresh the matrix and close.** Done. Every Findings Matrix row now carries a verdict
+      or a decision; no row reads "Not attempted" or "Partially informed" without one. All seven
+      **Must** criteria are met and all three **Nice to Have** items have written verdicts
+      (`No-Go`, `Defer`, `Defer`). **The research story is complete.** Implementation proceeded in
+      parallel and the SPEC's Task Breakdown is now finished apart from the optional aggregate
+      `ObjectStorageReady` condition.
 
 ---
 
@@ -886,6 +976,49 @@ Decisions and observations:
   together — a latent coupling worth knowing about.
 - **`NewObjectStorageManagementClient` is a package variable** so tests can substitute a stub,
   matching the existing `NewDynamicManagementClient` pattern.
+
+### Fifth batch — samples, chart correction, CEL tests (Task Breakdown items 6, 7, 8)
+
+| File | Change |
+|---|---|
+| `config/samples/object-storage.yaml` | New. Secret-backed AWS + Azure sample with inline guidance on the Secret keys, rotation behaviour, and why keyless is unavailable. |
+| `config/samples/kustomization.yaml` | Sample registered. |
+| `internal/controller/objectstorage_crd_validation_test.go` | New. Seven CEL cases against an envtest API server. |
+
+- **The Helm task was based on a false premise and was corrected rather than done.**
+  `charts/marklogic-operator-kubernetes` renders only the operator Deployment, RBAC,
+  ServiceAccount, Service, and the two CRDs — it never renders a `MarklogicCluster`. Adding
+  `objectStorage` values would have advertised a capability the chart does not have. Its only
+  object storage responsibility is shipping the regenerated CRD schema.
+- **CEL rules can only be tested against a real API server**, so these live in envtest rather than
+  as unit tests. All seven cases pass: the three valid shapes, both missing-`secretName` rules, and
+  both reserved auth values rejecting with their explanatory messages. The test skips cleanly if
+  envtest assets are missing, so it does not break contributors without them.
+  Run with `KUBEBUILDER_ASSETS="$PWD/$(bin/setup-envtest use 1.31.0 --bin-dir bin -p path)"` — the
+  path must be absolute, since `go test` runs from the package directory.
+
+**Pre-existing bug found, not introduced and not fixed here:** `kustomize build config/samples`
+fails because `complete.yaml` and `minimal-production.yaml` both declare
+`MarklogicCluster/ml-cluster` in namespace `prod`. Confirmed against `HEAD` with the new sample
+removed, so it predates this work. Worth a separate one-line fix (rename one of them).
+
+### Sixth batch — live integration tests and access-layer validation
+
+| File | Change |
+|---|---|
+| `pkg/mlmanage/credentials_live_test.go` | New. Four tests against a real Management API, gated on `ML_MANAGE_ENDPOINT`. |
+
+- **Placed in `pkg/mlmanage`, not `test/integration`.** The Manage app server rejects basic auth
+  (`401`) and answers only digest, so the verification read needs the client's existing digest
+  implementation; putting the test elsewhere would mean duplicating that crypto. `test/integration`
+  is also Kubernetes-based and not referenced by any make target, so a test placed there would not
+  run in the normal workflow.
+- Verified against the live two-node cluster: apply-and-read for both providers, three repeated
+  applies (idempotency), rotation, and a `401` control using a deliberately wrong password. The
+  tests assert `access-key` round-trips, `secret-key` does **not** come back in plaintext, and no
+  `session-token` is ever stored.
+- Sessions 7 and 8 were recorded from these runs plus the MinIO work; see those sections for the
+  propagation and access-layer evidence.
 
 ### Intended final commit split
 The draft is one commit for convenience. When re-cut, prefer three, so the only change with

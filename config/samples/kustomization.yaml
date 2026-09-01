@@ -5,4 +5,5 @@ resources:
 - quick-start.yaml
 - minimal-production.yaml
 - complete.yaml
+- object-storage.yaml
 #+kubebuilder:scaffold:manifestskustomizesamples

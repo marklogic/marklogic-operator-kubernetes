@@ -497,13 +497,12 @@ Tasks are grouped by area and ordered to allow incremental, testable delivery.
 
 ### 6. Helm Chart
 
-- [ ] Add `objectStorage` values to `charts/marklogic-operator-kubernetes/values.yaml` with documented defaults (disabled).
-- [ ] Thread the values through the relevant templates so `spec.objectStorage` is rendered when configured.
-- [ ] Update chart README/values documentation.
+- [x] **No `objectStorage` values are needed.** The original task assumed the chart renders cluster resources; it does not. `charts/marklogic-operator-kubernetes` installs only the operator Deployment, RBAC, ServiceAccount, Service, and the two CRDs — it never renders a `MarklogicCluster`. Users create that resource themselves (see `config/samples`), so adding `objectStorage` values would imply a capability the chart does not have.
+- [x] The chart's only object storage responsibility is shipping the updated CRD schema, regenerated with `make helm`.
 
 ### 7. Samples and Docs
 
-- [ ] Add a sample under `config/samples` demonstrating secret-backed AWS + Azure.
+- [x] Add a sample under `config/samples` demonstrating secret-backed AWS + Azure (`object-storage.yaml`), registered in `config/samples/kustomization.yaml`.
 - [ ] Keep this spec (`docs/spec/[SPEC]Object Storage.md`) as the reference and cross-link it from `docs` where object storage is mentioned.
 
 ### 8. Tests
@@ -511,8 +510,8 @@ Tasks are grouped by area and ordered to allow incremental, testable delivery.
 - [x] Unit tests: payload builders, secret resolution, fingerprint behavior, and validation.
 - [x] Client tests: `EnsureAWSCredentials` / `EnsureAzureCredentials` against a stub server asserting method, path, and body shape including the `type` field (mirroring `TestEnsureOAuthExternalSecurityCreatesConfiguration`), plus status-code handling and an assertion that credential material never reaches the error string.
 - [x] Controller tests: readiness gating, skip-if-unchanged, rotation on secret change, independent per-provider failure, and secret-safe status/logs.
-- [ ] Integration test (under `test/integration`) applying credentials against a running MarkLogic and verifying via the Management API that the provider is configured (without asserting secret values).
-- [ ] CRD validation tests for the CEL rules.
+- [x] Integration test applying credentials against a running MarkLogic and verifying via the Management API that the provider is configured (without asserting secret values). Implemented as `pkg/mlmanage/credentials_live_test.go`, gated on `ML_MANAGE_ENDPOINT` so it skips by default. It lives in `pkg/mlmanage` rather than `test/integration` because it needs the client's digest authentication for the verification read — the Manage app server rejects basic auth — and because `test/integration` is Kubernetes-based and not wired into any make target.
+- [x] CRD validation tests for the CEL rules, run against an envtest API server (`internal/controller/objectstorage_crd_validation_test.go`). CEL only executes inside a real API server, so these cannot be unit-tested. The test skips cleanly when envtest assets are unavailable.
 
 ### 9. Follow-Ups (not in v1)
 
