@@ -131,9 +131,9 @@ void runTests() {
     sh "make test"
 }
 
-void runMinikubeSetup(String profile = 'minikube', boolean reuse = false) {
+void runMinikubeSetup(String profile = 'minikube', boolean reuse = false, boolean setupIstio = true) {
     sh """
-        make e2e-setup-minikube IMG=${operatorRepo}:${VERSION} MINIKUBE_PROFILE=${profile} MINIKUBE_REUSE=${reuse}
+        make e2e-setup-minikube IMG=${operatorRepo}:${VERSION} MINIKUBE_PROFILE=${profile} MINIKUBE_REUSE=${reuse} E2E_SETUP_ISTIO=${setupIstio}
     """
 }
 
@@ -166,9 +166,8 @@ void runMinikubeCleanup(String profile = 'minikube', boolean reuse = false) {
     """
 }
 
-// Istio ambient mode is now installed by `make e2e-setup-minikube` itself (see Makefile),
-// so Istio e2e tests reuse the same minikube cluster as the rest of the suite instead of
-// requiring a dedicated cluster/shard to be spun up and torn down.
+// Istio e2e tests run on the same minikube cluster as the cluster-scoped suite.
+// `make e2e-setup-minikube` installs Istio only when E2E_SETUP_ISTIO=true.
 void runIstioE2eTests(String profile = 'minikube') {
     sh """
         make e2e-test-istio IMG=${operatorRepo}:${VERSION} E2E_ISTIO_AMBIENT=true MINIKUBE_PROFILE=${profile}
@@ -348,7 +347,7 @@ pipeline {
         choice(name: 'E2E_RUNTIME', choices: ['minikube', 'eks'], description: 'Execution runtime for e2e tests. minikube runs profile-parallel shards; eks runs the EKS suite only.')
         booleanParam(name: 'PUBLISH_IMAGE', defaultValue: false, description: 'Publish image to internal registry')
         string(name: 'emailList', defaultValue: emailList, description: 'List of email for build notification', trim: true)
-        booleanParam(name: 'VERIFY_ISTIO_AMBIENT', defaultValue: true, description: 'Run Istio ambient mode e2e tests (Istio ambient mode is installed alongside the regular Minikube/EKS cluster; no dedicated cluster is created).')
+        booleanParam(name: 'VERIFY_ISTIO_AMBIENT', defaultValue: true, description: 'Run Istio ambient mode e2e tests. For Minikube, Istio is installed only when this test path is selected; no dedicated cluster is created.')
         string(name: 'EKS_MARKLOGIC_IMAGE_TAG', defaultValue: 'latest-12', description: 'MarkLogic image tag to pull from the EKS ECR registry when E2E_RUNTIME=eks. The full ECR URL is constructed at runtime from the AWS account ID resolved via STS.', trim: true)
     }
 
@@ -433,6 +432,7 @@ pipeline {
                     def clusterMinikubeProfile = 'e2e-cluster'
                     def namespaceMinikubeProfile = 'e2e-namespace'
                     def runIstio = params.E2E_INSTALL_MODE == 'fresh' && runClusterScoped && clusterScope == 'cluster' && params.VERIFY_ISTIO_AMBIENT
+                    def clusterSetupIstio = runIstio ? 'true' : 'false'
                     def clusterTestCommand = params.E2E_INSTALL_MODE == 'upgrade'
                         ? "make e2e-test-upgrade-cluster IMG=${operatorRepo}:${VERSION} MINIKUBE_PROFILE=${clusterMinikubeProfile}"
                         : "make e2e-test-${clusterScope} IMG=${operatorRepo}:${VERSION} MINIKUBE_PROFILE=${clusterMinikubeProfile}"
@@ -449,7 +449,7 @@ pipeline {
                             export MINIKUBE_HOME='/space/minikube-cluster/'
 
                             echo '=====Starting cluster-scoped shard====='
-                            make e2e-setup-minikube IMG=${operatorRepo}:${VERSION} MINIKUBE_PROFILE=${clusterMinikubeProfile} MINIKUBE_REUSE=true
+                            make e2e-setup-minikube IMG=${operatorRepo}:${VERSION} MINIKUBE_PROFILE=${clusterMinikubeProfile} MINIKUBE_REUSE=true E2E_SETUP_ISTIO=${clusterSetupIstio}
                             ${clusterTestCommand}
                             if [ '${runIstio}' = 'true' ]; then
                                 make e2e-test-istio IMG=${operatorRepo}:${VERSION} E2E_ISTIO_AMBIENT=true MINIKUBE_PROFILE=${clusterMinikubeProfile}
@@ -466,7 +466,7 @@ pipeline {
                             export MINIKUBE_HOME='/space/minikube-namespace/'
 
                             echo '=====Starting namespace-scoped shard====='
-                            make e2e-setup-minikube IMG=${operatorRepo}:${VERSION} MINIKUBE_PROFILE=${namespaceMinikubeProfile} MINIKUBE_REUSE=true
+                            make e2e-setup-minikube IMG=${operatorRepo}:${VERSION} MINIKUBE_PROFILE=${namespaceMinikubeProfile} MINIKUBE_REUSE=true E2E_SETUP_ISTIO=false
                             ${namespaceTestCommand}
                             make e2e-cleanup-minikube MINIKUBE_PROFILE=${namespaceMinikubeProfile} MINIKUBE_REUSE=true
                             echo '=====Namespace-scoped shard complete====='

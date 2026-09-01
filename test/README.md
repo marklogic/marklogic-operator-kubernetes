@@ -32,10 +32,11 @@ make e2e-cleanup-minikube
 make e2e-test E2E_SCOPE=cluster
 ```
 
-`e2e-setup-minikube` also installs Istio in ambient mode, so Istio tests
-(`make e2e-test-istio`) run against the same cluster — no separate cluster/shard
-is required. Tests opt in to Istio per-namespace via the `istio.io/dataplane-mode: ambient`
-label rather than by recreating the cluster.
+`e2e-setup-minikube` can also install Istio in ambient mode (`E2E_SETUP_ISTIO=true`,
+default), so Istio tests (`make e2e-test-istio`) run against the same cluster —
+no separate cluster/shard is required. Tests opt in to Istio per-namespace via
+the `istio.io/dataplane-mode: ambient` label rather than by recreating the cluster.
+For faster namespace-only or focused non-Istio runs, pass `E2E_SETUP_ISTIO=false`.
 
 ### Parallelizing e2e runs with minikube profiles
 
@@ -73,8 +74,8 @@ look serialized. With `MINIKUBE_REUSE=true` that cost is paid once, and each
 suite's own TestMain teardown still resets Kubernetes-level state between runs:
 
 ```bash
-make e2e-setup-minikube MINIKUBE_PROFILE=e2e-cluster MINIKUBE_REUSE=true &
-make e2e-setup-minikube MINIKUBE_PROFILE=e2e-namespace MINIKUBE_REUSE=true &
+make e2e-setup-minikube MINIKUBE_PROFILE=e2e-cluster MINIKUBE_REUSE=true E2E_SETUP_ISTIO=true &
+make e2e-setup-minikube MINIKUBE_PROFILE=e2e-namespace MINIKUBE_REUSE=true E2E_SETUP_ISTIO=false &
 wait
 ```
 

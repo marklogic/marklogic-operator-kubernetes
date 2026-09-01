@@ -29,6 +29,7 @@ export E2E_KUBERNETES_VERSION ?= v1.31.13
 export E2E_ISTIO_AMBIENT ?= false
 export E2E_TEST_TIMEOUT ?= 60m
 export E2E_HELM_TEST_TIMEOUT ?= 45m
+export E2E_SETUP_ISTIO ?= true
 
 # MINIKUBE_PROFILE names the minikube cluster/profile targeted by the e2e-* targets below.
 # Override it to run independent e2e suites in parallel against separate minikube instances,
@@ -406,7 +407,7 @@ e2e-test-jenkins-volume-resize: e2e-test-volume-resize e2e-test-helm-volume-resi
 	@echo "=====Jenkins volume resize tests complete (cluster-scoped + namespace-scoped)====="
 
 .PHONY: e2e-setup-minikube
-e2e-setup-minikube: kustomize controller-gen build docker-build istioctl ## Setup a minikube cluster (profile: MINIKUBE_PROFILE) with Istio ambient mode pre-installed, ready for cluster-scoped, namespace-scoped and Istio e2e tests.
+e2e-setup-minikube: kustomize controller-gen build docker-build ## Setup a minikube cluster (profile: MINIKUBE_PROFILE). Set E2E_SETUP_ISTIO=true to install Istio ambient mode.
 	minikube version
 ifeq ($(MINIKUBE_REUSE), true)
 	@HOST_STATE="$$(minikube -p $(MINIKUBE_PROFILE) status --format='{{.Host}}' 2>/dev/null || echo Unknown)"; \
@@ -437,10 +438,16 @@ endif
 	@test "$$(kubectl --context=$(MINIKUBE_PROFILE) get storageclass csi-hostpath-sc -o jsonpath='{.allowVolumeExpansion}')" = "true" \
 		|| (echo "ERROR: csi-hostpath-sc.allowVolumeExpansion is not true after patch" && exit 1)
 	kubectl --context=$(MINIKUBE_PROFILE) get storageclass
+
+ifeq ($(E2E_SETUP_ISTIO), true)
+	$(MAKE) istioctl
 	@echo "=====Installing Istio (ambient profile) so any test namespace can opt in via istio.io/dataplane-mode=ambient without recreating the cluster====="
 	$(ISTIOCTL) --context=$(MINIKUBE_PROFILE) install --set profile=ambient -y
 	kubectl --context=$(MINIKUBE_PROFILE) wait --for=condition=Ready pods --all -n istio-system --timeout=120s
 	kubectl --context=$(MINIKUBE_PROFILE) get pods -n istio-system
+else
+	@echo "=====Skipping Istio install (E2E_SETUP_ISTIO=$(E2E_SETUP_ISTIO)); namespace-only and focused non-Istio suites do not require it====="
+endif
 	minikube -p $(MINIKUBE_PROFILE) image load $(IMG)
 	minikube -p $(MINIKUBE_PROFILE) image load $(E2E_MARKLOGIC_IMAGE_VERSION)
 	minikube -p $(MINIKUBE_PROFILE) image load "docker.io/haproxytech/haproxy-alpine:3.4.0"
@@ -448,8 +455,9 @@ endif
 	minikube -p $(MINIKUBE_PROFILE) image ls
 
 .PHONY: e2e-setup-minikube-istio
-e2e-setup-minikube-istio: e2e-setup-minikube ## Deprecated: Istio ambient mode is now installed by e2e-setup-minikube itself, so no dedicated cluster/shard is required. Kept as an alias for backward compatibility.
-	@echo "=====e2e-setup-minikube-istio is deprecated; use e2e-setup-minikube (Istio is now installed by default)====="
+e2e-setup-minikube-istio: E2E_SETUP_ISTIO=true
+e2e-setup-minikube-istio: e2e-setup-minikube ## Backward-compatible alias for explicitly installing Istio ambient mode during minikube setup.
+	@echo "=====e2e-setup-minikube-istio is an alias of e2e-setup-minikube E2E_SETUP_ISTIO=true====="
 
 .PHONY: e2e-cleanup-minikube
 e2e-cleanup-minikube:
