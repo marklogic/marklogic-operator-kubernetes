@@ -29,6 +29,31 @@ export E2E_KUBERNETES_VERSION ?= v1.31.13
 export E2E_ISTIO_AMBIENT ?= false
 export E2E_TEST_TIMEOUT ?= 60m
 export E2E_HELM_TEST_TIMEOUT ?= 45m
+export E2E_SETUP_ISTIO ?= true
+
+# MINIKUBE_PROFILE names the minikube cluster/profile targeted by the e2e-* targets below.
+# Override it to run independent e2e suites in parallel against separate minikube instances,
+# e.g. `make e2e-setup-minikube MINIKUBE_PROFILE=e2e-cluster` and
+# `make e2e-setup-minikube MINIKUBE_PROFILE=e2e-namespace` can be started concurrently, and the
+# matching `make e2e-test-cluster MINIKUBE_PROFILE=e2e-cluster` /
+# `make e2e-test-helm-namespace MINIKUBE_PROFILE=e2e-namespace` runs target their own cluster via
+# an explicit `-context` so parallel runs never race over kubectl's shared current-context.
+MINIKUBE_PROFILE ?= minikube
+
+# MINIKUBE_REUSE keeps an existing minikube profile ("shard") running instead of deleting and
+# recreating it on every setup/cleanup call. Two profiles doing `minikube start`/`delete`
+# concurrently on the same host can contend on host-level locks (e.g. iptables/docker network
+# setup), which serializes the very parallelism MINIKUBE_PROFILE is meant to provide. With
+# MINIKUBE_REUSE=true, e2e-setup-minikube checks the profile host state and starts it whenever
+# it is not Running.
+# and e2e-cleanup-minikube leaves it running (Kubernetes-level state is still reset by each
+# suite's TestMain teardown), so parallel shards only pay the start/stop cost once.
+MINIKUBE_REUSE ?= false
+
+# E2E_SCOPE selects which operator install mode `make e2e-test` validates by default.
+# Namespace-scoped (Helm, scope.type=namespace) is the default going forward; set
+# E2E_SCOPE=cluster to run the cluster-scoped (kustomize/ClusterRole) suite instead.
+E2E_SCOPE ?= namespace
 E2E_UPGRADE_SOURCE_VERSION ?= 1.2.0
 E2E_UPGRADE_CLUSTER_TEST_TIMEOUT ?= 90m
 E2E_UPGRADE_HELM_NAMESPACE_TEST_TIMEOUT ?= 75m
@@ -160,53 +185,31 @@ test: manifests generate fmt vet envtest ## Run tests.
 
 # Utilize minikube or modify the e2e tests to load the image locally, enabling compatibility with other vendors.
 # To run specific e2e test with label, try 	go test -v ./test/e2e -count=1 -args --labels="type=tls-multi-node"
-.PHONY: e2e-test  # Run the e2e tests against a minikube k8s instance that is spun up.
-e2e-test: 
-	@echo "=====Check Huges pages test is enabled or not for e2e test"
-ifeq ($(VERIFY_HUGE_PAGES), true)
-	@echo "=====Setting hugepages value to 1280 for hugepages-e2e test"
-	sudo sysctl -w vm.nr_hugepages=1280
-
-	@echo "=====Restart minikube cluster to apply hugepages value"
-	minikube stop
-	minikube start
-	@if kubectl config current-context 2>/dev/null | grep -q '^minikube$$'; then \
-		echo "=====Loading operator image $(IMG) into minikube====="; \
-		minikube image load $(IMG); \
-	else \
-		echo "=====Current context is not minikube; skipping image load====="; \
-	fi
-
-	@echo "=====Running e2e test including hugepages test"
-	IMG=$(IMG) go test -v -count=1 -timeout 60m ./test/e2e -verifyHugePages
-
-	@echo "=====Resetting hugepages value to 0"
-	sudo sysctl -w vm.nr_hugepages=0
-
-	@echo "=====Restart minikube cluster"
-	minikube stop
-	minikube start
+# MINIKUBE_PROFILE lets independent e2e runs target separate minikube clusters in parallel: each
+# target below passes -context=$(MINIKUBE_PROFILE) to `go test` so the run is pinned to its own
+# cluster regardless of kubectl's shared current-context.
+.PHONY: e2e-test  ## Run e2e tests (default: namespace-scoped via Helm). Set E2E_SCOPE=cluster to run the cluster-scoped suite instead.
+e2e-test:
+ifeq ($(E2E_SCOPE), cluster)
+	$(MAKE) e2e-test-cluster MINIKUBE_PROFILE=$(MINIKUBE_PROFILE)
 else
-	@echo "=====Running e2e test without hugepages test"
-	@if kubectl config current-context 2>/dev/null | grep -q '^minikube$$'; then \
-		echo "=====Loading operator image $(IMG) into minikube====="; \
-		minikube image load $(IMG); \
-	else \
-		echo "=====Current context is not minikube; skipping image load====="; \
-	fi
-	IMG=$(IMG) go test -v -count=1 -timeout $(E2E_TEST_TIMEOUT) ./test/e2e
+	$(MAKE) e2e-test-helm-namespace MINIKUBE_PROFILE=$(MINIKUBE_PROFILE)
 endif
 
+# Istio ambient mode is installed once, on the same minikube profile used by every other
+# e2e-test-* target (see e2e-setup-minikube). Tests opt in to Istio by labeling their own
+# namespace with istio.io/dataplane-mode=ambient (see isIstioAmbientEnabled/namespaceLabels
+# in test/e2e), so this no longer needs a dedicated cluster/shard.
 .PHONY: e2e-test-istio  # Run Istio ambient mode e2e tests
 e2e-test-istio:
 	@echo "=====Running Istio ambient mode e2e tests"
-	@if kubectl config current-context 2>/dev/null | grep -q '^minikube$$'; then \
-		echo "=====Loading operator image $(IMG) into minikube====="; \
-		minikube image load $(IMG); \
+	@if minikube -p $(MINIKUBE_PROFILE) status >/dev/null 2>&1; then \
+		echo "=====Loading operator image $(IMG) into minikube profile $(MINIKUBE_PROFILE)====="; \
+		minikube -p $(MINIKUBE_PROFILE) image load $(IMG); \
 	else \
-		echo "=====Current context is not minikube; skipping image load====="; \
+		echo "=====Minikube profile $(MINIKUBE_PROFILE) not found or not running; skipping image load====="; \
 	fi
-	IMG=$(IMG) E2E_ISTIO_AMBIENT=true go test -v -count=1 -timeout 30m ./test/e2e -run "Test(Istio|NonIstio)"
+	IMG=$(IMG) E2E_ISTIO_AMBIENT=true go test -v -count=1 -timeout 30m ./test/e2e -run "Test(Istio|NonIstio)" -context=$(MINIKUBE_PROFILE)
 
 # NOTE: There is intentionally no `e2e-test-namespace` target here.
 # The `test/e2e` suite always deploys the operator via `make deploy`
@@ -214,29 +217,56 @@ e2e-test-istio:
 # inside its TestMain, and does not honor E2E_SCOPE_TYPE / E2E_METRICS_SECURE
 # / WATCH_NAMESPACE patching. To validate namespace-scoped RBAC and the
 # insecure HTTP metrics endpoint, use `e2e-test-helm-namespace` below,
-# which installs the operator via the Helm chart with scope.type=namespace.
+# which installs the operator via the Helm chart with scope.type=namespace
+# and is what `make e2e-test` runs by default.
 
-.PHONY: e2e-test-cluster  ## Run e2e tests against a cluster-scoped operator install (alias for `e2e-test`)
+.PHONY: e2e-test-cluster  ## Run e2e tests against a cluster-scoped operator install (kustomize, ClusterRole/ClusterRoleBinding)
 e2e-test-cluster:
-	@echo "=====Running e2e tests in cluster-scoped mode"
-	@if kubectl config current-context 2>/dev/null | grep -q '^minikube$$'; then \
-		echo "=====Loading operator image $(IMG) into minikube====="; \
-		minikube image load $(IMG); \
+	@echo "=====Check Huges pages test is enabled or not for e2e test"
+ifeq ($(VERIFY_HUGE_PAGES), true)
+	@echo "=====Setting hugepages value to 1280 for hugepages-e2e test"
+	sudo sysctl -w vm.nr_hugepages=1280
+
+	@echo "=====Restart minikube cluster to apply hugepages value"
+	minikube -p $(MINIKUBE_PROFILE) stop
+	minikube -p $(MINIKUBE_PROFILE) start
+	@if minikube -p $(MINIKUBE_PROFILE) status >/dev/null 2>&1; then \
+		echo "=====Loading operator image $(IMG) into minikube profile $(MINIKUBE_PROFILE)====="; \
+		minikube -p $(MINIKUBE_PROFILE) image load $(IMG); \
 	else \
-		echo "=====Current context is not minikube; skipping image load====="; \
+		echo "=====Minikube profile $(MINIKUBE_PROFILE) not found or not running; skipping image load====="; \
 	fi
-	IMG=$(IMG) go test -v -count=1 -timeout $(E2E_TEST_TIMEOUT) ./test/e2e
+
+	@echo "=====Running e2e test including hugepages test"
+	IMG=$(IMG) go test -v -count=1 -timeout 60m ./test/e2e -verifyHugePages -context=$(MINIKUBE_PROFILE)
+
+	@echo "=====Resetting hugepages value to 0"
+	sudo sysctl -w vm.nr_hugepages=0
+
+	@echo "=====Restart minikube cluster"
+	minikube -p $(MINIKUBE_PROFILE) stop
+	minikube -p $(MINIKUBE_PROFILE) start
+else
+	@echo "=====Running e2e test without hugepages test"
+	@if minikube -p $(MINIKUBE_PROFILE) status >/dev/null 2>&1; then \
+		echo "=====Loading operator image $(IMG) into minikube profile $(MINIKUBE_PROFILE)====="; \
+		minikube -p $(MINIKUBE_PROFILE) image load $(IMG); \
+	else \
+		echo "=====Minikube profile $(MINIKUBE_PROFILE) not found or not running; skipping image load====="; \
+	fi
+	IMG=$(IMG) go test -v -count=1 -timeout $(E2E_TEST_TIMEOUT) ./test/e2e -context=$(MINIKUBE_PROFILE)
+endif
 
 .PHONY: e2e-test-helm-namespace  ## Run namespace-scoped e2e tests via Helm chart install (validates Role/RoleBinding, no ClusterRole, insecure metrics on :8080)
 e2e-test-helm-namespace:
 	@echo "=====Running namespace-scoped e2e tests via Helm chart====="
-	@if kubectl config current-context 2>/dev/null | grep -q '^minikube$$'; then \
-		echo "=====Loading operator image $(IMG) into minikube====="; \
-		minikube image load $(IMG); \
+	@if minikube -p $(MINIKUBE_PROFILE) status >/dev/null 2>&1; then \
+		echo "=====Loading operator image $(IMG) into minikube profile $(MINIKUBE_PROFILE)====="; \
+		minikube -p $(MINIKUBE_PROFILE) image load $(IMG); \
 	else \
-		echo "=====Current context is not minikube; skipping image load====="; \
+		echo "=====Minikube profile $(MINIKUBE_PROFILE) not found or not running; skipping image load====="; \
 	fi
-	E2E_DOCKER_IMAGE=$(IMG) go test -v -count=1 -timeout 45m ./test/e2e-helm
+	E2E_DOCKER_IMAGE=$(IMG) go test -v -count=1 -timeout $(E2E_HELM_TEST_TIMEOUT) ./test/e2e-helm -context=$(MINIKUBE_PROFILE)
 
 .PHONY: e2e-test-upgrade  ## Run both upgrade validation scenarios (cluster + namespace) and then reuse the matching e2e suites.
 e2e-test-upgrade:
@@ -244,10 +274,13 @@ e2e-test-upgrade:
 	@$(MAKE) e2e-test-upgrade-helm-namespace IMG=$(IMG)
 
 .PHONY: e2e-test-upgrade-cluster  ## Run the cluster-scoped upgrade validation and then reuse the cluster-scoped e2e suite.
+# NOTE: this target shells out directly to kubectl/helm, so it relies on kubectl's current-context
+# (rather than an explicit --context flag) and is not safe to run concurrently against multiple
+# MINIKUBE_PROFILE clusters from the same shell.
 e2e-test-upgrade-cluster:
-	@echo "=====Running cluster-scoped upgrade validation====="
+	@echo "=====Running cluster-scoped upgrade validation (minikube profile: $(MINIKUBE_PROFILE))====="
 	@TARGET_IMG='$(IMG)'; \
-	if kubectl config current-context 2>/dev/null | grep -q '^minikube$$'; then \
+	if minikube -p $(MINIKUBE_PROFILE) status >/dev/null 2>&1; then \
 		if ! docker image inspect "$$TARGET_IMG" >/dev/null 2>&1; then \
 			if docker image inspect '$(LOCAL_E2E_IMG)' >/dev/null 2>&1; then \
 				echo "=====Requested image $$TARGET_IMG is not in local Docker; falling back to $(LOCAL_E2E_IMG) for minikube upgrade test====="; \
@@ -257,10 +290,10 @@ e2e-test-upgrade-cluster:
 				exit 1; \
 			fi; \
 		fi; \
-		echo "=====Loading operator image $$TARGET_IMG into minikube====="; \
-		minikube image load "$$TARGET_IMG"; \
+		echo "=====Loading operator image $$TARGET_IMG into minikube profile $(MINIKUBE_PROFILE)====="; \
+		minikube -p $(MINIKUBE_PROFILE) image load "$$TARGET_IMG"; \
 	else \
-		echo "=====Current context is not minikube; skipping image load====="; \
+		echo "=====Minikube profile $(MINIKUBE_PROFILE) not found or not running; skipping image load====="; \
 	fi; \
 	E2E_UPGRADE_SOURCE_VERSION='$(E2E_UPGRADE_SOURCE_VERSION)' \
 	E2E_UPGRADE_TARGET_IMAGE="$$TARGET_IMG" \
@@ -268,10 +301,13 @@ e2e-test-upgrade-cluster:
 	go test -tags upgradee2e -v -count=1 -timeout $(E2E_UPGRADE_CLUSTER_TEST_TIMEOUT) ./test -run '^TestUpgradeClusterScope$$'
 
 .PHONY: e2e-test-upgrade-helm-namespace  ## Run the namespace-scoped upgrade validation and then reuse the Helm namespace-scoped e2e suite.
+# NOTE: this target shells out directly to kubectl/helm, so it relies on kubectl's current-context
+# (rather than an explicit --context flag) and is not safe to run concurrently against multiple
+# MINIKUBE_PROFILE clusters from the same shell.
 e2e-test-upgrade-helm-namespace:
-	@echo "=====Running namespace-scoped upgrade validation====="
+	@echo "=====Running namespace-scoped upgrade validation (minikube profile: $(MINIKUBE_PROFILE))====="
 	@TARGET_IMG='$(IMG)'; \
-	if kubectl config current-context 2>/dev/null | grep -q '^minikube$$'; then \
+	if minikube -p $(MINIKUBE_PROFILE) status >/dev/null 2>&1; then \
 		if ! docker image inspect "$$TARGET_IMG" >/dev/null 2>&1; then \
 			if docker image inspect '$(LOCAL_E2E_IMG)' >/dev/null 2>&1; then \
 				echo "=====Requested image $$TARGET_IMG is not in local Docker; falling back to $(LOCAL_E2E_IMG) for minikube upgrade test====="; \
@@ -281,10 +317,10 @@ e2e-test-upgrade-helm-namespace:
 				exit 1; \
 			fi; \
 		fi; \
-		echo "=====Loading operator image $$TARGET_IMG into minikube====="; \
-		minikube image load "$$TARGET_IMG"; \
+		echo "=====Loading operator image $$TARGET_IMG into minikube profile $(MINIKUBE_PROFILE)====="; \
+		minikube -p $(MINIKUBE_PROFILE) image load "$$TARGET_IMG"; \
 	else \
-		echo "=====Current context is not minikube; skipping image load====="; \
+		echo "=====Minikube profile $(MINIKUBE_PROFILE) not found or not running; skipping image load====="; \
 	fi; \
 	E2E_UPGRADE_SOURCE_VERSION='$(E2E_UPGRADE_SOURCE_VERSION)' \
 	E2E_UPGRADE_TARGET_IMAGE="$$TARGET_IMG" \
@@ -300,16 +336,16 @@ e2e-test-upgrade-cleanup:
 .PHONY: e2e-test-volume-resize  ## Run ONLY the cluster-scoped volume resize test (two namespaces in parallel)
 e2e-test-volume-resize:
 	@echo "=====Running cluster-scoped volume-resize e2e test (parallel, 2 namespaces)====="
-	IMG=$(IMG) go test -v -count=1 -timeout 30m ./test/e2e -run TestVolumeResizeClusterScoped
+	IMG=$(IMG) go test -v -count=1 -timeout 30m ./test/e2e -run TestVolumeResizeClusterScoped -context=$(MINIKUBE_PROFILE)
 
 .PHONY: e2e-test-dynamic-host  ## Run ONLY the cluster-scoped dynamic-host lifecycle test
 e2e-test-dynamic-host:
-	@if kubectl config current-context 2>/dev/null | grep -q '^minikube$$'; then \
-		echo "=====Detected minikube context; using local image flow to avoid remote pull failures====="; \
-		$(MAKE) e2e-test-dynamic-host-local; \
+	@if minikube -p $(MINIKUBE_PROFILE) status >/dev/null 2>&1; then \
+		echo "=====Minikube profile $(MINIKUBE_PROFILE) detected; using local image flow to avoid remote pull failures====="; \
+		$(MAKE) e2e-test-dynamic-host-local MINIKUBE_PROFILE=$(MINIKUBE_PROFILE); \
 	else \
 		echo "=====Running cluster-scoped dynamic-host lifecycle e2e test (controller image: $(IMG))====="; \
-		IMG=$(IMG) go test -v -count=1 -timeout 45m ./test/e2e -args --labels=\"type=dynamic-host\"; \
+		IMG=$(IMG) go test -v -count=1 -timeout 45m ./test/e2e -args --labels=\"type=dynamic-host\" --context=$(MINIKUBE_PROFILE); \
 	fi
 
 .PHONY: e2e-test-dynamic-host-local  ## Build/load local operator image (minikube context) and run ONLY dynamic-host lifecycle test
@@ -321,14 +357,14 @@ e2e-test-dynamic-host-local:
 		echo "=====Local image not found; building $(LOCAL_E2E_IMG)====="; \
 		$(MAKE) docker-build IMG=$(LOCAL_E2E_IMG); \
 	fi
-	@if kubectl config current-context 2>/dev/null | grep -q '^minikube$$'; then \
-		echo "=====Loading local operator image into minikube====="; \
-		minikube image load $(LOCAL_E2E_IMG); \
+	@if minikube -p $(MINIKUBE_PROFILE) status >/dev/null 2>&1; then \
+		echo "=====Loading local operator image into minikube profile $(MINIKUBE_PROFILE)====="; \
+		minikube -p $(MINIKUBE_PROFILE) image load $(LOCAL_E2E_IMG); \
 	else \
-		echo "=====Current context is not minikube; skipping minikube image load====="; \
+		echo "=====Minikube profile $(MINIKUBE_PROFILE) not found or not running; skipping minikube image load====="; \
 	fi
 	@echo "=====Running cluster-scoped dynamic-host lifecycle e2e test against local image====="
-	IMG=$(LOCAL_E2E_IMG) go test -v -count=1 -timeout 45m ./test/e2e -args --labels="type=dynamic-host"
+	IMG=$(LOCAL_E2E_IMG) go test -v -count=1 -timeout 45m ./test/e2e -args --labels="type=dynamic-host" --context=$(MINIKUBE_PROFILE)
 
 .PHONY: e2e-test-volume-resize-local  ## Build/load local operator image (minikube context) and run ONLY volume-resize test; ensures CSI hostpath is default SC
 e2e-test-volume-resize-local:
@@ -339,87 +375,98 @@ e2e-test-volume-resize-local:
 		echo "=====Local image not found; building $(LOCAL_E2E_IMG)====="; \
 		$(MAKE) docker-build IMG=$(LOCAL_E2E_IMG); \
 	fi
-	@if kubectl config current-context 2>/dev/null | grep -q '^minikube$$'; then \
-		echo "=====Loading local operator image into minikube====="; \
-		minikube image load $(LOCAL_E2E_IMG); \
+	@if minikube -p $(MINIKUBE_PROFILE) status >/dev/null 2>&1; then \
+		echo "=====Loading local operator image into minikube profile $(MINIKUBE_PROFILE)====="; \
+		minikube -p $(MINIKUBE_PROFILE) image load $(LOCAL_E2E_IMG); \
 		echo "=====Ensuring CSI hostpath driver is enabled for PVC expansion====="; \
-		minikube addons enable csi-hostpath-driver 2>/dev/null || true; \
-		kubectl patch storageclass standard \
+		minikube -p $(MINIKUBE_PROFILE) addons enable csi-hostpath-driver 2>/dev/null || true; \
+		kubectl --context=$(MINIKUBE_PROFILE) patch storageclass standard \
 		  -p '{"metadata":{"annotations":{"storageclass.kubernetes.io/is-default-class":"false"}}}' 2>/dev/null || true; \
-		kubectl patch storageclass csi-hostpath-sc \
+		kubectl --context=$(MINIKUBE_PROFILE) patch storageclass csi-hostpath-sc \
 		  -p '{"metadata":{"annotations":{"storageclass.kubernetes.io/is-default-class":"true"}}}' 2>/dev/null || true; \
-		kubectl patch storageclass csi-hostpath-sc -p '{"allowVolumeExpansion":true}' 2>/dev/null || true; \
+		kubectl --context=$(MINIKUBE_PROFILE) patch storageclass csi-hostpath-sc -p '{"allowVolumeExpansion":true}' 2>/dev/null || true; \
 	else \
-		echo "=====Current context is not minikube; skipping minikube image load and storage class setup====="; \
+		echo "=====Minikube profile $(MINIKUBE_PROFILE) not found or not running; skipping minikube image load and storage class setup====="; \
 	fi
 	@echo "=====Running cluster-scoped volume-resize e2e test against local image====="
-	IMG=$(LOCAL_E2E_IMG) go test -v -count=1 -timeout 30m ./test/e2e -run TestVolumeResizeClusterScoped
+	IMG=$(LOCAL_E2E_IMG) go test -v -count=1 -timeout 30m ./test/e2e -run TestVolumeResizeClusterScoped -context=$(MINIKUBE_PROFILE)
 
 .PHONY: e2e-test-helm-volume-resize  ## Run ONLY the namespace-scoped volume resize test via Helm (two watched namespaces in parallel)
 e2e-test-helm-volume-resize:
 	@echo "=====Running namespace-scoped volume-resize e2e test via Helm (parallel, 2 watched namespaces)====="
-	@if kubectl config current-context 2>/dev/null | grep -q '^minikube$$'; then \
-		echo "=====Loading operator image $(IMG) into minikube====="; \
-		minikube image load $(IMG); \
+	@if minikube -p $(MINIKUBE_PROFILE) status >/dev/null 2>&1; then \
+		echo "=====Loading operator image $(IMG) into minikube profile $(MINIKUBE_PROFILE)====="; \
+		minikube -p $(MINIKUBE_PROFILE) image load $(IMG); \
 	else \
-		echo "=====Current context is not minikube; skipping image load====="; \
+		echo "=====Minikube profile $(MINIKUBE_PROFILE) not found or not running; skipping image load====="; \
 	fi
-	E2E_DOCKER_IMAGE=$(IMG) go test -v -count=1 -timeout 30m ./test/e2e-helm -run TestVolumeResizeNamespaceScoped
+	E2E_DOCKER_IMAGE=$(IMG) go test -v -count=1 -timeout 30m ./test/e2e-helm -run TestVolumeResizeNamespaceScoped -context=$(MINIKUBE_PROFILE)
 
 .PHONY: e2e-test-jenkins-volume-resize  ## Run ONLY volume resize tests on Jenkins (cluster-scoped + namespace-scoped via Helm). Optimized for CI/CD pipeline.
 e2e-test-jenkins-volume-resize: e2e-test-volume-resize e2e-test-helm-volume-resize
 	@echo "=====Jenkins volume resize tests complete (cluster-scoped + namespace-scoped)====="
 
 .PHONY: e2e-setup-minikube
-e2e-setup-minikube: kustomize controller-gen build docker-build
+e2e-setup-minikube: kustomize controller-gen build docker-build ## Setup a minikube cluster (profile: MINIKUBE_PROFILE). Set E2E_SETUP_ISTIO=true to install Istio ambient mode.
 	minikube version
-	minikube delete || true
-	minikube start --driver=docker --kubernetes-version=$(E2E_KUBERNETES_VERSION) --memory=8192 --cpus=2
-	minikube addons enable ingress
-	minikube addons enable storage-provisioner
-	minikube addons enable default-storageclass
+ifeq ($(MINIKUBE_REUSE), true)
+	@HOST_STATE="$$(minikube -p $(MINIKUBE_PROFILE) status --format='{{.Host}}' 2>/dev/null || echo Unknown)"; \
+	if [ "$$HOST_STATE" = "Running" ]; then \
+		echo "=====Reusing existing minikube shard $(MINIKUBE_PROFILE) (MINIKUBE_REUSE=true)====="; \
+	else \
+		echo "=====Minikube shard $(MINIKUBE_PROFILE) host state is '$$HOST_STATE'; starting it====="; \
+		minikube -p $(MINIKUBE_PROFILE) start --driver=docker --kubernetes-version=$(E2E_KUBERNETES_VERSION) --memory=8192 --cpus=2; \
+	fi
+else
+	minikube -p $(MINIKUBE_PROFILE) delete || true
+	minikube -p $(MINIKUBE_PROFILE) start --driver=docker --kubernetes-version=$(E2E_KUBERNETES_VERSION) --memory=8192 --cpus=2
+endif
+	@HOST_STATE="$$(minikube -p $(MINIKUBE_PROFILE) status --format='{{.Host}}' 2>/dev/null || echo Unknown)"; \
+	[ "$$HOST_STATE" = "Running" ] || (echo "ERROR: minikube profile $(MINIKUBE_PROFILE) failed to reach Running state (Host=$$HOST_STATE)" && exit 1)
+	minikube -p $(MINIKUBE_PROFILE) addons enable ingress
+	minikube -p $(MINIKUBE_PROFILE) addons enable storage-provisioner
+	minikube -p $(MINIKUBE_PROFILE) addons enable default-storageclass
 	@echo "=====Enabling CSI hostpath driver (required for PVC volume expansion tests)"
-	minikube addons enable volumesnapshots
-	minikube addons enable csi-hostpath-driver
+	minikube -p $(MINIKUBE_PROFILE) addons enable volumesnapshots
+	minikube -p $(MINIKUBE_PROFILE) addons enable csi-hostpath-driver
 	@echo "=====Making csi-hostpath-sc the default StorageClass (allowVolumeExpansion=true)"
-	kubectl patch storageclass standard       -p '{"metadata":{"annotations":{"storageclass.kubernetes.io/is-default-class":"false"}}}' || true
-	kubectl patch storageclass csi-hostpath-sc -p '{"metadata":{"annotations":{"storageclass.kubernetes.io/is-default-class":"true"}}}'
+	kubectl --context=$(MINIKUBE_PROFILE) patch storageclass standard       -p '{"metadata":{"annotations":{"storageclass.kubernetes.io/is-default-class":"false"}}}' || true
+	kubectl --context=$(MINIKUBE_PROFILE) patch storageclass csi-hostpath-sc -p '{"metadata":{"annotations":{"storageclass.kubernetes.io/is-default-class":"true"}}}'
 	@echo "=====Ensuring csi-hostpath-sc has allowVolumeExpansion=true (some minikube versions ship it disabled)"
-	kubectl patch storageclass csi-hostpath-sc -p '{"allowVolumeExpansion":true}'
+	kubectl --context=$(MINIKUBE_PROFILE) patch storageclass csi-hostpath-sc -p '{"allowVolumeExpansion":true}'
 	@echo "=====Verifying allowVolumeExpansion is set on csi-hostpath-sc"
-	@test "$$(kubectl get storageclass csi-hostpath-sc -o jsonpath='{.allowVolumeExpansion}')" = "true" \
+	@test "$$(kubectl --context=$(MINIKUBE_PROFILE) get storageclass csi-hostpath-sc -o jsonpath='{.allowVolumeExpansion}')" = "true" \
 		|| (echo "ERROR: csi-hostpath-sc.allowVolumeExpansion is not true after patch" && exit 1)
-	kubectl get storageclass
-	minikube image load $(IMG)
-	minikube image load $(E2E_MARKLOGIC_IMAGE_VERSION)
-	minikube image load "docker.io/haproxytech/haproxy-alpine:3.4.0"
-	minikube image load $(FLUENT_BIT_IMAGE)
-	minikube image ls
+	kubectl --context=$(MINIKUBE_PROFILE) get storageclass
+
+ifeq ($(E2E_SETUP_ISTIO), true)
+	$(MAKE) istioctl
+	@echo "=====Installing Istio (ambient profile) so any test namespace can opt in via istio.io/dataplane-mode=ambient without recreating the cluster====="
+	$(ISTIOCTL) --context=$(MINIKUBE_PROFILE) install --set profile=ambient -y
+	kubectl --context=$(MINIKUBE_PROFILE) wait --for=condition=Ready pods --all -n istio-system --timeout=120s
+	kubectl --context=$(MINIKUBE_PROFILE) get pods -n istio-system
+else
+	@echo "=====Skipping Istio install (E2E_SETUP_ISTIO=$(E2E_SETUP_ISTIO)); namespace-only and focused non-Istio suites do not require it====="
+endif
+	minikube -p $(MINIKUBE_PROFILE) image load $(IMG)
+	minikube -p $(MINIKUBE_PROFILE) image load $(E2E_MARKLOGIC_IMAGE_VERSION)
+	minikube -p $(MINIKUBE_PROFILE) image load "docker.io/haproxytech/haproxy-alpine:3.4.0"
+	minikube -p $(MINIKUBE_PROFILE) image load $(FLUENT_BIT_IMAGE)
+	minikube -p $(MINIKUBE_PROFILE) image ls
 
 .PHONY: e2e-setup-minikube-istio
-e2e-setup-minikube-istio: kustomize controller-gen build docker-build istioctl ## Setup minikube with Istio ambient mode for e2e tests.
-	minikube version
-	minikube delete || true
-	minikube start --driver=docker --kubernetes-version=$(E2E_KUBERNETES_VERSION) --memory=8192 --cpus=2
-	minikube addons enable ingress
-	minikube addons enable storage-provisioner
-	minikube addons enable default-storageclass
-	@echo "=====Installing Istio with ambient profile====="
-	$(ISTIOCTL) install --set profile=ambient -y
-	@echo "=====Waiting for Istio components to be ready====="
-	kubectl wait --for=condition=Ready pods --all -n istio-system --timeout=120s
-	@echo "=====Istio ambient mode installed successfully====="
-	kubectl get pods -n istio-system
-	minikube image load $(IMG)
-	minikube image load $(E2E_MARKLOGIC_IMAGE_VERSION)
-	minikube image load "docker.io/haproxytech/haproxy-alpine:3.4.0"
-	minikube image load $(FLUENT_BIT_IMAGE)
-	minikube image ls
+e2e-setup-minikube-istio: E2E_SETUP_ISTIO=true
+e2e-setup-minikube-istio: e2e-setup-minikube ## Backward-compatible alias for explicitly installing Istio ambient mode during minikube setup.
+	@echo "=====e2e-setup-minikube-istio is an alias of e2e-setup-minikube E2E_SETUP_ISTIO=true====="
 
 .PHONY: e2e-cleanup-minikube
 e2e-cleanup-minikube:
-	@echo "=====Delete minikube cluster"
-	minikube delete
+ifeq ($(MINIKUBE_REUSE), true)
+	@echo "=====MINIKUBE_REUSE=true; leaving minikube shard $(MINIKUBE_PROFILE) running for reuse (Kubernetes-level state is reset by each suite's own TestMain teardown)====="
+else
+	@echo "=====Delete minikube cluster (profile: $(MINIKUBE_PROFILE))"
+	minikube -p $(MINIKUBE_PROFILE) delete
+endif
 
 ##@ EKS Testing
 

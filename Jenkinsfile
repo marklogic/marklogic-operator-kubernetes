@@ -131,23 +131,23 @@ void runTests() {
     sh "make test"
 }
 
-void runMinikubeSetup() {
+void runMinikubeSetup(String profile = 'minikube', boolean reuse = false, boolean setupIstio = true) {
     sh """
-        make e2e-setup-minikube IMG=${operatorRepo}:${VERSION}
+        make e2e-setup-minikube IMG=${operatorRepo}:${VERSION} MINIKUBE_PROFILE=${profile} MINIKUBE_REUSE=${reuse} E2E_SETUP_ISTIO=${setupIstio}
     """
 }
 
-void runE2eTests(String scope = 'cluster', String installMode = 'fresh') {
+void runE2eTests(String scope = 'cluster', String installMode = 'fresh', String profile = 'minikube') {
     if (!(installMode in ['fresh', 'upgrade'])) {
         error "Unsupported E2E install mode '${installMode}'. Supported modes: fresh, upgrade"
     }
 
     if (installMode == 'upgrade') {
         if (scope != 'cluster') {
-            error "Upgrade e2e flow only supports E2E_SCOPE='cluster'."
+            error "Upgrade e2e flow only supports the cluster suite target."
         }
         sh """
-            make e2e-test-upgrade-cluster IMG=${operatorRepo}:${VERSION}
+            make e2e-test-upgrade-cluster IMG=${operatorRepo}:${VERSION} MINIKUBE_PROFILE=${profile}
         """
         return
     }
@@ -156,25 +156,21 @@ void runE2eTests(String scope = 'cluster', String installMode = 'fresh') {
         error "Unsupported E2E scope '${scope}'. Supported scopes: cluster, dynamic-host, volume-resize"
     }
     sh """
-        make e2e-test-${scope} IMG=${operatorRepo}:${VERSION}
+        make e2e-test-${scope} IMG=${operatorRepo}:${VERSION} MINIKUBE_PROFILE=${profile}
     """
 }
 
-void runMinikubeCleanup() {
-    sh '''
-        make e2e-cleanup-minikube
-    '''
-}
-
-void runIstioMinikubeSetup() {
+void runMinikubeCleanup(String profile = 'minikube', boolean reuse = false) {
     sh """
-        make e2e-setup-minikube-istio IMG=${operatorRepo}:${VERSION}
+        make e2e-cleanup-minikube MINIKUBE_PROFILE=${profile} MINIKUBE_REUSE=${reuse}
     """
 }
 
-void runIstioE2eTests() {
+// Istio e2e tests run on the same minikube cluster as the cluster-scoped suite.
+// `make e2e-setup-minikube` installs Istio only when E2E_SETUP_ISTIO=true.
+void runIstioE2eTests(String profile = 'minikube') {
     sh """
-        make e2e-test-istio IMG=${operatorRepo}:${VERSION} E2E_ISTIO_AMBIENT=true
+        make e2e-test-istio IMG=${operatorRepo}:${VERSION} E2E_ISTIO_AMBIENT=true MINIKUBE_PROFILE=${profile}
     """
 }
 
@@ -241,20 +237,20 @@ void runEKSIstioE2eTests() {
     }
 }
 
-void runHelmNamespaceScopedE2eTests(String installMode = 'fresh') {
+void runHelmNamespaceScopedE2eTests(String installMode = 'fresh', String profile = 'minikube') {
     if (!(installMode in ['fresh', 'upgrade'])) {
         error "Unsupported E2E install mode '${installMode}'. Supported modes: fresh, upgrade"
     }
 
     if (installMode == 'upgrade') {
         sh """
-            make e2e-test-upgrade-helm-namespace IMG=${operatorRepo}:${VERSION}
+            make e2e-test-upgrade-helm-namespace IMG=${operatorRepo}:${VERSION} MINIKUBE_PROFILE=${profile}
         """
         return
     }
 
     sh """
-        make e2e-test-helm-namespace IMG=${operatorRepo}:${VERSION}
+        make e2e-test-helm-namespace IMG=${operatorRepo}:${VERSION} MINIKUBE_PROFILE=${profile}
     """
 }
 
@@ -329,10 +325,10 @@ pipeline {
     
     triggers {
         // Trigger nightly builds on the develop branch
-        parameterizedCron( env.BRANCH_NAME == 'develop' ? '''00 05 * * * % E2E_MARKLOGIC_IMAGE_VERSION=ml-docker-db-dev-tierpoint.bed-artifactory.bedford.progress.com/marklogic/marklogic-server-ubi-rootless:latest-12
-                                                             00 05 * * * % E2E_MARKLOGIC_IMAGE_VERSION=ml-docker-db-dev-tierpoint.bed-artifactory.bedford.progress.com/marklogic/marklogic-server-ubi-rootless:latest-11; PUBLISH_IMAGE=false
-                                                             00 07 * * * % E2E_MARKLOGIC_IMAGE_VERSION=ml-docker-db-dev-tierpoint.bed-artifactory.bedford.progress.com/marklogic/marklogic-server-ubi-rootless:latest-12; VERIFY_ISTIO_AMBIENT=true
-                                                             30 05 * * * % TEST_ON_EKS=true; VERIFY_ISTIO_AMBIENT=true''' : '')
+        parameterizedCron( env.BRANCH_NAME == 'develop' ? '''00 05 * * * % E2E_MARKLOGIC_IMAGE_VERSION=ml-docker-db-dev-tierpoint.bed-artifactory.bedford.progress.com/marklogic/marklogic-server-ubi-rootless:latest-12; E2E_SCOPE=both
+                 00 05 * * * % E2E_MARKLOGIC_IMAGE_VERSION=ml-docker-db-dev-tierpoint.bed-artifactory.bedford.progress.com/marklogic/marklogic-server-ubi-rootless:latest-11; PUBLISH_IMAGE=false; E2E_SCOPE=both
+                 00 07 * * * % E2E_MARKLOGIC_IMAGE_VERSION=ml-docker-db-dev-tierpoint.bed-artifactory.bedford.progress.com/marklogic/marklogic-server-ubi-rootless:latest-12; VERIFY_ISTIO_AMBIENT=true; E2E_SCOPE=both
+                 30 05 * * * % E2E_RUNTIME=eks; E2E_SCOPE=cluster; VERIFY_ISTIO_AMBIENT=true''' : '')
     }
 
     environment {
@@ -347,13 +343,12 @@ pipeline {
         string(name: 'E2E_MARKLOGIC_IMAGE_VERSION', defaultValue: 'ml-docker-db-dev-tierpoint.bed-artifactory.bedford.progress.com/marklogic/marklogic-server-ubi-rootless:latest-12', description: 'Docker image to use for tests.', trim: true)
         string(name: 'VERSION', defaultValue: '1.3.0', description: 'Version to tag the image with.', trim: true)
         choice(name: 'E2E_INSTALL_MODE', choices: ['fresh', 'upgrade'], description: 'Run the standard fresh-install e2e flow or the upgrade validation flow. Default is fresh.')
-        choice(name: 'E2E_SCOPE', choices: ['cluster', 'dynamic-host', 'volume-resize'], description: 'E2E scope for Minikube runs. Use cluster for full suite; dynamic-host and volume-resize run focused targets.')
+        choice(name: 'E2E_SCOPE', choices: ['namespace-only', 'cluster', 'both', 'dynamic-host', 'volume-resize'], description: 'Combined test selector: namespace-only runs Helm namespace suite, cluster runs full cluster suite, both runs cluster+namespace in parallel minikube shards, dynamic-host and volume-resize run focused cluster tests.')
+        choice(name: 'E2E_RUNTIME', choices: ['minikube', 'eks'], description: 'Execution runtime for e2e tests. minikube runs profile-parallel shards; eks runs the EKS suite only.')
         booleanParam(name: 'PUBLISH_IMAGE', defaultValue: false, description: 'Publish image to internal registry')
         string(name: 'emailList', defaultValue: emailList, description: 'List of email for build notification', trim: true)
-        booleanParam(name: 'VERIFY_ISTIO_AMBIENT', defaultValue: true, description: 'Run Istio ambient mode e2e tests (requires fresh minikube cluster with Istio)')
-        booleanParam(name: 'TEST_ON_EKS', defaultValue: false, description: 'Run e2e tests on the EKS cluster (jenkins-kube-ninjas) instead of Minikube. Requires KUBE_NINJAS_OPS_AWS_JENKINS credentials on this agent.')
-        string(name: 'EKS_MARKLOGIC_IMAGE_TAG', defaultValue: 'latest-12', description: 'MarkLogic image tag to pull from the EKS ECR registry when TEST_ON_EKS=true. The full ECR URL is constructed at runtime from the AWS account ID resolved via STS.', trim: true)
-        booleanParam(name: 'VERIFY_HELM_NAMESPACE_SCOPED', defaultValue: false, description: 'Run namespace-scoped e2e tests via Helm chart install (validates Role/RoleBinding, no ClusterRole)')
+        booleanParam(name: 'VERIFY_ISTIO_AMBIENT', defaultValue: true, description: 'Run Istio ambient mode e2e tests. For Minikube, Istio is installed only when this test path is selected; no dedicated cluster is created.')
+        string(name: 'EKS_MARKLOGIC_IMAGE_TAG', defaultValue: 'latest-12', description: 'MarkLogic image tag to pull from the EKS ECR registry when E2E_RUNTIME=eks. The full ECR URL is constructed at runtime from the AWS account ID resolved via STS.', trim: true)
     }
 
     stages {
@@ -370,104 +365,142 @@ pipeline {
         }
 
         // -----------------------------------------------------------------------
-        // E2E Tests — runs on Minikube (default) or the shared EKS cluster.
-        // Minikube and EKS paths are unified into the same named stages.
-        // The EKS cluster lock is acquired only for EKS builds, so unrelated
-        // Minikube builds are never blocked. Cleanup is guaranteed via
-        // try/finally even when earlier stages throw.
+        // E2E Tests — run minikube shards in one shell step using background jobs.
+        // This avoids Jenkins branch scheduling behavior and makes parallelism
+        // explicit at the process level: cluster-scoped shard and namespace-scoped
+        // shard run concurrently, each with its own MINIKUBE_PROFILE, KUBECONFIG,
+        // and MINIKUBE_HOME.
         // -----------------------------------------------------------------------
         stage('E2E Tests') {
             steps {
                 script {
-                    if (params.TEST_ON_EKS && params.E2E_SCOPE != 'cluster') {
-                        error "E2E_SCOPE='${params.E2E_SCOPE}' is not supported when TEST_ON_EKS=true. Use E2E_SCOPE='cluster'."
+                    def runOnEks = params.E2E_RUNTIME == 'eks'
+                    def runClusterScoped = params.E2E_SCOPE in ['cluster', 'both', 'dynamic-host', 'volume-resize']
+                    def runNamespaceScoped = params.E2E_SCOPE in ['namespace-only', 'both']
+                    def clusterScope = params.E2E_SCOPE in ['dynamic-host', 'volume-resize'] ? params.E2E_SCOPE : 'cluster'
+
+                    if (!runClusterScoped && !runNamespaceScoped) {
+                        echo "No e2e suites selected (E2E_SCOPE=${params.E2E_SCOPE}); skipping e2e tests."
+                        return
                     }
 
                     if (params.E2E_INSTALL_MODE == 'upgrade') {
-                        if (params.TEST_ON_EKS) {
-                            error "E2E_INSTALL_MODE='upgrade' is only supported on the Minikube path right now. Use TEST_ON_EKS=false."
+                        if (runOnEks) {
+                            error "E2E_INSTALL_MODE='upgrade' is only supported on the Minikube path right now. Use E2E_RUNTIME='minikube'."
                         }
-                        if (params.E2E_SCOPE != 'cluster') {
-                            error "E2E_INSTALL_MODE='upgrade' requires E2E_SCOPE='cluster'."
+                        if (clusterScope != 'cluster') {
+                            error "E2E_INSTALL_MODE='upgrade' supports E2E_SCOPE values: cluster, namespace-only, both."
                         }
                     }
 
-                    def doSetup    = { params.TEST_ON_EKS ? runEKSSetup()          : runMinikubeSetup() }
-                    def doTests    = { params.TEST_ON_EKS ? runEKSE2eTests()        : runE2eTests(params.E2E_SCOPE, params.E2E_INSTALL_MODE) }
-                    def doCleanup  = {
-                        catchError(buildResult: 'SUCCESS', stageResult: 'FAILURE') {
-                            if (params.TEST_ON_EKS) { runEKSCleanup() } else { runMinikubeCleanup() }
+                    if (runOnEks) {
+                        if (!runClusterScoped) {
+                            error "E2E_RUNTIME='eks' requires E2E_SCOPE to include cluster tests."
                         }
-                    }
-                    def doIstioSetup  = { params.TEST_ON_EKS ? runEKSIstioSetup()      : runIstioMinikubeSetup() }
-                    def doIstioTests  = { params.TEST_ON_EKS ? runEKSIstioE2eTests()   : runIstioE2eTests() }
+                        if (runNamespaceScoped) {
+                            error "E2E_RUNTIME='eks' does not support namespace-scoped tests. Set E2E_SCOPE='cluster'."
+                        }
+                        if (clusterScope != 'cluster') {
+                            error "E2E_RUNTIME='eks' does not support focused plans '${params.E2E_SCOPE}'. Use E2E_SCOPE='cluster'."
+                        }
 
-                    def testBody = {
+                        def runIstioOnEKS = params.E2E_INSTALL_MODE == 'fresh' && params.VERIFY_ISTIO_AMBIENT
                         try {
-                            stage('Setup')         { doSetup() }
-                            stage('Run e2e Tests') { doTests() }
-                        } finally {
-                            stage('Cleanup')       { doCleanup() }
-                        }
-                        // Istio stages are always declared so that Jenkins Stage View
-                        // shows a consistent set of columns across all run types.
-                        // When VERIFY_ISTIO_AMBIENT is false the stages are entered but
-                        // immediately skipped, preserving their position in the view.
-                        try {
-                            stage('Istio Setup') {
-                                if (params.E2E_INSTALL_MODE == 'fresh' && params.E2E_SCOPE == 'cluster' && params.VERIFY_ISTIO_AMBIENT) { doIstioSetup() }
-                                else { echo "Istio tests skipped (E2E_INSTALL_MODE=${params.E2E_INSTALL_MODE}, E2E_SCOPE=${params.E2E_SCOPE}, VERIFY_ISTIO_AMBIENT=${params.VERIFY_ISTIO_AMBIENT})" }
-                            }
-                            stage('Run Istio e2e Tests') {
-                                if (params.E2E_INSTALL_MODE == 'fresh' && params.E2E_SCOPE == 'cluster' && params.VERIFY_ISTIO_AMBIENT) { doIstioTests() }
-                                else { echo "Istio tests skipped (E2E_INSTALL_MODE=${params.E2E_INSTALL_MODE}, E2E_SCOPE=${params.E2E_SCOPE}, VERIFY_ISTIO_AMBIENT=${params.VERIFY_ISTIO_AMBIENT})" }
+                            lock(resource: 'jenkinsKubeNinjasEksCluster', inversePrecedence: true) {
+                                timeout(time: 3, unit: 'HOURS') {
+                                    stage('Setup') {
+                                        if (runIstioOnEKS) { runEKSIstioSetup() }
+                                        else               { runEKSSetup() }
+                                    }
+                                    stage('Run e2e Tests') { runEKSE2eTests() }
+                                    stage('Run Istio e2e Tests') {
+                                        if (runIstioOnEKS) { runEKSIstioE2eTests() }
+                                        else { echo "Istio tests skipped (E2E_INSTALL_MODE=${params.E2E_INSTALL_MODE}, VERIFY_ISTIO_AMBIENT=${params.VERIFY_ISTIO_AMBIENT})" }
+                                    }
+                                }
                             }
                         } finally {
-                            stage('Istio Cleanup') {
-                                if (params.E2E_INSTALL_MODE == 'fresh' && params.E2E_SCOPE == 'cluster' && params.VERIFY_ISTIO_AMBIENT) { doCleanup() }
-                                else { echo "Istio tests skipped (E2E_INSTALL_MODE=${params.E2E_INSTALL_MODE}, E2E_SCOPE=${params.E2E_SCOPE}, VERIFY_ISTIO_AMBIENT=${params.VERIFY_ISTIO_AMBIENT})" }
+                            stage('Cleanup') {
+                                catchError(buildResult: 'SUCCESS', stageResult: 'FAILURE') {
+                                    runEKSCleanup()
+                                }
                             }
                         }
+                        return
                     }
 
-                    if (params.TEST_ON_EKS) {
-                        lock(resource: 'jenkinsKubeNinjasEksCluster', inversePrecedence: true) {
-                            timeout(time: 3, unit: 'HOURS') {
-                                testBody()
-                            }
+                    def clusterMinikubeProfile = 'e2e-cluster'
+                    def namespaceMinikubeProfile = 'e2e-namespace'
+                    def runIstio = params.E2E_INSTALL_MODE == 'fresh' && runClusterScoped && clusterScope == 'cluster' && params.VERIFY_ISTIO_AMBIENT
+                    def clusterSetupIstio = runIstio ? 'true' : 'false'
+                    def clusterTestCommand = params.E2E_INSTALL_MODE == 'upgrade'
+                        ? "make e2e-test-upgrade-cluster IMG=${operatorRepo}:${VERSION} MINIKUBE_PROFILE=${clusterMinikubeProfile}"
+                        : "make e2e-test-${clusterScope} IMG=${operatorRepo}:${VERSION} MINIKUBE_PROFILE=${clusterMinikubeProfile}"
+                    def namespaceTestCommand = params.E2E_INSTALL_MODE == 'upgrade'
+                        ? "make e2e-test-upgrade-helm-namespace IMG=${operatorRepo}:${VERSION} MINIKUBE_PROFILE=${namespaceMinikubeProfile}"
+                        : "make e2e-test-helm-namespace IMG=${operatorRepo}:${VERSION} MINIKUBE_PROFILE=${namespaceMinikubeProfile}"
+
+                    sh """
+                        set -euo pipefail
+
+                        run_cluster_shard() {
+                            export MINIKUBE_PROFILE='${clusterMinikubeProfile}'
+                            export KUBECONFIG='/space/.kube-config-cluster'
+                            export MINIKUBE_HOME='/space/minikube-cluster/'
+
+                            echo '=====Starting cluster-scoped shard====='
+                            make e2e-setup-minikube IMG=${operatorRepo}:${VERSION} MINIKUBE_PROFILE=${clusterMinikubeProfile} MINIKUBE_REUSE=true E2E_SETUP_ISTIO=${clusterSetupIstio}
+                            ${clusterTestCommand}
+                            if [ '${runIstio}' = 'true' ]; then
+                                make e2e-test-istio IMG=${operatorRepo}:${VERSION} E2E_ISTIO_AMBIENT=true MINIKUBE_PROFILE=${clusterMinikubeProfile}
+                            else
+                                echo '=====Istio tests skipped for cluster shard====='
+                            fi
+                            make e2e-cleanup-minikube MINIKUBE_PROFILE=${clusterMinikubeProfile} MINIKUBE_REUSE=true
+                            echo '=====Cluster-scoped shard complete====='
                         }
-                    } else {
-                        testBody()
-                    }
-                }
-            }
-        }
 
-        stage('Helm-NS-Minikube-Setup') {
-            when {
-                expression { return params.VERIFY_HELM_NAMESPACE_SCOPED != false && params.E2E_SCOPE == 'cluster' }
-            }
-            steps {
-                runMinikubeSetup()
-            }
-        }
+                        run_namespace_shard() {
+                            export MINIKUBE_PROFILE='${namespaceMinikubeProfile}'
+                            export KUBECONFIG='/space/.kube-config-namespace'
+                            export MINIKUBE_HOME='/space/minikube-namespace/'
 
-        stage('Run-Helm-NS-e2e-Tests') {
-            when {
-                expression { return params.VERIFY_HELM_NAMESPACE_SCOPED != false && params.E2E_SCOPE == 'cluster' }
-            }
-            steps {
-                runHelmNamespaceScopedE2eTests(params.E2E_INSTALL_MODE)
-            }
-        }
+                            echo '=====Starting namespace-scoped shard====='
+                            make e2e-setup-minikube IMG=${operatorRepo}:${VERSION} MINIKUBE_PROFILE=${namespaceMinikubeProfile} MINIKUBE_REUSE=true E2E_SETUP_ISTIO=false
+                            ${namespaceTestCommand}
+                            make e2e-cleanup-minikube MINIKUBE_PROFILE=${namespaceMinikubeProfile} MINIKUBE_REUSE=true
+                            echo '=====Namespace-scoped shard complete====='
+                        }
 
-        stage('Helm-NS-Cleanup') {
-            when {
-                expression { return params.VERIFY_HELM_NAMESPACE_SCOPED != false && params.E2E_SCOPE == 'cluster' }
-            }
-            steps {
-                catchError(buildResult: 'SUCCESS', stageResult: 'FAILURE') {
-                    runMinikubeCleanup()
+                        cluster_pid=''
+                        namespace_pid=''
+
+                        if [ '${runClusterScoped}' = 'true' ]; then
+                            (run_cluster_shard) &
+                            cluster_pid=\$!
+                        fi
+
+                        if [ '${runNamespaceScoped}' = 'true' ]; then
+                            (run_namespace_shard) &
+                            namespace_pid=\$!
+                        fi
+
+                        rc=0
+
+                        if [ -n "\$cluster_pid" ]; then
+                            if ! wait "\$cluster_pid"; then
+                                rc=1
+                            fi
+                        fi
+
+                        if [ -n "\$namespace_pid" ]; then
+                            if ! wait "\$namespace_pid"; then
+                                rc=1
+                            fi
+                        fi
+
+                        exit "\$rc"
+                    """
                 }
             }
         }

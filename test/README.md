@@ -6,8 +6,8 @@ and **EKS** (the Jenkins CI target).
 
 | Package | Description |
 |---|---|
+| `test/e2e-helm` | **Namespace-scoped tests (default).** Operator installed via `helm install` with `scope.type=namespace`. Validates that Role/RoleBinding per watched namespace is sufficient and no ClusterRole is present. |
 | `test/e2e` | Cluster-scoped tests. Operator deployed via `make deploy` (kustomize, ClusterRole/ClusterRoleBinding). |
-| `test/e2e-helm` | Namespace-scoped tests. Operator installed via `helm install` with `scope.type=namespace`. Validates that Role/RoleBinding per watched namespace is sufficient and no ClusterRole is present. |
 
 ---
 
@@ -23,6 +23,60 @@ and **EKS** (the Jenkins CI target).
 make e2e-setup-minikube
 make e2e-test
 make e2e-cleanup-minikube
+```
+
+`make e2e-test` runs the **namespace-scoped** suite (`test/e2e-helm`) by default. Set
+`E2E_SCOPE=cluster` to run the cluster-scoped suite (`test/e2e`) instead:
+
+```bash
+make e2e-test E2E_SCOPE=cluster
+```
+
+`e2e-setup-minikube` can also install Istio in ambient mode (`E2E_SETUP_ISTIO=true`,
+default), so Istio tests (`make e2e-test-istio`) run against the same cluster —
+no separate cluster/shard is required. Tests opt in to Istio per-namespace via
+the `istio.io/dataplane-mode: ambient` label rather than by recreating the cluster.
+For faster namespace-only or focused non-Istio runs, pass `E2E_SETUP_ISTIO=false`.
+
+### Parallelizing e2e runs with minikube profiles
+
+Every `e2e-setup-minikube*`/`e2e-test-*`/`e2e-cleanup-minikube` target accepts a
+`MINIKUBE_PROFILE` variable (default: `minikube`). Use distinct profiles to run
+independent suites concurrently against separate minikube clusters:
+
+```bash
+make e2e-setup-minikube MINIKUBE_PROFILE=e2e-cluster &
+make e2e-setup-minikube MINIKUBE_PROFILE=e2e-namespace &
+wait
+
+make e2e-test-cluster MINIKUBE_PROFILE=e2e-cluster &
+make e2e-test-helm-namespace MINIKUBE_PROFILE=e2e-namespace &
+wait
+
+make e2e-cleanup-minikube MINIKUBE_PROFILE=e2e-cluster
+make e2e-cleanup-minikube MINIKUBE_PROFILE=e2e-namespace
+```
+
+Each run is pinned to its own cluster via an explicit `-context=$MINIKUBE_PROFILE`
+passed to `go test`, so parallel runs never race over kubectl's shared
+current-context. (The `e2e-test-upgrade-*` targets shell out to `kubectl`/`helm`
+directly and rely on the current-context instead, so avoid running those in
+parallel with other profiles from the same shell.)
+
+`e2e-setup-minikube` and `e2e-cleanup-minikube` also accept `MINIKUBE_REUSE`
+(default: `false`). With `MINIKUBE_REUSE=true`, setup only starts the profile if
+it isn't already running (skipping delete/recreate), and cleanup leaves it
+running instead of deleting it. This turns each `MINIKUBE_PROFILE` into a
+persistent "shard": running two profiles concurrently every time otherwise means
+two `minikube start`/`delete` calls contend for the same host-level locks
+(e.g. iptables/docker network setup) on every run, which can make parallel runs
+look serialized. With `MINIKUBE_REUSE=true` that cost is paid once, and each
+suite's own TestMain teardown still resets Kubernetes-level state between runs:
+
+```bash
+make e2e-setup-minikube MINIKUBE_PROFILE=e2e-cluster MINIKUBE_REUSE=true E2E_SETUP_ISTIO=true &
+make e2e-setup-minikube MINIKUBE_PROFILE=e2e-namespace MINIKUBE_REUSE=true E2E_SETUP_ISTIO=false &
+wait
 ```
 
 ---
@@ -51,7 +105,7 @@ For full setup and operational details see [test/eks-config/README.md](eks-confi
 Each test is assigned a "type" label, allowing you to run only the tests of a specified type.
 
 ```bash
-# Cluster-scoped (default — what `make e2e-test` runs)
+# Cluster-scoped (make e2e-test now defaults to namespace-scoped — see below)
 make e2e-test-cluster
 ```
 
@@ -100,11 +154,12 @@ go test -v ./test/e2e -count=1 -args --labels="type=metrics"
 
 ---
 
-## test/e2e-helm — Namespace-scoped (Helm)
+## test/e2e-helm — Namespace-scoped (Helm, default)
 
 This suite installs the operator via the Helm chart with `scope.type=namespace` so the operator
 runs with only a Role/RoleBinding per watched namespace — no ClusterRole backstop.
-It is the only reliable way to validate namespace-scoped RBAC behaviour.
+It is the only reliable way to validate namespace-scoped RBAC behaviour, and is what
+`make e2e-test` runs by default.
 
 ### Setup and run
 
