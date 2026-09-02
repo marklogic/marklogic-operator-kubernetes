@@ -33,3 +33,20 @@ The functional spec assumes a specific integration model (cluster-wide credentia
 10. Research and document whether Kubernetes CSI abstractions (for example, mounting object storage as a volume) are a viable alternative or complementary integration path. State explicitly whether CSI is in scope for v1 or remains a follow-up and ensure that the research does not block the MarkLogic-native credential path.
 
 No production code is required to ship from this story; throwaway/POC code is acceptable and should not block on full test coverage.
+
+## Research Status
+
+Status of each AC above, based on the findings recorded in `docs/spec/[SPEC]Object Storage.md` (Requirement Review + Validation Status table) and `docs/spec/[STEPS] Object Storage.md`.
+
+| AC | Status | Notes |
+|---|---|---|
+| 1 | ✅ Confirmed | `204` not `201`; `type` in body not query string; `secret-key` is non-deterministic ciphertext on `GET`, `access-key`/`session-token` plaintext. |
+| 2 | ✅ Confirmed | `manage-admin` alone returns `403`; both `manage-admin`+`security` and scoped `credentials-set-{aws,azure}` work. v1 uses existing bootstrap admin credential; dedicated least-privilege user deferred as optional hardening. |
+| 3 | ✅ Confirmed | Flow works end-to-end for both providers; redundant re-apply of unchanged material returns `204` with no error. |
+| 4 | ⚠️ Partially open | Fingerprinting is confirmed as the only viable idempotency mechanism (direct read-back comparison is impossible). Not yet validated at the Go code level: salt stability across restarts, canonical field ordering, optional-field behavior. **Still open:** how Secret changes trigger reconciliation — a fingerprint alone is not a watch mechanism. |
+| 5 | ✅ Confirmed | v1 is cluster-wide credential configuration only; forest/backup/region/endpoint automation is out of scope. |
+| 6 | ✅ Done | Findings matrix exists as the Validation Status table in `[SPEC]Object Storage.md`. |
+| 7 | ✅ Confirmed | Expanded into a per-provider phase + machine-readable failure-reason model; no secret material in status. |
+| 8 | ❌ No-Go | Verified impossible, not just deferred — MarkLogic ignores the AWS SDK credential chain and has no web-identity step; IAM-role fallback is disabled by the operator image's `MARKLOGIC_EC2_HOST=0`. |
+| 9 | ⏸️ Deferred | Not attempted; requires Azure infrastructure not yet provisioned. Out of scope for v1 regardless of outcome. |
+| 10 | ⏸️ Deferred | Recorded as a future research item; does not block the MarkLogic-native credential path. |
