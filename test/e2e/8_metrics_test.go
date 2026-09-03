@@ -54,6 +54,7 @@ const (
 func TestMetricsEndpoint(t *testing.T) {
 	// Resolve runtime configuration
 	trackTest(t)
+	runTopLevelParallel(t)
 	metricsSecure := os.Getenv("E2E_METRICS_SECURE") != "false" // default true
 	scopeType := os.Getenv("E2E_SCOPE_TYPE")
 	if scopeType == "" {

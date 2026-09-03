@@ -53,6 +53,7 @@ const (
 // 5) scale-to-zero
 func TestDynamicHostLifecycleClusterScoped(t *testing.T) {
 	trackTest(t)
+	runTopLevelParallel(t)
 
 	feature := features.New("Dynamic Host Lifecycle — Cluster-Scoped").
 		WithLabel("type", "dynamic-host")

@@ -40,6 +40,7 @@ var (
 	operatorNamespace   = envOrDefault("E2E_OPERATOR_NAMESPACE", "marklogic-operator-system")
 	namespace           = operatorNamespace
 	useExistingOperator = strings.EqualFold(os.Getenv("E2E_USE_EXISTING_OPERATOR"), "true")
+	topLevelParallelEnabled = !strings.EqualFold(envOrDefault("E2E_TOP_LEVEL_PARALLEL", "true"), "false")
 
 	staleE2ENamespaces = []string{
 		"ml-dynamic-host",
@@ -50,7 +51,11 @@ var (
 		"marklogic-tlsednode",
 		"haproxy-pathbased",
 		"haproxy-test",
-		"log-test",
+		"log-test-disabled",
+		"log-test-partial",
+		"log-test-secret-env",
+		"log-test-resources",
+		"log-test-filters",
 		"ml-resize-a",
 		"ml-resize-b",
 		"loki",
@@ -115,6 +120,14 @@ func trackTest(t *testing.T) {
 	})
 }
 
+// runTopLevelParallel opts top-level tests into parallel mode unless explicitly disabled.
+func runTopLevelParallel(t *testing.T) {
+	t.Helper()
+	if topLevelParallelEnabled {
+		t.Parallel()
+	}
+}
+
 // printTestSummary logs a structured pass/fail banner of all tracked tests to stdout.
 func printTestSummary() {
 	trackMu.Lock()
@@ -177,6 +190,7 @@ func TestMain(m *testing.M) {
 	log.Printf("MarkLogic image: %s", marklogicImage)
 	log.Printf("Kubernetes version: %s", kubernetesVer)
 	log.Printf("Istio ambient mode: %v", isIstioAmbientEnabled())
+	log.Printf("Top-level test parallelization: %v", topLevelParallelEnabled)
 	log.Printf("Operator namespace: %s", operatorNamespace)
 	log.Printf("Reuse existing operator install: %v", useExistingOperator)
 
