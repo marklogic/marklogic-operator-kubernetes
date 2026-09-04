@@ -27,6 +27,7 @@ var NewObjectStorageManagementClient = func(opts mlmanage.ClientOptions) mlmanag
 const (
 	awsAccessKeySecretKey    = "accessKey"
 	awsSecretKeySecretKey    = "secretKey"
+	awsSessionTokenSecretKey = "sessionToken"
 	azureStorageAccountKey   = "storageAccount"
 	azureStorageKeySecretKey = "storageKey"
 )
@@ -89,14 +90,16 @@ func (cc *ClusterContext) reconcileAWSObjectStorage(client mlmanage.Client, spec
 		return failedStatus(marklogicv1.ObjectStorageReasonSecretKeyMissing,
 			fmt.Sprintf("secret %q must contain non-empty %q and %q", spec.SecretName, awsAccessKeySecretKey, awsSecretKeySecretKey))
 	}
+	// sessionToken is optional: absent means long-lived IAM user keys only.
+	sessionToken, _ := secretValue(secret, awsSessionTokenSecretKey)
 
-	material := objectstorage.AWSMaterial{AccessKey: accessKey, SecretKey: secretKey}
+	material := objectstorage.AWSMaterial{AccessKey: accessKey, SecretKey: secretKey, SessionToken: sessionToken}
 	fingerprint := material.Fingerprint(cc.objectStorageSalt())
 	if applied := cc.alreadyApplied(providerAWS, fingerprint); applied != nil {
 		return applied
 	}
 
-	if err := client.EnsureAWSCredentials(cc.Ctx, mlmanage.AWSCredentials{AccessKey: accessKey, SecretKey: secretKey}); err != nil {
+	if err := client.EnsureAWSCredentials(cc.Ctx, mlmanage.AWSCredentials{AccessKey: accessKey, SecretKey: secretKey, SessionToken: sessionToken}); err != nil {
 		return cc.applyFailure(providerAWS, err)
 	}
 

@@ -36,10 +36,11 @@ func TestFingerprintChangesWhenAnyFieldChanges(t *testing.T) {
 	baseline := awsMaterial().Fingerprint(testSalt)
 
 	awsCases := map[string]AWSMaterial{
-		"accessKey changed": {AccessKey: "AKIAIOSFODNN7CHANGED", SecretKey: testSecretKey},
-		"secretKey changed": {AccessKey: testAccessKey, SecretKey: "wJalrXUtnFEMI/K7MDENG/bPxRfiCYCHANGED"},
-		"accessKey cleared": {AccessKey: "", SecretKey: testSecretKey},
-		"secretKey cleared": {AccessKey: testAccessKey, SecretKey: ""},
+		"accessKey changed":  {AccessKey: "AKIAIOSFODNN7CHANGED", SecretKey: testSecretKey},
+		"secretKey changed":  {AccessKey: testAccessKey, SecretKey: "wJalrXUtnFEMI/K7MDENG/bPxRfiCYCHANGED"},
+		"accessKey cleared":  {AccessKey: "", SecretKey: testSecretKey},
+		"secretKey cleared":  {AccessKey: testAccessKey, SecretKey: ""},
+		"sessionToken added": {AccessKey: testAccessKey, SecretKey: testSecretKey, SessionToken: "testSessionToken123"},
 	}
 
 	for name, material := range awsCases {

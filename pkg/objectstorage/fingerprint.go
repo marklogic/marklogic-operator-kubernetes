@@ -21,17 +21,20 @@ const (
 
 const redacted = "[REDACTED]"
 
-// AWSMaterial is resolved AWS credential material. MarkLogic also accepts an
-// optional session-token; it is deliberately unsupported (see [SPEC]Object Storage.md).
+// AWSMaterial is resolved AWS credential material. SessionToken is optional and
+// supports STS temporary credentials; when empty it is omitted from the applied
+// payload exactly as before (see [SPEC]Object Storage.md, Requirement Review #6).
 type AWSMaterial struct {
-	AccessKey string
-	SecretKey string
+	AccessKey    string
+	SecretKey    string
+	SessionToken string
 }
 
 func (m AWSMaterial) Fields() map[string]string {
 	return map[string]string{
-		"accessKey": m.AccessKey,
-		"secretKey": m.SecretKey,
+		"accessKey":    m.AccessKey,
+		"secretKey":    m.SecretKey,
+		"sessionToken": m.SessionToken,
 	}
 }
 

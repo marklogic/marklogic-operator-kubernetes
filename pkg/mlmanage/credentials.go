@@ -13,12 +13,14 @@ import (
 const credentialsPropertiesPath = "/manage/v2/credentials/properties"
 
 // AWSCredentials is the AWS credential material applied cluster-wide.
-// MarkLogic also accepts an optional session-token; it is intentionally not
-// supported because it expires, cannot be refreshed by the operator, and is
-// returned in plaintext by the Management API.
+// SessionToken is optional, for STS temporary credentials. MarkLogic returns
+// it in plaintext on GET (unlike SecretKey, which is encrypted), so supplying
+// it is an explicit, user-accepted exposure; keeping it refreshed is the
+// caller's responsibility via the referenced Secret.
 type AWSCredentials struct {
-	AccessKey string
-	SecretKey string
+	AccessKey    string
+	SecretKey    string
+	SessionToken string
 }
 
 // AzureCredentials is the Azure Blob credential material applied cluster-wide.
@@ -81,11 +83,15 @@ func BuildAWSCredentialsPayload(config AWSCredentials) (map[string]any, error) {
 
 	// MarkLogic selects the provider from this body field. The documented
 	// ?type= query parameter has no effect on how the payload is parsed.
-	return map[string]any{
+	payload := map[string]any{
 		"type":       "aws",
 		"access-key": config.AccessKey,
 		"secret-key": config.SecretKey,
-	}, nil
+	}
+	if config.SessionToken != "" {
+		payload["session-token"] = config.SessionToken
+	}
+	return payload, nil
 }
 
 // BuildAzureCredentialsPayload returns the Management API representation for Azure credentials.

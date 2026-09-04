@@ -105,16 +105,53 @@ kubectl -n marklogic-operator-system rollout status deploy/marklogic-operator-co
 
 ## Demo: rotation is automatic
 
-Update either Secret's value and re-apply — no edit to the `MarklogicCluster` is needed:
+Update either Secret's value and re-apply — no edit to the `MarklogicCluster` is needed.
+`generate-updated-secret.sh` below rebuilds `ml-s3-credentials` from whatever
+`AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` (and optional `AWS_SESSION_TOKEN`) are
+currently in your shell env, so you can point it at a rotated IAM key or a real STS
+temporary credential:
 
 ```bash
-kubectl create secret generic ml-s3-credentials \
-  --from-literal=accessKey=AKIA... --from-literal=secretKey=NEWKEY... \
+#!/usr/bin/env bash
+# generate-updated-secret.sh — rebuild and re-apply ml-s3-credentials from env vars.
+set -euo pipefail
+
+: "${AWS_ACCESS_KEY_ID:?export the new access key first}"
+: "${AWS_SECRET_ACCESS_KEY:?export the new secret key first}"
+
+args=(
+  --from-literal=accessKey="$AWS_ACCESS_KEY_ID"
+  --from-literal=secretKey="$AWS_SECRET_ACCESS_KEY"
+)
+# sessionToken is optional — omit AWS_SESSION_TOKEN to rotate a plain IAM key.
+if [[ -n "${AWS_SESSION_TOKEN:-}" ]]; then
+  args+=(--from-literal=sessionToken="$AWS_SESSION_TOKEN")
+fi
+
+kubectl -n marklogic create secret generic ml-s3-credentials "${args[@]}" \
   --dry-run=client -o yaml | kubectl apply -f -
 ```
 
+Run it directly with a rotated long-lived key:
+
+```bash
+AWS_ACCESS_KEY_ID=AKIA... AWS_SECRET_ACCESS_KEY=NEWKEY... ./generate-updated-secret.sh
+```
+
+Or demo the opt-in `sessionToken` path with a real STS temporary credential:
+
+```bash
+eval "$(aws sts get-session-token --duration-seconds 900 --query \
+  'Credentials.[join(`=`,[`export AWS_ACCESS_KEY_ID`,AccessKeyId]),join(`=`,[`export AWS_SECRET_ACCESS_KEY`,SecretAccessKey]),join(`=`,[`export AWS_SESSION_TOKEN`,SessionToken])]' \
+  --output text)"
+./generate-updated-secret.sh
+```
+
 The operator detects the change (fingerprint differs) and re-applies automatically;
-`status.objectStorage.aws.lastAppliedTime` updates.
+`status.objectStorage.aws.lastAppliedTime` updates. With a session token present, the
+Management API payload now includes `session-token` — visible in plaintext if you repeat
+the Part 1 step 3 `curl`, which is the accepted opt-in tradeoff (see [SPEC]Object Storage.md,
+Security NFR #5).
 
 ## If something goes wrong
 

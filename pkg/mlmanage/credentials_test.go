@@ -80,7 +80,29 @@ func TestEnsureAWSCredentialsSendsTypeInBody(t *testing.T) {
 		t.Fatalf("unexpected credential fields in payload")
 	}
 	if _, present := payload["session-token"]; present {
-		t.Fatal("session-token must never be sent")
+		t.Fatal("session-token must be omitted when not supplied")
+	}
+}
+
+func TestEnsureAWSCredentialsIncludesSessionTokenWhenSupplied(t *testing.T) {
+	server, _, body := credentialsTestServer(t, http.StatusNoContent, "")
+	client := credentialsTestClient(server)
+
+	err := client.EnsureAWSCredentials(context.Background(), AWSCredentials{
+		AccessKey:    testAccessKey,
+		SecretKey:    testSecretKey,
+		SessionToken: "testSessionToken123",
+	})
+	if err != nil {
+		t.Fatalf("expected success, got %v", err)
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(*body, &payload); err != nil {
+		t.Fatalf("request body is not JSON: %v", err)
+	}
+	if payload["session-token"] != "testSessionToken123" {
+		t.Fatalf("expected session-token in payload, got %v", payload["session-token"])
 	}
 }
 

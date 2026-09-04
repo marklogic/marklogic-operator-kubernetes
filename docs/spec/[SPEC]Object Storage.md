@@ -109,7 +109,7 @@ Content-Type: application/json
 }
 ```
 
-MarkLogic also accepts an optional `session-token` field for STS credentials. **v1 never sends it** — see Requirement Review #6.
+MarkLogic also accepts an optional `session-token` field for STS credentials. The operator supports it as an **opt-in pass-through**: if the referenced Secret's `sessionToken` key is absent, the operator omits the field exactly as before; if present, the operator includes it in the applied payload and in the fingerprint, so rotation (Requirement Review #4) still detects when an external process rewrites the Secret with a fresh token before expiry. See Security NFR #5 for the accepted plaintext-exposure tradeoff.
 
 ```http
 PUT /manage/v2/credentials/properties
@@ -210,7 +210,7 @@ Acceptance criteria:
 2.  Only fingerprints (salted SHA-256) and Secret references are persisted in status.
 3.  The operator reads referenced Secrets with least-privilege RBAC scoped to the operator's namespace access model.
 4.  The admin-capable credential used for credential application is the existing bootstrap credential; an optional dedicated credential is documented as a hardening path. Two combinations are confirmed sufficient: the `manage-admin` + `security` roles, or the granular `manage` + `manage-admin` + `credentials-set-aws` and/or `credentials-set-azure` privileges. The granular form is the tighter option because it avoids the broad `security` role **and** is scoped per provider — a deployment that only uses S3 can grant `credentials-set-aws` alone, and a caller holding only that privilege is refused (`403`) when attempting to configure Azure.
-5.  **MarkLogic returns `session-token` in plaintext** from `GET /manage/v2/credentials/properties`, unlike `secret-key` which it stores encrypted. Any caller with sufficient Management API privilege can read it back, and the operator could not mask it. This is one of the reasons `sessionToken` is excluded from v1 entirely (Requirement Review #6) rather than merely discouraged — the operator does not send the field, so there is nothing to leak.
+5.  **MarkLogic returns `session-token` in plaintext** from `GET /manage/v2/credentials/properties`, unlike `secret-key` which it stores encrypted. Any caller with sufficient Management API privilege can read it back, and the operator cannot mask it. `sessionToken` is therefore an **opt-in** field: the operator never sends it unless the user's Secret supplies it, so a user who does not need STS credentials sees identical behavior (and identical risk) to today. A user who does supply it accepts the plaintext-exposure tradeoff explicitly, in return for STS support; keeping the token refreshed before expiry remains the user's responsibility via the existing Secret-rotation path.
 
 #### Reliability
 
@@ -240,7 +240,7 @@ Acceptance criteria:
 2.  CSI-based object storage mounting.
 3.  AWS keyless access via IRSA / instance profile — not supported by MarkLogic as described; see Compatibility.
 4.  Azure managed identity (deferred pending MarkLogic support confirmation).
-5.  AWS STS session tokens (`sessionToken`) — excluded from the v1 API surface, not merely unrotated; see Requirement Review #6.
+5.  Automatic refresh of AWS STS session tokens — `sessionToken` is accepted as an opt-in pass-through field (see Background and Security NFR #5), but the operator does not obtain, renew, or track its expiry; keeping it current is the user's responsibility via the referenced Secret.
 6.  Region/endpoint provisioning for S3 (an environment concern outside the credentials API).
 7.  Revoking credentials when a provider block is removed (see Validation Rules #6).
 
@@ -340,7 +340,7 @@ spec:
 
 | Provider | Secret keys | Notes |
 |---|---|---|
-| AWS | `accessKey`, `secretKey` | Both required for `authType=secret`. `sessionToken` is **not** supported in v1 |
+| AWS | `accessKey`, `secretKey`, `sessionToken` | `accessKey`/`secretKey` required for `authType=secret`. `sessionToken` is **optional**: omitted when absent, applied and fingerprinted when present (opt-in STS support, see Security NFR #5) |
 | Azure | `storageAccount`, `storageKey` | Both required for `authType=secret` |
 
 ### Validation Rules
@@ -465,7 +465,7 @@ Tasks are grouped by area and ordered to allow incremental, testable delivery.
 ### 2. Management Client (`pkg/mlmanage`)
 
 - [ ] Add `EnsureAWSCredentials(ctx, AWSCredentials) error` and `EnsureAzureCredentials(ctx, AzureCredentials) error` to the `Client` interface.
-- [ ] Add `AWSCredentials` (`AccessKey`, `SecretKey`) and `AzureCredentials` (`StorageAccount`, `StorageKey`) config structs. `SessionToken` is deliberately omitted — see Requirement Review #6.
+- [x] Add `AWSCredentials` (`AccessKey`, `SecretKey`, optional `SessionToken`) and `AzureCredentials` (`StorageAccount`, `StorageKey`) config structs. `SessionToken` is opt-in pass-through — see Security NFR #5.
 - [ ] Implement `PUT /manage/v2/credentials/properties` with the provider selected by a `"type": "aws"|"azure"` field in the request body, following the existing `doJSON` idempotent `Ensure*` pattern, expecting `204 No Content`.
 - [ ] Add `BuildAWSCredentialsPayload` / `BuildAzureCredentialsPayload` with validation (reject empty required fields) mirroring `BuildOAuthExternalSecurityPayload`; both must emit the `type` field, since Azure fails with `400` without it.
 - [ ] Ensure error strings never include request/response bodies that may contain secrets; build messages from the HTTP status code plus `errorResponse.messageCode` / `errorResponse.message` only.

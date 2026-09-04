@@ -106,6 +106,12 @@ func awsSecret(accessKey, secretKey string) *corev1.Secret {
 	}
 }
 
+func awsSecretWithSessionToken(accessKey, secretKey, sessionToken string) *corev1.Secret {
+	secret := awsSecret(accessKey, secretKey)
+	secret.Data["sessionToken"] = []byte(sessionToken)
+	return secret
+}
+
 func newObjectStorageContext(t *testing.T, stub *stubObjectStorageClient, objects ...runtime.Object) *ClusterContext {
 	t.Helper()
 
@@ -171,6 +177,25 @@ func TestReconcileObjectStorageAppliesBothProviders(t *testing.T) {
 	}
 	if status.AWS.AppliedFingerprint == "" || status.AWS.AppliedFingerprint == status.Azure.AppliedFingerprint {
 		t.Fatal("expected distinct, non-empty fingerprints per provider")
+	}
+}
+
+// sessionToken is optional: when present in the Secret it is passed through
+// as-is; when absent, behavior is unchanged from long-lived IAM user keys.
+func TestReconcileObjectStorageAWSSessionTokenIsOptionalPassThrough(t *testing.T) {
+	stub := onlineBootstrap()
+	cluster := objectStorageTestCluster(&marklogicv1.ObjectStorageConfig{
+		AWS: &marklogicv1.AWSObjectStorage{SecretName: "ml-s3"},
+	})
+
+	cc := newObjectStorageContext(t, stub, cluster, adminSecret(), awsSecretWithSessionToken("AKIA123", "s3cret", "testSessionToken123"))
+
+	if res := cc.ReconcileObjectStorage(); res.Completed() {
+		t.Fatalf("expected reconcile to continue, got %+v", res)
+	}
+
+	if len(stub.awsCalls) != 1 || stub.awsCalls[0].SessionToken != "testSessionToken123" {
+		t.Fatalf("expected sessionToken to be passed through, got %+v", stub.awsCalls)
 	}
 }
 
