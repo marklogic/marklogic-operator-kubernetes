@@ -49,6 +49,11 @@ MINIKUBE_PROFILE ?= minikube
 # and e2e-cleanup-minikube leaves it running (Kubernetes-level state is still reset by each
 # suite's TestMain teardown), so parallel shards only pay the start/stop cost once.
 MINIKUBE_REUSE ?= false
+MINIKUBE_START_WAIT_TIMEOUT ?= 10m0s
+MINIKUBE_START_RETRIES ?= 2
+MINIKUBE_START_RETRY_DELAY_SECONDS ?= 20
+MINIKUBE_MEMORY_MB ?= 8192
+MINIKUBE_CPUS ?= 2
 
 # E2E_SCOPE selects which operator install mode `make e2e-test` validates by default.
 # Namespace-scoped (Helm, scope.type=namespace) is the default going forward; set
@@ -410,16 +415,50 @@ e2e-test-jenkins-volume-resize: e2e-test-volume-resize e2e-test-helm-volume-resi
 e2e-setup-minikube: kustomize controller-gen build docker-build ## Setup a minikube cluster (profile: MINIKUBE_PROFILE). Set E2E_SETUP_ISTIO=true to install Istio ambient mode.
 	minikube version
 ifeq ($(MINIKUBE_REUSE), true)
-	@HOST_STATE="$$(minikube -p $(MINIKUBE_PROFILE) status --format='{{.Host}}' 2>/dev/null || echo Unknown)"; \
+	@start_minikube_profile() { \
+		attempt=1; \
+		while [ $$attempt -le $(MINIKUBE_START_RETRIES) ]; do \
+			echo "=====Starting minikube profile $(MINIKUBE_PROFILE) (attempt $$attempt/$(MINIKUBE_START_RETRIES), timeout $(MINIKUBE_START_WAIT_TIMEOUT))====="; \
+			if minikube -p $(MINIKUBE_PROFILE) start --driver=docker --kubernetes-version=$(E2E_KUBERNETES_VERSION) --memory=$(MINIKUBE_MEMORY_MB) --cpus=$(MINIKUBE_CPUS) --wait-timeout=$(MINIKUBE_START_WAIT_TIMEOUT); then \
+				return 0; \
+			fi; \
+			echo "=====Minikube start failed for profile $(MINIKUBE_PROFILE) on attempt $$attempt; deleting profile before retry====="; \
+			minikube -p $(MINIKUBE_PROFILE) delete || true; \
+			attempt=$$((attempt + 1)); \
+			if [ $$attempt -le $(MINIKUBE_START_RETRIES) ]; then \
+				echo "=====Retrying in $(MINIKUBE_START_RETRY_DELAY_SECONDS)s====="; \
+				sleep $(MINIKUBE_START_RETRY_DELAY_SECONDS); \
+			fi; \
+		done; \
+		return 1; \
+	}; \
+	HOST_STATE="$$(minikube -p $(MINIKUBE_PROFILE) status --format='{{.Host}}' 2>/dev/null || echo Unknown)"; \
 	if [ "$$HOST_STATE" = "Running" ]; then \
 		echo "=====Reusing existing minikube shard $(MINIKUBE_PROFILE) (MINIKUBE_REUSE=true)====="; \
 	else \
 		echo "=====Minikube shard $(MINIKUBE_PROFILE) host state is '$$HOST_STATE'; starting it====="; \
-		minikube -p $(MINIKUBE_PROFILE) start --driver=docker --kubernetes-version=$(E2E_KUBERNETES_VERSION) --memory=8192 --cpus=2; \
+		start_minikube_profile || (echo "ERROR: failed to start minikube profile $(MINIKUBE_PROFILE) after $(MINIKUBE_START_RETRIES) attempts" && exit 1); \
 	fi
 else
 	minikube -p $(MINIKUBE_PROFILE) delete || true
-	minikube -p $(MINIKUBE_PROFILE) start --driver=docker --kubernetes-version=$(E2E_KUBERNETES_VERSION) --memory=8192 --cpus=2
+	@start_minikube_profile() { \
+		attempt=1; \
+		while [ $$attempt -le $(MINIKUBE_START_RETRIES) ]; do \
+			echo "=====Starting minikube profile $(MINIKUBE_PROFILE) (attempt $$attempt/$(MINIKUBE_START_RETRIES), timeout $(MINIKUBE_START_WAIT_TIMEOUT))====="; \
+			if minikube -p $(MINIKUBE_PROFILE) start --driver=docker --kubernetes-version=$(E2E_KUBERNETES_VERSION) --memory=$(MINIKUBE_MEMORY_MB) --cpus=$(MINIKUBE_CPUS) --wait-timeout=$(MINIKUBE_START_WAIT_TIMEOUT); then \
+				return 0; \
+			fi; \
+			echo "=====Minikube start failed for profile $(MINIKUBE_PROFILE) on attempt $$attempt; deleting profile before retry====="; \
+			minikube -p $(MINIKUBE_PROFILE) delete || true; \
+			attempt=$$((attempt + 1)); \
+			if [ $$attempt -le $(MINIKUBE_START_RETRIES) ]; then \
+				echo "=====Retrying in $(MINIKUBE_START_RETRY_DELAY_SECONDS)s====="; \
+				sleep $(MINIKUBE_START_RETRY_DELAY_SECONDS); \
+			fi; \
+		done; \
+		return 1; \
+	}; \
+	start_minikube_profile || (echo "ERROR: failed to start minikube profile $(MINIKUBE_PROFILE) after $(MINIKUBE_START_RETRIES) attempts" && exit 1)
 endif
 	@HOST_STATE="$$(minikube -p $(MINIKUBE_PROFILE) status --format='{{.Host}}' 2>/dev/null || echo Unknown)"; \
 	[ "$$HOST_STATE" = "Running" ] || (echo "ERROR: minikube profile $(MINIKUBE_PROFILE) failed to reach Running state (Host=$$HOST_STATE)" && exit 1)
