@@ -69,7 +69,7 @@ var typeNamespaceNameSvc = types.NamespacedName{Name: svcName, Namespace: Namesp
 var netPolicyName = Name
 var typeNsNameNetPolicy = types.NamespacedName{Name: netPolicyName, Namespace: Namespace}
 
-const fluentBitImage = "fluent/fluent-bit:4.1.1"
+const fluentBitImage = "fluent/fluent-bit:5.1.0"
 
 var groupConfig = &marklogicv1.GroupConfig{
 	Name:          "dnode",
@@ -124,7 +124,7 @@ var _ = Describe("MarkLogicGroup controller", func() {
 						RunAsNonRoot:             &runAsNonRoot,
 						AllowPrivilegeEscalation: &allowPrivilegeEscalation,
 					},
-					LogCollection: &marklogicv1.LogCollection{Enabled: true, Image: "fluent/fluent-bit:4.1.1", Files: marklogicv1.LogFilesConfig{ErrorLogs: true, AccessLogs: true, RequestLogs: true, CrashLogs: true, AuditLogs: true}, Outputs: "stdout"},
+					LogCollection: &marklogicv1.LogCollection{Enabled: true, Image: "fluent/fluent-bit:5.1.0", Files: marklogicv1.LogFilesConfig{ErrorLogs: true, AccessLogs: true, RequestLogs: true, CrashLogs: true, AuditLogs: true}, Outputs: "stdout"},
 				},
 			}
 			Expect(k8sClient.Create(ctx, mlGroup)).Should(Succeed())
@@ -2799,6 +2799,18 @@ func (f *fakeDynamicManagementClient) RemoveDynamicHost(ctx context.Context, clu
 			f.behavior.groupHostsByGroup[groupName] = filtered
 		}
 	}
+	return nil
+}
+
+func (f *fakeDynamicManagementClient) ImportCertificateAuthority(ctx context.Context, authorityPEM string) error {
+	return nil
+}
+
+func (f *fakeDynamicManagementClient) EnsureOAuthExternalSecurity(ctx context.Context, config mlmanage.OAuthExternalSecurityConfig) error {
+	return nil
+}
+
+func (f *fakeDynamicManagementClient) EnsureOAuthAppServer(ctx context.Context, config mlmanage.OAuthAppServerConfig) error {
 	return nil
 }
 

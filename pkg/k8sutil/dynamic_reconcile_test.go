@@ -145,6 +145,18 @@ func (s *stubDynamicManagementClient) RemoveDynamicHost(ctx context.Context, clu
 	return nil
 }
 
+func (s *stubDynamicManagementClient) ImportCertificateAuthority(ctx context.Context, authorityPEM string) error {
+	return nil
+}
+
+func (s *stubDynamicManagementClient) EnsureOAuthExternalSecurity(ctx context.Context, config mlmanage.OAuthExternalSecurityConfig) error {
+	return nil
+}
+
+func (s *stubDynamicManagementClient) EnsureOAuthAppServer(ctx context.Context, config mlmanage.OAuthAppServerConfig) error {
+	return nil
+}
+
 func TestJoinDynamicPodSuccess(t *testing.T) {
 	oc := &OperatorContext{Ctx: context.Background()}
 

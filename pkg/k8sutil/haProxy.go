@@ -296,6 +296,14 @@ func (cc *ClusterContext) createHAProxyDeploymentDef(meta metav1.ObjectMeta) *ap
 				},
 			},
 		})
+		deploymentDef.Spec.Template.Spec.Containers[0].VolumeMounts = append(
+			deploymentDef.Spec.Template.Spec.Containers[0].VolumeMounts,
+			corev1.VolumeMount{
+				Name:      "ssl-certificate",
+				MountPath: "/usr/local/etc/ssl",
+				ReadOnly:  true,
+			},
+		)
 	}
 	AddOwnerRefToObject(deploymentDef, ownerDef)
 	return deploymentDef

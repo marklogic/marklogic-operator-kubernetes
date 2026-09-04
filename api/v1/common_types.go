@@ -79,12 +79,13 @@ type AdminAuth struct {
 type LogCollection struct {
 	// +kubebuilder:default:=false
 	Enabled bool `json:"enabled,omitempty"`
-	// +kubebuilder:default:="fluent/fluent-bit:4.1.1"
+	// +kubebuilder:default:="fluent/fluent-bit:5.1.0"
 	Image            string                        `json:"image,omitempty"`
 	ImagePullSecrets []corev1.LocalObjectReference `json:"imagePullSecrets,omitempty"`
 	SecurityContext  *corev1.SecurityContext       `json:"securityContext,omitempty"`
 	// +kubebuilder:default:={"requests":{"cpu":"100m","memory":"200Mi"},"limits":{"cpu":"200m","memory":"500Mi"}}
 	Resources *corev1.ResourceRequirements `json:"resources,omitempty"`
+	Env       []corev1.EnvVar              `json:"env,omitempty"`
 	// +kubebuilder:default:={errorLogs: true, accessLogs: true, requestLogs: true, crashLogs: true, auditLogs: true}
 	Files   LogFilesConfig `json:"files,omitempty"`
 	Outputs string         `json:"outputs,omitempty"`
@@ -110,7 +111,7 @@ type NetworkPolicy struct {
 }
 type HAProxy struct {
 	Enabled bool `json:"enabled,omitempty"`
-	// +kubebuilder:default:="haproxytech/haproxy-alpine:3.4.0"
+	// +kubebuilder:default:="haproxytech/haproxy-alpine:3.4.3"
 	Image                    string                        `json:"image,omitempty"`
 	ImagePullSecrets         []corev1.LocalObjectReference `json:"imagePullSecrets,omitempty"`
 	PodSecurityContext       *corev1.PodSecurityContext    `json:"podSecurityContext,omitempty"`

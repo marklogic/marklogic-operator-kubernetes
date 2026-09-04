@@ -6,12 +6,113 @@ import (
 	"context"
 	"crypto"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 )
+
+type roundTripperFunc func(*http.Request) (*http.Response, error)
+
+func (fn roundTripperFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return fn(req)
+}
+
+type closeErrorReadCloser struct {
+	io.Reader
+	err error
+}
+
+func (body closeErrorReadCloser) Close() error {
+	return body.err
+}
+
+func TestJoinDynamicHostPreservesHTTPAndCloseErrors(t *testing.T) {
+	t.Parallel()
+
+	closeErr := errors.New("close response body")
+	client := &managementClient{
+		baseURL: "http://management.example.test",
+		httpClient: &http.Client{Transport: roundTripperFunc(func(*http.Request) (*http.Response, error) {
+			return &http.Response{
+				StatusCode: http.StatusBadRequest,
+				Body:       closeErrorReadCloser{Reader: strings.NewReader("invalid dynamic host token"), err: closeErr},
+				Header:     make(http.Header),
+			}, nil
+		})},
+	}
+
+	err := client.JoinDynamicHost(context.Background(), "node-1.example.test", "token")
+	if err == nil {
+		t.Fatal("expected JoinDynamicHost to return an error")
+	}
+	if !strings.Contains(err.Error(), "returned status 400: invalid dynamic host token") {
+		t.Fatalf("expected HTTP status error, got %v", err)
+	}
+	if !errors.Is(err, closeErr) {
+		t.Fatalf("expected joined close error, got %v", err)
+	}
+}
+
+func TestResponseHelpersPreserveHTTPAndCloseErrors(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		call func(*managementClient) ([]byte, int, error)
+	}{
+		{
+			name: "JSON",
+			call: func(client *managementClient) ([]byte, int, error) {
+				return client.doJSON(context.Background(), http.MethodGet, "/manage/v2", nil, nil, http.StatusOK)
+			},
+		},
+		{
+			name: "XML",
+			call: func(client *managementClient) ([]byte, int, error) {
+				return client.doXML(context.Background(), http.MethodGet, "/manage/v2", nil, "", http.StatusOK)
+			},
+		},
+		{
+			name: "PlainText",
+			call: func(client *managementClient) ([]byte, int, error) {
+				return client.doPlainText(context.Background(), http.MethodPost, "/manage/v2/certificate-authorities", nil, "", http.StatusCreated)
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			closeErr := errors.New("close response body")
+			client := &managementClient{
+				baseURL: "http://management.example.test",
+				httpClient: &http.Client{Transport: roundTripperFunc(func(*http.Request) (*http.Response, error) {
+					return &http.Response{
+						StatusCode: http.StatusInternalServerError,
+						Body:       closeErrorReadCloser{Reader: strings.NewReader("management failure"), err: closeErr},
+						Header:     make(http.Header),
+					}, nil
+				})},
+			}
+
+			_, statusCode, err := test.call(client)
+			if statusCode != http.StatusInternalServerError {
+				t.Fatalf("status code = %d, want %d", statusCode, http.StatusInternalServerError)
+			}
+			if err == nil {
+				t.Fatal("expected response helper to return an error")
+			}
+			if !strings.Contains(err.Error(), "returned status 500: management failure") {
+				t.Fatalf("expected HTTP status error, got %v", err)
+			}
+			if !errors.Is(err, closeErr) {
+				t.Fatalf("expected joined close error, got %v", err)
+			}
+		})
+	}
+}
 
 func TestRemoveDynamicHostUsesXMLBodyContract(t *testing.T) {
 	t.Parallel()
@@ -72,6 +173,49 @@ func TestRemoveDynamicHostUsesXMLBodyContract(t *testing.T) {
 	}
 }
 
+func TestImportCertificateAuthorityUsesPlainTextPEMContract(t *testing.T) {
+	t.Parallel()
+
+	const authorityPEM = "-----BEGIN CERTIFICATE-----\ntrusted-test-ca\n-----END CERTIFICATE-----\n"
+	var gotMethod string
+	var gotRequestURI string
+	var gotContentType string
+	var gotBody string
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close()
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Fatalf("read body: %v", err)
+		}
+		gotMethod = r.Method
+		gotRequestURI = r.RequestURI
+		gotContentType = r.Header.Get("Content-Type")
+		gotBody = string(body)
+		w.WriteHeader(http.StatusCreated)
+	}))
+	defer server.Close()
+
+	client := &managementClient{
+		baseURL:    server.URL,
+		username:   "user",
+		password:   "password",
+		httpClient: server.Client(),
+	}
+	if err := client.ImportCertificateAuthority(context.Background(), authorityPEM); err != nil {
+		t.Fatalf("ImportCertificateAuthority returned error: %v", err)
+	}
+	if gotMethod != http.MethodPost || gotRequestURI != "/manage/v2/certificate-authorities" {
+		t.Fatalf("request = %s %s, want POST /manage/v2/certificate-authorities", gotMethod, gotRequestURI)
+	}
+	if gotContentType != "text/plain" {
+		t.Fatalf("Content-Type = %q, want text/plain", gotContentType)
+	}
+	if gotBody != authorityPEM {
+		t.Fatalf("request body = %q, want %q", gotBody, authorityPEM)
+	}
+}
+
 func TestRemoveDynamicHostEscapesXMLBodyText(t *testing.T) {
 	t.Parallel()
 
@@ -129,6 +273,171 @@ func TestRemoveDynamicHostReturnsAPIError(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "returned status 400") {
 		t.Fatalf("expected status detail in error, got %v", err)
+	}
+}
+
+func TestEnsureOAuthExternalSecurityCreatesConfiguration(t *testing.T) {
+	t.Parallel()
+
+	var gotBody map[string]any
+	var requests []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests = append(requests, r.Method+" "+r.RequestURI)
+		switch r.Method {
+		case http.MethodGet:
+			w.WriteHeader(http.StatusNotFound)
+		case http.MethodPost:
+			defer r.Body.Close()
+			if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
+				t.Fatalf("decode request: %v", err)
+			}
+			w.WriteHeader(http.StatusCreated)
+		default:
+			t.Fatalf("unexpected method %s", r.Method)
+		}
+	}))
+	defer server.Close()
+
+	client := &managementClient{
+		baseURL:    server.URL,
+		username:   "user",
+		password:   "password",
+		httpClient: server.Client(),
+	}
+	config := OAuthExternalSecurityConfig{
+		Name:              "oauth security",
+		Authentication:    "oauth",
+		Authorization:     "internal",
+		CacheTimeout:      300,
+		FlowType:          "Resource server",
+		Vendor:            "Other",
+		ClientID:          "marklogic-oauth-client",
+		TokenType:         "JSON Web Tokens",
+		UsernameAttribute: "preferred_username",
+		RoleAttribute:     "roles",
+		JWTIssuerURI:      "https://keycloak.example.test/realms/marklogic-oauth",
+		JWTAlgorithm:      "RS256",
+		JWKSURI:           "https://keycloak.example.test/certs",
+	}
+
+	if err := client.EnsureOAuthExternalSecurity(context.Background(), config); err != nil {
+		t.Fatalf("EnsureOAuthExternalSecurity returned error: %v", err)
+	}
+
+	if got := strings.Join(requests, ", "); got != "GET /manage/v2/external-security/oauth%20security?format=json, POST /manage/v2/external-security" {
+		t.Fatalf("unexpected requests: %s", got)
+	}
+	if gotBody["external-security-name"] != config.Name {
+		t.Fatalf("external-security-name = %v, want %q", gotBody["external-security-name"], config.Name)
+	}
+	if gotBody["cache-timeout"] != float64(config.CacheTimeout) {
+		t.Fatalf("cache-timeout = %v, want %d", gotBody["cache-timeout"], config.CacheTimeout)
+	}
+	oauthServer, ok := gotBody["oauth-server"].(map[string]any)
+	if !ok {
+		t.Fatalf("oauth-server = %#v, want object", gotBody["oauth-server"])
+	}
+	if _, found := oauthServer["oauth-authorization-server-uri"]; found {
+		t.Fatalf("resource-server payload must omit authorization endpoint: %#v", oauthServer)
+	}
+	if _, found := oauthServer["oauth-token-server-uri"]; found {
+		t.Fatalf("resource-server payload must omit token endpoint: %#v", oauthServer)
+	}
+	if _, found := oauthServer["oauth-redirect-uri"]; found {
+		t.Fatalf("resource-server payload must omit redirect URI: %#v", oauthServer)
+	}
+	if oauthServer["oauth-jwt-issuer-uri"] != config.JWTIssuerURI {
+		t.Fatalf("JWT issuer URI = %v, want %q", oauthServer["oauth-jwt-issuer-uri"], config.JWTIssuerURI)
+	}
+	if oauthServer["oauth-jwks-uri"] != config.JWKSURI {
+		t.Fatalf("JWKS URI = %v, want %q", oauthServer["oauth-jwks-uri"], config.JWKSURI)
+	}
+}
+
+func TestBuildOAuthExternalSecurityPayloadRejectsMissingRequiredField(t *testing.T) {
+	_, err := BuildOAuthExternalSecurityPayload(OAuthExternalSecurityConfig{
+		Name:           "oauth-security",
+		Authentication: "oauth",
+		Authorization:  "oauth",
+		CacheTimeout:   300,
+	})
+	if err == nil {
+		t.Fatal("BuildOAuthExternalSecurityPayload accepted an incomplete configuration")
+	}
+	if strings.TrimSpace(err.Error()) == "" {
+		t.Fatal("BuildOAuthExternalSecurityPayload returned an empty validation error")
+	}
+}
+
+func TestEnsureOAuthAppServerCreatesConfiguration(t *testing.T) {
+	t.Parallel()
+
+	var gotBody map[string]any
+	var requests []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests = append(requests, r.Method+" "+r.RequestURI)
+		switch r.Method {
+		case http.MethodGet:
+			w.WriteHeader(http.StatusNotFound)
+		case http.MethodPost:
+			defer r.Body.Close()
+			if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
+				t.Fatalf("decode request: %v", err)
+			}
+			w.WriteHeader(http.StatusCreated)
+		default:
+			t.Fatalf("unexpected method %s", r.Method)
+		}
+	}))
+	defer server.Close()
+
+	client := &managementClient{baseURL: server.URL, username: "user", password: "password", httpClient: server.Client()}
+	config := OAuthAppServerConfig{Name: "oauth app", Group: "Default", Root: "/", Port: 8013, ContentDatabase: "Documents", ExternalSecurityName: "keycloak-resource-server", TLSCertificateTemplate: "defaultTemplate"}
+	if err := client.EnsureOAuthAppServer(context.Background(), config); err != nil {
+		t.Fatalf("EnsureOAuthAppServer returned error: %v", err)
+	}
+
+	if got := strings.Join(requests, ", "); got != "GET /manage/v2/servers/oauth%20app?format=json&group-id=Default, POST /manage/v2/servers?format=json&group-id=Default&server-type=http" {
+		t.Fatalf("unexpected requests: %s", got)
+	}
+	if gotBody["authentication"] != "oauth" || gotBody["internal-security"] != false || gotBody["external-security"] != config.ExternalSecurityName || gotBody["ssl-certificate-template"] != config.TLSCertificateTemplate {
+		t.Fatalf("OAuth App Server payload = %#v", gotBody)
+	}
+}
+
+func TestEnsureOAuthAppServerUpdatesExistingConfiguration(t *testing.T) {
+	t.Parallel()
+
+	var gotBody map[string]any
+	var requests []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests = append(requests, r.Method+" "+r.RequestURI)
+		switch r.Method {
+		case http.MethodGet:
+			w.WriteHeader(http.StatusOK)
+		case http.MethodPut:
+			defer r.Body.Close()
+			if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
+				t.Fatalf("decode request: %v", err)
+			}
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			t.Fatalf("unexpected method %s", r.Method)
+		}
+	}))
+	defer server.Close()
+
+	client := &managementClient{baseURL: server.URL, username: "user", password: "password", httpClient: server.Client()}
+	config := OAuthAppServerConfig{Name: "oauth app", Group: "Default", Root: "/", Port: 8013, ContentDatabase: "Documents", ExternalSecurityName: "keycloak-resource-server", TLSCertificateTemplate: "defaultTemplate"}
+	if err := client.EnsureOAuthAppServer(context.Background(), config); err != nil {
+		t.Fatalf("EnsureOAuthAppServer returned error: %v", err)
+	}
+
+	if got := strings.Join(requests, ", "); got != "GET /manage/v2/servers/oauth%20app?format=json&group-id=Default, PUT /manage/v2/servers/oauth%20app/properties?format=json&group-id=Default" {
+		t.Fatalf("unexpected requests: %s", got)
+	}
+	if gotBody["port"] != float64(config.Port) || gotBody["external-security"] != config.ExternalSecurityName {
+		t.Fatalf("OAuth App Server payload = %#v", gotBody)
 	}
 }
 

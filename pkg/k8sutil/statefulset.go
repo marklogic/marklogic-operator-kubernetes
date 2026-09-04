@@ -307,7 +307,7 @@ func generateStatefulSetsDef(stsMeta metav1.ObjectMeta, params statefulSetParame
 		statefulSet.Spec.Template.Spec.InitContainers = []corev1.Container{
 			{
 				Name:            "copy-certs",
-				Image:           "redhat/ubi9:9.7",
+				Image:           "redhat/ubi9:9.8",
 				ImagePullPolicy: "IfNotPresent",
 				Command:         []string{"/bin/sh", "/tmp/helm-scripts/copy-certs.sh"},
 				VolumeMounts:    copyCertsVM,
@@ -379,7 +379,7 @@ func generateContainerDef(name string, containerParams containerParameters) []co
 	}
 
 	if containerParams.LogCollection != nil && containerParams.LogCollection.Enabled {
-		fulentBitContainerDef := corev1.Container{
+		fluentBitContainerDef := corev1.Container{
 			Name:            "fluent-bit",
 			Image:           containerParams.LogCollection.Image,
 			ImagePullPolicy: "IfNotPresent",
@@ -389,10 +389,17 @@ func generateContainerDef(name string, containerParams containerParameters) []co
 			SecurityContext: getFluentBitSecurityContextOrDefault(containerParams.LogCollection.SecurityContext),
 			VolumeMounts:    getFluentBitVolumeMount(containerParams),
 		}
-		if containerParams.LogCollection.Resources != nil {
-			fulentBitContainerDef.Resources = *containerParams.LogCollection.Resources
+		// Prevent user configuration from overriding operator-provided env vars.
+		for _, envVar := range containerParams.LogCollection.Env {
+			if envVar.Name == "POD_NAME" || envVar.Name == "NAMESPACE" {
+				continue
+			}
+			fluentBitContainerDef.Env = append(fluentBitContainerDef.Env, envVar)
 		}
-		containerDef = append(containerDef, fulentBitContainerDef)
+		if containerParams.LogCollection.Resources != nil {
+			fluentBitContainerDef.Resources = *containerParams.LogCollection.Resources
+		}
+		containerDef = append(containerDef, fluentBitContainerDef)
 	}
 
 	return containerDef

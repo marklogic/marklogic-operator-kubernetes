@@ -40,19 +40,19 @@ helm repo update
 
 **For cluster-scoped deployment (default - watches all namespaces):**
 ```sh
-helm upgrade marklogic-operator marklogic-operator/marklogic-operator-kubernetes --version=1.3.0 --install --namespace marklogic-operator-system --create-namespace
+helm upgrade marklogic-operator marklogic-operator/marklogic-operator-kubernetes --version=1.3.1 --install --namespace marklogic-operator-system --create-namespace
 ```
 
 **For namespace-scoped deployment (watches only a specific namespace):**
 ```sh
 # Watch the same namespace where operator is deployed
-helm upgrade marklogic-operator marklogic-operator/marklogic-operator-kubernetes --version=1.3.0 --install --namespace marklogic-prod --create-namespace --set scope.type=namespace
+helm upgrade marklogic-operator marklogic-operator/marklogic-operator-kubernetes --version=1.3.1 --install --namespace marklogic-prod --create-namespace --set scope.type=namespace
 
 # Or watch a different namespace
-helm upgrade marklogic-operator marklogic-operator/marklogic-operator-kubernetes --version=1.3.0 --install --namespace marklogic-operator-system --create-namespace --set scope.type=namespace --set scope.watchNamespaces=marklogic-prod
+helm upgrade marklogic-operator marklogic-operator/marklogic-operator-kubernetes --version=1.3.1 --install --namespace marklogic-operator-system --create-namespace --set scope.type=namespace --set scope.watchNamespaces=marklogic-prod
 
 # Or watch multiple namespaces
-helm upgrade marklogic-operator marklogic-operator/marklogic-operator-kubernetes --version=1.3.0 --install --namespace marklogic-operator-system --create-namespace --set scope.type=namespace --set scope.watchNamespaces="prod,staging,dev"
+helm upgrade marklogic-operator marklogic-operator/marklogic-operator-kubernetes --version=1.3.1 --install --namespace marklogic-operator-system --create-namespace --set scope.type=namespace --set scope.watchNamespaces="prod,staging,dev"
 ```
 
 See [Operator Scope Configuration](./docs/operator-scope-configuration.md) for more deployment options and examples.
@@ -103,6 +103,8 @@ kubectl get secret single-node-admin --namespace=<namespace-name> -o jsonpath='{
 
 For additional manifests to deploy a MarkLogic cluster inside a Kubernetes cluster, see [Operator manifest](https://docs.progress.com/bundle/marklogic-server-on-kubernetes/operator/Operator-manifest.html) in the documentation.
 
+For Fluent Bit log collection configuration, including secret-backed environment variables for authenticated OpenTelemetry exports, see [Fluent Bit Log Collection](./docs/log-collection.md).
+
 ## Clean Up
 
 #### Cleaning up MarkLogic Cluster
@@ -137,6 +139,6 @@ kubectl delete crd marklogicgroups.marklogic.progress.com
 
 ## Known Issues and Limitations
 
-1. The latest released version of `fluent/fluent-bit:4.1.1` has high security vulnerabilities. If you decide to enable the log collection feature, choose and deploy the fluent-bit or an alternate image with no vulnerabilities as per your requirements.
+1. The latest released version of `fluent/fluent-bit:5.1.0` has high security vulnerabilities. If you decide to enable the log collection feature, choose and deploy the fluent-bit or an alternate image with no vulnerabilities as per your requirements.
 2. Known Issues and Limitations for the MarkLogic Server Docker image can be viewed using the link: [https://github.com/marklogic/marklogic-docker?tab=readme-ov-file#Known-Issues-and-Limitations](https://github.com/marklogic/marklogic-docker?tab=readme-ov-file#Known-Issues-and-Limitations).
 3. If you're updating the group name configuration, ensure that you delete the pod to apply the changes, as we are using the OnDelete upgrade strategy.
