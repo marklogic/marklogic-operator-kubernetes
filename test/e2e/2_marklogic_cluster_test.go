@@ -281,16 +281,22 @@ func TestMarklogicCluster(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Failed to install grafana helm chart: %v", err)
 		}
-		// Wait for Grafana pod to be ready
-		time.Sleep(5 * time.Second) // Give some time for Grafana to start
-		podList := &corev1.PodList{}
-		if err := client.Resources("grafana").List(ctx, podList); err != nil {
-			t.Fatal(err)
+		// Wait until at least one Grafana pod exists so we can wait on its readiness.
+		grafanaPodName := ""
+		err = utils.WaitForCondition(ctx, "Grafana pod creation", 2*time.Minute, 5*time.Second, func() (bool, error) {
+			podList := &corev1.PodList{}
+			if listErr := client.Resources("grafana").List(ctx, podList); listErr != nil {
+				return false, nil
+			}
+			if len(podList.Items) == 0 {
+				return false, nil
+			}
+			grafanaPodName = podList.Items[0].Name
+			return true, nil
+		})
+		if err != nil {
+			t.Fatalf("Failed waiting for Grafana pod creation: %v", err)
 		}
-		if len(podList.Items) == 0 {
-			t.Fatal("No Grafana pods found")
-		}
-		grafanaPodName := podList.Items[0].Name
 		err = utils.WaitForPod(ctx, t, client, "grafana", grafanaPodName, 120*time.Second, true)
 		if err != nil {
 			t.Fatalf("Failed to wait for grafana pod creation: %v", err)
@@ -390,20 +396,29 @@ func TestMarklogicCluster(t *testing.T) {
 	// Assessment to check for logging in MarkLogic Operator
 	feature.Assess("Grafana Dashboard created", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 		client := c.Client()
-		podList := &corev1.PodList{}
-		if err := client.Resources("grafana").List(ctx, podList); err != nil {
-			t.Fatal(err)
+		grafanaPodName := ""
+		err := utils.WaitForCondition(ctx, "Grafana pod availability", 2*time.Minute, 5*time.Second, func() (bool, error) {
+			podList := &corev1.PodList{}
+			if listErr := client.Resources("grafana").List(ctx, podList); listErr != nil {
+				return false, nil
+			}
+			if len(podList.Items) == 0 {
+				return false, nil
+			}
+			grafanaPodName = podList.Items[0].Name
+			return true, nil
+		})
+		if err != nil {
+			t.Fatalf("Failed waiting for Grafana pod: %v", err)
 		}
-		time.Sleep(5 * time.Second) // Wait for Grafana to be fully ready
-		if len(podList.Items) == 0 {
-			t.Fatal("No Grafana pods found")
+		err = utils.WaitForPod(ctx, t, client, "grafana", grafanaPodName, 120*time.Second, true)
+		if err != nil {
+			t.Fatalf("Failed waiting for Grafana pod readiness: %v", err)
 		}
-		grafanaPodName := podList.Items[0].Name
 		grafanaAdminUser, grafanaAdminPassword, err := utils.GetSecretData(ctx, client, "grafana", "grafana", "admin-user", "admin-password")
 		if err != nil {
 			t.Fatalf("Failed to get Grafana admin user and password: %v", err)
 		}
-		time.Sleep(90 * time.Second)
 		grafanaURL := "http://localhost:3000"
 		url := fmt.Sprintf("%s/api/dashboards/db", grafanaURL)
 		curlCommand := fmt.Sprintf(`curl -X POST %s -u %s:%s -H "Content-Type: application/json" -d '%s'`, url, grafanaAdminUser, grafanaAdminPassword, dashboardPayload)
@@ -451,29 +466,24 @@ func TestMarklogicCluster(t *testing.T) {
 		}
 		queryUrl := fmt.Sprintf("%s/api/ds/query?ds_type=loki", grafanaURL)
 		curlCommand = fmt.Sprintf(`curl -X POST %s -u %s:%s -H "Content-Type: application/json" -d '%s'`, queryUrl, grafanaAdminUser, grafanaAdminPassword, payloadBytes)
-		maxRetries := 5
-		for attempt := 1; attempt <= maxRetries; attempt++ {
+		lastQueryOutput := ""
+		attempt := 0
+		err = utils.WaitForCondition(ctx, "MarkLogic logs in Grafana datasource query", 2*time.Minute, 5*time.Second, func() (bool, error) {
+			attempt++
 			t.Logf("Attempt %d to query datasource", attempt)
-			output, err = utils.ExecCmdInPod(grafanaPodName, "grafana", "grafana", curlCommand)
-			if err != nil {
-				t.Logf("Attempt  %d/%d Failed to execute kubectl command in grafana pod: %v", attempt, 5, err)
-				if attempt == maxRetries {
-					t.Fatalf("failed to execute kubectl command after %d attempts: %v", maxRetries, err)
-				}
-				// Exponential backoff: 1s, 2s, 4s, 8s, 16s
-				time.Sleep(time.Duration(1<<(attempt-1)) * time.Second)
+			queryOutput, queryErr := utils.ExecCmdInPod(grafanaPodName, "grafana", "grafana", curlCommand)
+			if queryErr != nil {
+				t.Logf("Attempt %d failed to query datasource: %v", attempt, queryErr)
+				return false, nil
 			}
-			t.Logf("Query datasource response: %s", output)
-			// Verify MarkLogic logs in Grafana using Loki and Fluent Bit
-			if strings.Contains(output, "Starting MarkLogic Server") {
-				t.Logf("Successfully found MarkLogic logs on attempt %d", attempt)
-			} else if attempt == maxRetries {
-				t.Fatalf("Failed to find MarkLogic logs in Grafana after %d attempts", maxRetries)
-			} else {
-				t.Logf("MarkLogic logs not found, retrying...")
-				time.Sleep(time.Duration(1<<(attempt-1)) * time.Second) // Exponential backoff
-			}
+			lastQueryOutput = queryOutput
+			t.Logf("Query datasource response: %s", queryOutput)
+			return strings.Contains(queryOutput, "Starting MarkLogic Server"), nil
+		})
+		if err != nil {
+			t.Fatalf("Failed to find MarkLogic logs in Grafana within timeout: %v. Last output: %s", err, lastQueryOutput)
 		}
+		t.Logf("Successfully found MarkLogic logs after %d attempts", attempt)
 
 		curlCommand = fmt.Sprintf(`curl -u %s:%s %s/api/dashboards/uid/%s`, grafanaAdminUser, grafanaAdminPassword, grafanaURL, dashboardUID)
 		output, err = utils.ExecCmdInPod(grafanaPodName, "grafana", "grafana", curlCommand)

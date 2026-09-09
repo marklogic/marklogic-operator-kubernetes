@@ -25,6 +25,56 @@ import (
 	e2eutils "sigs.k8s.io/e2e-framework/pkg/utils"
 )
 
+func waitForTLSHTTPSReady(ctx context.Context, t *testing.T, namespace, podName string, timeout time.Duration) error {
+	t.Helper()
+
+	httpsCheck := "curl -k -s -o /dev/null -w '%{http_code}' https://localhost:8002/admin/v1/timestamp"
+	httpCheck := "curl -s -o /dev/null -w '%{http_code}' http://localhost:8002/admin/v1/timestamp"
+	attempt := 0
+
+	return utils.WaitForCondition(ctx, "TLS HTTPS endpoint on port 8002", timeout, 2*time.Second, func() (bool, error) {
+		attempt++
+
+		httpsOutput, httpsErr := utils.ExecCmdInPod(podName, namespace, mlContainerName, httpsCheck)
+		if httpsErr == nil && (strings.Contains(httpsOutput, "200") || strings.Contains(httpsOutput, "401")) {
+			t.Log("HTTPS is configured and responding")
+			return true, nil
+		}
+
+		httpOutput, _ := utils.ExecCmdInPod(podName, namespace, mlContainerName, httpCheck)
+		if strings.Contains(httpOutput, "200") || strings.Contains(httpOutput, "401") {
+			t.Logf("Port 8002 still using HTTP (attempt %d), waiting for TLS configuration...", attempt)
+		} else {
+			t.Logf("Port 8002 not ready yet (attempt %d)...", attempt)
+		}
+
+		return false, nil
+	})
+}
+
+func waitForTLSClusterHosts(ctx context.Context, t *testing.T, namespace, podName string, expectedHosts []string, timeout time.Duration) error {
+	t.Helper()
+
+	cmd := fmt.Sprintf("curl -k --anyauth -u %s:%s https://localhost:8002/manage/v2/hosts?view=status&format=json", adminUsername, adminPassword)
+
+	return utils.WaitForCondition(ctx, "MarkLogic cluster host membership", timeout, 5*time.Second, func() (bool, error) {
+		output, err := utils.ExecCmdInPod(podName, namespace, mlContainerName, cmd)
+		if err != nil {
+			t.Logf("Failed to query host membership from pod %s: %v", podName, err)
+			return false, nil
+		}
+
+		for _, host := range expectedHosts {
+			if !strings.Contains(output, host) {
+				t.Logf("Host %q not present yet, waiting...", host)
+				return false, nil
+			}
+		}
+
+		return true, nil
+	})
+}
+
 func TestTlsWithSelfSigned(t *testing.T) {
 	trackTest(t)
 	runTopLevelParallel(t)
@@ -97,38 +147,10 @@ func TestTlsWithSelfSigned(t *testing.T) {
 			t.Fatalf("Failed to wait for pod creation: %v", err)
 		}
 
-		// Wait for TLS to be fully configured on management port 8002
+		// Wait for TLS to be fully configured on management port 8002.
 		t.Log("Waiting for TLS configuration to be applied to port 8002...")
-		time.Sleep(30 * time.Second)
-
-		// Verify HTTPS is actually configured (not HTTP)
-		t.Log("Verifying HTTPS is configured on port 8002...")
-		httpsCheck := "curl -k -s -o /dev/null -w '%{http_code}' https://localhost:8002/admin/v1/timestamp"
-		var httpsReady bool
-		for i := 0; i < 60; i++ {
-			output, err := utils.ExecCmdInPod(podName, namespace, mlContainerName, httpsCheck)
-			if err == nil && (strings.Contains(output, "200") || strings.Contains(output, "401")) {
-				t.Log("HTTPS is configured and responding")
-				httpsReady = true
-				break
-			}
-			// Check if still HTTP (should fail)
-			httpCheck := "curl -s -o /dev/null -w '%{http_code}' http://localhost:8002/admin/v1/timestamp"
-			output, _ = utils.ExecCmdInPod(podName, namespace, mlContainerName, httpCheck)
-			if strings.Contains(output, "200") || strings.Contains(output, "401") {
-				t.Logf("Port 8002 still using HTTP (attempt %d/60), waiting for TLS configuration...", i+1)
-			} else {
-				t.Logf("Port 8002 not ready yet (attempt %d/60)...", i+1)
-			}
-
-			if i == 59 {
-				t.Fatalf("HTTPS not configured on port 8002 after 2 minutes. TLS configuration may have failed.")
-			}
-			time.Sleep(2 * time.Second)
-		}
-
-		if !httpsReady {
-			t.Fatal("HTTPS endpoint never became ready")
+		if err := waitForTLSHTTPSReady(ctx, t, namespace, podName, 2*time.Minute); err != nil {
+			t.Fatalf("HTTPS not configured on port 8002 within timeout: %v", err)
 		}
 
 		return ctx
@@ -291,7 +313,9 @@ func TestTlsWithNamedCert(t *testing.T) {
 	feature.Assess("Verify Named Certificate", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 		podName := "marklogic-1"
 		hostnamesSlice := []string{"marklogic-0.marklogic.marklogic-tlsnamed.svc.cluster.local", "marklogic-1.marklogic.marklogic-tlsnamed.svc.cluster.local"}
-		time.Sleep(5 * time.Second)
+		if err := waitForTLSHTTPSReady(ctx, t, namespace, podName, 2*time.Minute); err != nil {
+			t.Fatalf("HTTPS not configured on port 8002 within timeout: %v", err)
+		}
 		url := "https://localhost:8002/manage/v2/certificates?format=json"
 		command := fmt.Sprintf("curl -k --anyauth -u %s:%s %s", adminUsername, adminPassword, url)
 		certs, err := utils.ExecCmdInPod(podName, namespace, mlContainerName, command)
@@ -444,8 +468,13 @@ func TestTlsWithMultiNode(t *testing.T) {
 			t.Log("Deleting existing MarklogicCluster from previous run")
 			if err := client.Resources(namespace).Delete(ctx, existingCR); err != nil {
 				t.Logf("Warning: Failed to delete existing MarklogicCluster: %s", err)
+			} else if err := wait.For(
+				conditions.New(client.Resources(namespace)).ResourceDeleted(existingCR),
+				wait.WithTimeout(2*time.Minute),
+				wait.WithInterval(2*time.Second),
+			); err != nil {
+				t.Fatalf("Timed out waiting for existing MarklogicCluster deletion: %v", err)
 			}
-			time.Sleep(10 * time.Second) // Wait for deletion
 		}
 
 		if err := client.Resources(namespace).Create(ctx, cr); err != nil {
@@ -509,9 +538,11 @@ func TestTlsWithMultiNode(t *testing.T) {
 			t.Fatalf("Failed to wait for enode-0 creation: %v", err)
 		}
 
-		// Wait additional time for enode to join cluster and configure TLS
-		t.Log("Waiting for enode to join cluster and configure TLS...")
-		time.Sleep(60 * time.Second)
+		// Wait until both hosts are visible in cluster membership output.
+		err = waitForTLSClusterHosts(ctx, t, namespace, "dnode-0", []string{"dnode-0", "enode-0"}, 3*time.Minute)
+		if err != nil {
+			t.Fatalf("Failed waiting for enode cluster join: %v", err)
+		}
 
 		return ctx
 	})
@@ -520,38 +551,10 @@ func TestTlsWithMultiNode(t *testing.T) {
 		podName := "dnode-0"
 		hostnamesSlice := []string{"enode-0.enode.marklogic-tlsednode.svc.cluster.local", "dnode-0.dnode.marklogic-tlsednode.svc.cluster.local"}
 
-		// Wait longer for TLS to be fully configured on management port 8002
+		// Wait for TLS to be fully configured on management port 8002.
 		t.Log("Waiting for TLS configuration to be applied to port 8002...")
-		time.Sleep(30 * time.Second)
-
-		// Verify HTTPS is actually configured (not HTTP)
-		t.Log("Verifying HTTPS is configured on port 8002...")
-		httpsCheck := "curl -k -s -o /dev/null -w '%{http_code}' https://localhost:8002/admin/v1/timestamp"
-		var httpsReady bool
-		for i := 0; i < 60; i++ {
-			output, err := utils.ExecCmdInPod(podName, namespace, mlContainerName, httpsCheck)
-			if err == nil && (strings.Contains(output, "200") || strings.Contains(output, "401")) {
-				t.Log("HTTPS is configured and responding")
-				httpsReady = true
-				break
-			}
-			// Check if still HTTP (should fail)
-			httpCheck := "curl -s -o /dev/null -w '%{http_code}' http://localhost:8002/admin/v1/timestamp"
-			output, _ = utils.ExecCmdInPod(podName, namespace, mlContainerName, httpCheck)
-			if strings.Contains(output, "200") || strings.Contains(output, "401") {
-				t.Logf("Port 8002 still using HTTP (attempt %d/60), waiting for TLS configuration...", i+1)
-			} else {
-				t.Logf("Port 8002 not ready yet (attempt %d/60)...", i+1)
-			}
-
-			if i == 59 {
-				t.Fatalf("HTTPS not configured on port 8002 after 2 minutes. TLS configuration may have failed.")
-			}
-			time.Sleep(2 * time.Second)
-		}
-
-		if !httpsReady {
-			t.Fatal("HTTPS endpoint never became ready")
+		if err := waitForTLSHTTPSReady(ctx, t, namespace, podName, 2*time.Minute); err != nil {
+			t.Fatalf("HTTPS not configured on port 8002 within timeout: %v", err)
 		}
 
 		// Now fetch certificates list with HTTPS
