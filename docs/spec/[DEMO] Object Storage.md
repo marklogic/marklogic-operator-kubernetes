@@ -188,6 +188,79 @@ Check `status.objectStorage.<provider>.reason` for a machine-readable cause:
 ### Cluster-wide behavior
 - On a multi-host cluster, apply credentials once, then `curl` `/manage/v2/credentials/properties` from a **non-bootstrap** host to show it's visible cluster-wide, not per-pod.
 
+## Presenting AWS (EKS) + Azure (AKS) side by side
+
+Two clusters, two clouds, two terminal panes — Pane A drives Part 1 against EKS, Pane B drives
+Part 2 against AKS. Status as of 2026-09-09:
+
+| | EKS `marklogic-tiered-poc` (AWS S3) | AKS `pzhou-test-k8s` (Azure Blob) |
+|---|---|---|
+| kubectl context | `pzhou@marklogic-tiered-poc.us-west-2.eksctl.io` | `pzhou-test-k8s` |
+| `MarklogicCluster` | `ml-tiered-poc` (ns `marklogic`) — **does not exist yet** | `ml-tiered-blob-poc` (ns `marklogic`) — Ready |
+| Operator/CRD | **not deployed** — node is up but no CRDs/controller | deployed, `objectStorage` CRD present |
+| Cloud-side prereqs | bucket `pzhou-k8s-test` and IAM user `marklogic-objstore-demo` still exist | storage account `mltieredpocsa03865` still exists |
+| Credential Secret | `ml-s3-credentials` — **gone** (namespace was wiped; the IAM user's existing access key `AKIAUPUKHJ7Y237J4BGO` has no recoverable secret value) | `ml-azure-credentials` — present, already `Applied` |
+
+### Scripts
+
+The steps below are automated as runnable scripts in `docs/spec/object-storage-demo/`. Every
+script that touches credential material writes nothing sensitive to its own stdout/argv and is
+meant to be run as a whole file (`bash <script>`), never by copy-pasting individual `kubectl`
+lines with a secret inline.
+
+| Script | Cloud | What it does |
+|---|---|---|
+| `eks-01-provision.sh` | EKS (AWS) | One-time: build+push image to ECR, install CRDs/controller, bootstrap `MarklogicCluster/ml-tiered-poc` with no `objectStorage` yet |
+| `eks-02-apply-aws-credentials.sh` | EKS (AWS) | **Live demo step**: `aws iam create-access-key` for `marklogic-objstore-demo`, create Secret `ml-s3-credentials`, deactivate the old orphaned key, patch `objectStorage.aws` onto the cluster |
+| `aks-01-provision.sh` | AKS (Azure) | One-time, idempotent: build+push image to ACR, install CRDs/controller, refresh the `acr-pull` imagePullSecret, bootstrap `MarklogicCluster/ml-tiered-blob-poc` if it doesn't already exist |
+| `aks-02-apply-azure-credentials.sh` | AKS (Azure) | **Live demo step**: `az storage account keys list` for `mltieredpocsa03865`, create Secret `ml-azure-credentials`, patch `objectStorage.azure` onto the cluster |
+| `verify-credentials.sh <context> <ns> <cluster> <svc> <aws\|azure>` | either | Port-forwards to the bootstrap host and `curl`s `/manage/v2/credentials/properties` directly, independent of the operator's own status |
+
+Run the `-01-provision.sh` scripts ahead of time (not during the presentation — they take
+several minutes and aren't interesting to watch). AKS's has already been run once; it's safe to
+re-run since it skips bootstrap when the `MarklogicCluster` already exists.
+
+### One-time EKS setup (do before the presentation, not live)
+
+```bash
+bash docs/spec/object-storage-demo/eks-01-provision.sh
+```
+
+If the controller rollout doesn't converge, check the same two things that broke AKS the first
+time: a stale `imagePullSecret` (401 on ECR/ACR auth) and the Deployment's `serviceAccountName`
+actually having RoleBindings (`kubectl -n marklogic-operator-system get rolebindings,clusterrolebindings -o wide`).
+
+### Live two-pane script
+
+- **Pane A (EKS / AWS):**
+  ```bash
+  bash docs/spec/object-storage-demo/eks-02-apply-aws-credentials.sh
+  bash docs/spec/object-storage-demo/verify-credentials.sh \
+    pzhou@marklogic-tiered-poc.us-west-2.eksctl.io marklogic ml-tiered-poc node aws
+  ```
+- **Pane B (AKS / Azure):**
+  ```bash
+  bash docs/spec/object-storage-demo/aks-02-apply-azure-credentials.sh
+  bash docs/spec/object-storage-demo/verify-credentials.sh \
+    pzhou-test-k8s marklogic ml-tiered-blob-poc node azure
+  ```
+
+AKS is already sitting at `phase: Applied` from the last session, which is a fine end state to just
+narrate — but if you want the audience to see `Pending`/absent → `Applied` happen live instead of
+walking in pre-applied, reset it right before presenting:
+
+```bash
+kubectl --context pzhou-test-k8s -n marklogic patch marklogiccluster ml-tiered-blob-poc \
+  --type=json -p='[{"op":"remove","path":"/spec/objectStorage/azure"}]'
+# confirm status.objectStorage.azure.phase flips to Disabled, then re-run
+# aks-02-apply-azure-credentials.sh live to show the transition back to Applied.
+```
+
+Suggested narrative: run Pane A (EKS/AWS) to completion first including the Management API check,
+then switch panes and run Pane B (AKS/Azure) the same way — same CRD, same `kubectl patch` shape,
+same `status.objectStorage.<provider>` contract, different cloud underneath. That parity is the
+point of the demo.
+
 ## Not covered by this demo
 
 - AWS IRSA / instance-role keyless access — not supported by MarkLogic, do not attempt.
