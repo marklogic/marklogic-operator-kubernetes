@@ -108,6 +108,7 @@ AWS_ACCOUNT_ID ?= $(shell aws sts get-caller-identity --query Account --output t
 ECR_REGISTRY ?= $(AWS_ACCOUNT_ID).dkr.ecr.$(EKS_REGION).amazonaws.com
 ECR_OPERATOR_IMAGE ?= $(ECR_REGISTRY)/$(EKS_CLUSTER_NAME)/marklogic-kubernetes-operator:$(VERSION)
 E2E_TEST_PARALLELISM ?= 4
+GO_TEST ?= go test
 
 
 # CHANNELS define the bundle channels used in the bundle.
@@ -220,7 +221,7 @@ kill-envtest: ## Kill any stale envtest kube-apiserver and etcd processes left b
 
 .PHONY: test
 test: manifests generate fmt vet envtest ## Run tests.
-	KUBEBUILDER_ASSETS="$(shell $(ENVTEST) use $(ENVTEST_K8S_VERSION) --bin-dir $(LOCALBIN) -p path)" go test -v $$(go list ./... | grep -v /e2e) -coverprofile cover.out
+	KUBEBUILDER_ASSETS="$(shell $(ENVTEST) use $(ENVTEST_K8S_VERSION) --bin-dir $(LOCALBIN) -p path)" $(GO_TEST) -v $$(go list ./... | grep -v /e2e) -coverprofile cover.out
 
 # Utilize minikube or modify the e2e tests to load the image locally, enabling compatibility with other vendors.
 # To run specific e2e test with label, try 	go test -v ./test/e2e -count=1 -args --labels="type=tls-multi-node"
@@ -248,7 +249,7 @@ e2e-test-istio:
 	else \
 		echo "=====Minikube profile $(MINIKUBE_PROFILE) not found or not running; skipping image load====="; \
 	fi
-	IMG=$(IMG) E2E_ISTIO_AMBIENT=true go test -v -count=1 -parallel $(E2E_TOP_LEVEL_PARALLELISM) -timeout 30m ./test/e2e -run "Test(Istio|NonIstio)" -context=$(MINIKUBE_PROFILE)
+	IMG=$(IMG) E2E_ISTIO_AMBIENT=true $(GO_TEST) -v -count=1 -parallel $(E2E_TOP_LEVEL_PARALLELISM) -timeout 30m ./test/e2e -run "Test(Istio|NonIstio)" -context=$(MINIKUBE_PROFILE)
 
 # NOTE: There is intentionally no `e2e-test-namespace` target here.
 # The `test/e2e` suite always deploys the operator via `make deploy`
@@ -277,7 +278,7 @@ ifeq ($(VERIFY_HUGE_PAGES), true)
 	fi
 
 	@echo "=====Running e2e test including hugepages test"
-	IMG=$(IMG) go test -v -count=1 -parallel $(E2E_TOP_LEVEL_PARALLELISM) -timeout 60m ./test/e2e -verifyHugePages -context=$(MINIKUBE_PROFILE)
+	IMG=$(IMG) $(GO_TEST) -v -count=1 -parallel $(E2E_TOP_LEVEL_PARALLELISM) -timeout 60m ./test/e2e -verifyHugePages -context=$(MINIKUBE_PROFILE)
 
 	@echo "=====Resetting hugepages value to 0"
 	sudo sysctl -w vm.nr_hugepages=0
@@ -293,7 +294,7 @@ else
 	else \
 		echo "=====Minikube profile $(MINIKUBE_PROFILE) not found or not running; skipping image load====="; \
 	fi
-	IMG=$(IMG) go test -v -count=1 -parallel $(E2E_TOP_LEVEL_PARALLELISM) -timeout $(E2E_TEST_TIMEOUT) ./test/e2e -context=$(MINIKUBE_PROFILE)
+	IMG=$(IMG) $(GO_TEST) -v -count=1 -parallel $(E2E_TOP_LEVEL_PARALLELISM) -timeout $(E2E_TEST_TIMEOUT) ./test/e2e -context=$(MINIKUBE_PROFILE)
 endif
 
 .PHONY: e2e-test-helm-namespace  ## Run namespace-scoped e2e tests via Helm chart install (validates Role/RoleBinding, no ClusterRole, insecure metrics on :8080)
@@ -305,7 +306,7 @@ e2e-test-helm-namespace:
 	else \
 		echo "=====Minikube profile $(MINIKUBE_PROFILE) not found or not running; skipping image load====="; \
 	fi
-	E2E_DOCKER_IMAGE=$(IMG) go test -v -count=1 -timeout $(E2E_HELM_TEST_TIMEOUT) ./test/e2e-helm -context=$(MINIKUBE_PROFILE)
+	E2E_DOCKER_IMAGE=$(IMG) $(GO_TEST) -v -count=1 -timeout $(E2E_HELM_TEST_TIMEOUT) ./test/e2e-helm -context=$(MINIKUBE_PROFILE)
 
 .PHONY: e2e-test-upgrade  ## Run both upgrade validation scenarios (cluster + namespace) and then reuse the matching e2e suites.
 e2e-test-upgrade:
@@ -337,7 +338,7 @@ e2e-test-upgrade-cluster:
 	E2E_UPGRADE_SOURCE_VERSION='$(E2E_UPGRADE_SOURCE_VERSION)' \
 	E2E_UPGRADE_TARGET_IMAGE="$$TARGET_IMG" \
 	E2E_MARKLOGIC_IMAGE_VERSION='$(E2E_MARKLOGIC_IMAGE_VERSION)' \
-	go test -tags upgradee2e -v -count=1 -timeout $(E2E_UPGRADE_CLUSTER_TEST_TIMEOUT) ./test -run '^TestUpgradeClusterScope$$'
+	$(GO_TEST) -tags upgradee2e -v -count=1 -timeout $(E2E_UPGRADE_CLUSTER_TEST_TIMEOUT) ./test -run '^TestUpgradeClusterScope$$'
 
 .PHONY: e2e-test-upgrade-helm-namespace  ## Run the namespace-scoped upgrade validation and then reuse the Helm namespace-scoped e2e suite.
 # NOTE: this target shells out directly to kubectl/helm, so it relies on kubectl's current-context
@@ -364,18 +365,18 @@ e2e-test-upgrade-helm-namespace:
 	E2E_UPGRADE_SOURCE_VERSION='$(E2E_UPGRADE_SOURCE_VERSION)' \
 	E2E_UPGRADE_TARGET_IMAGE="$$TARGET_IMG" \
 	E2E_MARKLOGIC_IMAGE_VERSION='$(E2E_MARKLOGIC_IMAGE_VERSION)' \
-	go test -tags upgradee2e -v -count=1 -timeout $(E2E_UPGRADE_HELM_NAMESPACE_TEST_TIMEOUT) ./test -run '^TestUpgradeNamespaceScope$$'
+	$(GO_TEST) -tags upgradee2e -v -count=1 -timeout $(E2E_UPGRADE_HELM_NAMESPACE_TEST_TIMEOUT) ./test -run '^TestUpgradeNamespaceScope$$'
 
 .PHONY: e2e-test-upgrade-cleanup  ## Delete upgrade-test releases and namespaces, optionally filtered by E2E_UPGRADE_RUN_ID.
 e2e-test-upgrade-cleanup:
 	@echo "=====Cleaning upgrade-test resources====="
 	E2E_UPGRADE_RUN_ID=$(E2E_UPGRADE_RUN_ID) \
-	go test -tags upgradee2e -v -count=1 -timeout $(E2E_UPGRADE_CLEANUP_TIMEOUT) ./test -run '^TestCleanupUpgradeResources$$'
+	$(GO_TEST) -tags upgradee2e -v -count=1 -timeout $(E2E_UPGRADE_CLEANUP_TIMEOUT) ./test -run '^TestCleanupUpgradeResources$$'
 
 .PHONY: e2e-test-volume-resize  ## Run ONLY the cluster-scoped volume resize test (two namespaces in parallel)
 e2e-test-volume-resize:
 	@echo "=====Running cluster-scoped volume-resize e2e test (parallel, 2 namespaces)====="
-	IMG=$(IMG) go test -v -count=1 -parallel $(E2E_TOP_LEVEL_PARALLELISM) -timeout 30m ./test/e2e -run TestVolumeResizeClusterScoped -context=$(MINIKUBE_PROFILE)
+	IMG=$(IMG) $(GO_TEST) -v -count=1 -parallel $(E2E_TOP_LEVEL_PARALLELISM) -timeout 30m ./test/e2e -run TestVolumeResizeClusterScoped -context=$(MINIKUBE_PROFILE)
 
 .PHONY: e2e-test-dynamic-host  ## Run ONLY the cluster-scoped dynamic-host lifecycle test
 e2e-test-dynamic-host:
@@ -384,7 +385,7 @@ e2e-test-dynamic-host:
 		$(MAKE) e2e-test-dynamic-host-local MINIKUBE_PROFILE=$(MINIKUBE_PROFILE); \
 	else \
 		echo "=====Running cluster-scoped dynamic-host lifecycle e2e test (controller image: $(IMG))====="; \
-		IMG=$(IMG) go test -v -count=1 -parallel $(E2E_TOP_LEVEL_PARALLELISM) -timeout 45m ./test/e2e -args --labels=\"type=dynamic-host\" --context=$(MINIKUBE_PROFILE); \
+		IMG=$(IMG) $(GO_TEST) -v -count=1 -parallel $(E2E_TOP_LEVEL_PARALLELISM) -timeout 45m ./test/e2e -args --labels=\"type=dynamic-host\" --context=$(MINIKUBE_PROFILE); \
 	fi
 
 .PHONY: e2e-test-dynamic-host-local  ## Build/load local operator image (minikube context) and run ONLY dynamic-host lifecycle test
@@ -403,7 +404,7 @@ e2e-test-dynamic-host-local:
 		echo "=====Minikube profile $(MINIKUBE_PROFILE) not found or not running; skipping minikube image load====="; \
 	fi
 	@echo "=====Running cluster-scoped dynamic-host lifecycle e2e test against local image====="
-	IMG=$(LOCAL_E2E_IMG) go test -v -count=1 -parallel $(E2E_TOP_LEVEL_PARALLELISM) -timeout 45m ./test/e2e -args --labels="type=dynamic-host" --context=$(MINIKUBE_PROFILE)
+	IMG=$(LOCAL_E2E_IMG) $(GO_TEST) -v -count=1 -parallel $(E2E_TOP_LEVEL_PARALLELISM) -timeout 45m ./test/e2e -args --labels="type=dynamic-host" --context=$(MINIKUBE_PROFILE)
 
 .PHONY: e2e-test-volume-resize-local  ## Build/load local operator image (minikube context) and run ONLY volume-resize test; ensures CSI hostpath is default SC
 e2e-test-volume-resize-local:
@@ -428,7 +429,7 @@ e2e-test-volume-resize-local:
 		echo "=====Minikube profile $(MINIKUBE_PROFILE) not found or not running; skipping minikube image load and storage class setup====="; \
 	fi
 	@echo "=====Running cluster-scoped volume-resize e2e test against local image====="
-	IMG=$(LOCAL_E2E_IMG) go test -v -count=1 -parallel $(E2E_TOP_LEVEL_PARALLELISM) -timeout 30m ./test/e2e -run TestVolumeResizeClusterScoped -context=$(MINIKUBE_PROFILE)
+	IMG=$(LOCAL_E2E_IMG) $(GO_TEST) -v -count=1 -parallel $(E2E_TOP_LEVEL_PARALLELISM) -timeout 30m ./test/e2e -run TestVolumeResizeClusterScoped -context=$(MINIKUBE_PROFILE)
 
 .PHONY: e2e-test-helm-volume-resize  ## Run ONLY the namespace-scoped volume resize test via Helm (two watched namespaces in parallel)
 e2e-test-helm-volume-resize:
@@ -439,7 +440,7 @@ e2e-test-helm-volume-resize:
 	else \
 		echo "=====Minikube profile $(MINIKUBE_PROFILE) not found or not running; skipping image load====="; \
 	fi
-	E2E_DOCKER_IMAGE=$(IMG) go test -v -count=1 -timeout 30m ./test/e2e-helm -run TestVolumeResizeNamespaceScoped -context=$(MINIKUBE_PROFILE)
+	E2E_DOCKER_IMAGE=$(IMG) $(GO_TEST) -v -count=1 -timeout 30m ./test/e2e-helm -run TestVolumeResizeNamespaceScoped -context=$(MINIKUBE_PROFILE)
 
 .PHONY: e2e-test-jenkins-volume-resize  ## Run ONLY volume resize tests on Jenkins (cluster-scoped + namespace-scoped via Helm). Optimized for CI/CD pipeline.
 e2e-test-jenkins-volume-resize: e2e-test-volume-resize e2e-test-helm-volume-resize
@@ -603,7 +604,7 @@ e2e-setup-eks: kustomize controller-gen build ecr-login eks-update-kubeconfig ek
 e2e-test-eks: ## Run e2e tests on EKS.
 	@echo "=====Running e2e tests on EKS====="
 	PATH=$(LOCALBIN):$$PATH IMG=$(ECR_OPERATOR_IMAGE) E2E_DOCKER_IMAGE=$(ECR_OPERATOR_IMAGE) \
-	  go test -v -count=1 -parallel $(E2E_TEST_PARALLELISM) -timeout 60m ./test/e2e
+	  $(GO_TEST) -v -count=1 -parallel $(E2E_TEST_PARALLELISM) -timeout 60m ./test/e2e
 
 # Scale EKS worker nodes back to 0 after a test run.
 # Note: Kubernetes resources (operator, test namespaces) are removed by the
@@ -635,7 +636,7 @@ e2e-setup-eks-istio: kustomize controller-gen build istioctl ecr-login eks-updat
 e2e-test-eks-istio: ## Run Istio ambient mode e2e tests on EKS.
 	@echo "=====Running Istio ambient mode e2e tests on EKS====="
 	PATH=$(LOCALBIN):$$PATH IMG=$(ECR_OPERATOR_IMAGE) E2E_DOCKER_IMAGE=$(ECR_OPERATOR_IMAGE) E2E_ISTIO_AMBIENT=true \
-	  go test -v -count=1 -parallel $(E2E_TEST_PARALLELISM) -timeout 60m ./test/e2e -run "Test(Istio|NonIstio)"
+	  $(GO_TEST) -v -count=1 -parallel $(E2E_TEST_PARALLELISM) -timeout 60m ./test/e2e -run "Test(Istio|NonIstio)"
 
 GOLANGCI_LINT = $(shell pwd)/bin/golangci-lint
 golangci-lint:
