@@ -7,7 +7,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
+	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -42,6 +44,10 @@ const (
 	dynamicE2EPodDeleteTimeout      = 6 * time.Minute
 	dynamicE2ENamespaceResetTimeout = 4 * time.Minute
 	dynamicE2ERetryInterval         = 5 * time.Second
+
+	// dynamicHostMinMLMajorVersion is the lowest MarkLogic major version that
+	// supports dynamic hosts; the feature is unavailable on MarkLogic 11 and earlier.
+	dynamicHostMinMLMajorVersion = 12
 )
 
 // TestDynamicHostLifecycleClusterScoped validates dynamic-host lifecycle in a
@@ -53,6 +59,7 @@ const (
 // 5) scale-to-zero
 func TestDynamicHostLifecycleClusterScoped(t *testing.T) {
 	trackTest(t)
+	skipIfDynamicHostUnsupported(t)
 
 	feature := features.New("Dynamic Host Lifecycle — Cluster-Scoped").
 		WithLabel("type", "dynamic-host")
@@ -444,6 +451,57 @@ func dynamicHostTestImage() string {
 		return marklogicImage
 	}
 	return dynamicE2EDefaultImage
+}
+
+// skipIfDynamicHostUnsupported skips the test up front when the configured
+// MarkLogic image predates dynamic host support, avoiding a hard failure
+// against MarkLogic 11 (or earlier) images.
+func skipIfDynamicHostUnsupported(t *testing.T) {
+	t.Helper()
+	image := dynamicHostTestImage()
+	major, ok := marklogicImageMajorVersion(image)
+	if !ok {
+		t.Logf("could not determine MarkLogic major version from image %q; proceeding with dynamic host test", image)
+		return
+	}
+	if major < dynamicHostMinMLMajorVersion {
+		t.Skipf("skipping dynamic host test: image %q is MarkLogic %d, dynamic hosts require MarkLogic %d+", image, major, dynamicHostMinMLMajorVersion)
+	}
+}
+
+// marklogicTagVersionRe extracts a MarkLogic image tag's major version:
+// "12.0.3-ubi9-rootless-2.2.6" -> 12, "v11.2.0" -> 11, "latest-11" -> 11.
+var marklogicTagVersionRe = regexp.MustCompile(`^(?:v?(\d+)(?:[.\-].*)?|latest-(\d+))$`)
+
+// marklogicImageMajorVersion extracts the MarkLogic major version number from a
+// MarkLogic image reference's tag, e.g. "...:12.0.3-ubi9-rootless-2.2.6" -> 12 or
+// "...:latest-11" -> 11.
+func marklogicImageMajorVersion(image string) (int, bool) {
+	// Drop any digest so sha256 colons don't confuse tag parsing.
+	ref := strings.SplitN(image, "@", 2)[0]
+
+	// The tag is whatever follows the last ":" that appears after the last "/"
+	// (so a registry host:port isn't mistaken for a tag), or the whole ref if
+	// it's a bare tag with no repository path.
+	tag := ""
+	if idx := strings.LastIndex(ref, ":"); idx != -1 && idx < len(ref)-1 && idx > strings.LastIndex(ref, "/") {
+		tag = ref[idx+1:]
+	} else if !strings.Contains(ref, "/") {
+		tag = ref
+	} else {
+		return 0, false
+	}
+
+	m := marklogicTagVersionRe.FindStringSubmatch(tag)
+	if m == nil {
+		return 0, false
+	}
+	majorStr := m[1]
+	if majorStr == "" {
+		majorStr = m[2]
+	}
+	major, err := strconv.Atoi(majorStr)
+	return major, err == nil
 }
 
 func setDynamicReplicas(ctx context.Context, client klient.Client, replicas int32) error {
