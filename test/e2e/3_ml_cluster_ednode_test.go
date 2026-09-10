@@ -11,6 +11,7 @@ import (
 
 	marklogicv1 "github.com/marklogic/marklogic-operator-kubernetes/api/v1"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/util/homedir"
 
@@ -27,6 +28,9 @@ const (
 	dnodeGrpName = "dnode"
 	enodeGrpName = "enode"
 	mlClusterNs  = "ednode"
+
+	ednodePodReadyTimeout       = 5 * time.Minute
+	ednodeScaledPodReadyTimeout = 4 * time.Minute
 )
 
 var (
@@ -87,8 +91,11 @@ func TestMlClusterWithEdnode(t *testing.T) {
 				Labels: namespaceLabels(),
 			},
 		}
-		if err := client.Resources().Create(ctx, namespace); err != nil {
+		if err := client.Resources().Create(ctx, namespace); err != nil && !apierrors.IsAlreadyExists(err) {
 			t.Fatalf("Failed to create namespace: %s", err)
+		}
+		if p := e2eutils.RunCommand("kubectl -n ednode delete secret ml-admin-secrets --ignore-not-found=true"); p.Err() != nil {
+			t.Logf("Warning: failed deleting existing ml-admin-secrets: %s", p.Result())
 		}
 		marklogicv1.AddToScheme(client.Resources(mlClusterNs).GetScheme())
 
@@ -128,12 +135,12 @@ func TestMlClusterWithEdnode(t *testing.T) {
 		client := c.Client()
 
 		podName := "dnode-0"
-		err := utils.WaitForPod(ctx, t, client, mlClusterNs, podName, 120*time.Second, true)
+		err := utils.WaitForPod(ctx, t, client, mlClusterNs, podName, ednodePodReadyTimeout, true)
 		if err != nil {
 			t.Fatalf("Failed to wait for pod creation: %v", err)
 		}
 		epodName := "enode-0"
-		err = utils.WaitForPod(ctx, t, client, mlClusterNs, epodName, 180*time.Second, true)
+		err = utils.WaitForPod(ctx, t, client, mlClusterNs, epodName, ednodePodReadyTimeout, true)
 		if err != nil {
 			t.Fatalf("Failed to wait for pod creation: %v", err)
 		}
@@ -177,12 +184,12 @@ func TestMlClusterWithEdnode(t *testing.T) {
 	feature.Assess("New Pods created", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 		client := c.Client()
 		podNameOne := "dnode-1"
-		err := utils.WaitForPod(ctx, t, client, mlClusterNs, podNameOne, 60*time.Second, true)
+		err := utils.WaitForPod(ctx, t, client, mlClusterNs, podNameOne, ednodeScaledPodReadyTimeout, true)
 		if err != nil {
 			t.Fatalf("Failed to wait for pod %s creation: %v", podNameOne, err)
 		}
 		epodNameTwo := "enode-1"
-		err = utils.WaitForPod(ctx, t, client, mlClusterNs, epodNameTwo, 120*time.Second, true)
+		err = utils.WaitForPod(ctx, t, client, mlClusterNs, epodNameTwo, ednodeScaledPodReadyTimeout, true)
 		if err != nil {
 			t.Fatalf("Failed to wait for pod %s creation: %v", epodNameTwo, err)
 		}

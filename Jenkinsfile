@@ -479,6 +479,10 @@ pipeline {
                             export MINIKUBE_PROFILE='${clusterMinikubeProfile}'
                             export KUBECONFIG='/space/.kube-config-cluster'
                             export MINIKUBE_HOME='/space/minikube-cluster/'
+                            if [ '${runNamespaceScoped}' = 'true' ]; then
+                                # Avoid overloading minikube when cluster and helm shards run concurrently.
+                                export E2E_TOP_LEVEL_PARALLELISM='2'
+                            fi
 
                             echo '=====Starting cluster-scoped shard====='
                             make e2e-setup-minikube IMG=${operatorRepo}:${VERSION} MINIKUBE_PROFILE=${clusterMinikubeProfile} MINIKUBE_REUSE=true E2E_SETUP_ISTIO=${clusterSetupIstio}
