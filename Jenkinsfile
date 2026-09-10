@@ -481,8 +481,7 @@ pipeline {
                             export MINIKUBE_HOME='/space/minikube-cluster/'
                             if [ '${runNamespaceScoped}' = 'true' ]; then
                                 # Avoid overloading minikube when cluster and helm shards run concurrently.
-                                export E2E_TOP_LEVEL_PARALLELISM='1'
-                                export E2E_WAIT_TIMEOUT_SCALE='2'
+                                export E2E_TOP_LEVEL_PARALLELISM='2'
                             fi
 
                             echo '=====Starting cluster-scoped shard====='

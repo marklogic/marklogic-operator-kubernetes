@@ -24,7 +24,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -258,19 +257,6 @@ func WaitForPod(ctx context.Context, t *testing.T, client klient.Client, namespa
 		waitForReady = checkReady[0]
 	}
 
-	effectiveTimeout := timeout
-	if scaleValue := strings.TrimSpace(os.Getenv("E2E_WAIT_TIMEOUT_SCALE")); scaleValue != "" {
-		scale, err := strconv.ParseFloat(scaleValue, 64)
-		if err != nil || scale <= 0 {
-			t.Logf("Ignoring invalid E2E_WAIT_TIMEOUT_SCALE value %q", scaleValue)
-		} else {
-			effectiveTimeout = time.Duration(float64(timeout) * scale)
-			if scale != 1 {
-				t.Logf("Applying pod wait timeout scale %.2fx: %v -> %v for %s/%s", scale, timeout, effectiveTimeout, namespace, podName)
-			}
-		}
-	}
-
 	start := time.Now()
 	pod := &corev1.Pod{}
 	p := utils.RunCommand(`kubectl get ns`)
@@ -397,14 +383,14 @@ func WaitForPod(ctx context.Context, t *testing.T, client klient.Client, namespa
 			continue
 		}
 
-		if time.Since(start) > effectiveTimeout {
+		if time.Since(start) > timeout {
 			// Enhanced timeout error with pod describe
 			describeCmd := fmt.Sprintf("kubectl describe pod %s -n %s", podName, namespace)
 			describeResult := utils.RunCommand(describeCmd)
 			t.Logf("Pod description:\n%s", describeResult.Result())
 
 			return fmt.Errorf("timed out after %v waiting for pod %s to be %s (current phase: %s)",
-				effectiveTimeout, podName, statusMsg, pod.Status.Phase)
+				timeout, podName, statusMsg, pod.Status.Phase)
 		}
 
 		time.Sleep(5 * time.Second)
