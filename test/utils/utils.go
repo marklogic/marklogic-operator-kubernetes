@@ -208,43 +208,6 @@ func GetProjectDir() (string, error) {
 	return wd, nil
 }
 
-// WaitForCondition polls condition until it returns true, the timeout elapses,
-// or the context is cancelled. It exits early as soon as the condition is met.
-func WaitForCondition(ctx context.Context, description string, timeout, interval time.Duration, condition func() (bool, error)) error {
-	if timeout <= 0 {
-		return fmt.Errorf("timeout must be greater than zero")
-	}
-	if interval <= 0 {
-		interval = time.Second
-	}
-
-	deadline := time.Now().Add(timeout)
-	var lastErr error
-
-	for {
-		done, err := condition()
-		if done {
-			return nil
-		}
-		if err != nil {
-			lastErr = err
-		}
-
-		if time.Now().After(deadline) {
-			if lastErr != nil {
-				return fmt.Errorf("timed out after %v waiting for %s: %w", timeout, description, lastErr)
-			}
-			return fmt.Errorf("timed out after %v waiting for %s", timeout, description)
-		}
-
-		select {
-		case <-ctx.Done():
-			return fmt.Errorf("context cancelled while waiting for %s: %w", description, ctx.Err())
-		case <-time.After(interval):
-		}
-	}
-}
-
 // WaitForPod waits for a pod to be in Running phase, or optionally for Running + Ready condition.
 // By default, it only checks for Running phase. Pass true for checkReady to also wait for Ready condition.
 // Usage:
