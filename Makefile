@@ -5,7 +5,7 @@
 # To re-generate a bundle for another specific version without changing the standard setup, you can:
 # - use the VERSION as arg of the bundle target (e.g make bundle VERSION=0.0.2)
 # - use environment variables to overwrite this value (e.g export VERSION=0.0.2)
-VERSION ?= 1.3.0
+VERSION ?= 1.3.1
 
 # Tool Versions
 KUSTOMIZE_VERSION ?= v5.5.0
@@ -24,7 +24,7 @@ export E2E_DOCKER_IMAGE ?= $(IMG)
 export E2E_KUSTOMIZE_VERSION ?= $(KUSTOMIZE_VERSION)
 export E2E_CONTROLLER_TOOLS_VERSION ?= $(CONTROLLER_TOOLS_VERSION)
 export E2E_MARKLOGIC_IMAGE_VERSION ?= progressofficial/marklogic-db:12.0.3-ubi9-rootless-2.2.6
-export FLUENT_BIT_IMAGE ?= fluent/fluent-bit:4.1.1
+export FLUENT_BIT_IMAGE ?= fluent/fluent-bit:5.1.0
 export E2E_KUBERNETES_VERSION ?= v1.31.13
 export E2E_ISTIO_AMBIENT ?= false
 export E2E_TEST_TIMEOUT ?= 60m
@@ -484,7 +484,7 @@ else
 endif
 	minikube -p $(MINIKUBE_PROFILE) image load $(IMG)
 	minikube -p $(MINIKUBE_PROFILE) image load $(E2E_MARKLOGIC_IMAGE_VERSION)
-	minikube -p $(MINIKUBE_PROFILE) image load "docker.io/haproxytech/haproxy-alpine:3.4.0"
+	minikube -p $(MINIKUBE_PROFILE) image load "docker.io/haproxytech/haproxy-alpine:3.4.3"
 	minikube -p $(MINIKUBE_PROFILE) image load $(FLUENT_BIT_IMAGE)
 	minikube -p $(MINIKUBE_PROFILE) image ls
 
