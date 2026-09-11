@@ -127,8 +127,24 @@ void publishTestResults() {
     archiveArtifacts artifacts: '**/test/test_results/*.xml', allowEmptyArchive: true
 }
 
+void ensureGotestsum() {
+    sh '''
+        command -v gotestsum >/dev/null 2>&1 || \
+          GO111MODULE=on GOBIN=/space/go/bin go install gotest.tools/gotestsum@v1.12.3
+    '''
+}
+
+String goTestOverride(String junitFile) {
+    return "GO_TEST='gotestsum --format standard-verbose --junitfile ${junitFile} --'"
+}
+
 void runTests() {
-    sh "make test"
+    ensureGotestsum()
+    sh """
+        mkdir -p test/test_results
+        rm -f test/test_results/unit-tests.xml
+        make test ${goTestOverride('test/test_results/unit-tests.xml')}
+    """
 }
 
 void runMinikubeSetup(String profile = 'minikube', boolean reuse = false, boolean setupIstio = true) {
@@ -146,8 +162,9 @@ void runE2eTests(String scope = 'cluster', String installMode = 'fresh', String 
         if (scope != 'cluster') {
             error "Upgrade e2e flow only supports the cluster suite target."
         }
+        ensureGotestsum()
         sh """
-            make e2e-test-upgrade-cluster IMG=${operatorRepo}:${VERSION} MINIKUBE_PROFILE=${profile}
+            make e2e-test-upgrade-cluster IMG=${operatorRepo}:${VERSION} MINIKUBE_PROFILE=${profile} ${goTestOverride("test/test_results/e2e-upgrade-cluster-${profile}.xml")}
         """
         return
     }
@@ -155,8 +172,9 @@ void runE2eTests(String scope = 'cluster', String installMode = 'fresh', String 
     if (!(scope in ['cluster', 'dynamic-host', 'volume-resize'])) {
         error "Unsupported E2E scope '${scope}'. Supported scopes: cluster, dynamic-host, volume-resize"
     }
+    ensureGotestsum()
     sh """
-        make e2e-test-${scope} IMG=${operatorRepo}:${VERSION} MINIKUBE_PROFILE=${profile}
+        make e2e-test-${scope} IMG=${operatorRepo}:${VERSION} MINIKUBE_PROFILE=${profile} ${goTestOverride("test/test_results/e2e-${scope}-${profile}.xml")}
     """
 }
 
@@ -169,8 +187,9 @@ void runMinikubeCleanup(String profile = 'minikube', boolean reuse = false) {
 // Istio e2e tests run on the same minikube cluster as the cluster-scoped suite.
 // `make e2e-setup-minikube` installs Istio only when E2E_SETUP_ISTIO=true.
 void runIstioE2eTests(String profile = 'minikube') {
+    ensureGotestsum()
     sh """
-        make e2e-test-istio IMG=${operatorRepo}:${VERSION} E2E_ISTIO_AMBIENT=true MINIKUBE_PROFILE=${profile}
+        make e2e-test-istio IMG=${operatorRepo}:${VERSION} E2E_ISTIO_AMBIENT=true MINIKUBE_PROFILE=${profile} ${goTestOverride("test/test_results/e2e-istio-${profile}.xml")}
     """
 }
 
@@ -204,11 +223,15 @@ void runEKSSetup() {
     }
 }
 
-void runEKSE2eTests() {
+void runEKSE2eTests(String parallelism = '1') {
     withEksCredentials {
+        ensureGotestsum()
         sh """
             make e2e-test-eks \\
-              E2E_MARKLOGIC_IMAGE_VERSION=${env.EKS_MARKLOGIC_IMAGE_VERSION}
+              E2E_MARKLOGIC_IMAGE_VERSION=${env.EKS_MARKLOGIC_IMAGE_VERSION} \
+              E2E_TEST_PARALLELISM=${parallelism} \
+              E2E_TOP_LEVEL_PARALLELISM=${parallelism} \
+              ${goTestOverride('test/test_results/e2e-eks-cluster.xml')}
         """
     }
 }
@@ -228,11 +251,15 @@ void runEKSIstioSetup() {
     }
 }
 
-void runEKSIstioE2eTests() {
+void runEKSIstioE2eTests(String parallelism = '1') {
     withEksCredentials {
+        ensureGotestsum()
         sh """
             make e2e-test-eks-istio \\
-              E2E_MARKLOGIC_IMAGE_VERSION=${env.EKS_MARKLOGIC_IMAGE_VERSION}
+              E2E_MARKLOGIC_IMAGE_VERSION=${env.EKS_MARKLOGIC_IMAGE_VERSION} \
+              E2E_TEST_PARALLELISM=${parallelism} \
+              E2E_TOP_LEVEL_PARALLELISM=${parallelism} \
+              ${goTestOverride('test/test_results/e2e-eks-istio.xml')}
         """
     }
 }
@@ -243,14 +270,16 @@ void runHelmNamespaceScopedE2eTests(String installMode = 'fresh', String profile
     }
 
     if (installMode == 'upgrade') {
+        ensureGotestsum()
         sh """
-            make e2e-test-upgrade-helm-namespace IMG=${operatorRepo}:${VERSION} MINIKUBE_PROFILE=${profile}
+            make e2e-test-upgrade-helm-namespace IMG=${operatorRepo}:${VERSION} MINIKUBE_PROFILE=${profile} ${goTestOverride("test/test_results/e2e-upgrade-helm-${profile}.xml")}
         """
         return
     }
 
+    ensureGotestsum()
     sh """
-        make e2e-test-helm-namespace IMG=${operatorRepo}:${VERSION} MINIKUBE_PROFILE=${profile}
+        make e2e-test-helm-namespace IMG=${operatorRepo}:${VERSION} MINIKUBE_PROFILE=${profile} ${goTestOverride("test/test_results/e2e-helm-${profile}.xml")}
     """
 }
 
@@ -348,6 +377,7 @@ pipeline {
         booleanParam(name: 'PUBLISH_IMAGE', defaultValue: false, description: 'Publish image to internal registry')
         string(name: 'emailList', defaultValue: emailList, description: 'List of email for build notification', trim: true)
         booleanParam(name: 'VERIFY_ISTIO_AMBIENT', defaultValue: true, description: 'Run Istio ambient mode e2e tests. For Minikube, Istio is installed only when this test path is selected; no dedicated cluster is created.')
+        string(name: 'E2E_TOP_LEVEL_PARALLELISM', defaultValue: '1', description: 'Max test parallelism for e2e paths on minikube and EKS (positive integer).', trim: true)
         string(name: 'EKS_MARKLOGIC_IMAGE_TAG', defaultValue: 'latest-12', description: 'MarkLogic image tag to pull from the EKS ECR registry when E2E_RUNTIME=eks. The full ECR URL is constructed at runtime from the AWS account ID resolved via STS.', trim: true)
     }
 
@@ -378,6 +408,10 @@ pipeline {
                     def runClusterScoped = params.E2E_SCOPE in ['cluster', 'both', 'dynamic-host', 'volume-resize']
                     def runNamespaceScoped = params.E2E_SCOPE in ['namespace-only', 'both']
                     def clusterScope = params.E2E_SCOPE in ['dynamic-host', 'volume-resize'] ? params.E2E_SCOPE : 'cluster'
+                    def topLevelParallelism = params.E2E_TOP_LEVEL_PARALLELISM?.trim() ?: '1'
+                    if (!(topLevelParallelism ==~ /[1-9][0-9]*/)) {
+                        error "E2E_TOP_LEVEL_PARALLELISM must be a positive integer (got: '${params.E2E_TOP_LEVEL_PARALLELISM}')."
+                    }
 
                     if (!runClusterScoped && !runNamespaceScoped) {
                         echo "No e2e suites selected (E2E_SCOPE=${params.E2E_SCOPE}); skipping e2e tests."
@@ -412,9 +446,9 @@ pipeline {
                                         if (runIstioOnEKS) { runEKSIstioSetup() }
                                         else               { runEKSSetup() }
                                     }
-                                    stage('Run e2e Tests') { runEKSE2eTests() }
+                                    stage('Run e2e Tests') { runEKSE2eTests(topLevelParallelism) }
                                     stage('Run Istio e2e Tests') {
-                                        if (runIstioOnEKS) { runEKSIstioE2eTests() }
+                                        if (runIstioOnEKS) { runEKSIstioE2eTests(topLevelParallelism) }
                                         else { echo "Istio tests skipped (E2E_INSTALL_MODE=${params.E2E_INSTALL_MODE}, VERIFY_ISTIO_AMBIENT=${params.VERIFY_ISTIO_AMBIENT})" }
                                     }
                                 }
@@ -429,16 +463,23 @@ pipeline {
                         return
                     }
 
+                    ensureGotestsum()
+
                     def clusterMinikubeProfile = 'e2e-cluster'
                     def namespaceMinikubeProfile = 'e2e-namespace'
                     def runIstio = params.E2E_INSTALL_MODE == 'fresh' && runClusterScoped && clusterScope == 'cluster' && params.VERIFY_ISTIO_AMBIENT
                     def clusterSetupIstio = runIstio ? 'true' : 'false'
+                    def clusterGoTestOverride = goTestOverride("test/test_results/e2e-${clusterScope}-${clusterMinikubeProfile}.xml")
+                    def clusterUpgradeGoTestOverride = goTestOverride("test/test_results/e2e-upgrade-cluster-${clusterMinikubeProfile}.xml")
+                    def namespaceGoTestOverride = goTestOverride("test/test_results/e2e-helm-${namespaceMinikubeProfile}.xml")
+                    def namespaceUpgradeGoTestOverride = goTestOverride("test/test_results/e2e-upgrade-helm-${namespaceMinikubeProfile}.xml")
+                    def istioGoTestOverride = goTestOverride("test/test_results/e2e-istio-${clusterMinikubeProfile}.xml")
                     def clusterTestCommand = params.E2E_INSTALL_MODE == 'upgrade'
-                        ? "make e2e-test-upgrade-cluster IMG=${operatorRepo}:${VERSION} MINIKUBE_PROFILE=${clusterMinikubeProfile}"
-                        : "make e2e-test-${clusterScope} IMG=${operatorRepo}:${VERSION} MINIKUBE_PROFILE=${clusterMinikubeProfile}"
+                        ? "make e2e-test-upgrade-cluster IMG=${operatorRepo}:${VERSION} MINIKUBE_PROFILE=${clusterMinikubeProfile} ${clusterUpgradeGoTestOverride}"
+                        : "make e2e-test-${clusterScope} IMG=${operatorRepo}:${VERSION} MINIKUBE_PROFILE=${clusterMinikubeProfile} ${clusterGoTestOverride}"
                     def namespaceTestCommand = params.E2E_INSTALL_MODE == 'upgrade'
-                        ? "make e2e-test-upgrade-helm-namespace IMG=${operatorRepo}:${VERSION} MINIKUBE_PROFILE=${namespaceMinikubeProfile}"
-                        : "make e2e-test-helm-namespace IMG=${operatorRepo}:${VERSION} MINIKUBE_PROFILE=${namespaceMinikubeProfile}"
+                        ? "make e2e-test-upgrade-helm-namespace IMG=${operatorRepo}:${VERSION} MINIKUBE_PROFILE=${namespaceMinikubeProfile} ${namespaceUpgradeGoTestOverride}"
+                        : "make e2e-test-helm-namespace IMG=${operatorRepo}:${VERSION} MINIKUBE_PROFILE=${namespaceMinikubeProfile} ${namespaceGoTestOverride}"
 
                     sh """
                         set -euo pipefail
@@ -447,16 +488,15 @@ pipeline {
                             export MINIKUBE_PROFILE='${clusterMinikubeProfile}'
                             export KUBECONFIG='/space/.kube-config-cluster'
                             export MINIKUBE_HOME='/space/minikube-cluster/'
-                            if [ '${runNamespaceScoped}' = 'true' ]; then
-                                # Avoid overloading minikube when cluster and helm shards run concurrently.
-                                export E2E_TOP_LEVEL_PARALLELISM='2'
-                            fi
+                            # Apply configurable parallelism across all minikube e2e paths.
+                            export E2E_TOP_LEVEL_PARALLELISM='${topLevelParallelism}'
+                            export E2E_TEST_PARALLELISM='${topLevelParallelism}'
 
                             echo '=====Starting cluster-scoped shard====='
                             make e2e-setup-minikube IMG=${operatorRepo}:${VERSION} MINIKUBE_PROFILE=${clusterMinikubeProfile} MINIKUBE_REUSE=true E2E_SETUP_ISTIO=${clusterSetupIstio}
                             ${clusterTestCommand}
                             if [ '${runIstio}' = 'true' ]; then
-                                make e2e-test-istio IMG=${operatorRepo}:${VERSION} E2E_ISTIO_AMBIENT=true MINIKUBE_PROFILE=${clusterMinikubeProfile}
+                                make e2e-test-istio IMG=${operatorRepo}:${VERSION} E2E_ISTIO_AMBIENT=true MINIKUBE_PROFILE=${clusterMinikubeProfile} ${istioGoTestOverride}
                             else
                                 echo '=====Istio tests skipped for cluster shard====='
                             fi
@@ -468,6 +508,8 @@ pipeline {
                             export MINIKUBE_PROFILE='${namespaceMinikubeProfile}'
                             export KUBECONFIG='/space/.kube-config-namespace'
                             export MINIKUBE_HOME='/space/minikube-namespace/'
+                            export E2E_TOP_LEVEL_PARALLELISM='${topLevelParallelism}'
+                            export E2E_TEST_PARALLELISM='${topLevelParallelism}'
 
                             echo '=====Starting namespace-scoped shard====='
                             make e2e-setup-minikube IMG=${operatorRepo}:${VERSION} MINIKUBE_PROFILE=${namespaceMinikubeProfile} MINIKUBE_REUSE=true E2E_SETUP_ISTIO=false
