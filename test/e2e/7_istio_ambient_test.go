@@ -429,6 +429,7 @@ func waitForPodRestart(ctx context.Context, t *testing.T, c *envconf.Config, nam
 
 func TestIstioAmbientProvisioning(t *testing.T) {
 	trackTest(t)
+	runTopLevelParallel(t)
 	if !isIstioAmbientEnabled() {
 		t.Skip("Skipping: Istio ambient mode tests not enabled (set E2E_ISTIO_AMBIENT=true)")
 	}
@@ -649,6 +650,7 @@ func TestIstioAmbientProvisioning(t *testing.T) {
 
 func TestIstioAmbientResilience(t *testing.T) {
 	trackTest(t)
+	runTopLevelParallel(t)
 	if !isIstioAmbientEnabled() {
 		t.Skip("Skipping: Istio ambient mode tests not enabled (set E2E_ISTIO_AMBIENT=true)")
 	}
@@ -961,6 +963,7 @@ func TestIstioAmbientResilience(t *testing.T) {
 
 func TestIstioAmbientNetworkGatekeeper(t *testing.T) {
 	trackTest(t)
+	runTopLevelParallel(t)
 	if !isIstioAmbientEnabled() {
 		t.Skip("Skipping: Istio ambient mode tests not enabled (set E2E_ISTIO_AMBIENT=true)")
 	}
@@ -1128,6 +1131,7 @@ func TestIstioAmbientNetworkGatekeeper(t *testing.T) {
 
 func TestNonIstioRegression(t *testing.T) {
 	trackTest(t)
+	runTopLevelParallel(t)
 	if !isIstioAmbientEnabled() {
 		t.Skip("Skipping: Istio ambient mode tests not enabled (set E2E_ISTIO_AMBIENT=true)")
 	}

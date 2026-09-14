@@ -125,6 +125,7 @@ type DataSource struct {
 
 func TestMarklogicCluster(t *testing.T) {
 	trackTest(t)
+	runTopLevelParallel(t)
 	feature := features.New("Marklogic Cluster Test").WithLabel("type", "cluster-test")
 
 	// Create dedicated test namespace

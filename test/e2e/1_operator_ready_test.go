@@ -18,6 +18,7 @@ import (
 
 func TestOperatorReady(t *testing.T) {
 	trackTest(t)
+	runTopLevelParallel(t)
 	podCreationSig := make(chan *coreV1.Pod)
 
 	feature := features.New("Operator Ready")
