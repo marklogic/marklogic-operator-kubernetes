@@ -201,7 +201,7 @@ func TestLogCollectionPartialLogs(t *testing.T) {
 			},
 			LogCollection: &marklogicv1.LogCollection{
 				Enabled: true,
-				Image:   "fluent/fluent-bit:4.1.1",
+				Image:   "fluent/fluent-bit:5.1.0",
 				Files: marklogicv1.LogFilesConfig{
 					ErrorLogs:   true,  // Only error logs
 					AccessLogs:  false, // Disabled
@@ -370,7 +370,7 @@ func TestLogCollectionSecretBackedEnvironment(t *testing.T) {
 			},
 			LogCollection: &marklogicv1.LogCollection{
 				Enabled: true,
-				Image:   "fluent/fluent-bit:4.1.1",
+				Image:   "fluent/fluent-bit:5.1.0",
 				Env: []corev1.EnvVar{
 					{
 						Name: "OTEL_AUTH_TOKEN",
@@ -531,7 +531,7 @@ func TestLogCollectionCustomResources(t *testing.T) {
 			},
 			LogCollection: &marklogicv1.LogCollection{
 				Enabled:   true,
-				Image:     "fluent/fluent-bit:4.1.1",
+				Image:     "fluent/fluent-bit:5.1.0",
 				Resources: customResources,
 				Files: marklogicv1.LogFilesConfig{
 					ErrorLogs: true,
@@ -712,7 +712,7 @@ func TestLogCollectionCustomFilters(t *testing.T) {
 			},
 			LogCollection: &marklogicv1.LogCollection{
 				Enabled: true,
-				Image:   "fluent/fluent-bit:4.1.1",
+				Image:   "fluent/fluent-bit:5.1.0",
 				Files: marklogicv1.LogFilesConfig{
 					ErrorLogs: true,
 				},

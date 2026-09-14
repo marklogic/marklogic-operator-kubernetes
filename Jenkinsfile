@@ -341,7 +341,7 @@ pipeline {
 
     parameters {
         string(name: 'E2E_MARKLOGIC_IMAGE_VERSION', defaultValue: 'ml-docker-db-dev-tierpoint.bed-artifactory.bedford.progress.com/marklogic/marklogic-server-ubi-rootless:latest-12', description: 'Docker image to use for tests.', trim: true)
-        string(name: 'VERSION', defaultValue: '1.3.0', description: 'Version to tag the image with.', trim: true)
+        string(name: 'VERSION', defaultValue: '1.3.1', description: 'Version to tag the image with.', trim: true)
         choice(name: 'E2E_INSTALL_MODE', choices: ['fresh', 'upgrade'], description: 'Run the standard fresh-install e2e flow or the upgrade validation flow. Default is fresh.')
         choice(name: 'E2E_SCOPE', choices: ['namespace-only', 'cluster', 'both', 'dynamic-host', 'volume-resize'], description: 'Combined test selector: namespace-only runs Helm namespace suite, cluster runs full cluster suite, both runs cluster+namespace in parallel minikube shards, dynamic-host and volume-resize run focused cluster tests.')
         choice(name: 'E2E_RUNTIME', choices: ['minikube', 'eks'], description: 'Execution runtime for e2e tests. minikube runs profile-parallel shards; eks runs the EKS suite only.')

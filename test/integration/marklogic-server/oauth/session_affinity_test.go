@@ -27,7 +27,7 @@ const (
 	sessionAffinityPort            = 8080
 
 	nginxImage   = "nginx:1.27.5-alpine"
-	haproxyImage = "haproxytech/haproxy-alpine:3.4.0"
+	haproxyImage = "haproxytech/haproxy-alpine:3.4.3"
 	curlImage    = "curlimages/curl:8.12.1"
 )
 
