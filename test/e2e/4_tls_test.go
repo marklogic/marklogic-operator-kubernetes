@@ -5,6 +5,8 @@ package e2e
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -24,6 +26,40 @@ import (
 	"sigs.k8s.io/e2e-framework/pkg/features"
 	e2eutils "sigs.k8s.io/e2e-framework/pkg/utils"
 )
+
+func newTLSCertWorkspace(t *testing.T, prefix string) string {
+	t.Helper()
+	workspace := filepath.Join("test", "test_data", fmt.Sprintf("%s-%d", prefix, time.Now().UnixNano()))
+	if err := os.MkdirAll(workspace, 0o755); err != nil {
+		t.Fatalf("Failed to create TLS cert workspace %s: %v", workspace, err)
+	}
+	t.Cleanup(func() {
+		if err := os.RemoveAll(workspace); err != nil {
+			t.Logf("Warning: failed to remove TLS cert workspace %s: %v", workspace, err)
+		}
+	})
+	return workspace
+}
+
+func prepareTLSCertDir(t *testing.T, dirPath, serverConfigTemplate string) {
+	t.Helper()
+	if err := os.MkdirAll(dirPath, 0o755); err != nil {
+		t.Fatalf("Failed to create cert directory %s: %v", dirPath, err)
+	}
+
+	if serverConfigTemplate == "" {
+		return
+	}
+
+	content, err := os.ReadFile(serverConfigTemplate)
+	if err != nil {
+		t.Fatalf("Failed to read server config template %s: %v", serverConfigTemplate, err)
+	}
+
+	if err := os.WriteFile(filepath.Join(dirPath, "server.cnf"), content, 0o644); err != nil {
+		t.Fatalf("Failed to write server.cnf in %s: %v", dirPath, err)
+	}
+}
 
 func TestTlsWithSelfSigned(t *testing.T) {
 	trackTest(t)
@@ -181,6 +217,10 @@ func TestTlsWithNamedCert(t *testing.T) {
 	namespace := "marklogic-tlsnamed"
 	releaseName := "marklogic"
 	replicas := int32(2)
+	certWorkspace := newTLSCertWorkspace(t, "tls-named-certs")
+	caCertDir := filepath.Join(certWorkspace, "ca-cert")
+	podZeroCertDir := filepath.Join(certWorkspace, "pod-zero-certs")
+	podOneCertDir := filepath.Join(certWorkspace, "pod-one-certs")
 
 	cr := &marklogicv1.MarklogicCluster{
 		TypeMeta: metav1.TypeMeta{
@@ -221,34 +261,37 @@ func TestTlsWithNamedCert(t *testing.T) {
 			},
 		})
 		marklogicv1.AddToScheme(client.Resources(namespace).GetScheme())
+		prepareTLSCertDir(t, caCertDir, "")
+		prepareTLSCertDir(t, podZeroCertDir, filepath.Join("test", "test_data", "pod_zero_certs", "server.cnf"))
+		prepareTLSCertDir(t, podOneCertDir, filepath.Join("test", "test_data", "pod_one_certs", "server.cnf"))
 
 		// Generate certificates and create secrets BEFORE creating MarklogicCluster
-		err := utils.GenerateCACertificate("test/test_data/ca_cert")
+		err := utils.GenerateCACertificate(caCertDir)
 		if err != nil {
 			t.Fatalf("Failed to generate CA certificate: %s", err)
 		}
-		err = utils.GenerateCertificates("test/test_data/pod_zero_certs", "test/test_data/ca_cert")
+		err = utils.GenerateCertificates(podZeroCertDir, caCertDir)
 		if err != nil {
 			t.Fatalf("Failed to generate pod_zero_certs TLS certificates: %s", err)
 		}
-		err = utils.GenerateCertificates("test/test_data/pod_one_certs", "test/test_data/ca_cert")
+		err = utils.GenerateCertificates(podOneCertDir, caCertDir)
 		if err != nil {
 			t.Fatalf("Failed to generate pod_one_certs TLS certificates: %s", err)
 		}
 		// Delete existing secrets if they exist (cleanup from previous failed runs)
-		e2eutils.RunCommand("kubectl -n marklogic-tlsnamed delete secret ca-cert --ignore-not-found=true")
-		e2eutils.RunCommand("kubectl -n marklogic-tlsnamed delete secret marklogic-0-cert --ignore-not-found=true")
-		e2eutils.RunCommand("kubectl -n marklogic-tlsnamed delete secret marklogic-1-cert --ignore-not-found=true")
+		e2eutils.RunCommand("kubectl -n " + namespace + " delete secret ca-cert --ignore-not-found=true")
+		e2eutils.RunCommand("kubectl -n " + namespace + " delete secret marklogic-0-cert --ignore-not-found=true")
+		e2eutils.RunCommand("kubectl -n " + namespace + " delete secret marklogic-1-cert --ignore-not-found=true")
 
-		p := e2eutils.RunCommand("kubectl -n marklogic-tlsnamed create secret generic ca-cert --from-file=test/test_data/ca_cert/cacert.pem")
+		p := e2eutils.RunCommand(fmt.Sprintf("kubectl -n %s create secret generic ca-cert --from-file=%s", namespace, filepath.Join(caCertDir, "cacert.pem")))
 		if p.Err() != nil {
 			t.Fatalf("Failed to create ca-cert secret: %s. Output: %s", p.Err(), p.Result())
 		}
-		p = e2eutils.RunCommand("kubectl -n marklogic-tlsnamed create secret generic marklogic-0-cert --from-file=test/test_data/pod_zero_certs/tls.crt --from-file=test/test_data/pod_zero_certs/tls.key")
+		p = e2eutils.RunCommand(fmt.Sprintf("kubectl -n %s create secret generic marklogic-0-cert --from-file=%s --from-file=%s", namespace, filepath.Join(podZeroCertDir, "tls.crt"), filepath.Join(podZeroCertDir, "tls.key")))
 		if p.Err() != nil {
 			t.Fatalf("Failed to create marklogic-0-cert secret: %s. Output: %s", p.Err(), p.Result())
 		}
-		p = e2eutils.RunCommand("kubectl -n marklogic-tlsnamed create secret generic marklogic-1-cert --from-file=test/test_data/pod_one_certs/tls.crt --from-file=test/test_data/pod_one_certs/tls.key")
+		p = e2eutils.RunCommand(fmt.Sprintf("kubectl -n %s create secret generic marklogic-1-cert --from-file=%s --from-file=%s", namespace, filepath.Join(podOneCertDir, "tls.crt"), filepath.Join(podOneCertDir, "tls.key")))
 		if p.Err() != nil {
 			t.Fatalf("Failed to create marklogic-1-cert secret: %s. Output: %s", p.Err(), p.Result())
 		}
@@ -350,6 +393,10 @@ func TestTlsWithMultiNode(t *testing.T) {
 	dnodeName := "dnode"
 	enodeSize := int32(1)
 	dnodeSize := int32(1)
+	certWorkspace := newTLSCertWorkspace(t, "tls-multinode-certs")
+	caCertDir := filepath.Join(certWorkspace, "ca-cert")
+	enodeCertDir := filepath.Join(certWorkspace, "enode-zero-certs")
+	dnodeCertDir := filepath.Join(certWorkspace, "dnode-zero-certs")
 
 	cr := &marklogicv1.MarklogicCluster{
 		TypeMeta: metav1.TypeMeta{
@@ -461,32 +508,36 @@ func TestTlsWithMultiNode(t *testing.T) {
 		); err != nil {
 			t.Fatal(err)
 		}
-		err = utils.GenerateCACertificate("test/test_data/ca_cert")
+		prepareTLSCertDir(t, caCertDir, "")
+		prepareTLSCertDir(t, enodeCertDir, filepath.Join("test", "test_data", "enode_zero_certs", "server.cnf"))
+		prepareTLSCertDir(t, dnodeCertDir, filepath.Join("test", "test_data", "dnode_zero_certs", "server.cnf"))
+
+		err = utils.GenerateCACertificate(caCertDir)
 		if err != nil {
 			t.Fatalf("Failed to generate CA certificate: %s", err)
 		}
-		err = utils.GenerateCertificates("test/test_data/enode_zero_certs", "test/test_data/ca_cert")
+		err = utils.GenerateCertificates(enodeCertDir, caCertDir)
 		if err != nil {
 			t.Fatalf("Failed to generate pod_zero_certs TLS certificates: %s", err)
 		}
-		err = utils.GenerateCertificates("test/test_data/dnode_zero_certs", "test/test_data/ca_cert")
+		err = utils.GenerateCertificates(dnodeCertDir, caCertDir)
 		if err != nil {
 			t.Fatalf("Failed to generate pod_one_certs TLS certificates: %s", err)
 		}
 		// Delete existing secrets if they exist (cleanup from previous failed runs)
-		e2eutils.RunCommand("kubectl -n marklogic-tlsednode delete secret ca-cert --ignore-not-found=true")
-		e2eutils.RunCommand("kubectl -n marklogic-tlsednode delete secret dnode-0-cert --ignore-not-found=true")
-		e2eutils.RunCommand("kubectl -n marklogic-tlsednode delete secret enode-0-cert --ignore-not-found=true")
+		e2eutils.RunCommand("kubectl -n " + namespace + " delete secret ca-cert --ignore-not-found=true")
+		e2eutils.RunCommand("kubectl -n " + namespace + " delete secret dnode-0-cert --ignore-not-found=true")
+		e2eutils.RunCommand("kubectl -n " + namespace + " delete secret enode-0-cert --ignore-not-found=true")
 
-		p := e2eutils.RunCommand("kubectl -n marklogic-tlsednode create secret generic ca-cert --from-file=test/test_data/ca_cert/cacert.pem")
+		p := e2eutils.RunCommand(fmt.Sprintf("kubectl -n %s create secret generic ca-cert --from-file=%s", namespace, filepath.Join(caCertDir, "cacert.pem")))
 		if p.Err() != nil {
 			t.Fatalf("Failed to create ca-cert secret: %s. Output: %s", p.Err(), p.Result())
 		}
-		p = e2eutils.RunCommand("kubectl -n marklogic-tlsednode create secret generic dnode-0-cert --from-file=test/test_data/dnode_zero_certs/tls.crt --from-file=test/test_data/dnode_zero_certs/tls.key")
+		p = e2eutils.RunCommand(fmt.Sprintf("kubectl -n %s create secret generic dnode-0-cert --from-file=%s --from-file=%s", namespace, filepath.Join(dnodeCertDir, "tls.crt"), filepath.Join(dnodeCertDir, "tls.key")))
 		if p.Err() != nil {
 			t.Fatalf("Failed to create dnode-0-cert secret: %s. Output: %s", p.Err(), p.Result())
 		}
-		p = e2eutils.RunCommand("kubectl -n marklogic-tlsednode create secret generic enode-0-cert --from-file=test/test_data/enode_zero_certs/tls.crt --from-file=test/test_data/enode_zero_certs/tls.key")
+		p = e2eutils.RunCommand(fmt.Sprintf("kubectl -n %s create secret generic enode-0-cert --from-file=%s --from-file=%s", namespace, filepath.Join(enodeCertDir, "tls.crt"), filepath.Join(enodeCertDir, "tls.key")))
 		if p.Err() != nil {
 			t.Fatalf("Failed to create enode-0-cert secret: %s. Output: %s", p.Err(), p.Result())
 		}

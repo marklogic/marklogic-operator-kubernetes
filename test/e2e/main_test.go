@@ -31,15 +31,15 @@ import (
 )
 
 var (
-	testEnv             env.Environment
-	dockerImage         = os.Getenv("E2E_DOCKER_IMAGE")
-	kustomizeVer        = os.Getenv("E2E_KUSTOMIZE_VERSION")
-	ctrlgenVer          = os.Getenv("E2E_CONTROLLER_TOOLS_VERSION")
-	marklogicImage      = os.Getenv("E2E_MARKLOGIC_IMAGE_VERSION")
-	kubernetesVer       = os.Getenv("E2E_KUBERNETES_VERSION")
-	operatorNamespace   = envOrDefault("E2E_OPERATOR_NAMESPACE", "marklogic-operator-system")
-	namespace           = operatorNamespace
-	useExistingOperator = strings.EqualFold(os.Getenv("E2E_USE_EXISTING_OPERATOR"), "true")
+	testEnv                 env.Environment
+	dockerImage             = os.Getenv("E2E_DOCKER_IMAGE")
+	kustomizeVer            = os.Getenv("E2E_KUSTOMIZE_VERSION")
+	ctrlgenVer              = os.Getenv("E2E_CONTROLLER_TOOLS_VERSION")
+	marklogicImage          = os.Getenv("E2E_MARKLOGIC_IMAGE_VERSION")
+	kubernetesVer           = os.Getenv("E2E_KUBERNETES_VERSION")
+	operatorNamespace       = envOrDefault("E2E_OPERATOR_NAMESPACE", "marklogic-operator-system")
+	namespace               = operatorNamespace
+	useExistingOperator     = strings.EqualFold(os.Getenv("E2E_USE_EXISTING_OPERATOR"), "true")
 	topLevelParallelEnabled = !strings.EqualFold(envOrDefault("E2E_TOP_LEVEL_PARALLEL", "true"), "false")
 
 	staleE2ENamespaces = []string{
@@ -51,6 +51,7 @@ var (
 		"marklogic-tlsednode",
 		"haproxy-pathbased",
 		"haproxy-test",
+		"log-test",
 		"log-test-disabled",
 		"log-test-partial",
 		"log-test-secret-env",
