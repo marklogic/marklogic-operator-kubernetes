@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	marklogicv1 "github.com/marklogic/marklogic-operator-kubernetes/api/v1"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -104,7 +105,20 @@ type testResult struct {
 var (
 	trackMu      sync.Mutex
 	trackedTests []testResult
+
+	marklogicSchemeOnce sync.Once
+	marklogicSchemeErr  error
 )
+
+func ensureMarklogicSchemeRegistered(t *testing.T, c *envconf.Config) {
+	t.Helper()
+	marklogicSchemeOnce.Do(func() {
+		marklogicSchemeErr = marklogicv1.AddToScheme(c.Client().Resources().GetScheme())
+	})
+	if marklogicSchemeErr != nil {
+		t.Fatalf("Failed to register MarkLogic API scheme: %v", marklogicSchemeErr)
+	}
+}
 
 // trackTest registers t in the global summary. Call it at the top of each Test* function.
 // t.Cleanup runs after the test (and all its sub-tests) complete, so t.Failed()/t.Skipped() are final.

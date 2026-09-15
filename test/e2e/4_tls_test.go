@@ -106,7 +106,7 @@ func TestTlsWithSelfSigned(t *testing.T) {
 				Labels: namespaceLabels(),
 			},
 		})
-		marklogicv1.AddToScheme(client.Resources(namespace).GetScheme())
+		ensureMarklogicSchemeRegistered(t, c)
 
 		if err := client.Resources(namespace).Create(ctx, cr); err != nil {
 			t.Fatalf("Failed to create MarklogicCluster: %s", err)
@@ -260,7 +260,7 @@ func TestTlsWithNamedCert(t *testing.T) {
 				Labels: namespaceLabels(),
 			},
 		})
-		marklogicv1.AddToScheme(client.Resources(namespace).GetScheme())
+		ensureMarklogicSchemeRegistered(t, c)
 		prepareTLSCertDir(t, caCertDir, "")
 		prepareTLSCertDir(t, podZeroCertDir, filepath.Join("test", "test_data", "pod_zero_certs", "server.cnf"))
 		prepareTLSCertDir(t, podOneCertDir, filepath.Join("test", "test_data", "pod_one_certs", "server.cnf"))

@@ -86,7 +86,7 @@ func TestHAPorxyPathBaseEnabled(t *testing.T) {
 				Labels: namespaceLabels(),
 			},
 		})
-		marklogicv1.AddToScheme(client.Resources(namespace).GetScheme())
+		ensureMarklogicSchemeRegistered(t, c)
 
 		if err := client.Resources(namespace).Create(ctx, cr); err != nil {
 			t.Fatalf("Failed to create MarklogicCluster: %s", err)
@@ -220,7 +220,7 @@ func TestHAPorxWithNoPathBasedDisabled(t *testing.T) {
 				Labels: namespaceLabels(),
 			},
 		})
-		marklogicv1.AddToScheme(client.Resources(namespace).GetScheme())
+		ensureMarklogicSchemeRegistered(t, c)
 
 		if err := client.Resources(namespace).Create(ctx, cr); err != nil {
 			t.Fatalf("Failed to create MarklogicCluster: %s", err)

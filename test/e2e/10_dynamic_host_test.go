@@ -64,7 +64,7 @@ func TestDynamicHostLifecycleClusterScoped(t *testing.T) {
 
 	feature.Setup(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 		client := c.Client()
-		marklogicv1.AddToScheme(client.Resources().GetScheme())
+		ensureMarklogicSchemeRegistered(t, c)
 		if err := createDynamicHostNamespaceAndCluster(ctx, client); err != nil {
 			t.Fatalf("Setup failed: %v", err)
 		}

@@ -97,7 +97,7 @@ func TestMlClusterWithEdnode(t *testing.T) {
 		if p := e2eutils.RunCommand("kubectl -n ednode delete secret ml-admin-secrets --ignore-not-found=true"); p.Err() != nil {
 			t.Logf("Warning: failed deleting existing ml-admin-secrets: %s", p.Result())
 		}
-		marklogicv1.AddToScheme(client.Resources(mlClusterNs).GetScheme())
+		ensureMarklogicSchemeRegistered(t, c)
 
 		p := e2eutils.RunCommand("kubectl -n ednode create secret generic ml-admin-secrets --from-literal=username=admin --from-literal=password=Admin@8001 ")
 		if p.Err() != nil {
