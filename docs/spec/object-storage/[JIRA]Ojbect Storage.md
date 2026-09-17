@@ -4,13 +4,13 @@ As an operator engineer, I want to research and prototype how the MarkLogic Mana
 
 ## Description
 
-The functional spec assumes a specific integration model (cluster-wide credentials via `PUT /manage/v2/credentials/properties`, fingerprint-based drift detection, AWS IRSA keyless support). This story validates those assumptions against a real MarkLogic cluster and records findings that unblock implementation stories. The research must distinguish documented behavior from behavior observed on the MarkLogic image versions supported by the operator.
+The original functional spec assumed a specific integration model (cluster-wide credentials via `PUT /manage/v2/credentials/properties`, fingerprint-based Secret change detection, AWS IRSA keyless support). The completed research rules out that proposed IRSA path for v1. This story validates those assumptions against a real MarkLogic cluster and records findings that unblock implementation stories. The research must distinguish documented behavior from behavior observed on the MarkLogic image versions supported by the operator.
 
 ## Acceptance Criteria
 
 ### Must Achieve
 
-1. Confirm against a live MarkLogic instance that `PUT /manage/v2/credentials/properties?type=aws` and `PUT /manage/v2/credentials/properties?type=azure` behave as documented, including response codes, request/response payload shape, provider independence, and masking behavior when the configuration is read back with `GET`.
+1. Confirm against a live MarkLogic instance that `PUT /manage/v2/credentials/properties` with body `type: aws` and `type: azure` behave as documented, including response codes, request/response payload shape, provider independence, and masking behavior when the configuration is read back with `GET`.
 
 2. Confirm the minimum authorization required independently for AWS and Azure: `manage-admin` + `security` versus the applicable individual credential privileges. Document whether a dedicated least-privilege MarkLogic user is practical for v1 or must be deferred.
 
@@ -36,14 +36,14 @@ No production code is required to ship from this story; throwaway/POC code is ac
 
 ## Research Status
 
-Status of each AC above, based on the findings recorded in `docs/spec/[SPEC]Object Storage.md` (Requirement Review + Validation Status table) and `docs/spec/[STEPS] Object Storage.md`.
+Status of each AC above, based on the findings recorded in `docs/spec/object-storage/[SPEC]Object Storage.md` (Requirement Review + Validation Status table) and `docs/spec/object-storage/[STEPS] Object Storage.md`.
 
 | AC | Status | Notes |
 |---|---|---|
 | 1 | ✅ Confirmed | `204` not `201`; `type` in body not query string; `secret-key` is non-deterministic ciphertext on `GET`, `access-key`/`session-token` plaintext. |
 | 2 | ✅ Confirmed | `manage-admin` alone returns `403`; both `manage-admin`+`security` and scoped `credentials-set-{aws,azure}` work. v1 uses existing bootstrap admin credential; dedicated least-privilege user deferred as optional hardening. |
 | 3 | ✅ Confirmed | Flow works end-to-end for both providers; redundant re-apply of unchanged material returns `204` with no error. |
-| 4 | ⚠️ Partially open | Fingerprinting is confirmed as the only viable idempotency mechanism (direct read-back comparison is impossible). Not yet validated at the Go code level: salt stability across restarts, canonical field ordering, optional-field behavior. **Still open:** how Secret changes trigger reconciliation — a fingerprint alone is not a watch mechanism. |
+| 4 | ✅ Implemented and unit-tested | HMAC-SHA256 fingerprint tests cover canonical encoding, UID scoping and field changes; Secret mapper/predicate tests cover rotation triggers. The UID is public and does not prevent offline guessing. See STEPS C1–C2. |
 | 5 | ✅ Confirmed | v1 is cluster-wide credential configuration only; forest/backup/region/endpoint automation is out of scope. |
 | 6 | ✅ Done | Findings matrix exists as the Validation Status table in `[SPEC]Object Storage.md`. |
 | 7 | ✅ Confirmed | Expanded into a per-provider phase + machine-readable failure-reason model; no secret material in status. |

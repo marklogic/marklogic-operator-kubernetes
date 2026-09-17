@@ -50,7 +50,7 @@ type AWSObjectStorage struct {
 	// +kubebuilder:default:="secret"
 	// +optional
 	AuthType ObjectStorageAuthType `json:"authType,omitempty"`
-	// Name of the Secret holding accessKey and secretKey. STS session tokens are not supported.
+	// Name of the Secret holding accessKey and secretKey. An optional sessionToken supports externally refreshed STS credentials.
 	// +kubebuilder:validation:MaxLength=253
 	// +optional
 	SecretName string `json:"secretName,omitempty"`

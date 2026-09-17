@@ -16,31 +16,32 @@ AWS_SECRET_NAME="ml-s3-fake-credentials"
 AZURE_SECRET_NAME="ml-azure-fake-credentials"
 REGION="us-west-2"
 
-command kubectl config use-context "$CONTEXT"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/common.sh"
 
 apply_fake_secrets() {
   local tag="$1"
-  command kubectl -n "$NS" create secret generic "$AWS_SECRET_NAME" \
+  kube -n "$NS" create secret generic "$AWS_SECRET_NAME" \
     --from-literal=accessKey="AKIAFAKE${tag}" \
     --from-literal=secretKey="fakeSecretKey${tag}" \
-    --dry-run=client -o yaml | command kubectl apply -f -
+    --dry-run=client -o yaml | kube apply -f -
 
-  command kubectl -n "$NS" create secret generic "$AZURE_SECRET_NAME" \
+  kube -n "$NS" create secret generic "$AZURE_SECRET_NAME" \
     --from-literal=storageAccount="fakeaccount${tag}" \
     --from-literal=storageKey="fakeStorageKey${tag}" \
-    --dry-run=client -o yaml | command kubectl apply -f -
+    --dry-run=client -o yaml | kube apply -f -
 }
 
 print_status() {
-  echo "AWS:   $(command kubectl -n "$NS" get marklogiccluster "$CLUSTER_NAME" -o jsonpath='{.status.objectStorage.aws.phase} {.status.objectStorage.aws.appliedFingerprint}')"
-  echo "Azure: $(command kubectl -n "$NS" get marklogiccluster "$CLUSTER_NAME" -o jsonpath='{.status.objectStorage.azure.phase} {.status.objectStorage.azure.appliedFingerprint}')"
+  echo "AWS:   $(kube -n "$NS" get marklogiccluster "$CLUSTER_NAME" -o jsonpath='{.status.objectStorage.aws.phase} {.status.objectStorage.aws.appliedFingerprint}')"
+  echo "Azure: $(kube -n "$NS" get marklogiccluster "$CLUSTER_NAME" -o jsonpath='{.status.objectStorage.azure.phase} {.status.objectStorage.azure.appliedFingerprint}')"
 }
 
 echo "=== Step 1: create initial fake credentials for BOTH providers ==="
 apply_fake_secrets "v1"
 
 echo "=== Step 2: point the MarklogicCluster at both secrets at once ==="
-command kubectl -n "$NS" patch marklogiccluster "$CLUSTER_NAME" --type merge -p "$(cat <<EOF
+kube -n "$NS" patch marklogiccluster "$CLUSTER_NAME" --type merge -p "$(cat <<EOF
 spec:
   objectStorage:
     aws:
@@ -54,7 +55,8 @@ EOF
 )"
 
 echo "Waiting for the operator to reconcile both providers..."
-sleep 5
+wait_applied aws "$AWS_SECRET_NAME"
+wait_applied azure "$AZURE_SECRET_NAME"
 echo "--- status.objectStorage after initial apply (both providers should be Applied) ---"
 print_status
 
@@ -63,7 +65,8 @@ echo "=== Step 3: rotate — update ONLY the Secrets, MarklogicCluster spec is u
 apply_fake_secrets "v2-rotated"
 
 echo "Waiting for the operator's Secret watch to pick up the rotation..."
-sleep 5
+wait_applied aws "$AWS_SECRET_NAME"
+wait_applied azure "$AZURE_SECRET_NAME"
 echo "--- status.objectStorage after rotation (fingerprints should differ from Step 2) ---"
 print_status
 
@@ -71,5 +74,5 @@ echo
 echo "Both providers were applied at the same time, and rotating the Secrets alone (no CR edit)"
 echo "produced new appliedFingerprint values above, proving credential rotation works."
 echo "Cross-check against MarkLogic itself with:"
-echo "  bash docs/spec/object-storage-demo/verify-credentials.sh '$CONTEXT' $NS $CLUSTER_NAME node aws"
-echo "  bash docs/spec/object-storage-demo/verify-credentials.sh '$CONTEXT' $NS $CLUSTER_NAME node azure"
+echo "  bash docs/spec/object-storage/demo/verify-credentials.sh '$CONTEXT' $NS $CLUSTER_NAME node aws"
+echo "  bash docs/spec/object-storage/demo/verify-credentials.sh '$CONTEXT' $NS $CLUSTER_NAME node azure"

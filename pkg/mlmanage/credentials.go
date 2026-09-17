@@ -4,7 +4,6 @@ package mlmanage
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"strings"
@@ -30,8 +29,8 @@ type AzureCredentials struct {
 }
 
 // CredentialsError reports a failed credentials operation using only the HTTP
-// status and MarkLogic's own error fields. The request body is never included
-// because it carries credential material.
+// status and locally constructed error fields. Remote error text is never included
+// because even structured fields can echo credential material.
 type CredentialsError struct {
 	// StatusCode is 0 when the request never produced a response.
 	StatusCode  int
@@ -42,7 +41,7 @@ type CredentialsError struct {
 
 func (e *CredentialsError) Error() string {
 	if e.StatusCode == 0 {
-		return fmt.Sprintf("management api credentials request failed: %v", e.Err)
+		return "management api credentials request failed before receiving a response"
 	}
 	switch {
 	case e.MessageCode != "" && e.Message != "":
@@ -122,33 +121,19 @@ func validateRequiredCredentialFields(fields map[string]string) error {
 }
 
 func (c *managementClient) putCredentials(ctx context.Context, payload map[string]any) error {
-	data, statusCode, err := c.doJSON(ctx, http.MethodPut, credentialsPropertiesPath, nil, payload, http.StatusNoContent)
+	_, statusCode, err := c.doJSON(ctx, http.MethodPut, credentialsPropertiesPath, nil, payload, http.StatusNoContent)
 	if statusCode == http.StatusNoContent {
 		return err
 	}
 
 	// doJSON's own error embeds the response body, so it is discarded here in
-	// favour of a sanitised error built from the status and MarkLogic's fields.
+	// favour of a sanitised error built from the status alone.
 	if statusCode == 0 {
 		return &CredentialsError{Err: err}
 	}
 
-	credentialsErr := &CredentialsError{StatusCode: statusCode}
-	credentialsErr.MessageCode, credentialsErr.Message = parseManagementErrorResponse(data)
-	return credentialsErr
-}
-
-// parseManagementErrorResponse extracts MarkLogic's structured error fields.
-// The body is treated as untrusted: only these two fields are ever surfaced.
-func parseManagementErrorResponse(body []byte) (messageCode string, message string) {
-	var envelope struct {
-		ErrorResponse struct {
-			MessageCode string `json:"messageCode"`
-			Message     string `json:"message"`
-		} `json:"errorResponse"`
-	}
-	if err := json.Unmarshal(body, &envelope); err != nil {
-		return "", ""
-	}
-	return envelope.ErrorResponse.MessageCode, envelope.ErrorResponse.Message
+	// Structured message/messageCode values are also untrusted: a server or proxy
+	// can echo credentials inside either field. HTTP status is sufficient for the
+	// controller's failure-reason mapping.
+	return &CredentialsError{StatusCode: statusCode}
 }

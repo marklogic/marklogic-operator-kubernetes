@@ -167,7 +167,7 @@ func TestEnsureCredentialsRejectsMissingFields(t *testing.T) {
 	}
 }
 
-func TestEnsureCredentialsSurfacesStatusAndMessageCode(t *testing.T) {
+func TestEnsureCredentialsSurfacesStatusOnly(t *testing.T) {
 	tests := map[string]struct {
 		status          int
 		responseBody    string
@@ -176,7 +176,7 @@ func TestEnsureCredentialsSurfacesStatusAndMessageCode(t *testing.T) {
 		"400 invalid payload": {
 			status:          http.StatusBadRequest,
 			responseBody:    `{"errorResponse":{"statusCode":"400","status":"Bad Request","messageCode":"MANAGE-INVALIDPAYLOAD","message":"Payload has errors in structure, content-type or values."}}`,
-			wantMessageCode: "MANAGE-INVALIDPAYLOAD",
+			wantMessageCode: "",
 		},
 		"403 insufficient privilege": {
 			status:       http.StatusForbidden,
@@ -282,5 +282,18 @@ func TestEnsureCredentialsWrapsTransportFailure(t *testing.T) {
 	}
 	if !errors.Is(err, transportErr) {
 		t.Fatalf("expected the transport error to be wrapped, got %v", err)
+	}
+}
+
+func TestEnsureCredentialsDiscardsStructuredReflections(t *testing.T) {
+	for _, field := range []string{"message", "messageCode"} {
+		t.Run(field, func(t *testing.T) {
+			body, _ := json.Marshal(map[string]any{"errorResponse": map[string]string{field: testSecretKey + " token-sensitive"}})
+			server, _, _ := credentialsTestServer(t, http.StatusBadRequest, string(body))
+			err := credentialsTestClient(server).EnsureAWSCredentials(context.Background(), AWSCredentials{AccessKey: testAccessKey, SecretKey: testSecretKey, SessionToken: "token-sensitive"})
+			if err == nil || strings.Contains(err.Error(), testSecretKey) || strings.Contains(err.Error(), "token-sensitive") {
+				t.Fatalf("expected sanitized failure, got %v", err)
+			}
+		})
 	}
 }

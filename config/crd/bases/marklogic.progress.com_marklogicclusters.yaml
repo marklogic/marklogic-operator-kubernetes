@@ -10499,7 +10499,7 @@ spec:
                         type: string
                       secretName:
                         description: Name of the Secret holding accessKey and secretKey.
-                          STS session tokens are not supported.
+                          An optional sessionToken supports externally refreshed STS credentials.
                         maxLength: 253
                         type: string
                     type: object

@@ -71,8 +71,9 @@ func (m AzureMaterial) Fingerprint(salt string) string {
 //
 // The salt must be stable for the lifetime of the cluster and is derived from
 // MarklogicCluster.metadata.uid. Salting matters because status is readable by
-// anyone with get on the resource: an unsalted digest would let an observer
-// confirm guessed values, and would expose that two clusters share credentials.
+// anyone with get on the resource. The public UID prevents direct equality
+// comparison of digests across clusters, but does not prevent offline guessing
+// of complete candidate credentials; it is a salt, not a secret HMAC key.
 func Fingerprint(salt string, provider string, fields map[string]string) string {
 	mac := hmac.New(sha256.New, []byte(salt))
 

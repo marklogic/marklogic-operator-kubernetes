@@ -66,3 +66,12 @@ Customers deploying MarkLogic with the Kubernetes Operator must configure object
 
 - Further research is required to assess whether Kubernetes CSI abstractions are a viable integration option.
 
+
+## Accepted v1 boundary
+
+The [functional spec](%5BSPEC%5DObject%20Storage.md) narrows this outcome to
+Secret-backed credential application for both providers, including optional externally
+refreshed AWS session tokens. `Applied` confirms a Management API write, not cloud access.
+Backup/forest setup and verification remain administrator responsibilities. Workload
+identity, automatic token renewal, CSI integration and revocation on spec removal are
+outside v1. Cluster readiness alone does not establish object-storage readiness.

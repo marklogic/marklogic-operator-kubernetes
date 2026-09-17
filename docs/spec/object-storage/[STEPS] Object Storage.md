@@ -1,19 +1,27 @@
 # Object Storage Credentials Research — Log and Findings
 
 Research log for the "Object Storage Credentials Research and Prototype" story
-(`docs/spec/[JIRA]Ojbect Storage.md`), validating the assumptions recorded in
-`docs/spec/[SPEC]Object Storage.md`. This document is a running log: each
+(`docs/spec/object-storage/[JIRA]Ojbect Storage.md`), validating the assumptions recorded in
+`docs/spec/object-storage/[SPEC]Object Storage.md`. This document is a running log: each
 session records what was run, the raw evidence observed, and the conclusion.
-The findings matrix at the end summarizes the outcome per acceptance criterion.
+The findings matrix summarizes the outcome per acceptance criterion. Sessions and change
+batches below are historical evidence, not current setup instructions. In particular, the
+initial exclusion of STS tokens was superseded by optional `sessionToken` pass-through.
+The functional spec is the current contract; tokens must be refreshed externally.
+
+Review correction (2026-09-16): structured Management API error fields can echo submitted
+secrets just like raw response bodies. The client now discards both `message` and
+`messageCode` and reports HTTP status only. Older descriptions below record the original
+implementation, which did not satisfy that guarantee. The public UID salt does not prevent
+offline credential guessing; it only scopes digest equality to a cluster.
 
 Environment for this research:
 
 - Docker (Rancher Desktop) running locally on macOS.
 - Image: `progressofficial/marklogic-db:12.0.3-ubi9-rootless-2.2.6` (the same
   image pinned in the operator's `Makefile` `E2E_MARKLOGIC_IMAGE_VERSION`).
-- No Kubernetes/operator involved — a single standalone container is used to
-  talk directly to the Management API, isolating the MarkLogic behavior from
-  the operator's reconciliation logic.
+- No Kubernetes/operator involved in the live API experiments. Sessions 1–6 use
+  one container; Session 7 uses two hosts and Session 8 adds MinIO.
 
 ---
 
@@ -280,8 +288,8 @@ credential path. It is a complementary, separately-scoped capability.**
 
 Reasoning:
 
-1.  **It solves a different problem.** A CSI driver (Mountpoint for S3, BlobFuse, s3fs) presents a
-    bucket as a POSIX mount. MarkLogic's native S3/Azure support instead speaks the object APIs
+1.  **It solves a different problem.** An object-storage filesystem adapter, optionally exposed through CSI, presents a
+    bucket as a filesystem mount with driver-specific semantics; full POSIX behavior is not implied. MarkLogic's native S3/Azure support instead speaks the object APIs
     directly, and the credentials endpoint validated in Sessions 2–3 is what enables that. Making
     a bucket appear as a directory does nothing to configure MarkLogic's native path, so CSI
     cannot substitute for this feature — a cluster with a CSI mount and no credentials still
@@ -489,7 +497,7 @@ premise of the epic. This session closes that gap using MinIO, at zero cloud cos
 ### Setup
 
 ```sh
-docker run -d --name minio --network ml-objstor-net --dns-search=. \
+docker run -d --name minio --network ml-objstor-net --network-alias ml-backup.minio --dns-search=. \
   -p 19000:9000 -p 19001:9001 \
   -e MINIO_ROOT_USER=mlaccesskey -e MINIO_ROOT_PASSWORD=mlsecretkey123 \
   minio/minio server /data --console-address ":9001"
@@ -528,11 +536,9 @@ enables object I/O.
     object storage — holds. Combined with Session 7's propagation result, the operator's model is
     validated end to end at both the configuration and access layers.
 
-2.  **`SVC-AWSCRED` independently corroborates the Session 6 `No-Go` on IRSA.** With no credentials
-    configured, MarkLogic fails *immediately* with "No AWS security credentials" rather than
-    attempting any fallback. If it consulted the AWS credential provider chain, this is exactly
-    where that attempt would happen. Session 6 ruled out IRSA from documentation and image
-    contents; this is direct behavioural evidence pointing the same way.
+2.  **The no-credentials control fails with `SVC-AWSCRED`.** This local Docker experiment
+    had no IRSA token or role configuration, so it does not independently test web identity.
+    The v1 decision remains based on the documentation/image evidence in Session 6.
 
 3.  **MarkLogic uses virtual-host-style S3 addressing.** The first backup attempt failed because
     MarkLogic resolves `<bucket>.<s3-domain>` — `ml-backup.minio` — not `<s3-domain>/<bucket>`.
@@ -564,22 +570,22 @@ enables object I/O.
 
 | # | JIRA Acceptance Criterion | Status | Evidence / Conclusion |
 |---|---|---|---|
-| Must 1 | Confirm `PUT`/`GET` behavior, response codes, payload shape, masking | **Confirmed — SPEC needs correction** | Response code is `204`, not `201`. `type` must be in the JSON body, not the query string (Azure fails with `400` otherwise — a functional bug in the current SPEC's documented request shape). `secret-key` is encrypted (non-deterministic ciphertext), not masked with a placeholder. `session-token` is returned in **plaintext**, unmasked. |
+| Must 1 | Confirm `PUT`/`GET` behavior, response codes, payload shape, masking | **Confirmed — SPEC corrected** | Response code is `204`, not `201`. `type` must be in the JSON body, not the query string (Azure fails with `400` otherwise — a bug in the original SPEC request shape). `secret-key` is encrypted (non-deterministic ciphertext), not masked with a placeholder. `session-token` is returned in **plaintext**, unmasked. |
 | Must 2 | Confirm minimum privileges; dedicated least-privilege user practicality | **Confirmed** | `manage-admin` alone → `403` (not `401` as documented). `manage-admin`+`security` → success. Granular `manage`+`manage-admin`+`credentials-set-{aws,azure}` → success, confirmed per-provider scoped. A dedicated least-privilege user is practical for v1 using the granular privilege combination. |
 | Must 3 | Validate complete Secret-backed static credential flow | **Confirmed** | Both providers apply successfully with the corrected (body-`type`) request shape; re-applying identical material is idempotent at the MarkLogic level (`204` both times, no error). |
-| Must 4 | Validate fingerprinting approach | **Confirmed and implemented** | Live evidence (Session 2, Test 4) proves `GET`-based comparison cannot work: identical `secret-key` input produces different ciphertext output on each apply, making fingerprinting the *only* viable option. Both halves are now built and tested: the salted digest ([pkg/objectstorage](pkg/objectstorage/fingerprint.go), salt from `metadata.uid`, HMAC-SHA256 with length-prefixed canonical encoding) and the Secret watch that triggers reconciliation ([cluster controller](internal/controller/marklogiccluster_controller.go)). See Todos C1 and C2. |
+| Must 4 | Validate fingerprinting approach | **Confirmed and implemented** | Live evidence (Session 2, Test 4) proves `GET`-based comparison cannot work: identical `secret-key` input produces different ciphertext output on each apply, making fingerprinting the *only* viable option. Both halves are now built and tested: the salted digest ([pkg/objectstorage](../../../pkg/objectstorage/fingerprint.go), salt from `metadata.uid`, HMAC-SHA256 with length-prefixed canonical encoding) and the Secret watch that triggers reconciliation ([cluster controller](../../../internal/controller/marklogiccluster_controller.go)). See Todos C1 and C2. |
 | Must 5 | Resolve supported-usage boundary (credentials-only vs. backups/forests) | **Confirmed** | Resolved by design reasoning in SPEC's Requirement Review #2; nothing observed here contradicts it. The SPEC's *Out of Scope* list now also states that the forest, backup, region, and endpoint behaviors are excluded as **unvalidated**, not merely unwanted, as Must 5 requires. |
 | Must 6 | Findings matrix produced | **This table** | — |
-| Must 7 | Validate status/condition model | **Model designed; not yet exercised** | Observed error shapes (`{"errorResponse":{"statusCode","status","messageCode","message"}}`) drove an eight-reason failure vocabulary with a retriability column in the SPEC's *Status Contract*, splitting `401` (bad admin credential) from `403` (missing MarkLogic privilege) so the most likely misconfiguration is diagnosable from status alone. A *Phase Semantics* table was added, including that `Disabled` means "unmanaged", not "unconfigured". Remaining: exercise every reason against a live controller (see Todo C3). |
-| Nice 8 | AWS IRSA/instance-role prototype | **`No-Go` — verified impossible** | Session 6. No EKS needed. MarkLogic's credential order has exactly three steps (security DB → env vars → IAM Role) and is **not** the AWS SDK provider chain, so empty credentials do not fall through to IRSA. The IAM Role step is gated on `MARKLOGIC_AWS_ROLE`, which the docs say is ignored when `MARKLOGIC_EC2_HOST=0` — and the operator's rootless image hard-sets exactly that. No web-identity support exists in the image or docs. Corroborated behaviourally in Session 8: with no credentials, MarkLogic fails immediately with `SVC-AWSCRED` rather than attempting any fallback. |
+| Must 7 | Validate status/condition model | **Unit-tested; full controller e2e remains** | Observed error shapes (`{"errorResponse":{"statusCode","status","messageCode","message"}}`) drove an eight-reason failure vocabulary with a retriability column in the SPEC's *Status Contract*, splitting `401` (bad admin credential) from `403` (missing MarkLogic privilege) so the most likely misconfiguration is diagnosable from status alone. A *Phase Semantics* table was added, including that `Disabled` means "unmanaged", not "unconfigured". Unit tests exercise the reason vocabulary and requeue policy (Todo C3); this does not claim a live controller e2e run. |
+| Nice 8 | AWS IRSA/instance-role prototype | **`No-Go` — verified impossible** | Session 6. No EKS needed. MarkLogic's credential order has exactly three steps (security DB → env vars → IAM Role) and is **not** the AWS SDK provider chain, so empty credentials do not fall through to IRSA. The IAM Role step is gated on `MARKLOGIC_AWS_ROLE`, which the docs say is ignored when `MARKLOGIC_EC2_HOST=0` — and the operator's rootless image hard-sets exactly that. No web-identity support exists in the image or docs. Session 8 tests absence of credentials only, not an IRSA-configured environment. |
 | Nice 9 | Azure managed identity investigation | **`Defer`** | Not attempted — needs Azure infrastructure. Already out of v1 scope regardless. Scoped to image `12.0.3-ubi9-rootless-2.2.6`; other supported versions untested. |
 | Nice 10 | CSI abstraction research | **`Defer` — position recorded** | Session 5. CSI is complementary, not an alternative: it cannot configure MarkLogic's native object APIs, the epic's backup scenario is native-path, forest-on-mount is the unsupported pattern Requirement Review #2 already excludes, and CSI brings a second credential surface of its own. Did not block the native path. |
 | — | Credential revocation via `DELETE` | **Confirmed working — deliberately deferred** | Session 4. Deferred on API-design grounds (removal is ambiguous between "revoke" and "stop managing"), not effort. |
 | — | Least-privilege MarkLogic user | **Decision: use bootstrap admin in v1** | Session 3 proved a dedicated user is practical; deferred as a hardening path because the operator already holds the bootstrap admin credential, so a second user adds lifecycle surface without reducing capability. |
-| — | AWS `sessionToken` (STS) support | **Decision: dropped from v1** | Three findings compound: the token expires, the operator only re-applies on Secret change (so it stays expired), and Session 2 showed MarkLogic returns it in plaintext on `GET`. With IRSA ruled out (Session 6), there is no keyless alternative either — supporting the field would ship an option that works for hours and leaks meanwhile. v1 accepts long-lived IAM user keys only. |
+| — | AWS `sessionToken` (STS) support | **Implemented as optional pass-through** | Supersedes the initial exclusion below. Included in payload and fingerprint when supplied; the operator does not renew it or track expiry. MarkLogic returns it in plaintext, so verification must suppress returned values. |
 | — | Access layer: do the credentials actually work? | **Confirmed against MinIO** | Session 8. Credentials applied through the API enable real object I/O: write, list, and read all succeed. Removing the credential set makes the identical write fail with `SVC-AWSCRED`, and restoring it makes it work again — a causal proof, not a coincidence. |
 | — | Cluster-wide propagation (multi-host) | **Confirmed on a real two-host cluster** | Session 7. Writes on the bootstrap are visible on the non-bootstrap host for both providers, with no observable delay; `DELETE` propagates too and clears only the targeted provider. Also found: **any host accepts the write**, not just the bootstrap — so targeting the bootstrap is a convention, not a MarkLogic requirement. |
-| — | Fingerprint salt source | **Decision: derive from `MarklogicCluster.metadata.uid`** | Stable across restarts and replicas, unique per cluster (defeats cross-cluster correlation), no extra resource. Build-time constant rejected (shared across installs; upgrade invalidates all fingerprints → mass re-apply); generated Secret rejected (extra resource to manage and back up). |
+| — | Fingerprint salt source | **Decision: derive from `MarklogicCluster.metadata.uid`** | Stable across restarts and replicas, unique per cluster (prevents direct cross-cluster digest equality), no extra resource. Build-time constant rejected (shared across installs; upgrade invalidates all fingerprints → mass re-apply); generated Secret rejected (extra resource to manage and back up). |
 
 ## Corrections Needed in `[SPEC]Object Storage.md` — **applied**
 
@@ -676,15 +682,14 @@ These are the four corrections listed in the previous section, restated as actio
 
 ### C. Close the still-unvalidated research questions
 
-These are the only items that still need hands-on work. The SPEC's *Task Breakdown* has been
-updated so each has an explicit home in implementation, but none are validated yet.
+The checked items below are complete; each records its evidence and remaining e2e limits.
 
 - [x] **C1 — Fingerprinting prototype (JIRA Must 4).** Implemented as real, tested code in
-      [pkg/objectstorage/fingerprint.go](pkg/objectstorage/fingerprint.go) with
-      [tests](pkg/objectstorage/fingerprint_test.go). All pass under `go test ./pkg/objectstorage/...`.
+      [pkg/objectstorage/fingerprint.go](../../../pkg/objectstorage/fingerprint.go) with
+      [tests](../../../pkg/objectstorage/fingerprint_test.go). All pass under `go test ./pkg/objectstorage/...`.
 
       **Salt source: `MarklogicCluster.metadata.uid`.** Stable across controller restarts and
-      replicas, unique per cluster (so it also defeats cross-cluster correlation of identical
+      replicas, unique per cluster (so it also prevents direct cross-cluster digest equality of identical
       credentials), and needs no extra resource. A build-time constant was rejected because it is
       shared across installations and would invalidate every stored fingerprint on operator
       upgrade, triggering a simultaneous re-apply across all managed clusters; a generated Secret
@@ -708,18 +713,18 @@ updated so each has an explicit home in implementation, but none are validated y
       Mitigating context from B1: because MarkLogic accepts redundant re-applies cleanly, a
       fingerprint defect degrades to extra writes and noisy rotation events rather than data loss.
 - [x] **C2 — Secret-watch reconciliation trigger (JIRA Must 4, second half).** Implemented in
-      [internal/controller/marklogiccluster_controller.go](internal/controller/marklogiccluster_controller.go)
-      with [tests](internal/controller/marklogiccluster_secret_watch_test.go). A fingerprint is not
+      [internal/controller/marklogiccluster_controller.go](../../../internal/controller/marklogiccluster_controller.go)
+      with [tests](../../../internal/controller/marklogiccluster_secret_watch_test.go). A fingerprint is not
       a watch; this is the mechanism that makes a Secret edit wake the controller.
 
       **Finding 1 — the watch is nearly free.** The concern was that watching Secrets would force
       controller-runtime to cache every Secret in scope, which in the operator's default
-      cluster-scoped mode ([cmd/main.go](cmd/main.go)) means every Secret in the cluster. It turns
-      out that cost is **already being paid**: [pkg/k8sutil/secret.go](pkg/k8sutil/secret.go)
+      cluster-scoped mode ([cmd/main.go](../../../cmd/main.go)) means every Secret in the cluster. It turns
+      out that cost is **already being paid**: [pkg/k8sutil/secret.go](../../../pkg/k8sutil/secret.go)
       already calls `client.Get` on `corev1.Secret` through the manager's cached client, which
       starts a Secret informer regardless. The watch adds event handling, not cache footprint.
 
-      **Finding 2 — no RBAC change needed.** [config/rbac/role.yaml](config/rbac/role.yaml) already
+      **Finding 2 — no RBAC change needed.** [config/rbac/role.yaml](../../../config/rbac/role.yaml) already
       grants `watch` on `secrets`.
 
       **Finding 3 — a trap that would have shipped silently.** The controller applies its predicate
@@ -827,8 +832,8 @@ draft commit**; the intended final split is given at the end.
 
 | File | Change |
 |---|---|
-| `docs/spec/[SPEC]Object Storage.md` | Corrections A1–A4, findings B1–B8, scope decisions D1–D3, the `sessionToken` removal, and a new *Fingerprinting* section. |
-| `docs/spec/[STEPS] Object Storage.md` | Sessions 5 and 6, the Remaining Todos list (A–E), decision rows in the Findings Matrix, and this inventory. |
+| `docs/spec/object-storage/[SPEC]Object Storage.md` | Corrections A1–A4, findings B1–B8, scope decisions D1–D3, the `sessionToken` removal, and a new *Fingerprinting* section. |
+| `docs/spec/object-storage/[STEPS] Object Storage.md` | Sessions 5 and 6, the Remaining Todos list (A–E), decision rows in the Findings Matrix, and this inventory. |
 
 Substantive SPEC edits, by section:
 
