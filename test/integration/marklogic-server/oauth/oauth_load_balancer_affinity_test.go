@@ -4,6 +4,8 @@ package oauth
 
 import (
 	"encoding/json"
+	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -59,31 +61,6 @@ func TestOAuthResourceServerInfrastructure(t *testing.T) {
 	if document.Issuer != keycloakIssuerURL(oauthSessionAffinityNamespace) {
 		t.Fatalf("Keycloak discovery issuer = %q, want %q", document.Issuer, keycloakIssuerURL(oauthSessionAffinityNamespace))
 	}
-	tokenResponse := testutil.ExecuteInPod(
-		t,
-		oauthSessionAffinityNamespace,
-		oauthclient.DefaultName,
-		"curl",
-		"curl",
-		"--fail",
-		"--silent",
-		"--show-error",
-		"--request", "POST",
-		"--data-urlencode", "grant_type=password",
-		"--data-urlencode", "client_id="+keycloak.ClientID,
-		"--data-urlencode", "username="+keycloak.TestUsername,
-		"--data-urlencode", "password="+keycloak.TestUserPassword,
-		document.TokenEndpoint,
-	)
-	var token struct {
-		AccessToken string `json:"access_token"`
-	}
-	if err := json.Unmarshal([]byte(tokenResponse), &token); err != nil {
-		t.Fatalf("Decode Keycloak access token response: %v\n%s", err, tokenResponse)
-	}
-	if token.AccessToken == "" {
-		t.Fatalf("Keycloak access token response did not contain an access token: %s", tokenResponse)
-	}
 	testutil.ExecuteInPod(
 		t,
 		oauthSessionAffinityNamespace,
@@ -125,7 +102,24 @@ func TestOAuthResourceServerInfrastructure(t *testing.T) {
 		"--data-binary", string(payloadBytes),
 		marklogicManagementURL(infrastructure.Cluster.Name, oauthSessionAffinityNamespace)+"/manage/v2/external-security",
 	)
-	appServerPayload, err := json.Marshal(mlmanage.BuildOAuthAppServerPayload(resourceServerAppServerConfig()))
+	// Install the same protected identity probe on both nodes. A plain HTTP
+	// App Server does not automatically provide the REST API endpoints.
+	const probeRoot = "/tmp/oauth-resource-server/"
+	const probe = `xquery version "1.0-ml";
+xdmp:set-response-content-type("text/plain"),
+fn:concat("oauth-user:", xdmp:get-current-user())`
+	for node := 0; node < 2; node++ {
+		testutil.ExecuteInPod(t, oauthSessionAffinityNamespace,
+			fmt.Sprintf("%s-%d", infrastructure.Cluster.Name, node), "marklogic-server",
+			"sh", "-c", `mkdir -p "$1" && printf '%s' "$2" > "$1/identity.xqy"`,
+			"install-oauth-probe", probeRoot, probe)
+	}
+	// Match the disposable identity mapping used by the Authorization Code
+	// scenario. This grants admin only inside this disposable test cluster.
+	assignExternalNameToAdmin(t, oauthSessionAffinityNamespace, infrastructure.Cluster.Name, keycloak.TestUsername)
+	appConfig := resourceServerAppServerConfig()
+	appConfig.Root = probeRoot
+	appServerPayload, err := json.Marshal(mlmanage.BuildOAuthAppServerPayload(appConfig))
 	if err != nil {
 		t.Fatalf("Marshal OAuth App Server payload: %v", err)
 	}
@@ -171,5 +165,106 @@ func TestOAuthResourceServerInfrastructure(t *testing.T) {
 		t.Fatalf("OAuth App Server external security = %#v", appServer["external-security"])
 	}
 
-	t.Log("OAuth external security and a direct OAuth App Server were created; HAProxy routing and bearer-token assertions are not implemented yet; see docs/test/oauth-load-balancer-affinity-test.md")
+	baseURL := fmt.Sprintf("https://%s.%s.svc.cluster.local:%d", haproxyServiceName, oauthSessionAffinityNamespace, oauthAppServerPort)
+	waitForOAuthAppServerThroughHAProxy(t, oauthSessionAffinityNamespace, baseURL, 2*time.Minute)
+	// Acquire the token after setup and backend readiness so its lifetime is
+	// available for requests rather than consumed by cluster configuration.
+	tokenResponse := testutil.ExecuteInPod(
+		t,
+		oauthSessionAffinityNamespace,
+		oauthclient.DefaultName,
+		"curl",
+		"curl",
+		"--fail",
+		"--silent",
+		"--show-error",
+		"--request", "POST",
+		"--data-urlencode", "grant_type=password",
+		"--data-urlencode", "client_id="+keycloak.ClientID,
+		"--data-urlencode", "username="+keycloak.TestUsername,
+		"--data-urlencode", "password="+keycloak.TestUserPassword,
+		document.TokenEndpoint,
+	)
+	var token struct {
+		AccessToken string `json:"access_token"`
+	}
+	if err := json.Unmarshal([]byte(tokenResponse), &token); err != nil {
+		t.Fatalf("Decode Keycloak access token response: %v\n%s", err, tokenResponse)
+	}
+	if token.AccessToken == "" {
+		t.Fatalf("Keycloak access token response did not contain an access token: %s", tokenResponse)
+	}
+	for _, tc := range []struct {
+		name, bearer, status, body, rejection string
+	}{
+		{"valid_token", token.AccessToken, "200", "oauth-user:" + keycloak.TestUsername, ""},
+		{"missing_token", "", "", "", "XDMP-OAUTH: Access token provided is empty."},
+		{"invalid_token", "not-a-valid-jwt", "", "", "XDMP-INTERNAL: Internal error: invalid token supplied"},
+		// A fresh request must still succeed after the negative cases.
+		{"valid_token_after_rejection", token.AccessToken, "200", "oauth-user:" + keycloak.TestUsername, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// No cookie jar or redirects: each request independently tests bearer
+			// authentication, and a redirect cannot masquerade as success.
+			args := []string{"curl", "--silent", "--show-error", "--connect-timeout", "10", "--max-time", "30",
+				"--write-out", "\n%{http_code}"}
+			if tc.bearer != "" {
+				args = append(args, "--header", "Authorization: Bearer "+tc.bearer)
+			}
+			args = append(args, baseURL+"/identity.xqy")
+			output := testutil.ExecuteInPod(t, oauthSessionAffinityNamespace, oauthclient.DefaultName, "curl", args...)
+			var err error
+			if tc.rejection != "" {
+				err = validateBearerRejection(output, tc.rejection)
+			} else {
+				err = validateBearerResponse(output, tc.status, tc.body)
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+// validateBearerResponse requires an exact HTTP status and, for successful
+// requests, the identity produced by our protected module. Do not log response
+// bodies here: authentication error responses can contain token details.
+func validateBearerResponse(output, wantStatus, wantBody string) error {
+	body, status, err := parseBearerResponse(output)
+	if err != nil {
+		return err
+	}
+	if status != wantStatus {
+		return fmt.Errorf("bearer request HTTP status = %q, want %s", status, wantStatus)
+	}
+	if wantBody != "" && strings.TrimSpace(body) != wantBody {
+		return fmt.Errorf("bearer request did not return the expected authenticated identity")
+	}
+	return nil
+}
+
+// MarkLogic 12.0.3 reports these authentication failures as HTTP 500. Accept
+// only the specific error for the supplied input; an empty-token error for a
+// malformed token must fail because it indicates a lost Authorization header.
+func validateBearerRejection(output, expectedError string) error {
+	body, status, err := parseBearerResponse(output)
+	if err != nil {
+		return err
+	}
+	if status == "401" {
+		return nil
+	}
+	if status == "500" && expectedError != "" && strings.Contains(body, "<dt>"+expectedError+"</dt>") {
+		return nil
+	}
+	return fmt.Errorf("bearer rejection HTTP status = %q; expected 401 or the specific MarkLogic authentication error %q", status, expectedError)
+}
+
+func parseBearerResponse(output string) (string, string, error) {
+	output = strings.TrimSuffix(output, "\n")
+	index := strings.LastIndex(output, "\n")
+	if index < 0 {
+		return "", "", fmt.Errorf("bearer response is missing the HTTP status delimiter")
+	}
+	return output[:index], output[index+1:], nil
 }

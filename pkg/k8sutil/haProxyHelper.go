@@ -255,6 +255,7 @@ func generateBackendConfig(cr *marklogicv1.MarklogicCluster, config *HAProxyConf
 	backendTemplate := `
 backend {{ .BackendName }}
   mode http
+  option h1-case-adjust-bogus-server
   balance leastconn
   option forwardfor
   cookie haproxy insert indirect httponly nocache maxidle 30m maxlife 4h

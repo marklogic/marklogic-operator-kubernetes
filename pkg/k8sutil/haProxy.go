@@ -158,6 +158,8 @@ func generateHAProxyConfigMapData(ctx context.Context, cr *marklogicv1.Marklogic
 global
   log stdout format raw local0
   maxconn 1024
+  # MarkLogic 12.0 OAuth requires this spelling of the bearer header.
+  h1-case-adjust authorization Authorization
 `
 	baseConfig := `
 defaults

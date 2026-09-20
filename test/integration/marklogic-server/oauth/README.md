@@ -29,7 +29,7 @@ OAuth flows through the load balancer.
 | Test | Gate env var | Namespace | What it covers |
 | --- | --- | --- | --- |
 | `TestOAuthAuthorizationCodeInfrastructure` | `MARKLOGIC_OAUTH_AUTHORIZATION_CODE=true` | `ml-oauth-authorization-code` | Full OAuth 2.0 Authorization Code (PKCE) flow through HAProxy with SessionID affinity. |
-| `TestOAuthResourceServerInfrastructure` | `MARKLOGIC_OAUTH_RESOURCE_SERVER=true` | `ml-oauth-session-affinity` | Resource-server (JWT bearer) external security + OAuth App Server setup. |
+| `TestOAuthResourceServerInfrastructure` | `MARKLOGIC_OAUTH_RESOURCE_SERVER=true` | `ml-oauth-session-affinity` | Resource-server configuration and protected requests through HAProxy: valid token identity, missing token, and invalid token. |
 | `TestHAProxySessionIDAffinityContract` | `MARKLOGIC_HAPROXY_SESSION_AFFINITY=true` | `ml-haproxy-session-affinity` | HAProxy native SessionID cookie affinity contract, using nginx backends (no MarkLogic). |
 
 The unit tests in `oauth_setup_test.go` run without any gate and validate helper
@@ -80,6 +80,24 @@ go test -v -count=1 -timeout 45m \
   -run TestOAuthResourceServerInfrastructure \
   ./test/integration/marklogic-server/oauth
 ```
+
+The resource-server scenario installs an identity module on both MarkLogic nodes
+and maps the disposable Keycloak identity to the test cluster's admin role. Through
+HAProxy, it requires HTTP 200 with the expected identity for a valid bearer token
+and rejects missing or malformed tokens. Rejections must be HTTP 401 or the
+specific MarkLogic 12.0.3 HTTP 500 error for that input (empty token versus invalid
+token); unrelated server errors and lost headers do not pass. Requests use no cookies or redirects
+and verify TLS using the fixture CA. This does not yet cover expired tokens,
+wrong issuer/audience, or fine-grained authorization. The test writes its temporary
+module under `/tmp/oauth-resource-server/` in each MarkLogic container.
+
+The installed operator must generate `h1-case-adjust authorization Authorization`
+in HAProxy's global section and `option h1-case-adjust-bogus-server` in its HTTP
+backends. HAProxy normalizes header names to lowercase; MarkLogic 12.0.3's OAuth
+handler requires `Authorization`. This compatibility setting preserves the header
+spelling on the backend connection. An older operator without this fix will fail
+the positive bearer-token checks even when direct node requests succeed.
+See the [HAProxy configuration manual](https://docs.haproxy.org/3.0/configuration.html#h1-case-adjust).
 
 ### HAProxy SessionID affinity contract
 
