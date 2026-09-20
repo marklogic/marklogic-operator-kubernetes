@@ -94,18 +94,7 @@ func TestOAuthResourceServerInfrastructure(t *testing.T) {
 		"--data-binary", string(payloadBytes),
 		marklogicManagementURL(infrastructure.Cluster.Name, oauthSessionAffinityNamespace)+"/manage/v2/external-security",
 	)
-	// Install the same protected identity probe on both nodes. A plain HTTP
-	// App Server does not automatically provide the REST API endpoints.
-	const probeRoot = "/tmp/oauth-resource-server/"
-	const probe = `xquery version "1.0-ml";
-xdmp:set-response-content-type("text/plain"),
-fn:concat("oauth-user:", xdmp:get-current-user())`
-	for node := 0; node < 2; node++ {
-		testutil.ExecuteInPod(t, oauthSessionAffinityNamespace,
-			fmt.Sprintf("%s-%d", infrastructure.Cluster.Name, node), "marklogic-server",
-			"sh", "-c", `mkdir -p "$1" && printf '%s' "$2" > "$1/identity.xqy"`,
-			"install-oauth-probe", probeRoot, probe)
-	}
+	probeRoot := installOAuthIdentityProbe(t, oauthSessionAffinityNamespace, infrastructure.Cluster.Name)
 	// Match the disposable identity mapping used by the Authorization Code
 	// scenario. This grants admin only inside this disposable test cluster.
 	assignExternalNameToAdmin(t, oauthSessionAffinityNamespace, infrastructure.Cluster.Name, keycloak.TestUsername)
@@ -181,10 +170,10 @@ fn:concat("oauth-user:", xdmp:get-current-user())`
 		AccessToken string `json:"access_token"`
 	}
 	if err := json.Unmarshal([]byte(tokenResponse), &token); err != nil {
-		t.Fatalf("Decode Keycloak access token response: %v\n%s", err, tokenResponse)
+		t.Fatalf("Decode Keycloak access token response: %v", err)
 	}
 	if token.AccessToken == "" {
-		t.Fatalf("Keycloak access token response did not contain an access token: %s", tokenResponse)
+		t.Fatal("Keycloak access token response did not contain an access token")
 	}
 	for _, tc := range []struct {
 		name, bearer, status, body, rejection string

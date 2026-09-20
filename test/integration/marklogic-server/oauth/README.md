@@ -28,7 +28,7 @@ OAuth flows through the load balancer.
 
 | Test | Gate env var | Namespace prefix | What it covers |
 | --- | --- | --- | --- |
-| `TestOAuthAuthorizationCodeInfrastructure` | `MARKLOGIC_OAUTH_AUTHORIZATION_CODE=true` | `ml-oauth-authorization-code` | Full OAuth 2.0 Authorization Code (PKCE) flow through HAProxy with SessionID affinity. |
+| `TestOAuthAuthorizationCodeInfrastructure` | `MARKLOGIC_OAUTH_AUTHORIZATION_CODE=true` | `ml-oauth-authorization-code` | Curl-driven Authorization Code (PKCE) login, authenticated identity through HAProxy, and deterministic cross-node rejection. |
 | `TestOAuthResourceServerInfrastructure` | `MARKLOGIC_OAUTH_RESOURCE_SERVER=true` | `ml-oauth-resource-server` | Resource-server configuration and protected requests through HAProxy: valid token identity, missing token, and invalid token. |
 | `TestHAProxySessionIDAffinityContract` | `MARKLOGIC_HAPROXY_SESSION_AFFINITY=true` | `ml-haproxy-session-affinity` | HAProxy native SessionID cookie affinity contract, using nginx backends (no MarkLogic). |
 
@@ -65,16 +65,48 @@ make integration-test SCENARIO=oauth-authorization-code
 
 Sub-cases (the original release requirement/spec reference still needs to be linked):
 
-- **TC1 – SessionID before authentication:** the OAuth App Server sets a
-  `SessionID` cookie and redirects to Keycloak with an Authorization Code + PKCE
-  request before the user authenticates.
-- **TC2 – affinity completes flow:** with HAProxy `SessionID` affinity, the IdP
-  callback returns to the same node that started the flow, so the code exchange
-  (using the confidential client secret) succeeds.
-- **TC3 – cross-node callback fails:** a callback delivered to a different node
-  fails, because the in-flight PKCE verifier and OAuth `state` are node-local
-  (MarkLogic reports `XDMP-OAUTH: Novel OAuth state ... potential CSRF attack`).
-  This proves affinity is required.
+- **TC1 – SessionID before authentication:** require exactly HTTP 302/303,
+  a `SessionID` cookie, the expected Keycloak authorization endpoint, and nonempty
+  PKCE/state parameters with `S256` and `response_type=code`. Stop before login.
+- **TC2 – authenticated session through HAProxy:** complete the Keycloak login
+  and callback with the cookie jar. The callback must return HTTP 200/302/303
+  without restarting authentication. A separate request to `/identity.xqy`
+  using that cookie jar must return HTTP 200 and the expected authenticated user.
+  A 403 or unrelated server error cannot pass, even if the identity request succeeds.
+- **TC3 – cross-node callback fails for the expected reason:** start on node 0
+  and send the callback directly to node 1 without the initiating cookie. Require
+  HTTP 400/401/403/500 **and** an HTML error field containing
+  `XDMP-OAUTH: Novel OAuth state ... potential CSRF attack`. Generic 401/403/500,
+  TLS failures, and a redirect back to login all fail this assertion.
+
+The negative assertion deliberately accepts only the documented state-error
+signature. Its exact response format/status must still be validated against the
+chosen MarkLogic 12.1+ build. If a version changes that behavior, add captured,
+redacted evidence and a narrow regression case instead of accepting any 500.
+
+All five driver requests verify the fixture CA and allow HTTPS only. Each has a
+5-second connection timeout and a 20-second total timeout. The driver validates
+form destinations, retains cookies only in temporary files that are removed on
+exit, and emits stage/status markers instead of session cookies, authorization
+codes, OAuth state, or raw authentication responses.
+
+Coverage limits: the Authorization Code suite proves authenticated behavior
+through HAProxy and explicit cross-node rejection. It does not yet record the
+backend identity for both the initial request and callback. The separate
+HAProxy/nginx contract checks backend identity when replaying a SessionID cookie.
+TC3 does not disable affinity on a load balancer, and these tests do not validate
+a full browser or AWS ALB/NLB configuration.
+
+Local regression tests execute the real shell/curl driver against a synthetic
+HTTPS service, including an untrusted certificate at each of the five request
+stages. They do not substitute for live MarkLogic validation:
+
+```sh
+go test ./test/integration/marklogic-server/oauth -run TestAuthCode -count=1
+```
+
+These driver tests require `sh` and `curl` and permission to bind loopback ports;
+the driver tests skip if curl is unavailable. Assertion tests need no cluster.
 
 ### Resource-server (JWT bearer)
 
@@ -91,7 +123,7 @@ specific MarkLogic 12.0.3 HTTP 500 error for that input (empty token versus inva
 token); unrelated server errors and lost headers do not pass. Requests use no cookies or redirects
 and verify TLS using the fixture CA. This does not yet cover expired tokens,
 wrong issuer/audience, or fine-grained authorization. The test writes its temporary
-module under `/tmp/oauth-resource-server/` in each MarkLogic container.
+module under `/tmp/oauth-identity/` in each MarkLogic container.
 
 The installed operator must generate `h1-case-adjust authorization Authorization`
 in HAProxy's global section and `option h1-case-adjust-bogus-server` in its HTTP
@@ -126,7 +158,11 @@ A disposable test user `oauth-test-user` is seeded for authentication.
 | --- | --- |
 | `oauth_setup.go` | Shared infrastructure builder (TLS, Keycloak, MarkLogic cluster, HAProxy, client pod) and external-security / App Server config. |
 | `oauth_setup_test.go` | Unit tests for the setup helpers. |
-| `oauth_authorization_code_test.go` | Authorization Code flow test (TC1/TC2/TC3). |
+| `oauth_authorization_code_test.go` | Authorization Code live flow (TC1/TC2/TC3) and management helpers. |
+| `authcode_flow_script_test.go` | TLS-verifying curl driver with sanitized output. |
+| `authcode_assertions_test.go` / `authcode_response_test.go` | Exact result validators and negative regression cases. |
+| `authcode_driver_test.go` | Local HTTPS tests of the shell/curl driver and TLS failures. |
+| `identity_probe_test.go` | Shared protected identity module for both OAuth flows. |
 | `oauth_load_balancer_affinity_test.go` | Protected bearer-token identity and rejection tests through HAProxy. |
 | `session_affinity_test.go` | HAProxy SessionID affinity contract test using nginx backends. |
 

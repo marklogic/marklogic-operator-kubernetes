@@ -21,7 +21,7 @@ const oauthAuthCodeNamespace = "ml-oauth-authorization-code"
 // Code flow behind the operator-managed HAProxy load balancer on MarkLogic 12.1+,
 // where the flow is supported. It configures an Authorization Code external
 // security and OAuth App Server, then runs the load-balancer session-affinity
-// test cases from docs/test/OAuth Test Spec.md:
+// cases from the original release requirement (see README.md):
 //
 //	TC1 - the OAuth App Server sets a SessionID cookie and redirects to the IdP
 //	      before authentication.
@@ -64,7 +64,10 @@ func TestOAuthAuthorizationCodeInfrastructure(t *testing.T) {
 		t.Fatalf("Build Authorization Code external-security payload: %v", err)
 	}
 	postManagementJSON(t, oauthAuthCodeNamespace, infrastructure.Cluster.Name, "/manage/v2/external-security", externalSecurityPayload)
-	postManagementJSON(t, oauthAuthCodeNamespace, infrastructure.Cluster.Name, "/manage/v2/servers?group-id=Default&server-type=http", mlmanage.BuildOAuthAppServerPayload(authCodeAppServerConfig()))
+	probeRoot := installOAuthIdentityProbe(t, oauthAuthCodeNamespace, infrastructure.Cluster.Name)
+	appConfig := authCodeAppServerConfig()
+	appConfig.Root = probeRoot
+	postManagementJSON(t, oauthAuthCodeNamespace, infrastructure.Cluster.Name, "/manage/v2/servers?group-id=Default&server-type=http", mlmanage.BuildOAuthAppServerPayload(appConfig))
 
 	// Grant the disposable Keycloak identity a mapped MarkLogic role so a
 	// completed handshake yields an authorized 200 rather than only a 403.
@@ -83,18 +86,15 @@ func TestOAuthAuthorizationCodeInfrastructure(t *testing.T) {
 	// before authentication, when reached through the HAProxy load balancer.
 	t.Run("TC1_SessionID_before_authentication", func(t *testing.T) {
 		result := runAuthCodeFlow(t, oauthAuthCodeNamespace, authCodeFlowConfig{
-			StartURL:     haproxyBase + "/",
-			CallbackBase: haproxyBase,
-			CarrySession: true,
+			StartOnly:             true,
+			StartURL:              haproxyBase + "/identity.xqy",
+			CallbackBase:          haproxyBase,
+			CarrySession:          true,
+			AuthorizationEndpoint: document.AuthorizationEndpoint,
+			RedirectURI:           redirectURI,
 		})
-		if !strings.Contains(result["STEP1_STATUS"], "303") && !strings.Contains(result["STEP1_STATUS"], "302") {
-			t.Fatalf("expected a redirect (302/303) from the OAuth App Server, got %q\n%s", result["STEP1_STATUS"], result["_raw"])
-		}
-		if result["STEP1_SESSIONID"] == "" {
-			t.Fatalf("expected a SessionID cookie before authentication\n%s", result["_raw"])
-		}
-		if !strings.Contains(result["STEP1_LOCATION"], "code_challenge") || !strings.Contains(result["STEP1_LOCATION"], "response_type=code") {
-			t.Fatalf("expected an Authorization Code (PKCE) redirect to the IdP, got %q", result["STEP1_LOCATION"])
+		if err := validateAuthCodeStart(result); err != nil {
+			t.Fatal(err)
 		}
 	})
 
@@ -102,22 +102,30 @@ func TestOAuthAuthorizationCodeInfrastructure(t *testing.T) {
 	// node and the Authorization Code flow completes successfully.
 	t.Run("TC2_affinity_completes_flow", func(t *testing.T) {
 		result := runAuthCodeFlow(t, oauthAuthCodeNamespace, authCodeFlowConfig{
-			StartURL:     haproxyBase + "/",
-			CallbackBase: haproxyBase,
-			CarrySession: true,
+			StartURL:              haproxyBase + "/identity.xqy",
+			CallbackBase:          haproxyBase,
+			CarrySession:          true,
+			AuthorizationEndpoint: document.AuthorizationEndpoint,
+			RedirectURI:           redirectURI,
 		})
-		assertHandshakeCompleted(t, result)
+		if err := validateAuthCodeSuccess(result); err != nil {
+			t.Fatal(err)
+		}
 	})
 
 	// TC3: a callback delivered to a different node than the one that started the
 	// flow fails, because the PKCE verifier and state are node-local.
 	t.Run("TC3_cross_node_callback_fails", func(t *testing.T) {
 		result := runAuthCodeFlow(t, oauthAuthCodeNamespace, authCodeFlowConfig{
-			StartURL:     node0Base + "/",
-			CallbackBase: node1Base,
-			CarrySession: false,
+			StartURL:              node0Base + "/identity.xqy",
+			CallbackBase:          node1Base,
+			CarrySession:          false,
+			AuthorizationEndpoint: document.AuthorizationEndpoint,
+			RedirectURI:           redirectURI,
 		})
-		assertHandshakeRejected(t, result)
+		if err := validateAuthCodeRejection(result); err != nil {
+			t.Fatal(err)
+		}
 	})
 
 	if retainNamespaceFromEnvironment() {
@@ -126,14 +134,14 @@ func TestOAuthAuthorizationCodeInfrastructure(t *testing.T) {
 }
 
 type authCodeFlowConfig struct {
-	StartURL     string
-	CallbackBase string
-	CarrySession bool
+	StartURL              string
+	CallbackBase          string
+	StartOnly             bool
+	CarrySession          bool
+	AuthorizationEndpoint string
+	RedirectURI           string
 }
 
-// runAuthCodeFlow drives a complete browser-style Authorization Code + PKCE login
-// through the OAuth App Server and Keycloak from inside the in-cluster curl client,
-// returning the parsed key=value markers the script emits.
 // waitForOAuthAppServerThroughHAProxy blocks until the HAProxy OAuth backend has a
 // healthy server. HAProxy's server health check runs periodically, so for a short
 // window after the OAuth App Server is created the 8013 backend reports 503 with
@@ -165,6 +173,10 @@ func runAuthCodeFlow(t *testing.T, namespace string, config authCodeFlowConfig) 
 	if config.CarrySession {
 		carry = "yes"
 	}
+	mode := "full"
+	if config.StartOnly {
+		mode = "start"
+	}
 	output := testutil.ExecuteInPod(
 		t,
 		namespace,
@@ -176,38 +188,14 @@ func runAuthCodeFlow(t *testing.T, namespace string, config authCodeFlowConfig) 
 		keycloak.TestUsername,
 		keycloak.TestUserPassword,
 		carry,
+		oauthclient.CAPath,
+		config.AuthorizationEndpoint,
+		config.RedirectURI,
+		mode,
 	)
 	result := parseMarkers(output)
-	result["_raw"] = output
-	t.Logf("Authorization Code flow markers:\n%s", output)
+	t.Logf("Authorization Code stages: start=%s callback=%s identity=%s result=%s", result["STEP1_STATUS"], result["STEP4_STATUS"], result["STEP5_STATUS"], result["RESULT"])
 	return result
-}
-
-func assertHandshakeCompleted(t *testing.T, result map[string]string) {
-	t.Helper()
-	if result["RESULT"] != "DONE" {
-		t.Fatalf("Authorization Code flow did not reach the callback: %s\n%s", result["RESULT"], result["_raw"])
-	}
-	status := result["STEP4_STATUS"]
-	if strings.Contains(status, "401") || strings.Contains(status, "400") || strings.Contains(status, "500") {
-		t.Fatalf("callback on the initiating node should complete, got %q\n%s", status, result["_raw"])
-	}
-	if strings.Contains(result["STEP4_LOCATION"], "/protocol/openid-connect/auth") {
-		t.Fatalf("callback should not restart the OAuth flow when affinity holds\n%s", result["_raw"])
-	}
-}
-
-func assertHandshakeRejected(t *testing.T, result map[string]string) {
-	t.Helper()
-	if result["RESULT"] != "DONE" {
-		t.Fatalf("cross-node negative case did not reach the callback: %s\n%s", result["RESULT"], result["_raw"])
-	}
-	status := result["STEP4_STATUS"]
-	restarted := strings.Contains(result["STEP4_LOCATION"], "/protocol/openid-connect/auth")
-	rejected := strings.Contains(status, "401") || strings.Contains(status, "400") || strings.Contains(status, "403") || strings.Contains(status, "500") || restarted
-	if !rejected {
-		t.Fatalf("cross-node callback should fail without the initiating node's OAuth state, got %q\n%s", status, result["_raw"])
-	}
 }
 
 func discoverKeycloak(t *testing.T, namespace string) openIDConfiguration {
@@ -287,61 +275,3 @@ func parseMarkers(output string) map[string]string {
 	}
 	return result
 }
-
-// authCodeFlowScript performs a full Authorization Code + PKCE + form_post login
-// from the in-cluster curl client. MarkLogic generates the PKCE verifier and
-// state, so the script only follows MarkLogic's redirect, submits the Keycloak
-// login form, and posts the callback. Positional args:
-//
-//	$1 START_URL     initial OAuth App Server URL
-//	$2 CALLBACK_BASE scheme://host[:port] to send the callback to
-//	$3 USERNAME
-//	$4 PASSWORD
-//	$5 CARRY_SESSION "yes" to send the initiating SessionID cookie on the callback
-const authCodeFlowScript = `
-START_URL="$1"; CALLBACK_BASE="$2"; USER="$3"; PASS="$4"; CARRY="$5"
-JAR=$(mktemp); KCJAR=$(mktemp)
-
-H1=$(curl -sS --fail -c "$JAR" -D - -o /dev/null "$START_URL")
-echo "STEP1_STATUS=$(printf '%s' "$H1" | head -1 | tr -d '\r')"
-LOC=$(printf '%s' "$H1" | tr -d '\r' | awk 'tolower($1)=="location:"{print $2; exit}')
-SID=$(awk '$6=="SessionID"{v=$7} END{print v}' "$JAR")
-echo "STEP1_SESSIONID=$SID"
-echo "STEP1_LOCATION=$LOC"
-if [ -z "$LOC" ]; then echo "RESULT=NO_REDIRECT"; exit 0; fi
-
-LOGIN=$(curl -sk -c "$KCJAR" -b "$KCJAR" "$LOC")
-ACTION=$(printf '%s' "$LOGIN" | grep -io 'action="[^"]*login-actions/authenticate[^"]*"' | head -1 | sed -e 's/^[aA][cC][tT][iI][oO][nN]="//' -e 's/"$//' -e 's/&amp;/\&/g')
-if [ -z "$ACTION" ]; then ACTION=$(printf '%s' "$LOGIN" | grep -io 'action="[^"]*"' | head -1 | sed -e 's/^[aA][cC][tT][iI][oO][nN]="//' -e 's/"$//' -e 's/&amp;/\&/g'); fi
-echo "STEP2_ACTION_PRESENT=$([ -n "$ACTION" ] && echo yes || echo no)"
-if [ -z "$ACTION" ]; then echo "RESULT=NO_LOGIN_FORM"; printf '%s' "$LOGIN" | head -40; exit 0; fi
-
-# Keycloak's form_post response emits UPPERCASE HTML (<INPUT NAME="code" VALUE="..."/>)
-# while the login page is lowercase, so all attribute parsing must be case-insensitive.
-POST=$(curl -sk -c "$KCJAR" -b "$KCJAR" --data-urlencode "username=$USER" --data-urlencode "password=$PASS" --data-urlencode "credentialId=" "$ACTION")
-CODE=$(printf '%s' "$POST" | grep -io 'name="code"[^>]*' | head -1 | grep -io 'value="[^"]*"' | head -1 | sed -e 's/^[vV][aA][lL][uU][eE]="//' -e 's/"$//')
-STATE=$(printf '%s' "$POST" | grep -io 'name="state"[^>]*' | head -1 | grep -io 'value="[^"]*"' | head -1 | sed -e 's/^[vV][aA][lL][uU][eE]="//' -e 's/"$//')
-CBACT=$(printf '%s' "$POST" | grep -io 'action="[^"]*"' | head -1 | sed -e 's/^[aA][cC][tT][iI][oO][nN]="//' -e 's/"$//' -e 's/&amp;/\&/g')
-echo "STEP3_CODE_PRESENT=$([ -n "$CODE" ] && echo yes || echo no)"
-echo "STEP3_STATE_PRESENT=$([ -n "$STATE" ] && echo yes || echo no)"
-if [ -z "$CODE" ] || [ -z "$STATE" ]; then echo "RESULT=NO_CODE"; printf '%s' "$POST" | head -60; exit 0; fi
-
-PATHQ=$(printf '%s' "$CBACT" | sed -e 's#^https\{0,1\}://[^/]*##')
-if [ -z "$PATHQ" ]; then PATHQ="/oauth/callback"; fi
-CBURL="${CALLBACK_BASE}${PATHQ}"
-echo "CALLBACK_URL=$CBURL"
-
-B4=$(mktemp)
-if [ "$CARRY" = "yes" ] && [ -n "$SID" ]; then
-  H4=$(curl -sk -b "SessionID=$SID" -D - -o "$B4" --data-urlencode "code=$CODE" --data-urlencode "state=$STATE" "$CBURL")
-else
-  H4=$(curl -sk -D - -o "$B4" --data-urlencode "code=$CODE" --data-urlencode "state=$STATE" "$CBURL")
-fi
-echo "STEP4_STATUS=$(printf '%s' "$H4" | head -1 | tr -d '\r')"
-echo "STEP4_LOCATION=$(printf '%s' "$H4" | tr -d '\r' | awk 'tolower($1)=="location:"{print $2; exit}')"
-printf '%s' "$H4" | tr -d '\r' | grep -iE '^(www-authenticate|set-cookie):' | head -5
-echo "STEP4_BODY_BEGIN"
-head -40 "$B4"
-echo "STEP4_BODY_END"
-echo "RESULT=DONE"
-`
