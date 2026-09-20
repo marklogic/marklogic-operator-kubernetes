@@ -211,6 +211,10 @@ kill-envtest: ## Kill any stale envtest kube-apiserver and etcd processes left b
 	@pkill -f "$(LOCALBIN)/k8s/.*/kube-apiserver" 2>/dev/null || true
 	@pkill -f "$(LOCALBIN)/k8s/.*/etcd" 2>/dev/null || true
 
+.PHONY: integration-test
+integration-test: ## Run one live integration scenario; set SCENARIO and INTEGRATION_CONTEXT.
+	bash test/integration/scripts/run.sh
+
 .PHONY: test
 test: manifests generate fmt vet envtest ## Run tests.
 	KUBEBUILDER_ASSETS="$(shell $(ENVTEST) use $(ENVTEST_K8S_VERSION) --bin-dir $(LOCALBIN) -p path)" go test -v $$(go list ./... | grep -v /e2e) -coverprofile cover.out

@@ -36,21 +36,17 @@ func TestHAProxySessionIDAffinityContract(t *testing.T) {
 		t.Skipf("set %s=true to run the HAProxy SessionID affinity contract test", sessionAffinityTestEnvironment)
 	}
 
-	t.Cleanup(func() {
-		if t.Failed() {
-			testutil.CollectKubernetesDiagnostics(t, sessionAffinityNamespace)
-		}
-		testutil.DeleteNamespace(t, sessionAffinityNamespace)
-	})
+	run := testutil.NewRun(t, "ml-haproxy-session-affinity", false)
+	sessionAffinityNamespace := run.Namespace
+	run.ApplyObjects(t, sessionAffinityObjects(sessionAffinityNamespace)...)
 
-	testutil.EnsureNamespace(t, sessionAffinityNamespace)
-	testutil.ApplyObjects(t, sessionAffinityObjects(sessionAffinityNamespace)...)
 	for _, name := range []string{sessionAffinityBackendAName, sessionAffinityBackendBName, sessionAffinityProxyName} {
 		testutil.WaitForDeploymentAvailable(t, sessionAffinityNamespace, name, 2*time.Minute)
 	}
 	testutil.WaitForPodReady(t, sessionAffinityNamespace, sessionAffinityClientName, time.Minute)
+	run.LogImages(t)
 
-	initial := sessionAffinityRequest(t, "curl -sS --retry 12 --retry-delay 1 --retry-connrefused -D /tmp/headers -o /tmp/body -c /tmp/cookies -w '%{http_code}' http://"+sessionAffinityProxyName+":8080/start")
+	initial := sessionAffinityRequest(t, sessionAffinityNamespace, "curl -sS --retry 12 --retry-delay 1 --retry-connrefused -D /tmp/headers -o /tmp/body -c /tmp/cookies -w '%{http_code}' http://"+sessionAffinityProxyName+":8080/start")
 	if initial.status != "302" {
 		t.Fatalf("initial response status = %q, want 302; headers: %s", initial.status, initial.headers)
 	}
@@ -61,7 +57,7 @@ func TestHAProxySessionIDAffinityContract(t *testing.T) {
 		t.Fatalf("initial response does not identify a backend: %s", initial.headers)
 	}
 
-	affine := sessionAffinityRequest(t, "curl -sS --retry 12 --retry-delay 1 --retry-connrefused -D /tmp/headers -o /tmp/body -b /tmp/cookies -w '%{http_code}' http://"+sessionAffinityProxyName+":8080/callback")
+	affine := sessionAffinityRequest(t, sessionAffinityNamespace, "curl -sS --retry 12 --retry-delay 1 --retry-connrefused -D /tmp/headers -o /tmp/body -b /tmp/cookies -w '%{http_code}' http://"+sessionAffinityProxyName+":8080/callback")
 	if affine.status != "200" {
 		t.Fatalf("cookie replay status = %q, want 200; headers: %s", affine.status, affine.headers)
 	}
@@ -71,7 +67,7 @@ func TestHAProxySessionIDAffinityContract(t *testing.T) {
 
 	backends := make(map[string]bool)
 	for request := 0; request < 8; request++ {
-		response := sessionAffinityRequest(t, "curl -sS --retry 12 --retry-delay 1 --retry-connrefused -D /tmp/headers -o /tmp/body -w '%{http_code}' http://"+sessionAffinityProxyName+":8080/callback")
+		response := sessionAffinityRequest(t, sessionAffinityNamespace, "curl -sS --retry 12 --retry-delay 1 --retry-connrefused -D /tmp/headers -o /tmp/body -w '%{http_code}' http://"+sessionAffinityProxyName+":8080/callback")
 		if response.status != "200" {
 			t.Fatalf("cookie-free request %d status = %q, want 200; headers: %s", request, response.status, response.headers)
 		}
@@ -88,7 +84,7 @@ type sessionAffinityResponse struct {
 	backend string
 }
 
-func sessionAffinityRequest(t *testing.T, request string) sessionAffinityResponse {
+func sessionAffinityRequest(t *testing.T, sessionAffinityNamespace, request string) sessionAffinityResponse {
 	t.Helper()
 	testutil.ExecuteInPod(t, sessionAffinityNamespace, sessionAffinityClientName, "curl", "sh", "-ec", request+" > /tmp/status")
 	result := testutil.ExecuteInPod(t, sessionAffinityNamespace, sessionAffinityClientName, "curl", "sh", "-ec", `status=$(tail -c 3 /tmp/status 2>/dev/null || true); printf '%s\n---HEADERS---\n' "$status"; cat /tmp/headers`)

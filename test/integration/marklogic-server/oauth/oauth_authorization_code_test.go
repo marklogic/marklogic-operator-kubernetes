@@ -37,20 +37,11 @@ func TestOAuthAuthorizationCodeInfrastructure(t *testing.T) {
 	if image == "" {
 		t.Fatalf("set %s to a MarkLogic 12.1+ image; the Authorization Code flow is deprecated/rejected on 12.0.x", marklogicImageEnvironment)
 	}
+	run := testutil.NewRun(t, "ml-oauth-authorization-code", true)
+	oauthAuthCodeNamespace := run.Namespace
 	redirectURI := authCodeRedirectURI(oauthAuthCodeNamespace)
 
-	t.Cleanup(func() {
-		if t.Failed() {
-			testutil.CollectKubernetesDiagnostics(t, oauthAuthCodeNamespace)
-		}
-		if retainNamespaceFromEnvironment() {
-			t.Logf("Retaining namespace %s because %s=true", oauthAuthCodeNamespace, oauthRetainNamespaceEnvironment)
-			return
-		}
-		testutil.DeleteNamespace(t, oauthAuthCodeNamespace)
-	})
-
-	infrastructure := DeployInfrastructure(t, InfrastructureConfig{
+	infrastructure := DeployInfrastructure(t, run, InfrastructureConfig{
 		Namespace:   oauthAuthCodeNamespace,
 		RedirectURI: redirectURI,
 		Image:       image,
@@ -59,6 +50,7 @@ func TestOAuthAuthorizationCodeInfrastructure(t *testing.T) {
 	testutil.WaitForDeploymentAvailable(t, oauthAuthCodeNamespace, haproxyServiceName, 5*time.Minute)
 	testutil.WaitForDeploymentAvailable(t, oauthAuthCodeNamespace, keycloak.Name, 5*time.Minute)
 	testutil.WaitForPodReady(t, oauthAuthCodeNamespace, oauthclient.DefaultName, 2*time.Minute)
+	run.LogImages(t)
 
 	document := discoverKeycloak(t, oauthAuthCodeNamespace)
 	if document.AuthorizationEndpoint == "" {

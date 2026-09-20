@@ -21,20 +21,11 @@ func TestOAuthResourceServerInfrastructure(t *testing.T) {
 	if !resourceServerTestEnabledFromEnvironment() {
 		t.Skipf("set %s=true to run OAuth resource-server infrastructure setup", oauthResourceServerTestEnvironment)
 	}
+	run := testutil.NewRun(t, "ml-oauth-resource-server", true)
+	oauthSessionAffinityNamespace := run.Namespace
 	redirectURI, _ := redirectURIFromEnvironment()
 
-	t.Cleanup(func() {
-		if t.Failed() {
-			testutil.CollectKubernetesDiagnostics(t, oauthSessionAffinityNamespace)
-		}
-		if retainNamespaceFromEnvironment() {
-			t.Logf("Retaining namespace %s because %s=true", oauthSessionAffinityNamespace, oauthRetainNamespaceEnvironment)
-			return
-		}
-		testutil.DeleteNamespace(t, oauthSessionAffinityNamespace)
-	})
-
-	infrastructure := DeployInfrastructure(t, InfrastructureConfig{
+	infrastructure := DeployInfrastructure(t, run, InfrastructureConfig{
 		Namespace:   oauthSessionAffinityNamespace,
 		RedirectURI: redirectURI,
 		Image:       marklogicImageFromEnvironment(),
@@ -43,6 +34,7 @@ func TestOAuthResourceServerInfrastructure(t *testing.T) {
 	testutil.WaitForDeploymentAvailable(t, oauthSessionAffinityNamespace, haproxyServiceName, 5*time.Minute)
 	testutil.WaitForDeploymentAvailable(t, oauthSessionAffinityNamespace, keycloak.Name, 5*time.Minute)
 	testutil.WaitForPodReady(t, oauthSessionAffinityNamespace, oauthclient.DefaultName, 2*time.Minute)
+	run.LogImages(t)
 	discovery := testutil.ExecuteInPod(
 		t,
 		oauthSessionAffinityNamespace,

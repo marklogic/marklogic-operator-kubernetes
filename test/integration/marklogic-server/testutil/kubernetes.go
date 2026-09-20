@@ -4,8 +4,10 @@ package testutil
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -56,24 +58,6 @@ func CollectKubernetesDiagnostics(t *testing.T, namespace string) {
 			continue
 		}
 		t.Logf("Kubernetes diagnostics for %s:\n%s", pod, output)
-	}
-}
-
-// DeleteNamespace requests asynchronous cleanup so failed test evidence remains available in test logs.
-func DeleteNamespace(t *testing.T, namespace string) {
-	t.Helper()
-	output, err := runKubectl("delete", "namespace", namespace, "--ignore-not-found", "--wait=false")
-	if err != nil {
-		t.Logf("Namespace cleanup for %s failed: %v\n%s", namespace, err, output)
-	}
-}
-
-// EnsureNamespace creates the namespace if it does not already exist.
-func EnsureNamespace(t *testing.T, namespace string) {
-	t.Helper()
-	output, err := runKubectl("create", "namespace", namespace)
-	if err != nil && !strings.Contains(output, "AlreadyExists") {
-		t.Fatalf("Create namespace %s: %v\n%s", namespace, err, output)
 	}
 }
 
@@ -173,15 +157,31 @@ func ExecuteInPod(t *testing.T, namespace, name, container string, command ...st
 }
 
 func runKubectl(arguments ...string) (string, error) {
-	command := exec.Command("kubectl", arguments...)
-	output, err := command.CombinedOutput()
-	return string(output), err
+	return runKubectlInput(nil, arguments...)
 }
 
 func runKubectlInput(input []byte, arguments ...string) (string, error) {
-	command := exec.Command("kubectl", arguments...)
+	// Leave room for the longest Kubernetes rollout wait, but bound hung execs.
+	timeout := 2 * time.Minute
+	for _, argument := range arguments {
+		if strings.HasPrefix(argument, "--timeout=") {
+			if d, err := time.ParseDuration(strings.TrimPrefix(argument, "--timeout=")); err == nil && d > timeout {
+				timeout = d + 30*time.Second
+			}
+		}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	if target := os.Getenv("INTEGRATION_CONTEXT"); target != "" {
+		arguments = append([]string{"--context", target}, arguments...)
+	}
+	command := exec.CommandContext(ctx, "kubectl", arguments...)
+	command.WaitDelay = 5 * time.Second
 	command.Stdin = bytes.NewReader(input)
 	output, err := command.CombinedOutput()
+	if ctx.Err() != nil {
+		return string(output), fmt.Errorf("kubectl timed out after %s: %w", timeout, ctx.Err())
+	}
 	return string(output), err
 }
 

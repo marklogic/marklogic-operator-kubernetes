@@ -282,3 +282,14 @@ func containsString(values []string, expected string) bool {
 	}
 	return false
 }
+
+func TestBuildInfrastructurePreservesSelectedStorageClass(t *testing.T) {
+	infrastructure, err := BuildInfrastructure(InfrastructureConfig{Namespace: "storage-test", StorageClass: "integration-storage"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	persistence := infrastructure.Cluster.Spec.Persistence
+	if persistence == nil || !persistence.Enabled || persistence.StorageClassName != "integration-storage" {
+		t.Fatalf("selected storage class lost in infrastructure composition: %#v", persistence)
+	}
+}

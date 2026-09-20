@@ -14,8 +14,8 @@ OAuth flows through the load balancer.
 
 ## Prerequisites
 
-- A running Kubernetes cluster (minikube, kind, EKS, ...) selected by the current
-  `kubectl` context, with a default `StorageClass` that can provision
+- A running Kubernetes cluster (minikube, kind, EKS, ...) selected explicitly by
+  `INTEGRATION_CONTEXT`, with a selected/default `StorageClass` that can provision
   `PersistentVolumeClaim`s.
 - The MarkLogic operator installed in the cluster (the tests create
   `MarklogicCluster` resources reconciled by the operator).
@@ -26,14 +26,18 @@ OAuth flows through the load balancer.
 
 ## Test suites
 
-| Test | Gate env var | Namespace | What it covers |
+| Test | Gate env var | Namespace prefix | What it covers |
 | --- | --- | --- | --- |
 | `TestOAuthAuthorizationCodeInfrastructure` | `MARKLOGIC_OAUTH_AUTHORIZATION_CODE=true` | `ml-oauth-authorization-code` | Full OAuth 2.0 Authorization Code (PKCE) flow through HAProxy with SessionID affinity. |
-| `TestOAuthResourceServerInfrastructure` | `MARKLOGIC_OAUTH_RESOURCE_SERVER=true` | `ml-oauth-session-affinity` | Resource-server configuration and protected requests through HAProxy: valid token identity, missing token, and invalid token. |
+| `TestOAuthResourceServerInfrastructure` | `MARKLOGIC_OAUTH_RESOURCE_SERVER=true` | `ml-oauth-resource-server` | Resource-server configuration and protected requests through HAProxy: valid token identity, missing token, and invalid token. |
 | `TestHAProxySessionIDAffinityContract` | `MARKLOGIC_HAPROXY_SESSION_AFFINITY=true` | `ml-haproxy-session-affinity` | HAProxy native SessionID cookie affinity contract, using nginx backends (no MarkLogic). |
 
 The unit tests in `oauth_setup_test.go` run without any gate and validate helper
 logic (OpenID discovery parsing, redirect-URI validation, etc.).
+
+Each run appends a generated suffix to its namespace prefix. For the common
+runner, context/operator settings, storage selection, preflight limits, and
+cleanup behavior, see [the integration runner guide](../README.md#running-the-tests).
 
 ## Environment variables
 
@@ -50,16 +54,16 @@ logic (OpenID discovery parsing, redirect-URI validation, etc.).
 
 ### Authorization Code flow (MarkLogic 12.1+)
 
+With `INTEGRATION_CONTEXT`, `INTEGRATION_OPERATOR_NAMESPACE`, and
+`INTEGRATION_OPERATOR_DEPLOYMENT` set as described in the runner guide:
+
 ```sh
-MARKLOGIC_OAUTH_AUTHORIZATION_CODE=true \
 MARKLOGIC_IMAGE=<your-marklogic-12.1+-image> \
-MARKLOGIC_OAUTH_RETAIN_NAMESPACE=true \
-go test -v -count=1 -timeout 45m \
-  -run TestOAuthAuthorizationCodeInfrastructure \
-  ./test/integration/marklogic-server/oauth
+MARKLOGIC_VERSION=12.1.0 \
+make integration-test SCENARIO=oauth-authorization-code
 ```
 
-Sub-cases (from `docs/test/OAuth Test Spec.md`):
+Sub-cases (the original release requirement/spec reference still needs to be linked):
 
 - **TC1 – SessionID before authentication:** the OAuth App Server sets a
   `SessionID` cookie and redirects to Keycloak with an Authorization Code + PKCE
@@ -75,10 +79,8 @@ Sub-cases (from `docs/test/OAuth Test Spec.md`):
 ### Resource-server (JWT bearer)
 
 ```sh
-MARKLOGIC_OAUTH_RESOURCE_SERVER=true \
-go test -v -count=1 -timeout 45m \
-  -run TestOAuthResourceServerInfrastructure \
-  ./test/integration/marklogic-server/oauth
+MARKLOGIC_IMAGE=<image-under-test> \
+make integration-test SCENARIO=oauth-resource-server
 ```
 
 The resource-server scenario installs an identity module on both MarkLogic nodes
@@ -102,10 +104,8 @@ See the [HAProxy configuration manual](https://docs.haproxy.org/3.0/configuratio
 ### HAProxy SessionID affinity contract
 
 ```sh
-MARKLOGIC_HAPROXY_SESSION_AFFINITY=true \
-go test -v -count=1 -timeout 20m \
-  -run TestHAProxySessionIDAffinityContract \
-  ./test/integration/marklogic-server/oauth
+INTEGRATION_CONTEXT=<context> \
+make integration-test SCENARIO=haproxy-session-affinity
 ```
 
 ## Keycloak fixture
@@ -127,17 +127,20 @@ A disposable test user `oauth-test-user` is seeded for authentication.
 | `oauth_setup.go` | Shared infrastructure builder (TLS, Keycloak, MarkLogic cluster, HAProxy, client pod) and external-security / App Server config. |
 | `oauth_setup_test.go` | Unit tests for the setup helpers. |
 | `oauth_authorization_code_test.go` | Authorization Code flow test (TC1/TC2/TC3). |
-| `oauth_load_balancer_affinity_test.go` | Resource-server external security + OAuth App Server setup test. |
+| `oauth_load_balancer_affinity_test.go` | Protected bearer-token identity and rejection tests through HAProxy. |
 | `session_affinity_test.go` | HAProxy SessionID affinity contract test using nginx backends. |
 
 ## Cleanup
 
-By default each test deletes its namespace on completion. Set
-`MARKLOGIC_OAUTH_RETAIN_NAMESPACE=true` to retain it for inspection, then remove it
-manually when finished:
+Each test uses a fresh namespace and verifies ownership before deleting it.
+Set `INTEGRATION_RETAIN_NAMESPACE=true` (or the legacy
+`MARKLOGIC_OAUTH_RETAIN_NAMESPACE=true`) to retain it for inspection. The output
+includes the generated namespace and context-specific cleanup command. Normal
+cleanup waits for namespace and bound PV deletion and reports failures.
 
-```sh
-kubectl delete ns ml-oauth-authorization-code
-kubectl delete ns ml-oauth-session-affinity
-kubectl delete ns ml-haproxy-session-affinity
-```
+## Ownership
+
+Requirements owner, test maintainer, named reviewers, and the original release
+requirement link: **TBD — confirm with the Server and Kubernetes teams**. The
+[contribution guide](../../CONTRIBUTING.md) describes the proposed responsibility
+split; it does not assign people or change repository contribution policy.

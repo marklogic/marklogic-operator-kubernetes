@@ -56,9 +56,10 @@ type Infrastructure struct {
 }
 
 type InfrastructureConfig struct {
-	Namespace   string
-	RedirectURI string
-	Image       string
+	Namespace    string
+	RedirectURI  string
+	Image        string
+	StorageClass string
 }
 
 type openIDConfiguration struct {
@@ -84,14 +85,15 @@ func (infrastructure Infrastructure) Objects() []runtime.Object {
 	return objects
 }
 
-func DeployInfrastructure(t *testing.T, config InfrastructureConfig) Infrastructure {
+func DeployInfrastructure(t *testing.T, run *testutil.Run, config InfrastructureConfig) Infrastructure {
 	t.Helper()
+	config.Namespace = run.Namespace
+	config.StorageClass = run.StorageClass
 	infrastructure, err := BuildInfrastructure(config)
 	if err != nil {
 		t.Fatal(err)
 	}
-	testutil.EnsureNamespace(t, config.Namespace)
-	testutil.ApplyObjects(t, infrastructure.Objects()...)
+	run.ApplyObjects(t, infrastructure.Objects()...)
 	return infrastructure
 }
 
@@ -138,6 +140,7 @@ func BuildInfrastructure(config InfrastructureConfig) (Infrastructure, error) {
 		Namespace:              config.Namespace,
 		Name:                   clusterName,
 		Image:                  config.Image,
+		StorageClass:           config.StorageClass,
 		AdminUsername:          marklogicAdminUsername,
 		AdminPassword:          marklogicAdminPassword,
 		CASecretName:           tlsResources.CASecret.Name,

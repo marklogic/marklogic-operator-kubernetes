@@ -18,6 +18,7 @@ type Config struct {
 	Namespace              string
 	Name                   string
 	Image                  string
+	StorageClass           string
 	AdminUsername          string
 	AdminPassword          string
 	CASecretName           string
@@ -52,7 +53,8 @@ func Build(config Config) (*marklogicv1.MarklogicCluster, error) {
 		TypeMeta:   metav1.TypeMeta{APIVersion: "marklogic.progress.com/v1", Kind: "MarklogicCluster"},
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: config.Namespace},
 		Spec: marklogicv1.MarklogicClusterSpec{
-			Image: image,
+			Image:       image,
+			Persistence: &marklogicv1.Persistence{Enabled: true, Size: "10Gi", StorageClassName: config.StorageClass},
 			Auth: &marklogicv1.AdminAuth{
 				AdminUsername: &config.AdminUsername,
 				AdminPassword: &config.AdminPassword,
