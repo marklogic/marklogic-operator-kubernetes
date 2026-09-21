@@ -73,21 +73,8 @@ func TestLogCollectionDisabled(t *testing.T) {
 	feature.Setup(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 		client := c.Client()
 
-		// Delete namespace if it exists and wait for it to be fully removed
-		ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: testNamespace}}
-		if err := client.Resources().Get(ctx, testNamespace, "", ns); err == nil {
-			// Namespace exists, delete it
-			if err := client.Resources().Delete(ctx, ns); err != nil {
-				t.Logf("Failed to delete existing namespace: %v", err)
-			}
-			// Wait for namespace to be fully deleted
-			if err := wait.For(
-				conditions.New(client.Resources()).ResourceDeleted(ns),
-				wait.WithTimeout(2*time.Minute),
-				wait.WithInterval(2*time.Second),
-			); err != nil {
-				t.Logf("Warning: namespace deletion timeout, proceeding anyway: %v", err)
-			}
+		if err := ensureFreshNamespace(ctx, client, testNamespace); err != nil {
+			t.Fatalf("Failed to reset namespace %s: %v", testNamespace, err)
 		}
 
 		namespace := &corev1.Namespace{
@@ -226,21 +213,8 @@ func TestLogCollectionPartialLogs(t *testing.T) {
 	feature.Setup(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 		client := c.Client()
 
-		// Delete namespace if it exists and wait for it to be fully removed
-		ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: testNamespace}}
-		if err := client.Resources().Get(ctx, testNamespace, "", ns); err == nil {
-			// Namespace exists, delete it
-			if err := client.Resources().Delete(ctx, ns); err != nil {
-				t.Logf("Failed to delete existing namespace: %v", err)
-			}
-			// Wait for namespace to be fully deleted
-			if err := wait.For(
-				conditions.New(client.Resources()).ResourceDeleted(ns),
-				wait.WithTimeout(2*time.Minute),
-				wait.WithInterval(2*time.Second),
-			); err != nil {
-				t.Logf("Warning: namespace deletion timeout, proceeding anyway: %v", err)
-			}
+		if err := ensureFreshNamespace(ctx, client, testNamespace); err != nil {
+			t.Fatalf("Failed to reset namespace %s: %v", testNamespace, err)
 		}
 
 		namespace := &corev1.Namespace{
@@ -401,18 +375,8 @@ func TestLogCollectionSecretBackedEnvironment(t *testing.T) {
 	feature.Setup(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 		client := c.Client()
 
-		ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: testNamespace}}
-		if err := client.Resources().Get(ctx, testNamespace, "", ns); err == nil {
-			if err := client.Resources().Delete(ctx, ns); err != nil {
-				t.Logf("Failed to delete existing namespace: %v", err)
-			}
-			if err := wait.For(
-				conditions.New(client.Resources()).ResourceDeleted(ns),
-				wait.WithTimeout(2*time.Minute),
-				wait.WithInterval(2*time.Second),
-			); err != nil {
-				t.Logf("Warning: namespace deletion timeout, proceeding anyway: %v", err)
-			}
+		if err := ensureFreshNamespace(ctx, client, testNamespace); err != nil {
+			t.Fatalf("Failed to reset namespace %s: %v", testNamespace, err)
 		}
 
 		namespace := &corev1.Namespace{
@@ -557,21 +521,8 @@ func TestLogCollectionCustomResources(t *testing.T) {
 	feature.Setup(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 		client := c.Client()
 
-		// Delete namespace if it exists and wait for it to be fully removed
-		ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: testNamespace}}
-		if err := client.Resources().Get(ctx, testNamespace, "", ns); err == nil {
-			// Namespace exists, delete it
-			if err := client.Resources().Delete(ctx, ns); err != nil {
-				t.Logf("Failed to delete existing namespace: %v", err)
-			}
-			// Wait for namespace to be fully deleted
-			if err := wait.For(
-				conditions.New(client.Resources()).ResourceDeleted(ns),
-				wait.WithTimeout(2*time.Minute),
-				wait.WithInterval(2*time.Second),
-			); err != nil {
-				t.Logf("Warning: namespace deletion timeout, proceeding anyway: %v", err)
-			}
+		if err := ensureFreshNamespace(ctx, client, testNamespace); err != nil {
+			t.Fatalf("Failed to reset namespace %s: %v", testNamespace, err)
 		}
 
 		namespace := &corev1.Namespace{
@@ -740,21 +691,8 @@ func TestLogCollectionCustomFilters(t *testing.T) {
 	feature.Setup(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 		client := c.Client()
 
-		// Delete namespace if it exists and wait for it to be fully removed
-		ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: testNamespace}}
-		if err := client.Resources().Get(ctx, testNamespace, "", ns); err == nil {
-			// Namespace exists, delete it
-			if err := client.Resources().Delete(ctx, ns); err != nil {
-				t.Logf("Failed to delete existing namespace: %v", err)
-			}
-			// Wait for namespace to be fully deleted
-			if err := wait.For(
-				conditions.New(client.Resources()).ResourceDeleted(ns),
-				wait.WithTimeout(2*time.Minute),
-				wait.WithInterval(2*time.Second),
-			); err != nil {
-				t.Logf("Warning: namespace deletion timeout, proceeding anyway: %v", err)
-			}
+		if err := ensureFreshNamespace(ctx, client, testNamespace); err != nil {
+			t.Fatalf("Failed to reset namespace %s: %v", testNamespace, err)
 		}
 
 		namespace := &corev1.Namespace{

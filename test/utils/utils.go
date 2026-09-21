@@ -454,8 +454,63 @@ func InstallHelmChart(releaseName string, chartName string, namespace string, ve
 }
 
 func DeleteNS(ctx context.Context, cfg *envconf.Config, nsName string) error {
-	nsObj := corev1.Namespace{}
-	nsObj.Name = nsName
-	err := cfg.Client().Resources().Delete(ctx, &nsObj)
-	return err
+	nsObj := &corev1.Namespace{}
+	if err := cfg.Client().Resources().Get(ctx, nsName, "", nsObj); err != nil {
+		if errors.IsNotFound(err) {
+			return nil
+		}
+		return fmt.Errorf("failed to get namespace %s before deletion: %w", nsName, err)
+	}
+
+	if err := cfg.Client().Resources().Delete(ctx, nsObj); err != nil && !errors.IsNotFound(err) {
+		return fmt.Errorf("failed to delete namespace %s: %w", nsName, err)
+	}
+
+	if err := waitForNamespaceDeletion(ctx, cfg, nsName, 90*time.Second); err == nil {
+		return nil
+	}
+
+	if err := forceFinalizeNamespace(nsName); err != nil {
+		return fmt.Errorf("failed to force-finalize namespace %s: %w", nsName, err)
+	}
+
+	if err := waitForNamespaceDeletion(ctx, cfg, nsName, 120*time.Second); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func waitForNamespaceDeletion(ctx context.Context, cfg *envconf.Config, nsName string, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		ns := &corev1.Namespace{}
+		err := cfg.Client().Resources().Get(ctx, nsName, "", ns)
+		if errors.IsNotFound(err) {
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("error checking namespace %s deletion status: %w", nsName, err)
+		}
+		time.Sleep(2 * time.Second)
+	}
+	return fmt.Errorf("timeout waiting for namespace %s to be deleted", nsName)
+}
+
+func forceFinalizeNamespace(nsName string) error {
+	command := fmt.Sprintf(
+		"kubectl get namespace %s -o json | python3 -c \"import sys, json; d=json.load(sys.stdin); d['spec']['finalizers']=[]; print(json.dumps(d))\" | kubectl replace --raw /api/v1/namespaces/%s/finalize -f -",
+		nsName,
+		nsName,
+	)
+	cmd := exec.Command("bash", "-c", command)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		output := string(out)
+		if strings.Contains(output, "(NotFound)") || strings.Contains(strings.ToLower(output), "not found") {
+			return nil
+		}
+		return fmt.Errorf("failed to force finalize namespace %s: %w: %s", nsName, err, output)
+	}
+	return nil
 }

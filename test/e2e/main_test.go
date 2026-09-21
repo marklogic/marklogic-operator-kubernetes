@@ -682,31 +682,58 @@ func waitForNamespaceDeletionByName(ctx context.Context, client klient.Client, n
 	return fmt.Errorf("timeout waiting for namespace %s to be deleted after force-finalize", nsName)
 }
 
+func forceDeleteNamespacedTestResources(nsName string) {
+	commands := []string{
+		"kubectl --request-timeout=20s delete pods --all -n %s --ignore-not-found --force --grace-period=0 --wait=false",
+		"kubectl --request-timeout=20s delete marklogicclusters.marklogic.progress.com --all -n %s --ignore-not-found --wait=false",
+		"kubectl --request-timeout=20s delete marklogicgroups.marklogic.progress.com --all -n %s --ignore-not-found --wait=false",
+	}
+
+	for _, commandTmpl := range commands {
+		command := fmt.Sprintf(commandTmpl, nsName)
+		result := utils.RunCommand(command)
+		if result.Err() != nil {
+			log.Printf("Warning: stale resource cleanup command failed for namespace %s: %s (err=%v)", nsName, command, result.Err())
+		}
+	}
+}
+
+func ensureFreshNamespace(ctx context.Context, client klient.Client, nsName string) error {
+	ns := &corev1.Namespace{}
+	err := client.Resources().Get(ctx, nsName, "", ns)
+	if apierrors.IsNotFound(err) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("failed to query namespace %s: %w", nsName, err)
+	}
+
+	log.Printf("Ensuring stale namespace is removed: %s", nsName)
+	forceDeleteNamespacedTestResources(nsName)
+
+	if err := client.Resources().Delete(ctx, ns); err != nil && !apierrors.IsNotFound(err) {
+		return fmt.Errorf("failed to delete namespace %s: %w", nsName, err)
+	}
+
+	if err := waitForNamespaceDeletionByName(ctx, client, nsName, 90*time.Second); err == nil {
+		return nil
+	}
+
+	log.Printf("Namespace %s is still terminating; forcing finalizer cleanup", nsName)
+	forceDeleteNamespacedTestResources(nsName)
+	if err := forceFinalizeNamespace(nsName); err != nil {
+		return fmt.Errorf("failed to force-finalize namespace %s: %w", nsName, err)
+	}
+	if err := waitForNamespaceDeletionByName(ctx, client, nsName, 120*time.Second); err != nil {
+		return err
+	}
+
+	return nil
+}
+
 func cleanupStaleE2ENamespaces(ctx context.Context, client klient.Client, namespaces []string) error {
 	for _, nsName := range namespaces {
-		ns := &corev1.Namespace{}
-		err := client.Resources().Get(ctx, nsName, "", ns)
-		if apierrors.IsNotFound(err) {
-			continue
-		}
-		if err != nil {
-			return fmt.Errorf("failed to query stale namespace %s: %w", nsName, err)
-		}
-
-		log.Printf("Cleaning stale test namespace: %s", nsName)
-		if err := client.Resources().Delete(ctx, ns); err != nil && !apierrors.IsNotFound(err) {
-			return fmt.Errorf("failed to delete stale namespace %s: %w", nsName, err)
-		}
-
-		if err := waitForNamespaceDeletionByName(ctx, client, nsName, 60*time.Second); err == nil {
-			continue
-		}
-
-		log.Printf("Namespace %s is still terminating; forcing finalizer cleanup", nsName)
-		if err := forceFinalizeNamespace(nsName); err != nil {
-			return fmt.Errorf("failed to force-finalize stale namespace %s: %w", nsName, err)
-		}
-		if err := waitForNamespaceDeletionByName(ctx, client, nsName, 90*time.Second); err != nil {
+		if err := ensureFreshNamespace(ctx, client, nsName); err != nil {
 			return err
 		}
 	}
