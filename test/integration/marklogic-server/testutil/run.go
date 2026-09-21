@@ -4,8 +4,10 @@ package testutil
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"strings"
 	"testing"
 	"time"
@@ -31,32 +33,51 @@ type Run struct {
 	StorageClass string
 	uid          types.UID
 	client       kubernetes.Interface
+	report       *runReport
 }
 
 // NewRun checks prerequisites before creating resources and registers bounded cleanup.
 // INTEGRATION_CONTEXT is required even when invoking go test directly.
 func NewRun(t *testing.T, scenario string, needsMarkLogic bool) *Run {
 	t.Helper()
+	run := &Run{ID: string(uuid.NewUUID())}
+	report, err := newRunReport(run.ID, scenario, t.Name())
+	if err != nil {
+		t.Fatalf("Create integration results directory: %v", err)
+	}
+	run.report = report
+	t.Logf("Integration results: %s", report.dir)
+	t.Cleanup(func() { run.finishReport(t) })
+	run.Stage(t, "preflight")
+	prerequisiteFailure := func(err error) {
+		run.updateReport(t, func(result *runResult) { result.Outcome = "prerequisites_unmet"; result.FailureStage = "preflight" })
+		t.Fatalf("Integration prerequisites not met: %v", err)
+	}
 	target := strings.TrimSpace(os.Getenv("INTEGRATION_CONTEXT"))
 	if target == "" {
-		t.Fatal("set INTEGRATION_CONTEXT to the explicit kubectl context for this run")
+		prerequisiteFailure(fmt.Errorf("set INTEGRATION_CONTEXT to the explicit kubectl context for this run"))
+	}
+	if _, err := exec.LookPath("kubectl"); err != nil {
+		prerequisiteFailure(fmt.Errorf("kubectl is required: %w", err))
 	}
 	config, err := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(clientcmd.NewDefaultClientConfigLoadingRules(), &clientcmd.ConfigOverrides{CurrentContext: target}).ClientConfig()
 	if err != nil {
-		t.Fatalf("Load integration context: %v", err)
+		prerequisiteFailure(err)
 	}
 	config.Timeout = 30 * time.Second
 	client, err := kubernetes.NewForConfig(config)
 	if err != nil {
-		t.Fatal(err)
+		prerequisiteFailure(err)
 	}
-	run := &Run{ID: string(uuid.NewUUID()), client: client}
+	run.client = client
+	run.updateReport(t, func(result *runResult) { result.Server = run.report.redactor.text(config.Host) })
 	t.Logf("Integration scenario=%s context=%s server=%s run=%s", scenario, target, config.Host, run.ID)
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 	if err := run.preflight(ctx, t, needsMarkLogic); err != nil {
-		t.Fatalf("Integration prerequisites not met: %v", err)
+		prerequisiteFailure(err)
 	}
+	run.Stage(t, "create_namespace")
 	ns, err := client.CoreV1().Namespaces().Create(ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{
 		GenerateName: scenario + "-", Labels: map[string]string{runLabel: run.ID},
 	}}, metav1.CreateOptions{})
@@ -64,20 +85,31 @@ func NewRun(t *testing.T, scenario string, needsMarkLogic bool) *Run {
 		t.Fatalf("Create isolated namespace: %v", err)
 	}
 	run.Namespace, run.uid = ns.Name, ns.UID
+	run.updateReport(t, func(result *runResult) { result.Namespace = ns.Name; result.Cleanup = "pending" })
 	t.Logf("Created namespace %s (run=%s)", run.Namespace, run.ID)
 	t.Cleanup(func() {
 		if t.Failed() {
-			CollectKubernetesDiagnostics(t, run.Namespace)
+			run.updateReport(t, func(result *runResult) {
+				if len(result.Stages) > 0 {
+					result.FailureStage = result.Stages[len(result.Stages)-1].Name
+				}
+			})
+			run.Stage(t, "diagnostics")
+			run.collectDiagnostics(t)
 		}
 		if strings.EqualFold(os.Getenv("INTEGRATION_RETAIN_NAMESPACE"), "true") || strings.EqualFold(os.Getenv("MARKLOGIC_OAUTH_RETAIN_NAMESPACE"), "true") {
+			run.updateReport(t, func(result *runResult) { result.Cleanup = "retained" })
 			t.Logf("Retained namespace %s; inspect with kubectl --context=%q get pods -n %s; clean up with kubectl --context=%q delete namespace %s", run.Namespace, target, run.Namespace, target, run.Namespace)
 			return
 		}
+		run.Stage(t, "cleanup")
 		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 5*time.Minute)
 		defer cleanupCancel()
 		if err := run.cleanup(cleanupCtx); err != nil {
+			run.updateReport(t, func(result *runResult) { result.Cleanup = "failed" })
 			t.Errorf("Cleanup namespace %s: %v", run.Namespace, err)
 		} else {
+			run.updateReport(t, func(result *runResult) { result.Cleanup = "completed" })
 			t.Logf("Namespace %s cleanup completed", run.Namespace)
 		}
 	})
@@ -106,8 +138,31 @@ func (r *Run) ApplyObjects(t *testing.T, objects ...runtime.Object) {
 		}
 		labels[runLabel] = r.ID
 		metadata.SetLabels(labels)
+		if r.report != nil {
+			if secret, ok := copy.(*corev1.Secret); ok {
+				for _, value := range secret.Data {
+					r.report.redactor.add(string(value))
+				}
+				for _, value := range secret.StringData {
+					r.report.redactor.add(value)
+				}
+			}
+			contents, err := marshalKubernetesObject(copy)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var decoded map[string]any
+			if err := json.Unmarshal(contents, &decoded); err != nil {
+				t.Fatal(err)
+			}
+			r.report.redactor.discover(decoded)
+			r.updateReport(t, func(result *runResult) {
+				result.Resources = append(result.Resources, resourceSummary{Kind: fmt.Sprint(decoded["kind"]), Name: metadata.GetName(), Namespace: metadata.GetNamespace()})
+			})
+		}
 		copies = append(copies, copy)
 	}
+	r.Stage(t, "deploy_resources")
 	ApplyObjects(t, copies...)
 }
 
@@ -186,6 +241,7 @@ func (r *Run) LogImages(t *testing.T) {
 	}
 	for _, pod := range pods.Items {
 		for _, container := range pod.Status.ContainerStatuses {
+			r.recordVersion(t, pod.Name+"/"+container.Name, container.Image+" ("+container.ImageID+")")
 			t.Logf("Component pod=%s container=%s image=%s imageID=%s", pod.Name, container.Name, container.Image, container.ImageID)
 		}
 	}

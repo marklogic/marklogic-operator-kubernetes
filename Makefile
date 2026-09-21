@@ -215,6 +215,19 @@ kill-envtest: ## Kill any stale envtest kube-apiserver and etcd processes left b
 integration-test: ## Run one live integration scenario; set SCENARIO and INTEGRATION_CONTEXT.
 	bash test/integration/scripts/run.sh
 
+.PHONY: integration-list integration-describe integration-check integration-test-local
+integration-list: ## List registered integration scenarios without cluster access.
+	bash test/integration/scripts/run.sh list
+
+integration-describe: ## Describe a registered scenario; set SCENARIO.
+	bash test/integration/scripts/run.sh describe "$(SCENARIO)"
+
+integration-check: ## Compile and verify all registered test selections with live gates disabled.
+	bash test/integration/scripts/run.sh check
+
+integration-test-local: ## Run integration helper/contract tests with all registered live gates disabled.
+	bash test/integration/scripts/run.sh local
+
 .PHONY: test
 test: manifests generate fmt vet envtest ## Run tests.
 	KUBEBUILDER_ASSETS="$(shell $(ENVTEST) use $(ENVTEST_K8S_VERSION) --bin-dir $(LOCALBIN) -p path)" go test -v $$(go list ./... | grep -v /e2e) -coverprofile cover.out

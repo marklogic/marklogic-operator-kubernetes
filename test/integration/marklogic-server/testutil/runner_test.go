@@ -10,46 +10,32 @@ import (
 	"testing"
 )
 
-func TestRunnerSelectsOneScenarioAndRejectsInvalidPrerequisites(t *testing.T) {
+// Runner selection and prerequisite regressions live with the Go runner. This
+// test protects the original shell entry point and its argument forwarding.
+func TestRunnerShellCompatibility(t *testing.T) {
 	dir := t.TempDir()
-	fakeGo := `#!/bin/sh
-printf 'GO_ARGS:%s\n' "$*"
-printf 'GATES:%s,%s,%s\n' "$MARKLOGIC_OAUTH_RESOURCE_SERVER" "$MARKLOGIC_OAUTH_AUTHORIZATION_CODE" "$MARKLOGIC_HAPROXY_SESSION_AFFINITY"
+	script := `#!/bin/sh
+printf 'GO_ARGS:%s\nSCENARIO:%s\n' "$*" "$SCENARIO"
 `
-	for name, script := range map[string]string{"go": fakeGo, "kubectl": "#!/bin/sh\nexit 99\n"} {
-		if err := os.WriteFile(filepath.Join(dir, name), []byte(script), 0700); err != nil {
-			t.Fatal(err)
-		}
+	if err := os.WriteFile(filepath.Join(dir, "go"), []byte(script), 0700); err != nil {
+		t.Fatal(err)
 	}
-	for _, tc := range []struct {
-		name, scenario, version string
-		wantErr                 bool
-		selection, gates        string
-	}{
-		{"resource server", "oauth-resource-server", "", false, "^TestOAuthResourceServerInfrastructure$", "true,false,false"},
-		{"affinity", "haproxy-session-affinity", "", false, "^TestHAProxySessionIDAffinityContract$", "false,false,true"},
-		{"authcode", "oauth-authorization-code", "12.1.0", false, "^TestOAuthAuthorizationCodeInfrastructure$", "false,true,false"},
-		{"unsupported version", "oauth-authorization-code", "12.0.3", true, "", ""},
-		{"undeclared version", "oauth-authorization-code", "", true, "", ""},
-		{"unknown scenario", "typo", "", true, "", ""},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			cmd := exec.Command("bash", "../../scripts/run.sh")
-			// Deliberately enable every inherited gate: the runner must clear them.
-			cmd.Env = []string{"PATH=" + dir + ":" + os.Getenv("PATH"), "HOME=" + os.Getenv("HOME"), "SCENARIO=" + tc.scenario, "INTEGRATION_CONTEXT=test-only", "INTEGRATION_OPERATOR_NAMESPACE=operator", "INTEGRATION_OPERATOR_DEPLOYMENT=operator", "MARKLOGIC_IMAGE=custom:image", "MARKLOGIC_VERSION=" + tc.version, "MARKLOGIC_OAUTH_RESOURCE_SERVER=true", "MARKLOGIC_OAUTH_AUTHORIZATION_CODE=true", "MARKLOGIC_HAPROXY_SESSION_AFFINITY=true"}
-			output, err := cmd.CombinedOutput()
-			if (err != nil) != tc.wantErr {
-				t.Fatalf("err=%v output=%s", err, output)
-			}
-			if tc.wantErr {
-				if strings.Contains(string(output), "GO_ARGS:") {
-					t.Fatal("runner executed tests despite invalid prerequisites")
-				}
-				return
-			}
-			if !strings.Contains(string(output), "-run "+tc.selection) || !strings.Contains(string(output), "GATES:"+tc.gates) {
-				t.Fatalf("incorrect test selection: %s", output)
-			}
-		})
+	for _, args := range [][]string{nil, {"list"}, {"describe", "platform-smoke"}} {
+		cmd := exec.Command("bash", append([]string{"../../scripts/run.sh"}, args...)...)
+		cmd.Env = []string{"PATH=" + dir + ":" + os.Getenv("PATH"), "SCENARIO=oauth-resource-server"}
+		output, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("%v: %s", err, output)
+		}
+		want := "GO_ARGS:run ./test/integration/cmd/integration-runner"
+		if len(args) > 0 {
+			want += " " + strings.Join(args, " ")
+		}
+		if !strings.Contains(string(output), want+"\n") {
+			t.Fatalf("lost arguments: %s", output)
+		}
+		if !strings.Contains(string(output), "SCENARIO:oauth-resource-server") {
+			t.Fatalf("lost SCENARIO: %s", output)
+		}
 	}
 }

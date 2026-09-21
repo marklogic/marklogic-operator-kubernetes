@@ -20,6 +20,7 @@ func (r *Run) preflight(ctx context.Context, t *testing.T, needsMarkLogic bool) 
 		return err
 	}
 	t.Logf("Kubernetes version=%s", version.GitVersion)
+	r.recordVersion(t, "kubernetes", version.GitVersion)
 	permissions := []authorizationv1.ResourceAttributes{
 		{Resource: "namespaces", Verb: "create"}, {Resource: "namespaces", Verb: "get"}, {Resource: "namespaces", Verb: "delete"},
 		{Resource: "pods", Verb: "create"}, {Resource: "pods", Verb: "get"}, {Resource: "pods", Verb: "list"}, {Resource: "pods", Verb: "watch"},
@@ -78,6 +79,7 @@ func (r *Run) preflight(ctx context.Context, t *testing.T, needsMarkLogic bool) 
 	}
 	for _, container := range deployment.Spec.Template.Spec.Containers {
 		t.Logf("Operator container=%s image=%s", container.Name, container.Image)
+		r.recordVersion(t, "operator/"+container.Name, container.Image)
 	}
 	classes, err := r.client.StorageV1().StorageClasses().List(ctx, metav1.ListOptions{})
 	if err != nil {

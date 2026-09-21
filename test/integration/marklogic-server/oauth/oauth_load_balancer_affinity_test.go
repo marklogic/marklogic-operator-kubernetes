@@ -30,11 +30,13 @@ func TestOAuthResourceServerInfrastructure(t *testing.T) {
 		RedirectURI: redirectURI,
 		Image:       marklogicImageFromEnvironment(),
 	})
+	run.Stage(t, "readiness")
 	testutil.WaitForStatefulSetReady(t, oauthSessionAffinityNamespace, infrastructure.Cluster.Name, 15*time.Minute)
 	testutil.WaitForDeploymentAvailable(t, oauthSessionAffinityNamespace, haproxyServiceName, 5*time.Minute)
 	testutil.WaitForDeploymentAvailable(t, oauthSessionAffinityNamespace, keycloak.Name, 5*time.Minute)
 	testutil.WaitForPodReady(t, oauthSessionAffinityNamespace, oauthclient.DefaultName, 2*time.Minute)
 	run.LogImages(t)
+	run.Stage(t, "configure_authentication")
 	discovery := testutil.ExecuteInPod(
 		t,
 		oauthSessionAffinityNamespace,
@@ -175,6 +177,7 @@ func TestOAuthResourceServerInfrastructure(t *testing.T) {
 	if token.AccessToken == "" {
 		t.Fatal("Keycloak access token response did not contain an access token")
 	}
+	run.Stage(t, "verify_bearer_token")
 	for _, tc := range []struct {
 		name, bearer, status, body, rejection string
 	}{
@@ -184,7 +187,7 @@ func TestOAuthResourceServerInfrastructure(t *testing.T) {
 		// A fresh request must still succeed after the negative cases.
 		{"valid_token_after_rejection", token.AccessToken, "200", "oauth-user:" + keycloak.TestUsername, ""},
 	} {
-		t.Run(tc.name, func(t *testing.T) {
+		run.Case(t, tc.name, func(t *testing.T) {
 			// No cookie jar or redirects: each request independently tests bearer
 			// authentication, and a redirect cannot masquerade as success.
 			args := []string{"curl", "--silent", "--show-error", "--connect-timeout", "10", "--max-time", "30",

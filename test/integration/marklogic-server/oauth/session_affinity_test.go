@@ -40,11 +40,13 @@ func TestHAProxySessionIDAffinityContract(t *testing.T) {
 	sessionAffinityNamespace := run.Namespace
 	run.ApplyObjects(t, sessionAffinityObjects(sessionAffinityNamespace)...)
 
+	run.Stage(t, "readiness")
 	for _, name := range []string{sessionAffinityBackendAName, sessionAffinityBackendBName, sessionAffinityProxyName} {
 		testutil.WaitForDeploymentAvailable(t, sessionAffinityNamespace, name, 2*time.Minute)
 	}
 	testutil.WaitForPodReady(t, sessionAffinityNamespace, sessionAffinityClientName, time.Minute)
 	run.LogImages(t)
+	run.Stage(t, "verify_affinity")
 
 	initial := sessionAffinityRequest(t, sessionAffinityNamespace, "curl -sS --retry 12 --retry-delay 1 --retry-connrefused -D /tmp/headers -o /tmp/body -c /tmp/cookies -w '%{http_code}' http://"+sessionAffinityProxyName+":8080/start")
 	if initial.status != "302" {

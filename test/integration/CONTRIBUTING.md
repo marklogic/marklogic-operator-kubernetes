@@ -8,26 +8,63 @@ exception; maintainers must agree on any such process separately.
 
 ## Adding a scenario
 
-1. Copy [SCENARIO_TEMPLATE.md](SCENARIO_TEMPLATE.md) into your suite directory,
-   complete the requirement and acceptance criteria, and link the source issue.
-2. Identify the requirements owner, test maintainer, and reviewers. The proposed
+1. Run `make integration-test-local` from the repository root to establish the
+   local baseline; this command disables all registered live gates.
+2. Start from the runnable [platform example](marklogic-server/platform/README.md).
+   Copy its two Go test files into `marklogic-server/<suite>/`, change the package,
+   top-level test name, unique gate, and namespace prefix, then replace the fixture
+   and assertions. Copy [SCENARIO_TEMPLATE.md](SCENARIO_TEMPLATE.md) into that
+   directory, complete the acceptance criteria, and link the source requirement.
+3. Identify the requirements owner, test maintainer, and reviewers. The proposed
    division is for Server/PDC to own product expectations and Kubernetes
-   maintainers to own deployment fixtures and cluster lifecycle. Confirm the
-   actual people and responsibilities in the scenario issue.
-3. Put behavior tests in `marklogic-server/<suite>/`, reusable Kubernetes object
-   builders in `marklogic-server/fixtures/`, and cluster lifecycle utilities in
-   `marklogic-server/testutil/`. Keep protocol-specific composition in its suite.
-4. Gate live tests explicitly. Start each enabled scenario with `testutil.NewRun`
-   and apply its namespaced resources through `run.ApplyObjects`. Never use a
-   shared namespace or register an unconditional namespace deletion.
-5. Add the scenario name and exact test selection to `scripts/run.sh`. Use an
-   explicit context and document extra preflight requirements.
-6. Add focused local regression tests for failure-prone helper behavior. Run
-   `go test ./test/integration/marklogic-server/...` without live gates, then run
-   the scenario on its documented environment when available.
-7. Include the command, source commit/working changes, versions, executed cases,
-   skips, and cleanup outcome in the PR. Record an untested environment as
-   untested, rather than inferring coverage from another cloud.
+   maintainers to own deployment fixtures and cluster lifecycle. Confirm actual
+   people and responsibilities in the scenario issue. Label teaching examples
+   explicitly when no product requirement exists.
+4. Check the live gate before any setup, report creation, or cluster access. Do
+   not create cluster resources in package initializers or `TestMain` (Go test
+   discovery also starts the test binary). Begin enabled runs with
+   `testutil.NewRun(t, "<scenario-name>", needsMarkLogic)` and use the returned
+   namespace. Apply namespaced resources through `run.ApplyObjects`, record
+   phases with `run.Stage`, and assertions with `run.Case`. Never share a
+   namespace or register unconditional namespace deletion. Keep one-scenario
+   builders local; extract reusable builders into `fixtures/` only when needed.
+5. Add one entry to [`scenarios/catalog.json`](scenarios/catalog.json), with a
+   unique name, gate, and package/test pair. No runner code change is needed:
+
+   ```json
+   {
+     "name": "example-check",
+     "description": "Describe the observable behavior and scope.",
+     "package": "./test/integration/marklogic-server/example",
+     "test": "TestExampleBehavior",
+     "gate": "INTEGRATION_EXAMPLE_CHECK",
+     "requiredEnv": ["INTEGRATION_CONTEXT"],
+     "prerequisites": ["Document permissions, images, capacity, and coverage limits."]
+   }
+   ```
+
+   `package` is one repository-relative integration package; `test` is an exact
+   top-level Go test name, not a regex, subtest, or package wildcard. `gate` must
+   match the variable checked by the live test and must not be a configuration
+   variable. Include `INTEGRATION_CONTEXT` in `requiredEnv`; MarkLogic scenarios
+   also require `MARKLOGIC_IMAGE`, `INTEGRATION_OPERATOR_NAMESPACE`, and
+   `INTEGRATION_OPERATOR_DEPLOYMENT`. For a minimum MarkLogic major/minor version,
+   add `minMarkLogicVersion` (for example `"12.1"`) and require
+   `MARKLOGIC_VERSION`. The version is a caller declaration, not image inspection.
+   `prerequisites` is human-readable documentation, not an executable capability
+   or permission model. Shared preflight still uses `needsMarkLogic`; document
+   its actual permissions and add only capabilities your scenario needs.
+6. Run `make integration-list`, `make integration-describe SCENARIO=<name>`,
+   `make integration-check`, and `make integration-test-local`. Add meaningful
+   local fixture/helper contracts. The catalog-driven regression automatically
+   checks that each registered live suite skips before setup with gates disabled.
+   Discovery rejects renamed/missing tests; the live runner also rejects skipped
+   targets and zero execution. Renaming a test therefore requires a catalog edit.
+7. When an appropriate cluster is available, run
+   `INTEGRATION_CONTEXT=<context> make integration-test SCENARIO=<name>` with the
+   declared settings. Include command, source commit/working changes, versions,
+   executed cases, skips, reports, and cleanup outcome in the review. Record an
+   untested environment as untested; do not infer coverage from another cloud.
 
 ## Review checklist
 
@@ -45,7 +82,9 @@ exception; maintainers must agree on any such process separately.
 A preflight failure identifies a missing context, permission, CRD, available
 operator deployment, or storage class before deploying the workload. It cannot
 prove image pull access, sufficient capacity, or operator compatibility from an
-image tag alone. Diagnose workload failures from the test's namespace and logs.
+image tag alone. Diagnose workload failures from the printed results directory:
+`run.json` identifies the stage and cleanup outcome, and `diagnostics.json` links
+to filtered current/previous container logs. See the [artifact contract](marklogic-server/README.md#results-and-diagnostics).
 
 Use `INTEGRATION_RETAIN_NAMESPACE=true` to retain a run for inspection. The test
 prints its namespace and context-specific inspection and cleanup commands. The

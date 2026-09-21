@@ -137,6 +137,13 @@ kubectl delete crd marklogicclusters.marklogic.progress.com
 kubectl delete crd marklogicgroups.marklogic.progress.com
 ```
 
+## Integration testing
+
+See [Kubernetes integration tests](test/integration/README.md) to discover opt-in
+scenarios, run local contracts without cluster access, and add a new suite using
+shared lifecycle and reporting helpers. Start with `make integration-list` and
+`make integration-test-local`.
+
 ## Known Issues and Limitations
 
 1. The latest released version of `fluent/fluent-bit:5.1.0` has high security vulnerabilities. If you decide to enable the log collection feature, choose and deploy the fluent-bit or an alternate image with no vulnerabilities as per your requirements.

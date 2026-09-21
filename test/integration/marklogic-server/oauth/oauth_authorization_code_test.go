@@ -46,11 +46,13 @@ func TestOAuthAuthorizationCodeInfrastructure(t *testing.T) {
 		RedirectURI: redirectURI,
 		Image:       image,
 	})
+	run.Stage(t, "readiness")
 	testutil.WaitForStatefulSetReady(t, oauthAuthCodeNamespace, infrastructure.Cluster.Name, 15*time.Minute)
 	testutil.WaitForDeploymentAvailable(t, oauthAuthCodeNamespace, haproxyServiceName, 5*time.Minute)
 	testutil.WaitForDeploymentAvailable(t, oauthAuthCodeNamespace, keycloak.Name, 5*time.Minute)
 	testutil.WaitForPodReady(t, oauthAuthCodeNamespace, oauthclient.DefaultName, 2*time.Minute)
 	run.LogImages(t)
+	run.Stage(t, "configure_authentication")
 
 	document := discoverKeycloak(t, oauthAuthCodeNamespace)
 	if document.AuthorizationEndpoint == "" {
@@ -82,9 +84,10 @@ func TestOAuthAuthorizationCodeInfrastructure(t *testing.T) {
 	// OAuth App Server is created, which would otherwise race the assertions.
 	waitForOAuthAppServerThroughHAProxy(t, oauthAuthCodeNamespace, haproxyBase, 2*time.Minute)
 
+	run.Stage(t, "verify_authorization_code")
 	// TC1: the OAuth App Server must redirect to Keycloak and set SessionID
 	// before authentication, when reached through the HAProxy load balancer.
-	t.Run("TC1_SessionID_before_authentication", func(t *testing.T) {
+	run.Case(t, "TC1_SessionID_before_authentication", func(t *testing.T) {
 		result := runAuthCodeFlow(t, oauthAuthCodeNamespace, authCodeFlowConfig{
 			StartOnly:             true,
 			StartURL:              haproxyBase + "/identity.xqy",
@@ -100,7 +103,7 @@ func TestOAuthAuthorizationCodeInfrastructure(t *testing.T) {
 
 	// TC2: with HAProxy SessionID affinity the callback returns to the initiating
 	// node and the Authorization Code flow completes successfully.
-	t.Run("TC2_affinity_completes_flow", func(t *testing.T) {
+	run.Case(t, "TC2_affinity_completes_flow", func(t *testing.T) {
 		result := runAuthCodeFlow(t, oauthAuthCodeNamespace, authCodeFlowConfig{
 			StartURL:              haproxyBase + "/identity.xqy",
 			CallbackBase:          haproxyBase,
@@ -115,7 +118,7 @@ func TestOAuthAuthorizationCodeInfrastructure(t *testing.T) {
 
 	// TC3: a callback delivered to a different node than the one that started the
 	// flow fails, because the PKCE verifier and state are node-local.
-	t.Run("TC3_cross_node_callback_fails", func(t *testing.T) {
+	run.Case(t, "TC3_cross_node_callback_fails", func(t *testing.T) {
 		result := runAuthCodeFlow(t, oauthAuthCodeNamespace, authCodeFlowConfig{
 			StartURL:              node0Base + "/identity.xqy",
 			CallbackBase:          node1Base,

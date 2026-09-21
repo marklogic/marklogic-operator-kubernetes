@@ -27,3 +27,6 @@ go.work
 *.swo
 *~
 .DS_Store
+
+# Local integration run reports and diagnostics
+/test/test_results/integration/

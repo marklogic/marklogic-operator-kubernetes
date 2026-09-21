@@ -29,38 +29,6 @@ func newIntegrationScheme() *runtime.Scheme {
 	return scheme
 }
 
-// CollectKubernetesDiagnostics logs non-secret resources and container logs for a failed test namespace.
-func CollectKubernetesDiagnostics(t *testing.T, namespace string) {
-	t.Helper()
-	commands := [][]string{
-		{"get", "pods,services,ingresses", "-n", namespace, "-o", "wide"},
-		{"get", "events", "-n", namespace, "--sort-by=.lastTimestamp"},
-		{"get", "pods", "-n", namespace, "-o", "yaml"},
-	}
-	for _, arguments := range commands {
-		output, err := runKubectl(arguments...)
-		if err != nil {
-			t.Logf("Kubernetes diagnostics command %q failed: %v\n%s", arguments, err, output)
-			continue
-		}
-		t.Logf("Kubernetes diagnostics command %q:\n%s", arguments, output)
-	}
-
-	pods, err := runKubectl("get", "pods", "-n", namespace, "-o", "name")
-	if err != nil {
-		t.Logf("Unable to list pods for diagnostics: %v\n%s", err, pods)
-		return
-	}
-	for _, pod := range nonEmptyLines(pods) {
-		output, err := runKubectl("logs", "-n", namespace, pod, "--all-containers", "--tail=500")
-		if err != nil {
-			t.Logf("Kubernetes diagnostics for %s failed: %v\n%s", pod, err, output)
-			continue
-		}
-		t.Logf("Kubernetes diagnostics for %s:\n%s", pod, output)
-	}
-}
-
 // ApplyObjects applies typed Kubernetes resources through kubectl.
 func ApplyObjects(t *testing.T, objects ...runtime.Object) {
 	t.Helper()
@@ -78,9 +46,9 @@ func ApplyObjects(t *testing.T, objects ...runtime.Object) {
 		}
 		manifest.Write(contents)
 	}
-	output, err := runKubectlInput(manifest.Bytes(), "apply", "-f", "-")
+	_, err := runKubectlInput(manifest.Bytes(), "apply", "-f", "-")
 	if err != nil {
-		t.Fatalf("Apply Kubernetes resources: %v\n%s", err, output)
+		t.Fatalf("Apply Kubernetes resources: %v (raw output omitted because manifests may contain credentials)", err)
 	}
 }
 
@@ -151,7 +119,7 @@ func ExecuteInPod(t *testing.T, namespace, name, container string, command ...st
 	arguments = append(arguments, command...)
 	output, err := runKubectl(arguments...)
 	if err != nil {
-		t.Fatalf("Execute command in Pod %s/%s: %v\n%s", namespace, name, err, output)
+		t.Fatalf("Execute command in Pod %s/%s: %v (raw output omitted because authentication responses may contain credentials)", namespace, name, err)
 	}
 	return output
 }

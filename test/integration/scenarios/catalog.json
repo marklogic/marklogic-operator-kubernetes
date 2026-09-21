@@ -1,0 +1,39 @@
+[
+  {
+    "name": "oauth-resource-server",
+    "description": "JWT bearer authentication through operator-managed HAProxy.",
+    "package": "./test/integration/marklogic-server/oauth",
+    "test": "TestOAuthResourceServerInfrastructure",
+    "gate": "MARKLOGIC_OAUTH_RESOURCE_SERVER",
+    "requiredEnv": ["INTEGRATION_CONTEXT", "INTEGRATION_OPERATOR_NAMESPACE", "INTEGRATION_OPERATOR_DEPLOYMENT", "MARKLOGIC_IMAGE"],
+    "prerequisites": ["Installed operator watching generated namespaces; served MarkLogic CRD.", "Delete-reclaim storage class, capacity for a two-node TLS MarkLogic cluster, and pull access to fixture images.", "See marklogic-server/oauth/README.md for HAProxy requirements and coverage."]
+  },
+  {
+    "name": "oauth-authorization-code",
+    "description": "Authorization Code flow through operator-managed HAProxy (live validation pending).",
+    "package": "./test/integration/marklogic-server/oauth",
+    "test": "TestOAuthAuthorizationCodeInfrastructure",
+    "gate": "MARKLOGIC_OAUTH_AUTHORIZATION_CODE",
+    "requiredEnv": ["INTEGRATION_CONTEXT", "INTEGRATION_OPERATOR_NAMESPACE", "INTEGRATION_OPERATOR_DEPLOYMENT", "MARKLOGIC_IMAGE", "MARKLOGIC_VERSION"],
+    "minMarkLogicVersion": "12.1",
+    "prerequisites": ["Installed operator watching generated namespaces; served MarkLogic CRD.", "Delete-reclaim storage class, capacity for a two-node TLS MarkLogic cluster, and pull access to fixture images.", "MARKLOGIC_VERSION is a caller declaration; it must match the image. See marklogic-server/oauth/README.md."]
+  },
+  {
+    "name": "haproxy-session-affinity",
+    "description": "HAProxy SessionID affinity contract against nginx backends.",
+    "package": "./test/integration/marklogic-server/oauth",
+    "test": "TestHAProxySessionIDAffinityContract",
+    "gate": "MARKLOGIC_HAPROXY_SESSION_AFFINITY",
+    "requiredEnv": ["INTEGRATION_CONTEXT"],
+    "prerequisites": ["Pull access and capacity for nginx, HAProxy, and curl fixtures.", "No MarkLogic image, operator, or storage class required."]
+  },
+  {
+    "name": "platform-smoke",
+    "description": "Teaching example: ConfigMap mount and isolated Kubernetes lifecycle; not a PDC test.",
+    "package": "./test/integration/marklogic-server/platform",
+    "test": "TestPlatformConfigMapLifecycle",
+    "gate": "INTEGRATION_PLATFORM_SMOKE",
+    "requiredEnv": ["INTEGRATION_CONTEXT"],
+    "prerequisites": ["Pull access to busybox:1.37.0 and capacity for one small Pod.", "Shared Kubernetes preflight permissions, including pod exec and namespace lifecycle; see marklogic-server/platform/README.md.", "No operator, MarkLogic, persistent storage, or OAuth setup. Local contracts only; live validation pending."]
+  }
+]
