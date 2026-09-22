@@ -10,7 +10,7 @@
   },
   {
     "name": "oauth-authorization-code",
-    "description": "Authorization Code flow through operator-managed HAProxy (live validation pending).",
+    "description": "MLE-17734 Authorization Code flow with test-owned HAProxy backend observations and controlled no-affinity routing.",
     "package": "./test/integration/marklogic-server/oauth",
     "test": "TestOAuthAuthorizationCodeInfrastructure",
     "gate": "MARKLOGIC_OAUTH_AUTHORIZATION_CODE",

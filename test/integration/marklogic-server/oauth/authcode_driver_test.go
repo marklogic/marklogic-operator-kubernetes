@@ -4,6 +4,7 @@ package oauth
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/tls"
 	"encoding/pem"
 	"fmt"
@@ -28,11 +29,13 @@ const driverState = "never-log-this-state"
 const driverCode = "never-log-this-code"
 
 type driverScenario struct {
-	callbackStatus                                      int
-	callbackBody                                        string
-	wrongIdentity, restart, noCode, startOnly, negative bool
-	failTLSAt                                           int32
-	badCertificate                                      tls.Certificate
+	callbackStatus                                                                     int
+	callbackBody                                                                       string
+	wrongIdentity, restart, noCode, startOnly, negative                                bool
+	failTLSAt                                                                          int32
+	badCertificate                                                                     tls.Certificate
+	startStatus                                                                        int
+	missingHTTPOnly, missingPath, omittedPath, missingBackend, sameBackend, lostCookie bool
 }
 
 // Exercise the real shell and curl against a local HTTPS protocol fixture. This
@@ -46,6 +49,22 @@ func exerciseAuthCodeDriver(t *testing.T, scenario driverScenario) (map[string]s
 	var requests, handshakes atomic.Int32
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requests.Add(1)
+		backend := "node-0"
+		mode := "affinity"
+		if scenario.negative {
+			mode = "no-affinity"
+		}
+		if r.URL.Path == "/oauth/callback" && scenario.negative && !scenario.sameBackend {
+			backend = "node-1"
+		}
+		if !scenario.missingBackend {
+			w.Header().Set("X-Test-Backend", backend)
+		}
+		w.Header().Set("X-Test-Affinity", mode)
+		w.Header().Set("X-Test-Session-Hash", fmt.Sprintf("%X", sha256.Sum256([]byte(driverSecret))))
+		if cookie, err := r.Cookie("SessionID"); err == nil && !scenario.lostCookie {
+			w.Header().Set("X-Test-Received-Session-Hash", fmt.Sprintf("%X", sha256.Sum256([]byte(cookie.Value))))
+		}
 		switch r.URL.Path {
 		case "/identity.xqy":
 			cookie, err := r.Cookie("authenticated")
@@ -57,8 +76,19 @@ func exerciseAuthCodeDriver(t *testing.T, scenario driverScenario) (map[string]s
 				fmt.Fprint(w, "oauth-user:"+identity)
 				return
 			}
-			http.SetCookie(w, &http.Cookie{Name: "SessionID", Value: driverSecret, Path: "/", HttpOnly: true, Secure: true})
-			http.Redirect(w, r, server.URL+"/realms/test/protocol/openid-connect/auth?response_type=code&code_challenge=challenge&code_challenge_method=S256&state="+driverState, http.StatusFound)
+			cookiePath := "/"
+			if scenario.missingPath {
+				cookiePath = "/wrong"
+			}
+			if scenario.omittedPath {
+				cookiePath = ""
+			}
+			http.SetCookie(w, &http.Cookie{Name: "SessionID", Value: driverSecret, Path: cookiePath, HttpOnly: !scenario.missingHTTPOnly, Secure: true})
+			status := scenario.startStatus
+			if status == 0 {
+				status = http.StatusFound
+			}
+			http.Redirect(w, r, server.URL+"/realms/test/protocol/openid-connect/auth?response_type=code&code_challenge=challenge&code_challenge_method=S256&state="+driverState, status)
 		case "/realms/test/protocol/openid-connect/auth":
 			http.SetCookie(w, &http.Cookie{Name: "KEYCLOAK_SESSION", Value: driverSecret, Path: "/", HttpOnly: true, Secure: true})
 			fmt.Fprintf(w, `<form action="%s/realms/test/login-actions/authenticate?session_code=private&amp;execution=login"></form>`, server.URL)
@@ -85,7 +115,7 @@ func exerciseAuthCodeDriver(t *testing.T, scenario driverScenario) (map[string]s
 				t.Error("driver lost callback parameters")
 			}
 			_, err := r.Cookie("SessionID")
-			if (err == nil) == scenario.negative {
+			if err != nil && !scenario.missingPath {
 				t.Error("incorrect callback session cookie behavior")
 			}
 			if !scenario.negative {
@@ -118,9 +148,9 @@ func exerciseAuthCodeDriver(t *testing.T, scenario driverScenario) (map[string]s
 	if err := os.WriteFile(caPath, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: server.Certificate().Raw}), 0600); err != nil {
 		t.Fatal(err)
 	}
-	carry := "yes"
+	affinity := "enabled"
 	if scenario.negative {
-		carry = "no"
+		affinity = "disabled"
 	}
 	mode := "full"
 	if scenario.startOnly {
@@ -128,7 +158,7 @@ func exerciseAuthCodeDriver(t *testing.T, scenario driverScenario) (map[string]s
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "sh", "-c", authCodeFlowScript, "authcode-driver", server.URL+"/identity.xqy", server.URL, "alice", "password", carry, caPath, server.URL+"/realms/test/protocol/openid-connect/auth", server.URL+"/oauth/callback", mode)
+	cmd := exec.CommandContext(ctx, "sh", "-c", authCodeFlowScript, "authcode-driver", server.URL+"/identity.xqy", "alice", "password", caPath, server.URL+"/realms/test/protocol/openid-connect/auth", server.URL+"/oauth/callback", mode, affinity)
 	cmd.Env = append(os.Environ(), "NO_PROXY=127.0.0.1,localhost", "no_proxy=127.0.0.1,localhost", "TMPDIR="+dir)
 	output, err := cmd.CombinedOutput()
 	for _, secret := range []string{driverSecret, driverState, driverCode, "password"} {
@@ -165,6 +195,16 @@ func TestAuthCodeDriver(t *testing.T) {
 		{"unrelated server failure", driverScenario{callbackStatus: 500, negative: true, callbackBody: "<dt>XDMP-INTERNAL: unrelated failure</dt>"}, false},
 		{"error text outside error field", driverScenario{callbackStatus: 500, negative: true, callbackBody: "XDMP-OAUTH: Novel OAuth state; potential CSRF attack"}, false},
 		{"pre-authentication only", driverScenario{startOnly: true}, true},
+		{"initial 303 redirect", driverScenario{startOnly: true, startStatus: 303}, true},
+		{"initial 303 completes authentication", driverScenario{startStatus: 303, callbackStatus: 302}, true},
+		{"initial 303 cross-node rejection", driverScenario{startStatus: 303, callbackStatus: 500, negative: true, callbackBody: "<dt>XDMP-OAUTH: Novel OAuth state; potential CSRF attack</dt>"}, true},
+		{"initial 307 rejected", driverScenario{startOnly: true, startStatus: 307}, false},
+		{"HttpOnly required", driverScenario{startOnly: true, missingHTTPOnly: true}, false},
+		{"explicit cookie path required", driverScenario{startOnly: true, omittedPath: true}, false},
+		{"root cookie path required", driverScenario{startOnly: true, missingPath: true}, false},
+		{"observed backend required", driverScenario{startOnly: true, missingBackend: true}, false},
+		{"negative same backend cannot pass", driverScenario{negative: true, sameBackend: true, callbackStatus: 500, callbackBody: "<dt>XDMP-OAUTH: Novel OAuth state; potential CSRF attack</dt>"}, false},
+		{"negative lost cookie cannot pass", driverScenario{negative: true, lostCookie: true, callbackStatus: 500, callbackBody: "<dt>XDMP-OAUTH: Novel OAuth state; potential CSRF attack</dt>"}, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			result, err := exerciseAuthCodeDriver(t, tc.scenario)

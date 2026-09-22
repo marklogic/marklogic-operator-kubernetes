@@ -18,7 +18,7 @@ import (
 const oauthAuthCodeNamespace = "ml-oauth-authorization-code"
 
 // TestOAuthAuthorizationCodeInfrastructure exercises the OAuth 2.0 Authorization
-// Code flow behind the operator-managed HAProxy load balancer on MarkLogic 12.1+,
+// Code flow behind the test-owned HAProxy load balancer on MarkLogic 12.1+,
 // where the flow is supported. It configures an Authorization Code external
 // security and OAuth App Server, then runs the load-balancer session-affinity
 // cases from the original release requirement (see README.md):
@@ -41,16 +41,27 @@ func TestOAuthAuthorizationCodeInfrastructure(t *testing.T) {
 	oauthAuthCodeNamespace := run.Namespace
 	redirectURI := authCodeRedirectURI(oauthAuthCodeNamespace)
 
-	infrastructure := DeployInfrastructure(t, run, InfrastructureConfig{
-		Namespace:   oauthAuthCodeNamespace,
-		RedirectURI: redirectURI,
-		Image:       image,
+	infrastructure, err := BuildInfrastructure(InfrastructureConfig{
+		Namespace:    oauthAuthCodeNamespace,
+		RedirectURI:  redirectURI,
+		Image:        image,
+		StorageClass: run.StorageClass,
 	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A dedicated proxy provides direct backend observation and a controlled
+	// no-affinity mode without changing any shared operator infrastructure.
+	infrastructure.Cluster.Spec.HAProxy.Enabled = false
+	run.ApplyObjects(t, infrastructure.Objects()...)
 	run.Stage(t, "readiness")
 	testutil.WaitForStatefulSetReady(t, oauthAuthCodeNamespace, infrastructure.Cluster.Name, 15*time.Minute)
-	testutil.WaitForDeploymentAvailable(t, oauthAuthCodeNamespace, haproxyServiceName, 5*time.Minute)
 	testutil.WaitForDeploymentAvailable(t, oauthAuthCodeNamespace, keycloak.Name, 5*time.Minute)
 	testutil.WaitForPodReady(t, oauthAuthCodeNamespace, oauthclient.DefaultName, 2*time.Minute)
+	run.Stage(t, "verify_server_version")
+	verifyAuthCodeServerVersions(t, oauthAuthCodeNamespace, infrastructure.Cluster.Name)
+	run.ApplyObjects(t, authCodeProxyObjects(oauthAuthCodeNamespace, infrastructure.Cluster.Name)...)
+	testutil.WaitForDeploymentAvailable(t, oauthAuthCodeNamespace, haproxyServiceName, 5*time.Minute)
 	run.LogImages(t)
 	run.Stage(t, "configure_authentication")
 
@@ -65,6 +76,10 @@ func TestOAuthAuthorizationCodeInfrastructure(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Build Authorization Code external-security payload: %v", err)
 	}
+	// Explicit client-flow settings from the Server configuration guide.
+	oauthOptions := externalSecurityPayload["oauth-server"].(map[string]string)
+	oauthOptions["oauth-scope"] = "openid profile"
+	oauthOptions["oauth-client-authentication-method"] = "Client secret"
 	postManagementJSON(t, oauthAuthCodeNamespace, infrastructure.Cluster.Name, "/manage/v2/external-security", externalSecurityPayload)
 	probeRoot := installOAuthIdentityProbe(t, oauthAuthCodeNamespace, infrastructure.Cluster.Name)
 	appConfig := authCodeAppServerConfig()
@@ -76,8 +91,6 @@ func TestOAuthAuthorizationCodeInfrastructure(t *testing.T) {
 	assignExternalNameToAdmin(t, oauthAuthCodeNamespace, infrastructure.Cluster.Name, keycloak.TestUsername)
 
 	haproxyBase := fmt.Sprintf("https://%s.%s.svc.cluster.local:%d", haproxyServiceName, oauthAuthCodeNamespace, oauthAppServerPort)
-	node0Base := fmt.Sprintf("https://%s-0.%s.%s.svc.cluster.local:%d", infrastructure.Cluster.Name, infrastructure.Cluster.Name, oauthAuthCodeNamespace, oauthAppServerPort)
-	node1Base := fmt.Sprintf("https://%s-1.%s.%s.svc.cluster.local:%d", infrastructure.Cluster.Name, infrastructure.Cluster.Name, oauthAuthCodeNamespace, oauthAppServerPort)
 
 	// Wait for HAProxy's OAuth backend to pass its periodic health check before
 	// exercising the flow; the backend briefly reports 503 <NOSRV> right after the
@@ -91,8 +104,6 @@ func TestOAuthAuthorizationCodeInfrastructure(t *testing.T) {
 		result := runAuthCodeFlow(t, oauthAuthCodeNamespace, authCodeFlowConfig{
 			StartOnly:             true,
 			StartURL:              haproxyBase + "/identity.xqy",
-			CallbackBase:          haproxyBase,
-			CarrySession:          true,
 			AuthorizationEndpoint: document.AuthorizationEndpoint,
 			RedirectURI:           redirectURI,
 		})
@@ -106,8 +117,6 @@ func TestOAuthAuthorizationCodeInfrastructure(t *testing.T) {
 	run.Case(t, "TC2_affinity_completes_flow", func(t *testing.T) {
 		result := runAuthCodeFlow(t, oauthAuthCodeNamespace, authCodeFlowConfig{
 			StartURL:              haproxyBase + "/identity.xqy",
-			CallbackBase:          haproxyBase,
-			CarrySession:          true,
 			AuthorizationEndpoint: document.AuthorizationEndpoint,
 			RedirectURI:           redirectURI,
 		})
@@ -120,9 +129,8 @@ func TestOAuthAuthorizationCodeInfrastructure(t *testing.T) {
 	// flow fails, because the PKCE verifier and state are node-local.
 	run.Case(t, "TC3_cross_node_callback_fails", func(t *testing.T) {
 		result := runAuthCodeFlow(t, oauthAuthCodeNamespace, authCodeFlowConfig{
-			StartURL:              node0Base + "/identity.xqy",
-			CallbackBase:          node1Base,
-			CarrySession:          false,
+			StartURL:              haproxyBase + "/identity.xqy",
+			DisableAffinity:       true,
 			AuthorizationEndpoint: document.AuthorizationEndpoint,
 			RedirectURI:           redirectURI,
 		})
@@ -138,9 +146,8 @@ func TestOAuthAuthorizationCodeInfrastructure(t *testing.T) {
 
 type authCodeFlowConfig struct {
 	StartURL              string
-	CallbackBase          string
 	StartOnly             bool
-	CarrySession          bool
+	DisableAffinity       bool
 	AuthorizationEndpoint string
 	RedirectURI           string
 }
@@ -172,9 +179,9 @@ func waitForOAuthAppServerThroughHAProxy(t *testing.T, namespace, baseURL string
 
 func runAuthCodeFlow(t *testing.T, namespace string, config authCodeFlowConfig) map[string]string {
 	t.Helper()
-	carry := "no"
-	if config.CarrySession {
-		carry = "yes"
+	affinity := "enabled"
+	if config.DisableAffinity {
+		affinity = "disabled"
 	}
 	mode := "full"
 	if config.StartOnly {
@@ -187,17 +194,21 @@ func runAuthCodeFlow(t *testing.T, namespace string, config authCodeFlowConfig) 
 		"curl",
 		"sh", "-c", authCodeFlowScript, "authcode-flow",
 		config.StartURL,
-		config.CallbackBase,
 		keycloak.TestUsername,
 		keycloak.TestUserPassword,
-		carry,
 		oauthclient.CAPath,
 		config.AuthorizationEndpoint,
 		config.RedirectURI,
 		mode,
+		affinity,
 	)
 	result := parseMarkers(output)
-	t.Logf("Authorization Code stages: start=%s callback=%s identity=%s result=%s", result["STEP1_STATUS"], result["STEP4_STATUS"], result["STEP5_STATUS"], result["RESULT"])
+	// The driver emits only allowlisted metadata, never raw responses or hashes.
+	evidence, err := json.Marshal(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("MLE-17734 sanitized evidence: %s", evidence)
 	return result
 }
 

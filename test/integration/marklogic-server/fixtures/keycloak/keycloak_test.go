@@ -3,9 +3,39 @@
 package keycloak
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 )
+
+func TestAuthorizationCodeAccessTokenAudience(t *testing.T) {
+	data, err := json.Marshal(realmDefinition{RedirectURI: "https://oauth.example.test/callback"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var realm struct {
+		Clients []realmClient `json:"clients"`
+	}
+	if err := json.Unmarshal(data, &realm); err != nil {
+		t.Fatal(err)
+	}
+	for _, client := range realm.Clients {
+		if client.ClientID != AuthCodeClientID {
+			continue
+		}
+		if client.PublicClient || client.DirectAccessGrantsEnabled || !client.StandardFlowEnabled {
+			t.Fatal("Authorization Code fixture must remain a confidential, code-flow client")
+		}
+		for _, mapper := range client.ProtocolMappers {
+			if mapper.Protocol == "openid-connect" && mapper.ProtocolMapper == "oidc-audience-mapper" &&
+				mapper.Config["included.client.audience"] == client.ClientID && mapper.Config["access.token.claim"] == "true" {
+				return
+			}
+		}
+		t.Fatal("Authorization Code access tokens lack an explicit audience for the MarkLogic client; azp alone is insufficient")
+	}
+	t.Fatal("Authorization Code client missing from realm import")
+}
 
 func TestBuildResources(t *testing.T) {
 	resources, err := BuildResources(Config{

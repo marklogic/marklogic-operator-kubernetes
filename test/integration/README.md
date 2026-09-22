@@ -63,8 +63,10 @@ and [OAuth suites](marklogic-server/oauth/README.md) for existing product tests.
 ## Validation boundaries and follow-up work
 
 All actual cluster tests so far have run on EKS. The September 20, 2026 EKS
-bearer-token run passed four cases and has cleanup evidence. The original
-Authorization Code live validation on MarkLogic 12.1+ remains pending. PDC cloud
+bearer-token run passed four cases and has cleanup evidence. Authorization Code TC1–TC3 passed in a fresh MarkLogic 12.1.0 EKS run on
+September 22, 2026, with cleanup completed. Acceptance includes initial HTTP
+302 or 303 per the clarified OAuth contract; the Keycloak access-token audience
+fixture is fixed. See [the OAuth results](marklogic-server/oauth/README.md#live-validation-status). PDC cloud
 runs on AKS, but that does not establish AKS test coverage; AKS tests are unverified.
 The new platform example has local contract coverage only until a live run is
 recorded. It is a teaching example, not a PDC requirement or product test.

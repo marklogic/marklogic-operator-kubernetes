@@ -167,6 +167,17 @@ func (definition realmDefinition) MarshalJSON() ([]byte, error) {
 	// A confidential client for the Authorization Code flow: MarkLogic 12.1 sends
 	// a client secret when exchanging the authorization code at the token endpoint.
 	authCodeClient := realmClient{ClientID: AuthCodeClientID, Enabled: true, Protocol: "openid-connect", PublicClient: false, Secret: AuthCodeClientSecret, StandardFlowEnabled: true}
+	// Keycloak's azp claim is not an audience. MarkLogic 12.1 requires aud or
+	// client_id in the access token; without it, a successful code exchange is
+	// followed by another login redirect instead of an authenticated session.
+	authCodeClient.ProtocolMappers = []realmProtocolMapper{{
+		Name: "marklogic-audience", Protocol: "openid-connect", ProtocolMapper: "oidc-audience-mapper",
+		Config: map[string]string{
+			"included.client.audience": AuthCodeClientID,
+			"access.token.claim":       "true",
+			"id.token.claim":           "false",
+		},
+	}}
 	if definition.RedirectURI != "" {
 		client.RedirectURIs = []string{definition.RedirectURI}
 		authCodeClient.RedirectURIs = []string{definition.RedirectURI}
@@ -180,14 +191,22 @@ func (definition realmDefinition) MarshalJSON() ([]byte, error) {
 }
 
 type realmClient struct {
-	ClientID                  string   `json:"clientId"`
-	Enabled                   bool     `json:"enabled"`
-	Protocol                  string   `json:"protocol"`
-	PublicClient              bool     `json:"publicClient"`
-	Secret                    string   `json:"secret,omitempty"`
-	DirectAccessGrantsEnabled bool     `json:"directAccessGrantsEnabled"`
-	StandardFlowEnabled       bool     `json:"standardFlowEnabled"`
-	RedirectURIs              []string `json:"redirectUris,omitempty"`
+	ClientID                  string                `json:"clientId"`
+	Enabled                   bool                  `json:"enabled"`
+	Protocol                  string                `json:"protocol"`
+	PublicClient              bool                  `json:"publicClient"`
+	Secret                    string                `json:"secret,omitempty"`
+	DirectAccessGrantsEnabled bool                  `json:"directAccessGrantsEnabled"`
+	StandardFlowEnabled       bool                  `json:"standardFlowEnabled"`
+	RedirectURIs              []string              `json:"redirectUris,omitempty"`
+	ProtocolMappers           []realmProtocolMapper `json:"protocolMappers,omitempty"`
+}
+
+type realmProtocolMapper struct {
+	Name           string            `json:"name"`
+	Protocol       string            `json:"protocol"`
+	ProtocolMapper string            `json:"protocolMapper"`
+	Config         map[string]string `json:"config"`
 }
 
 type realmTestUser struct {

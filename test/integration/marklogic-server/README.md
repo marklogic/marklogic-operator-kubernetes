@@ -30,7 +30,7 @@ These requirements apply to MarkLogic scenarios. Use
 
 | Path | Purpose |
 | --- | --- |
-| [`oauth/`](oauth/README.md) | OAuth 2.0 (Authorization Code and Resource Server/JWT bearer) integration tests behind the operator-managed HAProxy load balancer, plus the HAProxy SessionID affinity contract test. See [oauth/README.md](oauth/README.md) for details. |
+| [`oauth/`](oauth/README.md) | OAuth 2.0 integration tests: test-owned HAProxy for MLE-17734 Authorization Code, operator-managed HAProxy for Resource Server/JWT bearer, and a separate HAProxy SessionID contract test. See [oauth/README.md](oauth/README.md) for details. |
 | [`platform/`](platform/README.md) | Runnable ConfigMap teaching example; no OAuth or MarkLogic dependency. |
 | [`../scenarios/catalog.json`](../scenarios/catalog.json) | Names, package/test selections, gates, and prerequisites consumed by the runner. |
 | `fixtures/` | Reusable builders for Kubernetes objects used by the integration tests. |
