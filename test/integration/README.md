@@ -66,9 +66,12 @@ The [S3 backup/restore example](marklogic-server/backup/README.md) uses the merg
 `spec.objectStorage.aws` support to connect a Secret-backed credential to real
 backup behavior. Discover it with `make integration-describe SCENARIO=backup-s3`.
 It verifies credential application, backups, changed data, and restoration of the
-original content on an isolated cluster. Live validation is pending. S3 objects
+original content on an isolated cluster. All five cases passed on EKS with static
+AWS credentials on September 22, 2026; see the scenario's live validation record. S3 objects
 are retained under a unique run prefix and recorded separately from namespace
 cleanup; the scenario README explains retention and removal.
+Use its [code walkthrough](marklogic-server/backup/README.md#use-this-as-a-future-feature-example)
+as a reference when adding future MarkLogic feature tests.
 
 ## Validation boundaries and follow-up work
 

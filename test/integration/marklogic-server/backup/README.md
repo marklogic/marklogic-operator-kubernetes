@@ -1,13 +1,46 @@
 # S3 backup and restore example
 
-Status: Implemented with local contract tests; **live EKS/S3 validation pending**.
+Status: **Live validated on EKS with AWS S3 on September 22, 2026** using static
+AWS credentials and the image recorded below. STS and other environments remain unverified.
 Scenario: `backup-s3`. Test: `TestS3BackupRestore`.
+Purpose: Teaching example for future MarkLogic feature integration tests.
 
 This example connects the new Secret-backed object-storage credential support to
 an observable use case. `status.objectStorage.aws.phase: Applied` means the
 operator configured credentials; it does not prove that the credentials can
 access S3 or that a backup is usable. This suite tests the rest of that path.
 Requirements owner, maintainer, and live validation reviewer: TBD with the team.
+
+## Use this as a future feature example
+
+The executable entry point is [`TestS3BackupRestore`](backup_test.go), registered
+as `backup-s3` in the [scenario catalog](../../scenarios/catalog.json). It combines
+the operator configuration contract with observable server behavior: applying a
+storage credential, writing a full backup to S3, and reading that backup during
+restore. The changed document before restore makes the final assertion distinguish
+a successful restore from data that simply remained in the database.
+
+| File | Responsibility to reuse when adding a feature test |
+| --- | --- |
+| [`config.go`](config.go) | Validate explicit environment settings and keep the destination inside a dedicated test prefix; normalize credentials consistently with the operator. |
+| [`fixture.go`](fixture.go) | Build the isolated TLS cluster, provider Secret, and client Pod; let the operator apply the storage credential. |
+| [`backup_test.go`](backup_test.go) | Check the live gate before setup, create a run, sequence named cases, stop dependent cases after failure, and record evidence. |
+| [`queries.go`](queries.go) | Keep server operations separate from orchestration and pass inputs as external variables. |
+| [`assertions.go`](assertions.go) | Require the current credential fingerprint, exact forest coverage, completed jobs, and a backup path owned by the run. |
+| [`contracts_test.go`](contracts_test.go) | Check configuration, fixtures, parsing, and failure handling locally without Kubernetes or AWS. |
+
+For a new feature, follow the [contribution guide](../../CONTRIBUTING.md) and
+[scenario template](../../SCENARIO_TEMPLATE.md): define its observable acceptance
+criteria, choose a unique test name and gate, register the scenario, and reuse
+`testutil.NewRun`, `run.ApplyObjects`, `run.Stage`, and `run.Case`. Keep the new
+feature's operations and assertions in its own suite; share fixture builders
+when more than one suite needs them.
+
+Future storage cases could cover credential rotation, incremental backup, or
+Azure restore. Each needs its own inputs, expected results, external-artifact
+cleanup policy, and live evidence. Those cases are not implemented here. The
+[live validation record](#live-validation-record) covers this example's full S3
+backup and same-cluster restore only.
 
 ## Cases
 
@@ -93,8 +126,8 @@ The run appends its random run ID to the supplied S3 prefix and asks MarkLogic t
 create the backup directory. It records `s3-backup-prefix`, and after a successful
 backup the actual `s3-backup` path, in `run.json.retainedArtifacts`. The prefix
 entry records the intended destination; a failed run may have no objects there.
-Backup directory preparation, cloud policies, and native S3 behavior still need
-live validation; local contracts do not establish that they work on a given image.
+Backup directory preparation and native S3 behavior passed in the environment
+recorded below. Other images and bucket policies require their own validation.
 
 **S3 objects are intentionally retained as evidence.** Namespace/PV cleanup does
 not delete them. Use an agreed test-bucket lifecycle policy, or after reviewing
@@ -125,10 +158,55 @@ fixture isolation, credential mounting, multipart eval parsing, and completion
 checks. The catalog-driven test verifies that this live suite skips before
 setup when disabled. None of these replace live backup evidence.
 
-For the first live run, record the source commit and working changes, exact
+For each live run, record the source commit and working changes, exact
 command without secrets, EKS/Kubernetes/operator/MarkLogic versions, both image
 IDs, all case outcomes, the report directory, S3 prefix, and namespace/PV cleanup.
 AKS/Azure coverage must be recorded separately; it is not inferred from EKS/S3.
+
+## Live validation record
+
+On September 22, 2026, `TestS3BackupRestore` passed all five cases on
+`pzhou@marklogic-tiered-poc.us-west-2.eksctl.io`: credential application, original
+data verification, full S3 backup, changed-data verification, and restoration of
+the original run ID and value. JUnit reports **5 tests, 0 failures, 0 skips**.
+No test-code changes were needed for this run.
+
+| Setting | Observed value |
+| --- | --- |
+| Source | `7a51a4ce43f46bcef1aaa91fe0e1a9749ffdb51c`; working tree contained only the two README walkthrough edits when the test started. |
+| Kubernetes | `v1.32.13-eks-bca9cf6` |
+| Operator | `308453789681.dkr.ecr.us-west-2.amazonaws.com/marklogic-tiered-poc/marklogic-operator@sha256:221eb6c1d702bd3822e58ea08ba0ff4a0c34757b93a8e043a5438cec3845005d` |
+| MarkLogic, both nodes | `progressofficial/marklogic-db:12.0.3-ubi9-rootless-2.2.6`, digest `sha256:5bbef4b49d737e5d9c1136bcd77ef52a9a3649a125cc4ff8ee1d908daefed56d` |
+| Client | `curlimages/curl:8.12.1`, digest `sha256:94e9e444bcba979c2ea12e27ae39bee4cd10bc7041a472c4727a558e213744e6` |
+| Storage | `gp2`, Delete reclaim policy |
+| Credentials | Resolved from the local AWS default profile; static access/secret keys, no session token. Values were passed through the child process environment and not printed. |
+| Run ID | `b8c8f8c8-9dd8-4b0f-b150-0b4336c1e50d` |
+| Namespace | `backup-s3-ggq6c`; cleanup completed, namespace absent and no PVs still reference it. |
+| Local report directory | `test/test_results/integration/run-2691958607/` (ignored by Git), containing `run.json` and `junit.xml`. |
+
+The existing operator was used without installing or upgrading it. With AWS
+credentials loaded into the environment, the command was equivalent to:
+
+```sh
+INTEGRATION_CONTEXT=pzhou@marklogic-tiered-poc.us-west-2.eksctl.io \
+INTEGRATION_OPERATOR_NAMESPACE=marklogic-operator-system \
+INTEGRATION_OPERATOR_DEPLOYMENT=marklogic-operator-controller-manager \
+MARKLOGIC_IMAGE=progressofficial/marklogic-db:12.0.3-ubi9-rootless-2.2.6 \
+INTEGRATION_BACKUP_S3_URI=s3://marklogic-tiered-poc-308453789681-usw2/integration-backup \
+INTEGRATION_RETAIN_NAMESPACE=false MARKLOGIC_OAUTH_RETAIN_NAMESPACE=false \
+make integration-test SCENARIO=backup-s3
+```
+
+S3 listing independently confirmed the backup's `BackupTag.txt`, Documents forest
+files, and configuration files under the retained directory:
+
+```text
+s3://marklogic-tiered-poc-308453789681-usw2/integration-backup/b8c8f8c8-9dd8-4b0f-b150-0b4336c1e50d/20260922-1253388045800
+```
+
+S3 objects remain intentionally retained. Namespace and Kubernetes PV deletion
+were checked; provider-side EBS deletion was not independently checked. This run
+does not establish STS rotation/expiry, other MarkLogic images, or AKS/Azure coverage.
 
 The implementation follows the MarkLogic APIs for
 [eval](https://docs.marklogic.com/REST/POST/v1/eval),

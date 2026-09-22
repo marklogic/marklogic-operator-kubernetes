@@ -29,7 +29,7 @@
   },
   {
     "name": "backup-s3",
-    "description": "Secret-backed AWS credentials followed by full S3 backup, data mutation, and restore verification (live validation pending).",
+    "description": "Secret-backed AWS credentials followed by full S3 backup, data mutation, and restore verification (EKS/static credentials validated; see scenario README).",
     "package": "./test/integration/marklogic-server/backup",
     "test": "TestS3BackupRestore",
     "gate": "INTEGRATION_BACKUP_S3",

@@ -31,7 +31,7 @@ These requirements apply to MarkLogic scenarios. Use
 | Path | Purpose |
 | --- | --- |
 | [`oauth/`](oauth/README.md) | OAuth 2.0 integration tests: test-owned HAProxy for MLE-17734 Authorization Code, operator-managed HAProxy for Resource Server/JWT bearer, and a separate HAProxy SessionID contract test. See [oauth/README.md](oauth/README.md) for details. |
-| [`backup/`](backup/README.md) | Secret-backed AWS credentials with full S3 backup and restore; local contracts verified, live validation pending. |
+| [`backup/`](backup/README.md) | Secret-backed AWS credentials with full S3 backup and restore; all five cases passed on EKS with static AWS credentials on September 22, 2026. |
 | [`platform/`](platform/README.md) | Runnable ConfigMap teaching example; no OAuth or MarkLogic dependency. |
 | [`../scenarios/catalog.json`](../scenarios/catalog.json) | Names, package/test selections, gates, and prerequisites consumed by the runner. |
 | `fixtures/` | Reusable builders for Kubernetes objects used by the integration tests. |
