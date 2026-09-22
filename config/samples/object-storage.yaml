@@ -1,0 +1,52 @@
+# Copyright (c) 2024-2026 Progress Software Corporation and/or its subsidiaries or affiliates. All Rights Reserved.
+
+## Cluster-wide object storage credentials for AWS S3 and Azure Blob.
+##
+## MarkLogic stores one credential set per provider for the whole cluster, so
+## objectStorage lives on the MarklogicCluster and is applied once, after the
+## bootstrap host is initialized and secured.
+##
+## Each provider is independent: declare only the one you need.
+##
+## Create the referenced secrets in the same namespace as this resource, for example:
+##   kubectl create secret generic ml-s3-credentials \
+##     --from-literal=accessKey=AKIA... --from-literal=secretKey=wJalr...
+##   kubectl create secret generic ml-azure-credentials \
+##     --from-literal=storageAccount=mystorageacct --from-literal=storageKey=base64key==
+##
+## Rotating a secret is picked up automatically; the MarklogicCluster does not
+## need to be edited. Removing a provider block stops the operator managing it
+## but does NOT revoke credentials already applied to MarkLogic.
+apiVersion: marklogic.progress.com/v1
+kind: MarklogicCluster
+metadata:
+  name: object-storage
+  annotations: {}
+spec:
+  image: "progressofficial/marklogic-db:12.0.3-ubi9-rootless-2.2.6"
+  auth:
+    secretName: ml-admin-credentials
+  persistence:
+    enabled: true
+    size: 10Gi
+  objectStorage:
+    aws:
+      ## Only 'secret' is supported. Static keys are required: MarkLogic does not
+      ## resolve S3 credentials through the AWS credential provider chain, so
+      ## IRSA and instance roles cannot be used.
+      authType: secret
+      ## Must contain keys: accessKey, secretKey
+      ## STS session tokens are not supported.
+      secretName: ml-s3-credentials
+      ## Informational only. The credentials API carries no region; MarkLogic
+      ## resolves the S3 region from its own configuration.
+      region: us-east-1
+    azure:
+      ## Only 'secret' is supported in this release; managedIdentity is reserved.
+      authType: secret
+      ## Must contain keys: storageAccount, storageKey
+      secretName: ml-azure-credentials
+  markLogicGroups:
+  - replicas: 2
+    name: node
+    isBootstrap: true

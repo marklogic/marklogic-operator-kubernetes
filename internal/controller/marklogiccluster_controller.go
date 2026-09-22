@@ -22,11 +22,15 @@ import (
 
 	"k8s.io/apimachinery/pkg/api/errors"
 
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	"reflect"
 
@@ -114,6 +118,12 @@ func markLogicClusterCreateUpdateDeletePredicate() predicate.Predicate {
 				if !reflect.DeepEqual(oldObj.Spec, newObj.Spec) {
 					return true // Reconcile if spec has changed
 				}
+			case *corev1.Secret:
+				// Credential rotation. Metadata-only updates are ignored so
+				// unrelated Secret churn does not trigger reconciles.
+				oldObj := e.ObjectOld.(*corev1.Secret)
+				newObj := e.ObjectNew.(*corev1.Secret)
+				return !reflect.DeepEqual(oldObj.Data, newObj.Data)
 			default:
 				return false // Ignore updates for other types
 			}
@@ -135,5 +145,53 @@ func (r *MarklogicClusterReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		For(&marklogicv1.MarklogicCluster{}).
 		WithEventFilter(markLogicClusterCreateUpdateDeletePredicate()).
 		Owns(&marklogicv1.MarklogicGroup{}).
+		Watches(&corev1.Secret{}, handler.EnqueueRequestsFromMapFunc(r.secretToMarklogicClusters)).
 		Complete(r)
+}
+
+// secretToMarklogicClusters enqueues the clusters that source credential
+// material from the given Secret, so rotating a Secret is picked up without
+// waiting for the next resync.
+func (r *MarklogicClusterReconciler) secretToMarklogicClusters(ctx context.Context, obj client.Object) []reconcile.Request {
+	secret, ok := obj.(*corev1.Secret)
+	if !ok {
+		return nil
+	}
+
+	clusters := &marklogicv1.MarklogicClusterList{}
+	if err := r.List(ctx, clusters, client.InNamespace(secret.Namespace)); err != nil {
+		log.FromContext(ctx).Error(err, "Failed to list MarklogicClusters for Secret",
+			"secret", secret.Name, "namespace", secret.Namespace)
+		return nil
+	}
+
+	requests := []reconcile.Request{}
+	for i := range clusters.Items {
+		cluster := &clusters.Items[i]
+		if !clusterReferencesSecret(cluster, secret.Name) {
+			continue
+		}
+		requests = append(requests, reconcile.Request{
+			NamespacedName: types.NamespacedName{Name: cluster.Name, Namespace: cluster.Namespace},
+		})
+	}
+
+	return requests
+}
+
+// clusterReferencesSecret reports whether the cluster sources credential
+// material from the named Secret.
+func clusterReferencesSecret(mlc *marklogicv1.MarklogicCluster, secretName string) bool {
+	if secretName == "" {
+		return false
+	}
+	if mlc.Spec.Auth != nil && mlc.Spec.Auth.SecretName != nil && *mlc.Spec.Auth.SecretName == secretName {
+		return true
+	}
+	for _, name := range mlc.Spec.ObjectStorage.ReferencedSecretNames() {
+		if name == secretName {
+			return true
+		}
+	}
+	return false
 }

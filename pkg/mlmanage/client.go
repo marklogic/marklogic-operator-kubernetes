@@ -39,6 +39,8 @@ type Client interface {
 	ImportCertificateAuthority(ctx context.Context, authorityPEM string) error
 	EnsureOAuthExternalSecurity(ctx context.Context, config OAuthExternalSecurityConfig) error
 	EnsureOAuthAppServer(ctx context.Context, config OAuthAppServerConfig) error
+	EnsureAWSCredentials(ctx context.Context, config AWSCredentials) error
+	EnsureAzureCredentials(ctx context.Context, config AzureCredentials) error
 }
 
 type ClientOptions struct {

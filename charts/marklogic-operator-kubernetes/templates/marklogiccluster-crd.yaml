@@ -10442,6 +10442,67 @@ spec:
                 additionalProperties:
                   type: string
                 type: object
+              objectStorage:
+                description: |-
+                  Cluster-wide object storage credentials. MarkLogic stores one credential set per
+                  provider for the whole cluster, so this is not a per-group setting.
+                properties:
+                  aws:
+                    properties:
+                      authType:
+                        default: secret
+                        description: ObjectStorageAuthType selects how credential material
+                          is supplied for a provider.
+                        enum:
+                        - secret
+                        - instanceRole
+                        type: string
+                      region:
+                        description: |-
+                          Informational only. The credentials API carries no region; S3 region is resolved
+                          by MarkLogic from its own configuration.
+                        maxLength: 64
+                        type: string
+                      secretName:
+                        description: Name of the Secret holding accessKey and secretKey.
+                          An optional sessionToken supports externally refreshed STS credentials.
+                        maxLength: 253
+                        type: string
+                    type: object
+                    x-kubernetes-validations:
+                    - message: 'objectStorage.aws.authType ''instanceRole'' is reserved
+                        but not supported: MarkLogic does not resolve S3 credentials
+                        through the AWS credential provider chain, so IRSA cannot be
+                        used. Use authType ''secret''.'
+                      rule: '!has(self.authType) || self.authType != ''instanceRole'''
+                    - message: objectStorage.aws.secretName is required when authType
+                        is 'secret'
+                      rule: '!has(self.authType) || self.authType != ''secret'' || (has(self.secretName)
+                        && size(self.secretName) > 0)'
+                  azure:
+                    properties:
+                      authType:
+                        default: secret
+                        description: ObjectStorageAuthType selects how credential material
+                          is supplied for a provider.
+                        enum:
+                        - secret
+                        - managedIdentity
+                        type: string
+                      secretName:
+                        description: Name of the Secret holding storageAccount and storageKey.
+                        maxLength: 253
+                        type: string
+                    type: object
+                    x-kubernetes-validations:
+                    - message: objectStorage.azure.authType 'managedIdentity' is reserved
+                        but not implemented in this release. Use authType 'secret'.
+                      rule: '!has(self.authType) || self.authType != ''managedIdentity'''
+                    - message: objectStorage.azure.secretName is required when authType
+                        is 'secret'
+                      rule: '!has(self.authType) || self.authType != ''secret'' || (has(self.secretName)
+                        && size(self.secretName) > 0)'
+                type: object
               persistence:
                 default:
                   enabled: true
@@ -11245,6 +11306,93 @@ spec:
                   - type
                   type: object
                 type: array
+              objectStorage:
+                properties:
+                  aws:
+                    properties:
+                      appliedFingerprint:
+                        description: Salted digest of the applied material, never the
+                          material itself.
+                        maxLength: 128
+                        type: string
+                      authType:
+                        description: ObjectStorageAuthType selects how credential material
+                          is supplied for a provider.
+                        type: string
+                      lastAppliedTime:
+                        format: date-time
+                        type: string
+                      message:
+                        description: Never contains credential material.
+                        maxLength: 512
+                        type: string
+                      phase:
+                        description: ObjectStoragePhase reports per-provider progress.
+                        enum:
+                        - Pending
+                        - Applied
+                        - Failed
+                        - Disabled
+                        type: string
+                      reason:
+                        description: |-
+                          ObjectStorageFailureReason is machine-readable and distinguishes failures that need
+                          different operator responses. 401 and 403 are kept separate because they point at
+                          different misconfigurations: a stale admin Secret versus missing MarkLogic privileges.
+                        enum:
+                        - BootstrapNotReady
+                        - SecretNotFound
+                        - SecretKeyMissing
+                        - InvalidPayload
+                        - AuthenticationFailed
+                        - InsufficientPrivilege
+                        - ManagementAPIUnreachable
+                        - ManagementAPIError
+                        type: string
+                    type: object
+                  azure:
+                    properties:
+                      appliedFingerprint:
+                        description: Salted digest of the applied material, never the
+                          material itself.
+                        maxLength: 128
+                        type: string
+                      authType:
+                        description: ObjectStorageAuthType selects how credential material
+                          is supplied for a provider.
+                        type: string
+                      lastAppliedTime:
+                        format: date-time
+                        type: string
+                      message:
+                        description: Never contains credential material.
+                        maxLength: 512
+                        type: string
+                      phase:
+                        description: ObjectStoragePhase reports per-provider progress.
+                        enum:
+                        - Pending
+                        - Applied
+                        - Failed
+                        - Disabled
+                        type: string
+                      reason:
+                        description: |-
+                          ObjectStorageFailureReason is machine-readable and distinguishes failures that need
+                          different operator responses. 401 and 403 are kept separate because they point at
+                          different misconfigurations: a stale admin Secret versus missing MarkLogic privileges.
+                        enum:
+                        - BootstrapNotReady
+                        - SecretNotFound
+                        - SecretKeyMissing
+                        - InvalidPayload
+                        - AuthenticationFailed
+                        - InsufficientPrivilege
+                        - ManagementAPIUnreachable
+                        - ManagementAPIError
+                        type: string
+                    type: object
+                type: object
             type: object
         type: object
     served: true

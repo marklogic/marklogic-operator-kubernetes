@@ -77,5 +77,8 @@ func (cc *ClusterContext) ReconsileMarklogicClusterHandler() (reconcile.Result, 
 			}
 		}
 	}
+	if result := cc.ReconcileObjectStorage(); result.Completed() {
+		return result.Output()
+	}
 	return result, err
 }

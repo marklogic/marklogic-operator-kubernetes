@@ -157,6 +157,14 @@ func (s *stubDynamicManagementClient) EnsureOAuthAppServer(ctx context.Context, 
 	return nil
 }
 
+func (s *stubDynamicManagementClient) EnsureAWSCredentials(ctx context.Context, config mlmanage.AWSCredentials) error {
+	return nil
+}
+
+func (s *stubDynamicManagementClient) EnsureAzureCredentials(ctx context.Context, config mlmanage.AzureCredentials) error {
+	return nil
+}
+
 func TestJoinDynamicPodSuccess(t *testing.T) {
 	oc := &OperatorContext{Ctx: context.Background()}
 
