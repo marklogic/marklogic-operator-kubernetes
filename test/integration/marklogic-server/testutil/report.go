@@ -27,25 +27,30 @@ type resourceSummary struct {
 	Name      string `json:"name"`
 	Namespace string `json:"namespace"`
 }
+type retainedArtifact struct {
+	Name     string `json:"name"`
+	Location string `json:"location"`
+}
 type runResult struct {
-	SchemaVersion int               `json:"schemaVersion"`
-	ID            string            `json:"runID"`
-	Scenario      string            `json:"scenario"`
-	Test          string            `json:"test"`
-	Context       string            `json:"context"`
-	Server        string            `json:"server,omitempty"`
-	Namespace     string            `json:"namespace,omitempty"`
-	Commit        string            `json:"commit,omitempty"`
-	WorkingTree   string            `json:"workingTree"`
-	Started       time.Time         `json:"started"`
-	Finished      *time.Time        `json:"finished,omitempty"`
-	Outcome       string            `json:"outcome"`
-	FailureStage  string            `json:"failureStage,omitempty"`
-	Cleanup       string            `json:"cleanup"`
-	Stages        []stageResult     `json:"stages"`
-	Cases         []caseResult      `json:"cases,omitempty"`
-	Versions      map[string]string `json:"versions,omitempty"`
-	Resources     []resourceSummary `json:"resources,omitempty"`
+	SchemaVersion     int                `json:"schemaVersion"`
+	ID                string             `json:"runID"`
+	Scenario          string             `json:"scenario"`
+	Test              string             `json:"test"`
+	Context           string             `json:"context"`
+	Server            string             `json:"server,omitempty"`
+	Namespace         string             `json:"namespace,omitempty"`
+	Commit            string             `json:"commit,omitempty"`
+	WorkingTree       string             `json:"workingTree"`
+	Started           time.Time          `json:"started"`
+	Finished          *time.Time         `json:"finished,omitempty"`
+	Outcome           string             `json:"outcome"`
+	FailureStage      string             `json:"failureStage,omitempty"`
+	Cleanup           string             `json:"cleanup"`
+	Stages            []stageResult      `json:"stages"`
+	Cases             []caseResult       `json:"cases,omitempty"`
+	Versions          map[string]string  `json:"versions,omitempty"`
+	Resources         []resourceSummary  `json:"resources,omitempty"`
+	RetainedArtifacts []retainedArtifact `json:"retainedArtifacts,omitempty"`
 }
 
 type runReport struct {
@@ -145,6 +150,21 @@ func (r *Run) Stage(t *testing.T, name string) {
 	t.Helper()
 	r.updateReport(t, func(result *runResult) {
 		result.Stages = append(result.Stages, stageResult{Name: name, At: time.Now().UTC()})
+	})
+}
+
+// RecordRetainedArtifact records an external evidence destination that namespace
+// cleanup will not delete. Recording a destination does not prove it was written.
+// Locations must not contain credentials; filtering is a best-effort safeguard.
+func (r *Run) RecordRetainedArtifact(t *testing.T, name, location string) {
+	t.Helper()
+	if r.report == nil {
+		return
+	}
+	r.updateReport(t, func(result *runResult) {
+		result.RetainedArtifacts = append(result.RetainedArtifacts, retainedArtifact{
+			Name: r.report.redactor.text(name), Location: r.report.redactor.text(location),
+		})
 	})
 }
 

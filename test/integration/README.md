@@ -60,6 +60,16 @@ then follow the [contribution guide](CONTRIBUTING.md) and
 needs updating. See the [lifecycle and artifact contract](marklogic-server/README.md)
 and [OAuth suites](marklogic-server/oauth/README.md) for existing product tests.
 
+## Storage credential example
+
+The [S3 backup/restore example](marklogic-server/backup/README.md) uses the merged
+`spec.objectStorage.aws` support to connect a Secret-backed credential to real
+backup behavior. Discover it with `make integration-describe SCENARIO=backup-s3`.
+It verifies credential application, backups, changed data, and restoration of the
+original content on an isolated cluster. Live validation is pending. S3 objects
+are retained under a unique run prefix and recorded separately from namespace
+cleanup; the scenario README explains retention and removal.
+
 ## Validation boundaries and follow-up work
 
 All actual cluster tests so far have run on EKS. The September 20, 2026 EKS

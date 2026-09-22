@@ -28,6 +28,15 @@
     "prerequisites": ["Pull access and capacity for nginx, HAProxy, and curl fixtures.", "No MarkLogic image, operator, or storage class required."]
   },
   {
+    "name": "backup-s3",
+    "description": "Secret-backed AWS credentials followed by full S3 backup, data mutation, and restore verification (live validation pending).",
+    "package": "./test/integration/marklogic-server/backup",
+    "test": "TestS3BackupRestore",
+    "gate": "INTEGRATION_BACKUP_S3",
+    "requiredEnv": ["INTEGRATION_CONTEXT", "INTEGRATION_OPERATOR_NAMESPACE", "INTEGRATION_OPERATOR_DEPLOYMENT", "MARKLOGIC_IMAGE", "INTEGRATION_BACKUP_S3_URI", "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY"],
+    "prerequisites": ["Installed operator and CRD supporting spec.objectStorage; generated namespaces must be watched.", "Existing AWS S3 bucket and a dedicated test prefix, reachable from MarkLogic; cloud credentials need list/read/write access. AWS_SESSION_TOKEN is optional and must remain valid for the whole run.", "Two-node TLS MarkLogic fixture with Delete-reclaim persistent storage; curl image pull access.", "S3 backup objects are retained as evidence under a unique run prefix; namespace cleanup does not delete them. See marklogic-server/backup/README.md for scope, retention, and cleanup."]
+  },
+  {
     "name": "platform-smoke",
     "description": "Teaching example: ConfigMap mount and isolated Kubernetes lifecycle; not a PDC test.",
     "package": "./test/integration/marklogic-server/platform",

@@ -46,7 +46,14 @@ func TestRunnerSelectsPackageAndIsolatesAllGates(t *testing.T) {
 	catalog := loadCatalog(t)
 	for _, s := range catalog {
 		t.Run(s.Name, func(t *testing.T) {
-			env := []string{"SCENARIO=" + s.Name, "INTEGRATION_CONTEXT=test-only", "INTEGRATION_OPERATOR_NAMESPACE=operator", "INTEGRATION_OPERATOR_DEPLOYMENT=operator", "MARKLOGIC_IMAGE=custom:image", "MARKLOGIC_VERSION=12.1.0"}
+			env := []string{"SCENARIO=" + s.Name}
+			for _, key := range s.RequiredEnv {
+				value := "test-only"
+				if key == "MARKLOGIC_VERSION" {
+					value = "12.1.0"
+				}
+				env = append(env, key+"="+value)
+			}
 			for _, other := range catalog {
 				env = append(env, other.Gate+"=true")
 			}

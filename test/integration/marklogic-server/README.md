@@ -31,6 +31,7 @@ These requirements apply to MarkLogic scenarios. Use
 | Path | Purpose |
 | --- | --- |
 | [`oauth/`](oauth/README.md) | OAuth 2.0 integration tests: test-owned HAProxy for MLE-17734 Authorization Code, operator-managed HAProxy for Resource Server/JWT bearer, and a separate HAProxy SessionID contract test. See [oauth/README.md](oauth/README.md) for details. |
+| [`backup/`](backup/README.md) | Secret-backed AWS credentials with full S3 backup and restore; local contracts verified, live validation pending. |
 | [`platform/`](platform/README.md) | Runnable ConfigMap teaching example; no OAuth or MarkLogic dependency. |
 | [`../scenarios/catalog.json`](../scenarios/catalog.json) | Names, package/test selections, gates, and prerequisites consumed by the runner. |
 | `fixtures/` | Reusable builders for Kubernetes objects used by the integration tests. |
@@ -68,7 +69,7 @@ make integration-test SCENARIO=oauth-resource-server
 ```
 
 The catalog includes `oauth-resource-server`, `oauth-authorization-code`,
-`haproxy-session-affinity`, and the non-OAuth `platform-smoke` teaching example. The affinity contract uses nginx and does not require
+`haproxy-session-affinity`, `backup-s3`, and the non-OAuth `platform-smoke` teaching example. The affinity contract uses nginx and does not require
 a MarkLogic image, operator, or storage class. Authorization Code requires a
 12.1+ image and a matching `MARKLOGIC_VERSION`, for example `12.1.0`. That value is
 a caller declaration, not proof of the version inside a custom image.
@@ -149,6 +150,10 @@ ignored by Git. Custom results roots should also be outside tracked source files
 no finish timestamp; do not interpret that as success. A failed cleanup fails the
 suite and records `cleanup: failed`. Retained environments record `retained`.
 Subtests registered through `run.Case` are included individually, including skips.
+Scenarios may record external evidence locations in `run.json.retainedArtifacts`
+using `run.RecordRetainedArtifact`. Namespace cleanup does not delete those
+artifacts; a recorded destination alone does not prove it was written. See the
+[backup example](backup/README.md#evidence-and-cleanup) for its S3 retention contract.
 
 The normal unit-test pass skips disabled live suites before creating reports.
 Likewise, runner argument/tool validation can fail before the Go suite starts;

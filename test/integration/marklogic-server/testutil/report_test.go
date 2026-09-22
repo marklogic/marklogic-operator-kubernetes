@@ -145,3 +145,30 @@ func TestRunDirectoriesAreUnique(t *testing.T) {
 		t.Fatal("runs reused the results directory")
 	}
 }
+
+func TestRetainedArtifactsAreDistinctFromNamespaceCleanup(t *testing.T) {
+	t.Setenv("INTEGRATION_RESULTS_DIR", t.TempDir())
+	report, err := newRunReport("test-id", "backup-s3", t.Name())
+	if err != nil {
+		t.Fatal(err)
+	}
+	run := &Run{report: report}
+	report.redactor.add("private-token")
+	run.RecordRetainedArtifact(t, "backup", "s3://example/test/run-id/")
+	run.RecordRetainedArtifact(t, "sensitive-location", "https://example/path?token=private-token")
+	run.updateReport(t, func(result *runResult) { result.Cleanup = "completed" })
+	contents, err := os.ReadFile(filepath.Join(report.dir, "run.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(contents), "private-token") {
+		t.Fatal("artifact location leaked a registered secret")
+	}
+	var result runResult
+	if err := json.Unmarshal(contents, &result); err != nil {
+		t.Fatal(err)
+	}
+	if result.Cleanup != "completed" || len(result.RetainedArtifacts) != 2 || result.RetainedArtifacts[0].Location != "s3://example/test/run-id/" {
+		t.Fatal("namespace cleanup hid retained external evidence")
+	}
+}
