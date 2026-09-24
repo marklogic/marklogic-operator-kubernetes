@@ -494,20 +494,6 @@ func TestTlsWithMultiNode(t *testing.T) {
 			}
 			time.Sleep(10 * time.Second) // Wait for deletion
 		}
-
-		if err := client.Resources(namespace).Create(ctx, cr); err != nil {
-			t.Fatalf("Failed to create MarklogicCluster: %s", err)
-		}
-		// wait for resource to be created
-		if err := wait.For(
-			conditions.New(client.Resources()).ResourceMatch(cr, func(object k8s.Object) bool {
-				return true
-			}),
-			wait.WithTimeout(3*time.Minute),
-			wait.WithInterval(5*time.Second),
-		); err != nil {
-			t.Fatal(err)
-		}
 		prepareTLSCertDir(t, caCertDir, "")
 		prepareTLSCertDir(t, enodeCertDir, filepath.Join("test", "test_data", "enode_zero_certs", "server.cnf"))
 		prepareTLSCertDir(t, dnodeCertDir, filepath.Join("test", "test_data", "dnode_zero_certs", "server.cnf"))
@@ -540,6 +526,20 @@ func TestTlsWithMultiNode(t *testing.T) {
 		p = e2eutils.RunCommand(fmt.Sprintf("kubectl -n %s create secret generic enode-0-cert --from-file=%s --from-file=%s", namespace, filepath.Join(enodeCertDir, "tls.crt"), filepath.Join(enodeCertDir, "tls.key")))
 		if p.Err() != nil {
 			t.Fatalf("Failed to create enode-0-cert secret: %s. Output: %s", p.Err(), p.Result())
+		}
+
+		if err := client.Resources(namespace).Create(ctx, cr); err != nil {
+			t.Fatalf("Failed to create MarklogicCluster: %s", err)
+		}
+		// wait for resource to be created
+		if err := wait.For(
+			conditions.New(client.Resources()).ResourceMatch(cr, func(object k8s.Object) bool {
+				return true
+			}),
+			wait.WithTimeout(3*time.Minute),
+			wait.WithInterval(5*time.Second),
+		); err != nil {
+			t.Fatal(err)
 		}
 		return ctx
 	})
