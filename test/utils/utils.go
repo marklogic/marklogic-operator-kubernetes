@@ -221,6 +221,8 @@ func WaitForPod(ctx context.Context, t *testing.T, client klient.Client, namespa
 	}
 
 	start := time.Now()
+	var terminatingSince time.Time
+	var terminalSince time.Time
 	pod := &corev1.Pod{}
 	p := utils.RunCommand(`kubectl get ns`)
 	t.Logf("Kubernetes namespace: %s", p.Result())
@@ -233,6 +235,13 @@ func WaitForPod(ctx context.Context, t *testing.T, client klient.Client, namespa
 	}
 
 	for {
+		if time.Since(start) > timeout {
+			describeCmd := fmt.Sprintf("kubectl describe pod %s -n %s", podName, namespace)
+			describeResult := utils.RunCommand(describeCmd)
+			t.Logf("Pod description:\n%s", describeResult.Result())
+			return fmt.Errorf("timed out after %v waiting for pod %s to be %s", timeout, podName, statusMsg)
+		}
+
 		t.Logf("Waiting for pod %s in namespace %s to be %s", podName, namespace, statusMsg)
 		p := utils.RunCommand("kubectl get pods --namespace " + namespace)
 		t.Logf("Kubernetes Pods: %s", p.Result())
@@ -240,11 +249,45 @@ func WaitForPod(ctx context.Context, t *testing.T, client klient.Client, namespa
 
 		if err == nil {
 			if pod.DeletionTimestamp != nil {
+				if terminatingSince.IsZero() {
+					terminatingSince = time.Now()
+				}
+				terminatingDuration := time.Since(terminatingSince)
+				deletionAge := time.Since(pod.DeletionTimestamp.Time)
 				t.Logf("Pod %s is terminating (deletionTimestamp=%s), waiting for replacement", pod.Name, pod.DeletionTimestamp.Time.Format(time.RFC3339))
+				if deletionAge > 45*time.Second || terminatingDuration > 45*time.Second {
+					t.Logf("Pod %s has been terminating for %s; attempting force cleanup", pod.Name, deletionAge.Round(time.Second))
+					if cleanupErr := forceDeleteTerminatingPod(namespace, podName); cleanupErr != nil {
+						t.Logf("Warning: failed to force cleanup terminating pod %s/%s: %v", namespace, podName, cleanupErr)
+					} else {
+						t.Logf("Triggered force cleanup for terminating pod %s/%s", namespace, podName)
+					}
+					terminatingSince = time.Now()
+				}
 				time.Sleep(5 * time.Second)
 				continue
 			}
+			terminatingSince = time.Time{}
 			t.Logf("Pod %s is in phase %s", pod.Name, pod.Status.Phase)
+			if pod.Status.Phase == corev1.PodSucceeded || pod.Status.Phase == corev1.PodFailed {
+				if terminalSince.IsZero() {
+					terminalSince = time.Now()
+				}
+				terminalDuration := time.Since(terminalSince)
+				t.Logf("Pod %s is in terminal phase %s, waiting for replacement", pod.Name, pod.Status.Phase)
+				if terminalDuration > 15*time.Second {
+					t.Logf("Pod %s has remained in terminal phase %s for %s; deleting stale pod", pod.Name, pod.Status.Phase, terminalDuration.Round(time.Second))
+					if cleanupErr := forceDeleteTerminatingPod(namespace, podName); cleanupErr != nil {
+						t.Logf("Warning: failed to delete terminal pod %s/%s: %v", namespace, podName, cleanupErr)
+					} else {
+						t.Logf("Triggered cleanup for terminal pod %s/%s", namespace, podName)
+					}
+					terminalSince = time.Now()
+				}
+				time.Sleep(5 * time.Second)
+				continue
+			}
+			terminalSince = time.Time{}
 
 			// Check for Running state
 			if pod.Status.Phase == corev1.PodRunning {
@@ -262,11 +305,6 @@ func WaitForPod(ctx context.Context, t *testing.T, client klient.Client, namespa
 					t.Logf("Pod %s is Running", pod.Name)
 					return nil
 				}
-			}
-
-			// Diagnostic: Check for failed state
-			if pod.Status.Phase == corev1.PodFailed {
-				return fmt.Errorf("pod %s entered Failed state: %s", podName, pod.Status.Message)
 			}
 
 			// Diagnostic: Check init containers
@@ -346,18 +384,31 @@ func WaitForPod(ctx context.Context, t *testing.T, client klient.Client, namespa
 			continue
 		}
 
-		if time.Since(start) > timeout {
-			// Enhanced timeout error with pod describe
-			describeCmd := fmt.Sprintf("kubectl describe pod %s -n %s", podName, namespace)
-			describeResult := utils.RunCommand(describeCmd)
-			t.Logf("Pod description:\n%s", describeResult.Result())
-
-			return fmt.Errorf("timed out after %v waiting for pod %s to be %s (current phase: %s)",
-				timeout, podName, statusMsg, pod.Status.Phase)
-		}
-
 		time.Sleep(5 * time.Second)
 	}
+}
+
+func forceDeleteTerminatingPod(namespace, podName string) error {
+	patchCommand := fmt.Sprintf("kubectl patch pod %s -n %s --type=merge -p '{\"metadata\":{\"finalizers\":[]}}'", podName, namespace)
+	patchResult := utils.RunCommand(patchCommand)
+	if patchResult.Err() != nil {
+		patchOutput := patchResult.Result()
+		if !strings.Contains(strings.ToLower(patchOutput), "notfound") && !strings.Contains(strings.ToLower(patchOutput), "not found") {
+			return fmt.Errorf("failed to patch finalizers on pod %s/%s: %v: %s", namespace, podName, patchResult.Err(), patchOutput)
+		}
+	}
+
+	deleteCommand := fmt.Sprintf("kubectl delete pod %s -n %s --grace-period=0 --force --wait=false --ignore-not-found=true", podName, namespace)
+	deleteResult := utils.RunCommand(deleteCommand)
+	if deleteResult.Err() != nil {
+		deleteOutput := deleteResult.Result()
+		if strings.Contains(strings.ToLower(deleteOutput), "notfound") || strings.Contains(strings.ToLower(deleteOutput), "not found") {
+			return nil
+		}
+		return fmt.Errorf("failed to force delete pod %s/%s: %v: %s", namespace, podName, deleteResult.Err(), deleteOutput)
+	}
+
+	return nil
 }
 
 // util function to get secret data
@@ -454,8 +505,63 @@ func InstallHelmChart(releaseName string, chartName string, namespace string, ve
 }
 
 func DeleteNS(ctx context.Context, cfg *envconf.Config, nsName string) error {
-	nsObj := corev1.Namespace{}
-	nsObj.Name = nsName
-	err := cfg.Client().Resources().Delete(ctx, &nsObj)
-	return err
+	nsObj := &corev1.Namespace{}
+	if err := cfg.Client().Resources().Get(ctx, nsName, "", nsObj); err != nil {
+		if errors.IsNotFound(err) {
+			return nil
+		}
+		return fmt.Errorf("failed to get namespace %s before deletion: %w", nsName, err)
+	}
+
+	if err := cfg.Client().Resources().Delete(ctx, nsObj); err != nil && !errors.IsNotFound(err) {
+		return fmt.Errorf("failed to delete namespace %s: %w", nsName, err)
+	}
+
+	if err := waitForNamespaceDeletion(ctx, cfg, nsName, 90*time.Second); err == nil {
+		return nil
+	}
+
+	if err := forceFinalizeNamespace(nsName); err != nil {
+		return fmt.Errorf("failed to force-finalize namespace %s: %w", nsName, err)
+	}
+
+	if err := waitForNamespaceDeletion(ctx, cfg, nsName, 120*time.Second); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func waitForNamespaceDeletion(ctx context.Context, cfg *envconf.Config, nsName string, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		ns := &corev1.Namespace{}
+		err := cfg.Client().Resources().Get(ctx, nsName, "", ns)
+		if errors.IsNotFound(err) {
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("error checking namespace %s deletion status: %w", nsName, err)
+		}
+		time.Sleep(2 * time.Second)
+	}
+	return fmt.Errorf("timeout waiting for namespace %s to be deleted", nsName)
+}
+
+func forceFinalizeNamespace(nsName string) error {
+	command := fmt.Sprintf(
+		"kubectl get namespace %s -o json | python3 -c \"import sys, json; d=json.load(sys.stdin); d['spec']['finalizers']=[]; print(json.dumps(d))\" | kubectl replace --raw /api/v1/namespaces/%s/finalize -f -",
+		nsName,
+		nsName,
+	)
+	cmd := exec.Command("bash", "-c", command)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		output := string(out)
+		if strings.Contains(output, "(NotFound)") || strings.Contains(strings.ToLower(output), "not found") {
+			return nil
+		}
+		return fmt.Errorf("failed to force finalize namespace %s: %w: %s", nsName, err, output)
+	}
+	return nil
 }

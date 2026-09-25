@@ -125,6 +125,7 @@ type DataSource struct {
 
 func TestMarklogicCluster(t *testing.T) {
 	trackTest(t)
+	runTopLevelParallel(t)
 	feature := features.New("Marklogic Cluster Test").WithLabel("type", "cluster-test")
 
 	// Create dedicated test namespace
@@ -345,7 +346,7 @@ func TestMarklogicCluster(t *testing.T) {
 	// Setup for MarklogicCluster creation
 	feature.Setup(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 		client := c.Client()
-		marklogicv1.AddToScheme(client.Resources(mlNamespace).GetScheme())
+		ensureMarklogicSchemeRegistered(t, c)
 
 		if err := client.Resources(mlNamespace).Create(ctx, marklogiccluster); err != nil {
 			t.Fatalf("Failed to create MarklogicCluster: %s", err)

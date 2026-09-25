@@ -68,6 +68,7 @@ type resizeOutcome struct {
 // against the cluster-scoped operator and prints a clear pass/fail summary.
 func TestVolumeResizeClusterScoped(t *testing.T) {
 	trackTest(t)
+	runTopLevelParallel(t)
 	feature := features.New("Volume Resize — Cluster-Scoped, Multi-Namespace").
 		WithLabel("type", "volume-resize")
 
@@ -82,7 +83,7 @@ func TestVolumeResizeClusterScoped(t *testing.T) {
 	// ── Create both namespaces and both clusters in parallel ──────────────────
 	feature.Setup(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 		client := c.Client()
-		marklogicv1.AddToScheme(client.Resources().GetScheme())
+		ensureMarklogicSchemeRegistered(t, c)
 
 		var wg sync.WaitGroup
 		errCh := make(chan error, len(resizeNamespaces))
