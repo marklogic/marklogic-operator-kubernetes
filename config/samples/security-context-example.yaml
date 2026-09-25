@@ -46,7 +46,7 @@ spec:
   # container-level security contexts
   haproxy:
     enabled: true
-    image: "haproxytech/haproxy-alpine:3.4.0"
+    image: "haproxytech/haproxy-alpine:3.4.3"
     replicas: 2
     pathBasedRouting: false
     frontendPort: 80
