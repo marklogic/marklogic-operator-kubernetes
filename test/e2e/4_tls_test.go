@@ -605,24 +605,16 @@ func TestTlsWithMultiNode(t *testing.T) {
 			t.Fatal("HTTPS endpoint never became ready")
 		}
 
-		// Poll until multi-node TLS convergence is visible via management APIs.
-		hostsURL := "https://localhost:8002/manage/v2/hosts?view=status&format=json"
+		// Poll until both node certificates are visible via the management API.
+		// The hosts status endpoint can return XML even when format=json is requested,
+		// so it is not a reliable JSON convergence signal on minikube.
 		certsURL := "https://localhost:8002/manage/v2/certificates?format=json"
-		hostsCommand := fmt.Sprintf("curl -k --anyauth -u %s:%s %s", adminUsername, adminPassword, hostsURL)
 		certsCommand := fmt.Sprintf("curl -k --anyauth -u %s:%s %s", adminUsername, adminPassword, certsURL)
 
 		var certs string
-		var hostsRaw string
 		var err error
 		converged := false
 		for i := 0; i < 90; i++ {
-			hostsRaw, err = utils.ExecCmdInPod(podName, namespace, mlContainerName, hostsCommand)
-			if err != nil {
-				t.Logf("Failed to get hosts (attempt %d/90): %v", i+1, err)
-				time.Sleep(2 * time.Second)
-				continue
-			}
-
 			certs, err = utils.ExecCmdInPod(podName, namespace, mlContainerName, certsCommand)
 			if err != nil {
 				t.Logf("Failed to get certificates (attempt %d/90): %v", i+1, err)
@@ -630,17 +622,13 @@ func TestTlsWithMultiNode(t *testing.T) {
 				continue
 			}
 
-			hostCount := gjson.Get(hostsRaw, "host-default-list.list-items.list-count.value").Int()
-			if hostCount == 0 {
-				hostCount = int64(len(gjson.Get(hostsRaw, "host-default-list.list-items.list-item.#.idref").Array()))
-			}
 			certCount := gjson.Get(certs, "certificate-default-list.list-items.list-count.value").Int()
 			if certCount == 0 {
 				certCount = int64(len(gjson.Get(certs, "certificate-default-list.list-items.list-item.#.uriref").Array()))
 			}
 
-			t.Logf("TLS convergence check (attempt %d/90): hosts=%d certs=%d", i+1, hostCount, certCount)
-			if hostCount >= 2 && certCount >= 2 {
+			t.Logf("TLS certificate convergence check (attempt %d/90): certs=%d", i+1, certCount)
+			if certCount >= 2 {
 				converged = true
 				break
 			}
@@ -648,9 +636,8 @@ func TestTlsWithMultiNode(t *testing.T) {
 			time.Sleep(2 * time.Second)
 		}
 		if !converged {
-			t.Logf("Last hosts payload: %s", hostsRaw)
 			t.Logf("Last certs payload: %s", certs)
-			t.Fatalf("Timed out waiting for multi-node TLS convergence (expected >=2 hosts and >=2 certificates)")
+			t.Fatalf("Timed out waiting for both node TLS certificates")
 		}
 		t.Log("Certificates list", certs)
 		certURIs := gjson.Get(certs, `certificate-default-list.list-items.list-item.#.uriref`).Array()
