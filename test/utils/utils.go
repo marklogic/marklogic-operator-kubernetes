@@ -389,7 +389,7 @@ func WaitForPod(ctx context.Context, t *testing.T, client klient.Client, namespa
 }
 
 func forceDeleteTerminatingPod(namespace, podName string) error {
-	patchCommand := fmt.Sprintf("kubectl patch pod %s -n %s --type=merge -p '{\"metadata\":{\"finalizers\":[]}}' --ignore-not-found", podName, namespace)
+	patchCommand := fmt.Sprintf("kubectl patch pod %s -n %s --type=merge -p '{\"metadata\":{\"finalizers\":[]}}'", podName, namespace)
 	patchResult := utils.RunCommand(patchCommand)
 	if patchResult.Err() != nil {
 		patchOutput := patchResult.Result()
