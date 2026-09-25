@@ -17,6 +17,7 @@ import (
 	marklogicv1 "github.com/marklogic/marklogic-operator-kubernetes/api/v1"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -106,17 +107,34 @@ var (
 	trackMu      sync.Mutex
 	trackedTests []testResult
 
-	marklogicSchemeOnce sync.Once
-	marklogicSchemeErr  error
+	schemeRegistrationMu     sync.Mutex
+	marklogicSchemeOnce      sync.Once
+	marklogicSchemeErr       error
+	apiextensionsSchemeOnce  sync.Once
+	apiextensionsSchemeError error
 )
 
 func ensureMarklogicSchemeRegistered(t *testing.T, c *envconf.Config) {
 	t.Helper()
 	marklogicSchemeOnce.Do(func() {
+		schemeRegistrationMu.Lock()
+		defer schemeRegistrationMu.Unlock()
 		marklogicSchemeErr = marklogicv1.AddToScheme(c.Client().Resources().GetScheme())
 	})
 	if marklogicSchemeErr != nil {
 		t.Fatalf("Failed to register MarkLogic API scheme: %v", marklogicSchemeErr)
+	}
+}
+
+func ensureAPIEExtensionsSchemeRegistered(t *testing.T, c *envconf.Config) {
+	t.Helper()
+	apiextensionsSchemeOnce.Do(func() {
+		schemeRegistrationMu.Lock()
+		defer schemeRegistrationMu.Unlock()
+		apiextensionsSchemeError = apiextensionsv1.AddToScheme(c.Client().Resources().GetScheme())
+	})
+	if apiextensionsSchemeError != nil {
+		t.Fatalf("Failed to register API extensions scheme: %v", apiextensionsSchemeError)
 	}
 }
 

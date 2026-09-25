@@ -377,7 +377,7 @@ pipeline {
         booleanParam(name: 'PUBLISH_IMAGE', defaultValue: false, description: 'Publish image to internal registry')
         string(name: 'emailList', defaultValue: emailList, description: 'List of email for build notification', trim: true)
         booleanParam(name: 'VERIFY_ISTIO_AMBIENT', defaultValue: true, description: 'Run Istio ambient mode e2e tests. For Minikube, Istio is installed only when this test path is selected; no dedicated cluster is created.')
-        string(name: 'E2E_TOP_LEVEL_PARALLELISM', defaultValue: '1', description: 'Max test parallelism for e2e paths on minikube and EKS (positive integer).', trim: true)
+        string(name: 'E2E_TOP_LEVEL_PARALLELISM', defaultValue: '1', description: 'Max e2e test parallelism (positive integer). Use at most 2 for minikube and 4 for EKS.', trim: true)
         string(name: 'EKS_MARKLOGIC_IMAGE_TAG', defaultValue: 'latest-12', description: 'MarkLogic image tag to pull from the EKS ECR registry when E2E_RUNTIME=eks. The full ECR URL is constructed at runtime from the AWS account ID resolved via STS.', trim: true)
     }
 
