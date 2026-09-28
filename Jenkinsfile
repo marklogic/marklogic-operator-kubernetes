@@ -109,16 +109,16 @@ void resultNotification(status) {
     } else {
         emailList = params.emailList
     }
-    jira_link = "https://progresssoftware.atlassian.net/browse/${JIRA_ID}"
-    email_body = "<b>Jenkins pipeline for</b> ${env.JOB_NAME} <br><b>Build Number: </b>${env.BUILD_NUMBER} <br><br><b>Build URL: </b><br><a href='${env.BUILD_URL}'>${env.BUILD_URL}</a>"
-    jira_email_body = "${email_body} <br><br><b>Jira URL: </b><br><a href='${jira_link}'>${jira_link}</a>"
+    def jiraLink = "https://progresssoftware.atlassian.net/browse/${JIRA_ID}"
+    def emailBody = "<b>Jenkins pipeline for</b> ${env.JOB_NAME} <br><b>Build Number: </b>${env.BUILD_NUMBER} <br><br><b>Build URL: </b><br><a href='${env.BUILD_URL}'>${env.BUILD_URL}</a>"
+    def jiraEmailBody = "${emailBody} <br><br><b>Jira URL: </b><br><a href='${jiraLink}'>${jiraLink}</a>"
 
     if (JIRA_ID) {
         def comment = [ body: "Jenkins pipeline build result: ${status}" ]
         jiraAddComment site: 'JIRA', idOrKey: JIRA_ID, failOnError: false, input: comment
-        mail charset: 'UTF-8', mimeType: 'text/html', to: "${emailList}", body: "${jira_email_body}", subject: "🥷 ${status}: ${env.JOB_NAME} #${env.BUILD_NUMBER} - ${JIRA_ID}"
+        mail charset: 'UTF-8', mimeType: 'text/html', to: "${emailList}", body: "${jiraEmailBody}", subject: "🥷 ${status}: ${env.JOB_NAME} #${env.BUILD_NUMBER} - ${JIRA_ID}"
     } else {
-        mail charset: 'UTF-8', mimeType: 'text/html', to: "${emailList}", body: "${email_body}", subject: "🥷 ${status}: ${env.JOB_NAME} #${env.BUILD_NUMBER}"
+        mail charset: 'UTF-8', mimeType: 'text/html', to: "${emailList}", body: "${emailBody}", subject: "🥷 ${status}: ${env.JOB_NAME} #${env.BUILD_NUMBER}"
     }
 }
 
@@ -385,6 +385,10 @@ pipeline {
         stage('Pre-Build-Check') {
             steps {
                 preBuildCheck()
+                sh '''
+                    rm -rf test/test_results
+                    mkdir -p test/test_results
+                '''
             }
         }
 
