@@ -492,19 +492,19 @@ pipeline {
                             export MINIKUBE_PROFILE='${clusterMinikubeProfile}'
                             export KUBECONFIG='/space/.kube-config-cluster'
                             export MINIKUBE_HOME='/space/minikube-cluster/'
+                            trap 'make e2e-cleanup-minikube MINIKUBE_PROFILE=${clusterMinikubeProfile} MINIKUBE_REUSE=false' EXIT
                             # Apply configurable parallelism across all minikube e2e paths.
                             export E2E_TOP_LEVEL_PARALLELISM='${topLevelParallelism}'
                             export E2E_TEST_PARALLELISM='${topLevelParallelism}'
 
                             echo '=====Starting cluster-scoped shard====='
-                            make e2e-setup-minikube IMG=${operatorRepo}:${VERSION} MINIKUBE_PROFILE=${clusterMinikubeProfile} MINIKUBE_REUSE=true E2E_SETUP_ISTIO=${clusterSetupIstio}
+                            make e2e-setup-minikube IMG=${operatorRepo}:${VERSION} MINIKUBE_PROFILE=${clusterMinikubeProfile} MINIKUBE_REUSE=false E2E_SETUP_ISTIO=${clusterSetupIstio}
                             ${clusterTestCommand}
                             if [ '${runIstio}' = 'true' ]; then
                                 make e2e-test-istio IMG=${operatorRepo}:${VERSION} E2E_ISTIO_AMBIENT=true MINIKUBE_PROFILE=${clusterMinikubeProfile} ${istioGoTestOverride}
                             else
                                 echo '=====Istio tests skipped for cluster shard====='
                             fi
-                            make e2e-cleanup-minikube MINIKUBE_PROFILE=${clusterMinikubeProfile} MINIKUBE_REUSE=true
                             echo '=====Cluster-scoped shard complete====='
                         }
 
@@ -512,13 +512,13 @@ pipeline {
                             export MINIKUBE_PROFILE='${namespaceMinikubeProfile}'
                             export KUBECONFIG='/space/.kube-config-namespace'
                             export MINIKUBE_HOME='/space/minikube-namespace/'
+                            trap 'make e2e-cleanup-minikube MINIKUBE_PROFILE=${namespaceMinikubeProfile} MINIKUBE_REUSE=false' EXIT
                             export E2E_TOP_LEVEL_PARALLELISM='${topLevelParallelism}'
                             export E2E_TEST_PARALLELISM='${topLevelParallelism}'
 
                             echo '=====Starting namespace-scoped shard====='
-                            make e2e-setup-minikube IMG=${operatorRepo}:${VERSION} MINIKUBE_PROFILE=${namespaceMinikubeProfile} MINIKUBE_REUSE=true E2E_SETUP_ISTIO=false
+                            make e2e-setup-minikube IMG=${operatorRepo}:${VERSION} MINIKUBE_PROFILE=${namespaceMinikubeProfile} MINIKUBE_REUSE=false E2E_SETUP_ISTIO=false
                             ${namespaceTestCommand}
-                            make e2e-cleanup-minikube MINIKUBE_PROFILE=${namespaceMinikubeProfile} MINIKUBE_REUSE=true
                             echo '=====Namespace-scoped shard complete====='
                         }
 
