@@ -413,8 +413,9 @@ pipeline {
                     def runNamespaceScoped = params.E2E_SCOPE in ['namespace-only', 'both']
                     def clusterScope = params.E2E_SCOPE in ['dynamic-host', 'volume-resize'] ? params.E2E_SCOPE : 'cluster'
                     def topLevelParallelism = params.E2E_TOP_LEVEL_PARALLELISM?.trim() ?: '1'
-                    if (!(topLevelParallelism ==~ /[1-9][0-9]*/)) {
-                        error "E2E_TOP_LEVEL_PARALLELISM must be a positive integer (got: '${params.E2E_TOP_LEVEL_PARALLELISM}')."
+					if (!(topLevelParallelism ==~ /[1-4]/)) {
+						error "E2E_TOP_LEVEL_PARALLELISM must be an integer from 1 to 4 (got: '${params.E2E_TOP_LEVEL_PARALLELISM}')."
+					}
                     }
 
                     if (!runClusterScoped && !runNamespaceScoped) {
