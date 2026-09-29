@@ -294,7 +294,7 @@ func TestMain(m *testing.M) {
 		// Ensure stale namespaces from interrupted prior runs do not cause
 		// namespace-already-exists conflicts in individual tests.
 		func(ctx context.Context, cfg *envconf.Config) (context.Context, error) {
-			if err := cleanupStaleE2ENamespaces(ctx, cfg.Client(), staleE2ENamespaces); err != nil {
+			if err := cleanupStaleE2ENamespaces(ctx, cfg, staleE2ENamespaces); err != nil {
 				return ctx, err
 			}
 			return ctx, nil
@@ -700,15 +700,26 @@ func waitForNamespaceDeletionByName(ctx context.Context, client klient.Client, n
 	return fmt.Errorf("timeout waiting for namespace %s to be deleted after force-finalize", nsName)
 }
 
-func forceDeleteNamespacedTestResources(nsName string) {
+func kubectlConfigArgs(cfg *envconf.Config) string {
+	args := fmt.Sprintf(" --kubeconfig=%q", cfg.KubeconfigFile())
+	if contextName := cfg.KubeContext(); contextName != "" {
+		args += fmt.Sprintf(" --context=%q", contextName)
+	}
+	return args
+}
+
+func forceDeleteNamespacedTestResources(cfg *envconf.Config, nsName string) {
+	kubectlArgs := kubectlConfigArgs(cfg)
 	commands := []string{
-		"kubectl --request-timeout=20s delete pods --all -n %s --ignore-not-found --force --grace-period=0 --wait=false",
-		"kubectl --request-timeout=20s delete marklogicclusters.marklogic.progress.com --all -n %s --ignore-not-found --wait=false",
-		"kubectl --request-timeout=20s delete marklogicgroups.marklogic.progress.com --all -n %s --ignore-not-found --wait=false",
+		"kubectl%s --request-timeout=20s delete pods --all -n %s --ignore-not-found --force --grace-period=0 --wait=false",
+		"kubectl%s --request-timeout=20s patch marklogicclusters.marklogic.progress.com --all -n %s --type=merge -p '{\"metadata\":{\"finalizers\":[]}}'",
+		"kubectl%s --request-timeout=20s delete marklogicclusters.marklogic.progress.com --all -n %s --ignore-not-found --wait=false",
+		"kubectl%s --request-timeout=20s patch marklogicgroups.marklogic.progress.com --all -n %s --type=merge -p '{\"metadata\":{\"finalizers\":[]}}'",
+		"kubectl%s --request-timeout=20s delete marklogicgroups.marklogic.progress.com --all -n %s --ignore-not-found --wait=false",
 	}
 
 	for _, commandTmpl := range commands {
-		command := fmt.Sprintf(commandTmpl, nsName)
+		command := fmt.Sprintf(commandTmpl, kubectlArgs, nsName)
 		result := utils.RunCommand(command)
 		if result.Err() != nil {
 			log.Printf("Warning: stale resource cleanup command failed for namespace %s: %s (err=%v)", nsName, command, result.Err())
@@ -716,7 +727,8 @@ func forceDeleteNamespacedTestResources(nsName string) {
 	}
 }
 
-func ensureFreshNamespace(ctx context.Context, client klient.Client, nsName string) error {
+func ensureFreshNamespace(ctx context.Context, cfg *envconf.Config, nsName string) error {
+	client := cfg.Client()
 	ns := &corev1.Namespace{}
 	err := client.Resources().Get(ctx, nsName, "", ns)
 	if apierrors.IsNotFound(err) {
@@ -727,7 +739,7 @@ func ensureFreshNamespace(ctx context.Context, client klient.Client, nsName stri
 	}
 
 	log.Printf("Ensuring stale namespace is removed: %s", nsName)
-	forceDeleteNamespacedTestResources(nsName)
+	forceDeleteNamespacedTestResources(cfg, nsName)
 
 	if err := client.Resources().Delete(ctx, ns); err != nil && !apierrors.IsNotFound(err) {
 		return fmt.Errorf("failed to delete namespace %s: %w", nsName, err)
@@ -738,7 +750,7 @@ func ensureFreshNamespace(ctx context.Context, client klient.Client, nsName stri
 	}
 
 	log.Printf("Namespace %s is still terminating; forcing finalizer cleanup", nsName)
-	forceDeleteNamespacedTestResources(nsName)
+	forceDeleteNamespacedTestResources(cfg, nsName)
 	if err := forceFinalizeNamespace(nsName); err != nil {
 		return fmt.Errorf("failed to force-finalize namespace %s: %w", nsName, err)
 	}
@@ -749,9 +761,9 @@ func ensureFreshNamespace(ctx context.Context, client klient.Client, nsName stri
 	return nil
 }
 
-func cleanupStaleE2ENamespaces(ctx context.Context, client klient.Client, namespaces []string) error {
+func cleanupStaleE2ENamespaces(ctx context.Context, cfg *envconf.Config, namespaces []string) error {
 	for _, nsName := range namespaces {
-		if err := ensureFreshNamespace(ctx, client, nsName); err != nil {
+		if err := ensureFreshNamespace(ctx, cfg, nsName); err != nil {
 			return err
 		}
 	}

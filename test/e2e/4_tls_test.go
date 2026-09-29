@@ -448,6 +448,7 @@ func TestTlsWithMultiNode(t *testing.T) {
 
 	feature.Setup(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 		client := c.Client()
+		ensureMarklogicSchemeRegistered(t, c)
 
 		// Check if namespace exists and wait if it's terminating
 		ns := &corev1.Namespace{}

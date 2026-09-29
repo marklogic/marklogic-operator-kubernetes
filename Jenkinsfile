@@ -416,7 +416,6 @@ pipeline {
 					if (!(topLevelParallelism ==~ /[1-4]/)) {
 						error "E2E_TOP_LEVEL_PARALLELISM must be an integer from 1 to 4 (got: '${params.E2E_TOP_LEVEL_PARALLELISM}')."
 					}
-                    }
 
                     if (!runClusterScoped && !runNamespaceScoped) {
                         echo "No e2e suites selected (E2E_SCOPE=${params.E2E_SCOPE}); skipping e2e tests."
