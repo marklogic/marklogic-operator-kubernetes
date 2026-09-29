@@ -17,6 +17,12 @@ OPERATOR_ROLE="${OPERATOR_ROLE:-marklogic-operator}"
 OPERATOR_USER="${OPERATOR_USER:-${CLUSTER_NAME}-operator}"
 LOCAL_MANAGE_PORT="${LOCAL_MANAGE_PORT:-18002}"
 WAIT_TIMEOUT="${WAIT_TIMEOUT:-20m}"
+MANAGE_SCHEME="${MANAGE_SCHEME:-https}"
+
+manage_curl_args=()
+if [[ "${MANAGE_SCHEME}" == "https" ]]; then
+  manage_curl_args+=(--insecure)
+fi
 
 require_command() {
   command -v "$1" >/dev/null 2>&1 || {
@@ -75,7 +81,8 @@ start_manage_port_forward() {
   PORT_FORWARD_PID=$!
   export PORT_FORWARD_PID
   for _ in {1..30}; do
-    if curl --silent --output /dev/null "http://127.0.0.1:${LOCAL_MANAGE_PORT}/manage/v2"; then
+    if curl --silent --output /dev/null "${manage_curl_args[@]}" \
+      "${MANAGE_SCHEME}://127.0.0.1:${LOCAL_MANAGE_PORT}/manage/v2"; then
       return
     fi
     if ! kill -0 "${PORT_FORWARD_PID}" 2>/dev/null; then
@@ -101,9 +108,9 @@ manage_request() {
   local method="$3"
   local path="$4"
   local body_file="${5:-}"
-  local args=(--silent --show-error --fail-with-body --anyauth --user "${username}:${password}" --request "${method}")
+  local args=(--silent --show-error --fail-with-body "${manage_curl_args[@]}" --anyauth --user "${username}:${password}" --request "${method}")
   if [[ -n "${body_file}" ]]; then
     args+=(--header 'Content-Type: application/json' --data-binary "@${body_file}")
   fi
-  curl "${args[@]}" "http://127.0.0.1:${LOCAL_MANAGE_PORT}${path}"
+  curl "${args[@]}" "${MANAGE_SCHEME}://127.0.0.1:${LOCAL_MANAGE_PORT}${path}"
 }

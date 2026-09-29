@@ -18,6 +18,11 @@
       "kind": "execute"
     },
     {
+      "privilege-name": "admin-issue-dynamic-host-token",
+      "action": "http://marklogic.com/xdmp/privileges/admin/issue-dynamic-host-token",
+      "kind": "execute"
+    },
+    {
       "privilege-name": "xdmp:eval",
       "action": "http://marklogic.com/xdmp/privileges/xdmp-eval",
       "kind": "execute"

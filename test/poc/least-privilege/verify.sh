@@ -17,6 +17,7 @@ done
 evidence_dir="${EVIDENCE_DIR:-${SCRIPT_DIR}/evidence}"
 mkdir -p "${evidence_dir}"
 results_file="${evidence_dir}/results.tsv"
+verification_started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 printf 'test\texpected\tactual\tresult\n' >"${results_file}"
 
 record_result() {
@@ -38,11 +39,11 @@ expect_http() {
   local response_file status
   response_file="$(mktemp)"
   TEMP_FILES+=("${response_file}")
-  local args=(--silent --show-error --output "${response_file}" --write-out '%{http_code}' --anyauth --user "${username}:${password}" --request "${method}")
+  local args=(--silent --show-error --output "${response_file}" --write-out '%{http_code}' "${manage_curl_args[@]}" --anyauth --user "${username}:${password}" --request "${method}")
   if [[ -n "${body_file}" ]]; then
     args+=(--header 'Content-Type: application/json' --data-binary "@${body_file}")
   fi
-  status="$(curl "${args[@]}" "http://127.0.0.1:${LOCAL_MANAGE_PORT}${path}")"
+  status="$(curl "${args[@]}" "${MANAGE_SCHEME}://127.0.0.1:${LOCAL_MANAGE_PORT}${path}")"
   if [[ "${status}" == "${expected_status}" ]]; then
     record_result "${test_name}" "${expected_status}" "${status}" PASS
     return
@@ -54,10 +55,10 @@ expect_http() {
 
 cleanup_probe_user() {
   if [[ "${PROBE_CREATED:-false}" == "true" ]]; then
-    curl --silent --output /dev/null --anyauth \
+    curl --silent --output /dev/null "${manage_curl_args[@]}" --anyauth \
       --user "${admin_username}:${admin_password}" \
       --request DELETE \
-      "http://127.0.0.1:${LOCAL_MANAGE_PORT}/manage/v2/users/${probe_user}" || true
+      "${MANAGE_SCHEME}://127.0.0.1:${LOCAL_MANAGE_PORT}/manage/v2/users/${probe_user}" || true
   fi
 }
 
@@ -117,6 +118,7 @@ jq 'walk(if type == "object" then with_entries(select(.key | test("password|cred
 for expected_value in manage-admin pki admin-ui-user \
   http://marklogic.com/xdmp/privileges/create-user \
   http://marklogic.com/xdmp/privileges/remove-dynamic-hosts \
+  http://marklogic.com/xdmp/privileges/admin/issue-dynamic-host-token \
   http://marklogic.com/xdmp/privileges/xdmp-eval \
   http://marklogic.com/xdmp/privileges/create-external-security; do
   if ! jq -e --arg value "${expected_value}" '.. | strings | select(. == $value)' "${role_response}" >/dev/null; then
@@ -148,11 +150,11 @@ jq --null-input \
   --arg username "${probe_user}" \
   --arg password "$(openssl rand -base64 30 | tr -d '\n')" \
   '{"user-name": $username, "password": $password, "role": ["admin"]}' >"${probe_payload}"
-probe_status="$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' --anyauth \
+probe_status="$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' "${manage_curl_args[@]}" --anyauth \
   --user "${operator_username}:${operator_password}" \
   --header 'Content-Type: application/json' \
   --data-binary "@${probe_payload}" \
-  "http://127.0.0.1:${LOCAL_MANAGE_PORT}/manage/v2/users")"
+  "${MANAGE_SCHEME}://127.0.0.1:${LOCAL_MANAGE_PORT}/manage/v2/users")"
 if [[ "${probe_status}" == 2* ]]; then
   PROBE_CREATED=true
   record_result admin-role-escalation denied "${probe_status}" FAIL
@@ -183,7 +185,7 @@ wait_for_cluster_ready
 kubectl get "marklogiccluster/${CLUSTER_NAME}" -n "${TEST_NAMESPACE}" -o yaml >"${evidence_dir}/cluster-redacted.yaml"
 kubectl get role,rolebinding -n "${TEST_NAMESPACE}" -o yaml >"${evidence_dir}/kubernetes-rbac.yaml"
 kubectl get clusterrole,clusterrolebinding -l "app.kubernetes.io/instance=${RELEASE_NAME}" -o yaml >"${evidence_dir}/cluster-rbac-exceptions.yaml"
-kubectl logs -n "${OPERATOR_NAMESPACE}" deployment/marklogic-operator-controller-manager --since=30m \
+kubectl logs -n "${OPERATOR_NAMESPACE}" deployment/marklogic-operator-controller-manager --since-time="${verification_started_at}" \
   | sed -E 's/(password|credential|authorization)[^,}]*/\1=<redacted>/Ig' >"${evidence_dir}/operator-redacted.log"
 
 if grep -Eiq 'unauthorized|forbidden|authentication failed|permission denied' "${evidence_dir}/operator-redacted.log"; then

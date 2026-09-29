@@ -8,11 +8,8 @@ This harness tests the MarkLogic-side role and user design from the `MarkLogic O
 - Kubernetes 1.30 or later, Helm 3, `curl`, `jq`, and `openssl` are installed.
 - Rancher Desktop has at least 6 GiB memory and 20 GiB free disk.
 - A default dynamic StorageClass exists.
-- Public images `progressofficial/marklogic-operator-kubernetes:1.3.1` and `progressofficial/marklogic-db:12.0.3-ubi9-rootless-2.2.6` are reachable.
-
-The published operator and baseline MarkLogic images do not advertise `linux/arm64`. Setup builds the operator locally for arm64. The baseline MarkLogic image is pinned to its verified amd64 manifest digest and runs through Rancher Desktop's Rosetta/binfmt support, which must be enabled.
-
-An in-place switch from this baseline to an ARM MarkLogic image is not supported because existing forest labels record the `x86_64` architecture. Use fresh persistent storage or a supported backup/restore migration when changing architecture.
+- Public image `progressofficial/marklogic-db:12.1.0-ubi9-rootless-2.3.0` is reachable.
+- The Operator image is built locally from the current source.
 
 The test creates namespaces `ml-lp-operator` and `ml-lp-test`. Change names through the environment variables defined in `common.sh` only when required.
 
@@ -23,9 +20,12 @@ From the repository root:
 ```bash
 bash test/poc/least-privilege/setup.sh
 bash test/poc/least-privilege/verify.sh
+bash test/poc/least-privilege/verify-tls-dynamic.sh
 ```
 
-Verification replaces the MarkLogic pod using the operator credential and confirms that the bootstrap Secret remains available for recovery. The PoC never deletes the bootstrap admin Secret.
+Verification replaces the static MarkLogic pods using the operator credential, validates self-signed TLS, scales the ephemeral dynamic group from one to two replicas and back to one, and confirms that the bootstrap Secret remains available for recovery. The PoC never deletes the bootstrap admin Secret.
+
+See [TLS-DYNAMIC-POC.md](TLS-DYNAMIC-POC.md) for the complete TLS and dynamic-node design, defects, fixes, execution flow, and validation results.
 
 ## Expected Role
 
@@ -35,6 +35,7 @@ The `marklogic-operator` role inherits `manage-admin`, `pki`, and `admin-ui-user
 | --- | --- |
 | `create-user` | `http://marklogic.com/xdmp/privileges/create-user` |
 | `xdmp:remove-dynamic-hosts` | `http://marklogic.com/xdmp/privileges/remove-dynamic-hosts` |
+| `admin-issue-dynamic-host-token` | `http://marklogic.com/xdmp/privileges/admin/issue-dynamic-host-token` |
 | `xdmp:eval` | `http://marklogic.com/xdmp/privileges/xdmp-eval` |
 | `create-external-security` | `http://marklogic.com/xdmp/privileges/create-external-security` |
 
@@ -51,14 +52,16 @@ The verifier writes only redacted evidence under `test/poc/least-privilege/evide
 - `kubernetes-rbac.yaml`: namespaced Role and RoleBinding inventory.
 - `cluster-rbac-exceptions.yaml`: cluster-scoped exceptions, normally the read-only StorageClass role.
 - `operator-redacted.log`: recent controller log with credential-related values redacted.
+- `tls-dynamic-results.tsv`: TLS and dynamic-host pass/fail matrix.
+- `dynamic-group-redacted.json`: final one-replica dynamic lifecycle status.
+- `dynamic-events.txt`: dynamic-group Kubernetes events.
 
 Do not commit evidence without reviewing it for environment-specific or sensitive content.
 
 ## Limitations
 
 - Rancher Desktop does not prove multi-node availability or failure-domain behavior.
-- The base test does not invoke TLS, OAuth, or dynamic-host code paths.
-- The current product code has a separate dynamic-host credential path. Validate that path independently before claiming complete removal of admin usage.
+- OAuth is not covered by this PoC.
 - The PoC provisions the MarkLogic role and user externally. Automatic `EnsureOperatorRole` and operator-user reconciliation remain follow-on product work.
 
 ## Cleanup

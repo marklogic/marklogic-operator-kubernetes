@@ -19,8 +19,10 @@ The PoC covered:
 - Readiness behavior after MarkLogic security is enabled.
 - Clean teardown and installation from scratch.
 - Manual MarkLogic image upgrade validation.
+- Self-signed TLS on default application servers.
+- Dynamic evaluator join, restart recovery, scale-up, and scale-down.
 
-The PoC did not validate production high availability, TLS, OAuth, dynamic-host operations, or automatic product reconciliation of the MarkLogic role and user.
+The PoC did not validate production high availability, OAuth, or automatic product reconciliation of the MarkLogic role and user.
 
 ## Environment
 
@@ -32,9 +34,9 @@ The PoC did not validate production high availability, TLS, OAuth, dynamic-host 
 | Operator namespace | `ml-lp-operator` |
 | Test namespace | `ml-lp-test` |
 | MarklogicCluster | `least-privilege` |
-| MarklogicGroup / StatefulSet | `node` |
-| Replica count | 3 |
-| Operator image | Locally built image using the PoC values |
+| MarklogicGroups / StatefulSets | `node`, `dynamic` |
+| Replica count | 3 static, 1 dynamic after lifecycle test |
+| Operator image | `marklogic-operator-kubernetes:ml-lp-tls-dynamic-fix-v4` |
 | Initial MarkLogic image | `progressofficial/marklogic-db:12.0.3-ubi9-rootless-2.2.6` |
 | Upgraded MarkLogic image | `progressofficial/marklogic-db:12.1.0-ubi9-rootless-2.3.0` |
 
@@ -48,6 +50,7 @@ The PoC harness is under `test/poc/least-privilege/`.
 | `role.json` | Defines the least-privilege MarkLogic role. |
 | `setup.sh` | Installs the Operator and cluster, provisions the role/user, creates the operator Secret, and performs credential handoff. |
 | `verify.sh` | Runs positive and negative authorization checks and captures redacted evidence. |
+| `verify-tls-dynamic.sh` | Verifies TLS transport and dynamic scale-up/scale-down lifecycle. |
 | `common.sh` | Provides context checks, Secret access, waits, Manage API helpers, and port-forward lifecycle handling. |
 | `cleanup.sh` | Removes PoC resources, with explicit flags for PVC and namespace deletion. |
 | `values.yaml` | Configures the locally built Operator image. |
@@ -78,6 +81,7 @@ It also receives these execute privileges:
 | --- | --- |
 | `create-user` | `http://marklogic.com/xdmp/privileges/create-user` |
 | `xdmp:remove-dynamic-hosts` | `http://marklogic.com/xdmp/privileges/remove-dynamic-hosts` |
+| `admin-issue-dynamic-host-token` | `http://marklogic.com/xdmp/privileges/admin/issue-dynamic-host-token` |
 | `xdmp:eval` | `http://marklogic.com/xdmp/privileges/xdmp-eval` |
 | `create-external-security` | `http://marklogic.com/xdmp/privileges/create-external-security` |
 
@@ -86,6 +90,8 @@ It also receives these execute privileges:
 Static joining calls `POST /admin/v1/cluster-config`, which requires the protected `admin-ui` privilege. Assigning `admin-ui` directly to the custom role was silently discarded by MarkLogic. Inheriting the built-in `admin-ui-user` role was therefore required.
 
 Without it, joining returned HTTP 403 with `SEC-NOADMIN`. The returned HTML error body was then incorrectly treated as `/tmp/cluster.zip`, causing the local apply request to fail with `XDMP-INVZIP`.
+
+MarkLogic 12.1 also returned HTTP 403 for dynamic token issuance with inherited `manage-admin`. The custom role therefore requires the narrower `admin-issue-dynamic-host-token` execute privilege. Dynamic host removal continues to use `xdmp:remove-dynamic-hosts`.
 
 ## Setup and Credential Handoff
 
@@ -133,6 +139,14 @@ test -f /tmp/marklogic_ready && curl -s -o /dev/null http://localhost:7997/
 ```
 
 After security initialization, port 7997 can return HTTP 401 while MarkLogic is reachable and healthy. `curl -f` interpreted that authenticated response as a failure and kept joined pods unready. The revised probe still requires the wrapper completion marker and successful HTTP connectivity but does not require a 2xx response.
+
+### TLS transition and dynamic lifecycle
+
+- Bootstrap initialization now falls back to authenticated HTTP while an existing cluster transitions to HTTPS, preventing repeated `instance-admin` initialization.
+- Dynamic host `/admin/v1/init` always uses HTTP because a new host has not joined or inherited cluster TLS configuration yet.
+- Existing generated manage-admin credentials are verified when least-privilege user lookup returns HTTP 403; user creation is attempted only when those credentials do not authenticate.
+- Mixed aggregate host status now resolves each host through its per-host status endpoint, so one offline dynamic member does not make every static bootstrap host appear offline.
+- Focused client tests cover TLS management with HTTP dynamic init, restricted user lookup, and mixed online/offline host status.
 
 ## Validation Performed
 
@@ -192,6 +206,17 @@ progressofficial/marklogic-db:12.1.0-ubi9-rootless-2.3.0
 
 The manual upgrade completed without observed issues. The resulting three-node cluster was healthy, with all three pods Ready and the Manage API reporting three total hosts and zero offline hosts.
 
+### TLS and dynamic hosts
+
+The dedicated verifier passed all checks under `least-privilege-operator`:
+
+- Authenticated HTTPS Manage API returned 200; plaintext HTTP returned 403.
+- The generated `least-privilege-manage-admin` Secret exists.
+- The initial dynamic host reached `Idle/1`, `joined`, with a nonempty host ID.
+- No dynamic PVC was created.
+- Scale-up reached `Idle/2`.
+- Scale-down deleted `dynamic-1` and returned to `Idle/1`.
+
 ## Current Source and Runtime State
 
 At the time this report was written, `cluster.yaml` declares:
@@ -200,11 +225,13 @@ At the time this report was written, `cluster.yaml` declares:
 image: progressofficial/marklogic-db:12.1.0-ubi9-rootless-2.3.0
 auth:
   secretName: least-privilege-admin
+tls:
+  enableOnDefaultAppServers: true
 ```
 
 This file is the bootstrap declaration. `setup.sh` subsequently patches the live custom resource to `least-privilege-operator`.
 
-The current live custom resource matches the source image and has three healthy nodes. It currently references `least-privilege-admin`, not `least-privilege-operator`, because the bootstrap declaration was applied after the earlier handoff. Both Secrets are retained, but the runtime credential handoff is not active in this latest state. Re-running the handoff step and rotating `OnDelete` pods is required before claiming that the current runtime uses only the least-privilege Secret.
+The current live custom resource references `least-privilege-operator`. All three static pods and the dynamic pod are Ready on templates that reference the operator Secret. The bootstrap Secret remains retained for recovery. Dynamic status is `Idle/1` after the completed scale-up and scale-down test.
 
 ## Defects and Lessons Learned
 
@@ -217,6 +244,9 @@ The current live custom resource matches the source image and has three healthy 
 - HTTP 401 can prove service reachability after security is enabled and must not automatically fail the readiness probe.
 - Unique local Operator tags are needed with `IfNotPresent` to avoid testing a stale cached image.
 - Bootstrap credential retention provides a necessary recovery path without requiring workloads to continue using administrator credentials.
+- Bootstrap HTTPS and pre-join dynamic-host HTTP are distinct transport phases.
+- Aggregate host status cannot identify which host is offline; mixed summaries require per-host status queries.
+- MarkLogic 12.1 requires the explicit token-issuance privilege for this least-privilege role.
 
 ## Acceptance Outcome
 
@@ -227,18 +257,16 @@ The least-privilege objective passed for static one-node and three-node operatio
 - Runtime workloads can use only the operator Secret.
 - The bootstrap admin Secret remains available for controlled recovery.
 - Three hosts can join and report online with the corrected join and readiness logic.
+- TLS remains active through pod rotation and least-privilege handoff.
+- Dynamic hosts can join, scale up, and scale down using the dedicated operator identity.
 - The manual upgrade from MarkLogic `12.0.3-ubi9-rootless-2.2.6` to `12.1.0-ubi9-rootless-2.3.0` completed without observed issues.
-
-The current live custom resource uses the bootstrap admin Secret. This does not invalidate the completed least-privilege validation, but it means the latest runtime is not presently in the final handoff state.
 
 ## Remaining Work
 
 - Implement product-level reconciliation for automatic creation and maintenance of the MarkLogic role and operator user.
-- Reapply the operator-Secret handoff to the current cluster and rotate all `OnDelete` pods, then verify their revision and mounted Secret.
-- Validate dynamic-host workflows and their separate credential path.
-- Validate TLS and OAuth configurations.
+- Validate OAuth configurations.
 - Validate production failure domains and multi-node availability outside Rancher Desktop.
-- Add focused automated tests for join restart detection, online-host checks, and authenticated readiness responses.
+- Add broader integration coverage for TLS transition and dynamic-host lifecycle recovery.
 
 ## Commands
 
@@ -247,6 +275,7 @@ From the repository root:
 ```bash
 bash test/poc/least-privilege/setup.sh
 bash test/poc/least-privilege/verify.sh
+bash test/poc/least-privilege/verify-tls-dynamic.sh
 ```
 
 Standard cleanup retains PVCs and namespaces unless explicitly requested:

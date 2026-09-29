@@ -56,6 +56,91 @@ func TestJoinDynamicHostPreservesHTTPAndCloseErrors(t *testing.T) {
 	}
 }
 
+func TestJoinDynamicHostUsesHTTPWithTLSManagementClient(t *testing.T) {
+	t.Parallel()
+
+	var requestURL string
+	client := &managementClient{
+		baseURL: "https://management.example.test",
+		httpClient: &http.Client{Transport: roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+			requestURL = req.URL.String()
+			return &http.Response{
+				StatusCode: http.StatusAccepted,
+				Body:       io.NopCloser(strings.NewReader("")),
+				Header:     make(http.Header),
+			}, nil
+		})},
+	}
+
+	if err := client.JoinDynamicHost(context.Background(), "node-1.example.test", "token"); err != nil {
+		t.Fatalf("JoinDynamicHost returned error: %v", err)
+	}
+	if requestURL != "http://node-1.example.test:8001/admin/v1/init" {
+		t.Fatalf("expected HTTP dynamic init URL, got %q", requestURL)
+	}
+}
+
+func TestEnsureManageAdminUserVerifiesCredentialsWhenLookupForbidden(t *testing.T) {
+	t.Parallel()
+
+	postCalls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/manage/v2/users/"):
+			w.WriteHeader(http.StatusForbidden)
+		case r.Method == http.MethodGet && r.URL.Path == "/manage/v2":
+			if strings.Contains(r.Header.Get("Authorization"), `username="generated-user"`) {
+				w.WriteHeader(http.StatusOK)
+				return
+			}
+			w.Header().Set("WWW-Authenticate", `Digest realm="test", nonce="nonce", qop="auth"`)
+			w.WriteHeader(http.StatusUnauthorized)
+		case r.Method == http.MethodPost && r.URL.Path == "/manage/v2/users":
+			postCalls++
+			w.WriteHeader(http.StatusCreated)
+		default:
+			w.WriteHeader(http.StatusUnauthorized)
+		}
+	}))
+	defer server.Close()
+
+	client := &managementClient{baseURL: server.URL, username: "operator", password: "operator-password", httpClient: server.Client()}
+	if err := client.EnsureManageAdminUser(context.Background(), "generated-user", "generated-password"); err != nil {
+		t.Fatalf("EnsureManageAdminUser returned error: %v", err)
+	}
+	if postCalls != 0 {
+		t.Fatalf("expected no user creation, got %d POST calls", postCalls)
+	}
+}
+
+func TestEnsureManageAdminUserCreatesUserWhenLookupForbiddenAndCredentialsFail(t *testing.T) {
+	t.Parallel()
+
+	postCalls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/manage/v2/users/"):
+			w.WriteHeader(http.StatusForbidden)
+		case r.Method == http.MethodGet && r.URL.Path == "/manage/v2":
+			w.WriteHeader(http.StatusUnauthorized)
+		case r.Method == http.MethodPost && r.URL.Path == "/manage/v2/users":
+			postCalls++
+			w.WriteHeader(http.StatusCreated)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	client := &managementClient{baseURL: server.URL, username: "operator", password: "operator-password", httpClient: server.Client()}
+	if err := client.EnsureManageAdminUser(context.Background(), "generated-user", "generated-password"); err != nil {
+		t.Fatalf("EnsureManageAdminUser returned error: %v", err)
+	}
+	if postCalls != 1 {
+		t.Fatalf("expected one user creation, got %d POST calls", postCalls)
+	}
+}
+
 func TestResponseHelpersPreserveHTTPAndCloseErrors(t *testing.T) {
 	t.Parallel()
 
@@ -882,6 +967,37 @@ func TestListHostsStatusUsesSummaryWhenItemStatusMissing(t *testing.T) {
 	}
 	if hosts[0].Online {
 		t.Fatalf("expected host to be inferred offline when total-hosts-offline > 0")
+	}
+}
+
+func TestListHostsStatusFetchesPerHostStatusForMixedSummary(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		switch r.URL.Path {
+		case "/manage/v2/hosts":
+			_, _ = w.Write([]byte(`{"host-status-list":{"status-list-summary":{"total-hosts-offline":{"units":"quantity","value":1}},"status-list-items":{"status-list-item":[{"nameref":"dynamic-0"},{"nameref":"node-0"}]}}}`))
+		case "/manage/v2/hosts/dynamic-0":
+			_, _ = w.Write([]byte(`{"host-status":{"name":"dynamic-0","version":"12.1.0","status-properties":{"online":{"units":"bool","value":false}}}}`))
+		case "/manage/v2/hosts/node-0":
+			_, _ = w.Write([]byte(`{"host-status":{"name":"node-0","version":"12.1.0","status-properties":{"online":{"units":"bool","value":true}}}}`))
+		default:
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	client := &managementClient{baseURL: server.URL, username: "user", password: "password", httpClient: server.Client()}
+	hosts, err := client.ListHostsStatus(context.Background())
+	if err != nil {
+		t.Fatalf("ListHostsStatus returned error: %v", err)
+	}
+	if len(hosts) != 2 {
+		t.Fatalf("expected 2 hosts, got %d", len(hosts))
+	}
+	if hosts[0].Online || !hosts[1].Online {
+		t.Fatalf("expected dynamic-0 offline and node-0 online, got %+v", hosts)
 	}
 }
 

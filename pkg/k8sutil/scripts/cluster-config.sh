@@ -344,6 +344,17 @@ function init_security_db {
         $HTTP_PROTOCOL://$MARKLOGIC_BOOTSTRAP_HOST:8002/manage/v2/hosts/$MARKLOGIC_BOOTSTRAP_HOST/properties
     )
 
+    # During an in-place TLS enablement, the desired protocol is HTTPS before
+    # configure_tls has switched the existing Manage App Server from HTTP.
+    if [[ "${response_code}" != "200" && "${MARKLOGIC_JOIN_TLS_ENABLED}" == "true" ]]; then
+        response_code=$( \
+            curl -s --anyauth \
+            -w '%{http_code}' -o "/tmp/${MARKLOGIC_BOOTSTRAP_HOST}.out" \
+            --user "${MARKLOGIC_ADMIN_USERNAME}":"${MARKLOGIC_ADMIN_PASSWORD}" \
+            http://$MARKLOGIC_BOOTSTRAP_HOST:8002/manage/v2/hosts/$MARKLOGIC_BOOTSTRAP_HOST/properties?format=xml
+        )
+    fi
+
     if [ "${response_code}" = "200" ]; then
         info "${MARKLOGIC_BOOTSTRAP_HOST} - bootstrap security already initialized"
         return 0

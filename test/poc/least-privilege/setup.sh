@@ -67,9 +67,9 @@ start_manage_port_forward
 admin_username="$(secret_value "${ADMIN_SECRET}" "${TEST_NAMESPACE}" username)"
 admin_password="$(secret_value "${ADMIN_SECRET}" "${TEST_NAMESPACE}" password)"
 
-role_status="$(curl --silent --output /dev/null --write-out '%{http_code}' --anyauth \
+role_status="$(curl --silent --output /dev/null --write-out '%{http_code}' "${manage_curl_args[@]}" --anyauth \
   --user "${admin_username}:${admin_password}" \
-  "http://127.0.0.1:${LOCAL_MANAGE_PORT}/manage/v2/roles/${OPERATOR_ROLE}?format=json")"
+  "${MANAGE_SCHEME}://127.0.0.1:${LOCAL_MANAGE_PORT}/manage/v2/roles/${OPERATOR_ROLE}?format=json")"
 if [[ "${role_status}" == "404" ]]; then
   manage_request "${admin_username}" "${admin_password}" POST '/manage/v2/roles' "${SCRIPT_DIR}/role.json" >/dev/null
 elif [[ "${role_status}" == "200" ]]; then
@@ -82,9 +82,9 @@ fi
 user_payload="$(mktemp)"
 trap 'rm -f "${user_payload}" "${user_payload}.update"; stop_manage_port_forward' EXIT
 
-user_status="$(curl --silent --output /dev/null --write-out '%{http_code}' --anyauth \
+user_status="$(curl --silent --output /dev/null --write-out '%{http_code}' "${manage_curl_args[@]}" --anyauth \
   --user "${admin_username}:${admin_password}" \
-  "http://127.0.0.1:${LOCAL_MANAGE_PORT}/manage/v2/users/${OPERATOR_USER}?format=json")"
+  "${MANAGE_SCHEME}://127.0.0.1:${LOCAL_MANAGE_PORT}/manage/v2/users/${OPERATOR_USER}?format=json")"
 if [[ "${user_status}" == "404" ]]; then
   operator_password="$(openssl rand -base64 30 | tr -d '\n')"
   jq --null-input \
