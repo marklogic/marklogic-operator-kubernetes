@@ -99,6 +99,31 @@ def getReviewState() {
     return reviewState
 }
 
+Map collectTestSummary() {
+    def summary = [total: 0, failed: 0, skipped: 0, failures: []]
+    findFiles(glob: 'test/test_results/*.xml').each { report ->
+        try {
+            def xml = new XmlSlurper().parseText(readFile(report.path))
+            xml.'**'.findAll { it.name() == 'testcase' }.each { testCase ->
+                summary.total++
+                if (testCase.skipped.size() > 0) {
+                    summary.skipped++
+                }
+                def failure = testCase.failure.size() > 0 ? testCase.failure[0] : testCase.error.size() > 0 ? testCase.error[0] : null
+                if (failure != null) {
+                    summary.failed++
+                    def testName = testCase.@classname ? "${testCase.@classname}.${testCase.@name}" : testCase.@name.toString()
+                    def message = failure.@message?.toString()?.replaceAll(/\s+/, ' ')?.trim()
+                    summary.failures << [name: testName, message: message ?: 'No failure message available']
+                }
+            }
+        } catch (Exception exception) {
+            echo "Unable to parse JUnit report ${report.path}: ${exception.message}"
+        }
+    }
+    return summary
+}
+
 void resultNotification(status) {
     def author, authorEmail, emailList
     //add author of a PR to email list if available
@@ -109,16 +134,28 @@ void resultNotification(status) {
     } else {
         emailList = params.emailList
     }
+    def testSummary = collectTestSummary()
     def jiraLink = "https://progresssoftware.atlassian.net/browse/${JIRA_ID}"
-    def emailBody = "<b>Jenkins pipeline for</b> ${env.JOB_NAME} <br><b>Build Number: </b>${env.BUILD_NUMBER} <br><br><b>Build URL: </b><br><a href='${env.BUILD_URL}'>${env.BUILD_URL}</a>"
+    def buildUrl = env.BUILD_URL
+    def testReportUrl = "${buildUrl}testReport/"
+    def consoleUrl = "${buildUrl}console"
+    def e2eDetails = "Runtime: ${params.E2E_RUNTIME}<br>Scope: ${params.E2E_SCOPE}<br>Install mode: ${params.E2E_INSTALL_MODE}<br>Top-level parallelism: ${params.E2E_TOP_LEVEL_PARALLELISM}<br>Istio ambient: ${params.VERIFY_ISTIO_AMBIENT ? 'enabled' : 'disabled'}"
+    def testDetails = "Tests: ${testSummary.total - testSummary.skipped - testSummary.failed} passed, ${testSummary.failed} failed, ${testSummary.skipped} skipped"
+    def failureDetails = testSummary.failures.take(5).collect { failure ->
+        "<li><b>${failure.name}</b>: ${failure.message}</li>"
+    }.join('')
+    if (testSummary.failures.size() > 5) {
+        failureDetails += "<li>Additional failed tests: ${testSummary.failures.size() - 5}</li>"
+    }
+    def emailBody = "<b>${status}</b> | ${env.JOB_NAME} #${env.BUILD_NUMBER}<br><br>${e2eDetails}<br><br>Duration: ${currentBuild.durationString.trim()}<br>${testDetails}${failureDetails ? "<br><br>Failures:<ul>${failureDetails}</ul>" : ''}<br><br><a href='${buildUrl}'>Build</a> | <a href='${testReportUrl}'>Test report</a> | <a href='${consoleUrl}'>Console log</a>"
     def jiraEmailBody = "${emailBody} <br><br><b>Jira URL: </b><br><a href='${jiraLink}'>${jiraLink}</a>"
 
     if (JIRA_ID) {
         def comment = [ body: "Jenkins pipeline build result: ${status}" ]
         jiraAddComment site: 'JIRA', idOrKey: JIRA_ID, failOnError: false, input: comment
-        mail charset: 'UTF-8', mimeType: 'text/html', to: "${emailList}", body: "${jiraEmailBody}", subject: "🥷 ${status}: ${env.JOB_NAME} #${env.BUILD_NUMBER} - ${JIRA_ID}"
+        mail charset: 'UTF-8', mimeType: 'text/html', to: "${emailList}", body: "${jiraEmailBody}", subject: "[E2E] ${status} | ${params.E2E_RUNTIME} | ${env.JOB_NAME} #${env.BUILD_NUMBER} - ${JIRA_ID}"
     } else {
-        mail charset: 'UTF-8', mimeType: 'text/html', to: "${emailList}", body: "${emailBody}", subject: "🥷 ${status}: ${env.JOB_NAME} #${env.BUILD_NUMBER}"
+        mail charset: 'UTF-8', mimeType: 'text/html', to: "${emailList}", body: "${emailBody}", subject: "[E2E] ${status} | ${params.E2E_RUNTIME} | ${env.JOB_NAME} #${env.BUILD_NUMBER}"
     }
 }
 
