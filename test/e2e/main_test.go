@@ -61,6 +61,10 @@ var (
 		"log-test-filters",
 		"ml-resize-a",
 		"ml-resize-b",
+		"istio-ambient-test",
+		"istio-resilience-test",
+		"istio-multinode-test",
+		"non-istio-test",
 		"loki",
 		"grafana",
 	}
@@ -263,7 +267,7 @@ func TestMain(m *testing.M) {
 					}
 					if i == 59 {
 						log.Printf("Namespace %s still deleting after initial wait; forcing namespace finalizer cleanup", operatorNamespace)
-						if err := forceFinalizeNamespace(operatorNamespace); err != nil {
+						if err := forceFinalizeNamespace(cfg, operatorNamespace); err != nil {
 							return ctx, fmt.Errorf("timeout waiting for namespace %s to be deleted; force-finalize failed: %w", operatorNamespace, err)
 						}
 						if err := waitForNamespaceDeletionByName(ctx, client, operatorNamespace, 90*time.Second); err != nil {
@@ -751,7 +755,7 @@ func ensureFreshNamespace(ctx context.Context, cfg *envconf.Config, nsName strin
 
 	log.Printf("Namespace %s is still terminating; forcing finalizer cleanup", nsName)
 	forceDeleteNamespacedTestResources(cfg, nsName)
-	if err := forceFinalizeNamespace(nsName); err != nil {
+	if err := forceFinalizeNamespace(cfg, nsName); err != nil {
 		return fmt.Errorf("failed to force-finalize namespace %s: %w", nsName, err)
 	}
 	if err := waitForNamespaceDeletionByName(ctx, client, nsName, 120*time.Second); err != nil {
@@ -771,10 +775,13 @@ func cleanupStaleE2ENamespaces(ctx context.Context, cfg *envconf.Config, namespa
 	return nil
 }
 
-func forceFinalizeNamespace(nsName string) error {
+func forceFinalizeNamespace(cfg *envconf.Config, nsName string) error {
+	kubectlArgs := kubectlConfigArgs(cfg)
 	command := fmt.Sprintf(
-		"kubectl get namespace %s -o json | python3 -c \"import sys, json; d=json.load(sys.stdin); d['spec']['finalizers']=[]; print(json.dumps(d))\" | kubectl replace --raw /api/v1/namespaces/%s/finalize -f -",
+		"kubectl%s get namespace %s -o json | python3 -c \"import sys, json; d=json.load(sys.stdin); d['spec']['finalizers']=[]; print(json.dumps(d))\" | kubectl%s replace --raw /api/v1/namespaces/%s/finalize -f -",
+		kubectlArgs,
 		nsName,
+		kubectlArgs,
 		nsName,
 	)
 	cmd := exec.Command("bash", "-c", command)

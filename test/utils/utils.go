@@ -523,7 +523,7 @@ func DeleteNS(ctx context.Context, cfg *envconf.Config, nsName string) error {
 		return nil
 	}
 
-	if err := forceFinalizeNamespace(nsName); err != nil {
+	if err := forceFinalizeNamespace(cfg, nsName); err != nil {
 		return fmt.Errorf("failed to force-finalize namespace %s: %w", nsName, err)
 	}
 
@@ -550,10 +550,17 @@ func waitForNamespaceDeletion(ctx context.Context, cfg *envconf.Config, nsName s
 	return fmt.Errorf("timeout waiting for namespace %s to be deleted", nsName)
 }
 
-func forceFinalizeNamespace(nsName string) error {
+func forceFinalizeNamespace(cfg *envconf.Config, nsName string) error {
+	kubectlArgs := fmt.Sprintf(" --kubeconfig=%q", cfg.KubeconfigFile())
+	if contextName := cfg.KubeContext(); contextName != "" {
+		kubectlArgs += fmt.Sprintf(" --context=%q", contextName)
+	}
+
 	command := fmt.Sprintf(
-		"kubectl get namespace %s -o json | python3 -c \"import sys, json; d=json.load(sys.stdin); d['spec']['finalizers']=[]; print(json.dumps(d))\" | kubectl replace --raw /api/v1/namespaces/%s/finalize -f -",
+		"kubectl%s get namespace %s -o json | python3 -c \"import sys, json; d=json.load(sys.stdin); d['spec']['finalizers']=[]; print(json.dumps(d))\" | kubectl%s replace --raw /api/v1/namespaces/%s/finalize -f -",
+		kubectlArgs,
 		nsName,
+		kubectlArgs,
 		nsName,
 	)
 	cmd := exec.Command("bash", "-c", command)
