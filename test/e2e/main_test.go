@@ -14,8 +14,10 @@ import (
 	"testing"
 	"time"
 
+	marklogicv1 "github.com/marklogic/marklogic-operator-kubernetes/api/v1"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -31,15 +33,16 @@ import (
 )
 
 var (
-	testEnv             env.Environment
-	dockerImage         = os.Getenv("E2E_DOCKER_IMAGE")
-	kustomizeVer        = os.Getenv("E2E_KUSTOMIZE_VERSION")
-	ctrlgenVer          = os.Getenv("E2E_CONTROLLER_TOOLS_VERSION")
-	marklogicImage      = os.Getenv("E2E_MARKLOGIC_IMAGE_VERSION")
-	kubernetesVer       = os.Getenv("E2E_KUBERNETES_VERSION")
-	operatorNamespace   = envOrDefault("E2E_OPERATOR_NAMESPACE", "marklogic-operator-system")
-	namespace           = operatorNamespace
-	useExistingOperator = strings.EqualFold(os.Getenv("E2E_USE_EXISTING_OPERATOR"), "true")
+	testEnv                 env.Environment
+	dockerImage             = os.Getenv("E2E_DOCKER_IMAGE")
+	kustomizeVer            = os.Getenv("E2E_KUSTOMIZE_VERSION")
+	ctrlgenVer              = os.Getenv("E2E_CONTROLLER_TOOLS_VERSION")
+	marklogicImage          = os.Getenv("E2E_MARKLOGIC_IMAGE_VERSION")
+	kubernetesVer           = os.Getenv("E2E_KUBERNETES_VERSION")
+	operatorNamespace       = envOrDefault("E2E_OPERATOR_NAMESPACE", "marklogic-operator-system")
+	namespace               = operatorNamespace
+	useExistingOperator     = strings.EqualFold(os.Getenv("E2E_USE_EXISTING_OPERATOR"), "true")
+	topLevelParallelEnabled = !strings.EqualFold(envOrDefault("E2E_TOP_LEVEL_PARALLEL", "true"), "false")
 
 	staleE2ENamespaces = []string{
 		"ml-dynamic-host",
@@ -51,8 +54,17 @@ var (
 		"haproxy-pathbased",
 		"haproxy-test",
 		"log-test",
+		"log-test-disabled",
+		"log-test-partial",
+		"log-test-secret-env",
+		"log-test-resources",
+		"log-test-filters",
 		"ml-resize-a",
 		"ml-resize-b",
+		"istio-ambient-test",
+		"istio-resilience-test",
+		"istio-multinode-test",
+		"non-istio-test",
 		"loki",
 		"grafana",
 	}
@@ -98,7 +110,37 @@ type testResult struct {
 var (
 	trackMu      sync.Mutex
 	trackedTests []testResult
+
+	schemeRegistrationMu     sync.Mutex
+	marklogicSchemeOnce      sync.Once
+	marklogicSchemeErr       error
+	apiextensionsSchemeOnce  sync.Once
+	apiextensionsSchemeError error
 )
+
+func ensureMarklogicSchemeRegistered(t *testing.T, c *envconf.Config) {
+	t.Helper()
+	marklogicSchemeOnce.Do(func() {
+		schemeRegistrationMu.Lock()
+		defer schemeRegistrationMu.Unlock()
+		marklogicSchemeErr = marklogicv1.AddToScheme(c.Client().Resources().GetScheme())
+	})
+	if marklogicSchemeErr != nil {
+		t.Fatalf("Failed to register MarkLogic API scheme: %v", marklogicSchemeErr)
+	}
+}
+
+func ensureAPIEExtensionsSchemeRegistered(t *testing.T, c *envconf.Config) {
+	t.Helper()
+	apiextensionsSchemeOnce.Do(func() {
+		schemeRegistrationMu.Lock()
+		defer schemeRegistrationMu.Unlock()
+		apiextensionsSchemeError = apiextensionsv1.AddToScheme(c.Client().Resources().GetScheme())
+	})
+	if apiextensionsSchemeError != nil {
+		t.Fatalf("Failed to register API extensions scheme: %v", apiextensionsSchemeError)
+	}
+}
 
 // trackTest registers t in the global summary. Call it at the top of each Test* function.
 // t.Cleanup runs after the test (and all its sub-tests) complete, so t.Failed()/t.Skipped() are final.
@@ -113,6 +155,14 @@ func trackTest(t *testing.T) {
 		})
 		trackMu.Unlock()
 	})
+}
+
+// runTopLevelParallel opts top-level tests into parallel mode unless explicitly disabled.
+func runTopLevelParallel(t *testing.T) {
+	t.Helper()
+	if topLevelParallelEnabled {
+		t.Parallel()
+	}
 }
 
 // printTestSummary logs a structured pass/fail banner of all tracked tests to stdout.
@@ -177,6 +227,7 @@ func TestMain(m *testing.M) {
 	log.Printf("MarkLogic image: %s", marklogicImage)
 	log.Printf("Kubernetes version: %s", kubernetesVer)
 	log.Printf("Istio ambient mode: %v", isIstioAmbientEnabled())
+	log.Printf("Top-level test parallelization: %v", topLevelParallelEnabled)
 	log.Printf("Operator namespace: %s", operatorNamespace)
 	log.Printf("Reuse existing operator install: %v", useExistingOperator)
 
@@ -216,7 +267,7 @@ func TestMain(m *testing.M) {
 					}
 					if i == 59 {
 						log.Printf("Namespace %s still deleting after initial wait; forcing namespace finalizer cleanup", operatorNamespace)
-						if err := forceFinalizeNamespace(operatorNamespace); err != nil {
+						if err := forceFinalizeNamespace(cfg, operatorNamespace); err != nil {
 							return ctx, fmt.Errorf("timeout waiting for namespace %s to be deleted; force-finalize failed: %w", operatorNamespace, err)
 						}
 						if err := waitForNamespaceDeletionByName(ctx, client, operatorNamespace, 90*time.Second); err != nil {
@@ -247,7 +298,7 @@ func TestMain(m *testing.M) {
 		// Ensure stale namespaces from interrupted prior runs do not cause
 		// namespace-already-exists conflicts in individual tests.
 		func(ctx context.Context, cfg *envconf.Config) (context.Context, error) {
-			if err := cleanupStaleE2ENamespaces(ctx, cfg.Client(), staleE2ENamespaces); err != nil {
+			if err := cleanupStaleE2ENamespaces(ctx, cfg, staleE2ENamespaces); err != nil {
 				return ctx, err
 			}
 			return ctx, nil
@@ -653,31 +704,70 @@ func waitForNamespaceDeletionByName(ctx context.Context, client klient.Client, n
 	return fmt.Errorf("timeout waiting for namespace %s to be deleted after force-finalize", nsName)
 }
 
-func cleanupStaleE2ENamespaces(ctx context.Context, client klient.Client, namespaces []string) error {
+func kubectlConfigArgs(cfg *envconf.Config) string {
+	args := fmt.Sprintf(" --kubeconfig=%q", cfg.KubeconfigFile())
+	if contextName := cfg.KubeContext(); contextName != "" {
+		args += fmt.Sprintf(" --context=%q", contextName)
+	}
+	return args
+}
+
+func forceDeleteNamespacedTestResources(cfg *envconf.Config, nsName string) {
+	kubectlArgs := kubectlConfigArgs(cfg)
+	commands := []string{
+		"kubectl%s --request-timeout=20s delete pods --all -n %s --ignore-not-found --force --grace-period=0 --wait=false",
+		"kubectl%s --request-timeout=20s patch marklogicclusters.marklogic.progress.com --all -n %s --type=merge -p '{\"metadata\":{\"finalizers\":[]}}'",
+		"kubectl%s --request-timeout=20s delete marklogicclusters.marklogic.progress.com --all -n %s --ignore-not-found --wait=false",
+		"kubectl%s --request-timeout=20s patch marklogicgroups.marklogic.progress.com --all -n %s --type=merge -p '{\"metadata\":{\"finalizers\":[]}}'",
+		"kubectl%s --request-timeout=20s delete marklogicgroups.marklogic.progress.com --all -n %s --ignore-not-found --wait=false",
+	}
+
+	for _, commandTmpl := range commands {
+		command := fmt.Sprintf(commandTmpl, kubectlArgs, nsName)
+		result := utils.RunCommand(command)
+		if result.Err() != nil {
+			log.Printf("Warning: stale resource cleanup command failed for namespace %s: %s (err=%v)", nsName, command, result.Err())
+		}
+	}
+}
+
+func ensureFreshNamespace(ctx context.Context, cfg *envconf.Config, nsName string) error {
+	client := cfg.Client()
+	ns := &corev1.Namespace{}
+	err := client.Resources().Get(ctx, nsName, "", ns)
+	if apierrors.IsNotFound(err) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("failed to query namespace %s: %w", nsName, err)
+	}
+
+	log.Printf("Ensuring stale namespace is removed: %s", nsName)
+	forceDeleteNamespacedTestResources(cfg, nsName)
+
+	if err := client.Resources().Delete(ctx, ns); err != nil && !apierrors.IsNotFound(err) {
+		return fmt.Errorf("failed to delete namespace %s: %w", nsName, err)
+	}
+
+	if err := waitForNamespaceDeletionByName(ctx, client, nsName, 90*time.Second); err == nil {
+		return nil
+	}
+
+	log.Printf("Namespace %s is still terminating; forcing finalizer cleanup", nsName)
+	forceDeleteNamespacedTestResources(cfg, nsName)
+	if err := forceFinalizeNamespace(cfg, nsName); err != nil {
+		return fmt.Errorf("failed to force-finalize namespace %s: %w", nsName, err)
+	}
+	if err := waitForNamespaceDeletionByName(ctx, client, nsName, 120*time.Second); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func cleanupStaleE2ENamespaces(ctx context.Context, cfg *envconf.Config, namespaces []string) error {
 	for _, nsName := range namespaces {
-		ns := &corev1.Namespace{}
-		err := client.Resources().Get(ctx, nsName, "", ns)
-		if apierrors.IsNotFound(err) {
-			continue
-		}
-		if err != nil {
-			return fmt.Errorf("failed to query stale namespace %s: %w", nsName, err)
-		}
-
-		log.Printf("Cleaning stale test namespace: %s", nsName)
-		if err := client.Resources().Delete(ctx, ns); err != nil && !apierrors.IsNotFound(err) {
-			return fmt.Errorf("failed to delete stale namespace %s: %w", nsName, err)
-		}
-
-		if err := waitForNamespaceDeletionByName(ctx, client, nsName, 60*time.Second); err == nil {
-			continue
-		}
-
-		log.Printf("Namespace %s is still terminating; forcing finalizer cleanup", nsName)
-		if err := forceFinalizeNamespace(nsName); err != nil {
-			return fmt.Errorf("failed to force-finalize stale namespace %s: %w", nsName, err)
-		}
-		if err := waitForNamespaceDeletionByName(ctx, client, nsName, 90*time.Second); err != nil {
+		if err := ensureFreshNamespace(ctx, cfg, nsName); err != nil {
 			return err
 		}
 	}
@@ -685,10 +775,13 @@ func cleanupStaleE2ENamespaces(ctx context.Context, client klient.Client, namesp
 	return nil
 }
 
-func forceFinalizeNamespace(nsName string) error {
+func forceFinalizeNamespace(cfg *envconf.Config, nsName string) error {
+	kubectlArgs := kubectlConfigArgs(cfg)
 	command := fmt.Sprintf(
-		"kubectl get namespace %s -o json | python3 -c \"import sys, json; d=json.load(sys.stdin); d['spec']['finalizers']=[]; print(json.dumps(d))\" | kubectl replace --raw /api/v1/namespaces/%s/finalize -f -",
+		"kubectl%s get namespace %s -o json | python3 -c \"import sys, json; d=json.load(sys.stdin); d['spec']['finalizers']=[]; print(json.dumps(d))\" | kubectl%s replace --raw /api/v1/namespaces/%s/finalize -f -",
+		kubectlArgs,
 		nsName,
+		kubectlArgs,
 		nsName,
 	)
 	cmd := exec.Command("bash", "-c", command)
