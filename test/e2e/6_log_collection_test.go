@@ -73,7 +73,7 @@ func TestLogCollectionDisabled(t *testing.T) {
 	feature.Setup(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 		client := c.Client()
 
-		if err := ensureFreshNamespace(ctx, client, testNamespace); err != nil {
+		if err := ensureFreshNamespace(ctx, c, testNamespace); err != nil {
 			t.Fatalf("Failed to reset namespace %s: %v", testNamespace, err)
 		}
 
@@ -213,7 +213,7 @@ func TestLogCollectionPartialLogs(t *testing.T) {
 	feature.Setup(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 		client := c.Client()
 
-		if err := ensureFreshNamespace(ctx, client, testNamespace); err != nil {
+		if err := ensureFreshNamespace(ctx, c, testNamespace); err != nil {
 			t.Fatalf("Failed to reset namespace %s: %v", testNamespace, err)
 		}
 
@@ -375,7 +375,7 @@ func TestLogCollectionSecretBackedEnvironment(t *testing.T) {
 	feature.Setup(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 		client := c.Client()
 
-		if err := ensureFreshNamespace(ctx, client, testNamespace); err != nil {
+		if err := ensureFreshNamespace(ctx, c, testNamespace); err != nil {
 			t.Fatalf("Failed to reset namespace %s: %v", testNamespace, err)
 		}
 
@@ -521,7 +521,7 @@ func TestLogCollectionCustomResources(t *testing.T) {
 	feature.Setup(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 		client := c.Client()
 
-		if err := ensureFreshNamespace(ctx, client, testNamespace); err != nil {
+		if err := ensureFreshNamespace(ctx, c, testNamespace); err != nil {
 			t.Fatalf("Failed to reset namespace %s: %v", testNamespace, err)
 		}
 
@@ -691,7 +691,7 @@ func TestLogCollectionCustomFilters(t *testing.T) {
 	feature.Setup(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 		client := c.Client()
 
-		if err := ensureFreshNamespace(ctx, client, testNamespace); err != nil {
+		if err := ensureFreshNamespace(ctx, c, testNamespace); err != nil {
 			t.Fatalf("Failed to reset namespace %s: %v", testNamespace, err)
 		}
 

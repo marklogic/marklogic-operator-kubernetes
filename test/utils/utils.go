@@ -32,6 +32,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"sigs.k8s.io/e2e-framework/klient"
+	"sigs.k8s.io/e2e-framework/klient/k8s/resources"
 	"sigs.k8s.io/e2e-framework/pkg/envconf"
 	"sigs.k8s.io/e2e-framework/pkg/utils"
 )
@@ -257,7 +258,7 @@ func WaitForPod(ctx context.Context, t *testing.T, client klient.Client, namespa
 				t.Logf("Pod %s is terminating (deletionTimestamp=%s), waiting for replacement", pod.Name, pod.DeletionTimestamp.Time.Format(time.RFC3339))
 				if deletionAge > 45*time.Second || terminatingDuration > 45*time.Second {
 					t.Logf("Pod %s has been terminating for %s; attempting force cleanup", pod.Name, deletionAge.Round(time.Second))
-					if cleanupErr := forceDeleteTerminatingPod(namespace, podName); cleanupErr != nil {
+					if cleanupErr := forceDeleteTerminatingPod(ctx, client, namespace, podName); cleanupErr != nil {
 						t.Logf("Warning: failed to force cleanup terminating pod %s/%s: %v", namespace, podName, cleanupErr)
 					} else {
 						t.Logf("Triggered force cleanup for terminating pod %s/%s", namespace, podName)
@@ -277,7 +278,7 @@ func WaitForPod(ctx context.Context, t *testing.T, client klient.Client, namespa
 				t.Logf("Pod %s is in terminal phase %s, waiting for replacement", pod.Name, pod.Status.Phase)
 				if terminalDuration > 15*time.Second {
 					t.Logf("Pod %s has remained in terminal phase %s for %s; deleting stale pod", pod.Name, pod.Status.Phase, terminalDuration.Round(time.Second))
-					if cleanupErr := forceDeleteTerminatingPod(namespace, podName); cleanupErr != nil {
+					if cleanupErr := forceDeleteTerminatingPod(ctx, client, namespace, podName); cleanupErr != nil {
 						t.Logf("Warning: failed to delete terminal pod %s/%s: %v", namespace, podName, cleanupErr)
 					} else {
 						t.Logf("Triggered cleanup for terminal pod %s/%s", namespace, podName)
@@ -388,24 +389,25 @@ func WaitForPod(ctx context.Context, t *testing.T, client klient.Client, namespa
 	}
 }
 
-func forceDeleteTerminatingPod(namespace, podName string) error {
-	patchCommand := fmt.Sprintf("kubectl patch pod %s -n %s --type=merge -p '{\"metadata\":{\"finalizers\":[]}}'", podName, namespace)
-	patchResult := utils.RunCommand(patchCommand)
-	if patchResult.Err() != nil {
-		patchOutput := patchResult.Result()
-		if !strings.Contains(strings.ToLower(patchOutput), "notfound") && !strings.Contains(strings.ToLower(patchOutput), "not found") {
-			return fmt.Errorf("failed to patch finalizers on pod %s/%s: %v: %s", namespace, podName, patchResult.Err(), patchOutput)
+func forceDeleteTerminatingPod(ctx context.Context, client klient.Client, namespace, podName string) error {
+	pod := &corev1.Pod{}
+	resourceClient := client.Resources(namespace)
+	if err := resourceClient.Get(ctx, podName, namespace, pod); err != nil {
+		if errors.IsNotFound(err) {
+			return nil
+		}
+		return fmt.Errorf("failed to get pod %s/%s for cleanup: %w", namespace, podName, err)
+	}
+
+	if len(pod.Finalizers) > 0 {
+		pod.Finalizers = nil
+		if err := resourceClient.Update(ctx, pod); err != nil && !errors.IsNotFound(err) {
+			return fmt.Errorf("failed to clear finalizers on pod %s/%s: %w", namespace, podName, err)
 		}
 	}
 
-	deleteCommand := fmt.Sprintf("kubectl delete pod %s -n %s --grace-period=0 --force --wait=false --ignore-not-found=true", podName, namespace)
-	deleteResult := utils.RunCommand(deleteCommand)
-	if deleteResult.Err() != nil {
-		deleteOutput := deleteResult.Result()
-		if strings.Contains(strings.ToLower(deleteOutput), "notfound") || strings.Contains(strings.ToLower(deleteOutput), "not found") {
-			return nil
-		}
-		return fmt.Errorf("failed to force delete pod %s/%s: %v: %s", namespace, podName, deleteResult.Err(), deleteOutput)
+	if err := resourceClient.Delete(ctx, pod, resources.WithGracePeriod(0)); err != nil && !errors.IsNotFound(err) {
+		return fmt.Errorf("failed to force delete pod %s/%s: %w", namespace, podName, err)
 	}
 
 	return nil
@@ -521,7 +523,7 @@ func DeleteNS(ctx context.Context, cfg *envconf.Config, nsName string) error {
 		return nil
 	}
 
-	if err := forceFinalizeNamespace(nsName); err != nil {
+	if err := forceFinalizeNamespace(cfg, nsName); err != nil {
 		return fmt.Errorf("failed to force-finalize namespace %s: %w", nsName, err)
 	}
 
@@ -548,10 +550,17 @@ func waitForNamespaceDeletion(ctx context.Context, cfg *envconf.Config, nsName s
 	return fmt.Errorf("timeout waiting for namespace %s to be deleted", nsName)
 }
 
-func forceFinalizeNamespace(nsName string) error {
+func forceFinalizeNamespace(cfg *envconf.Config, nsName string) error {
+	kubectlArgs := fmt.Sprintf(" --kubeconfig=%q", cfg.KubeconfigFile())
+	if contextName := cfg.KubeContext(); contextName != "" {
+		kubectlArgs += fmt.Sprintf(" --context=%q", contextName)
+	}
+
 	command := fmt.Sprintf(
-		"kubectl get namespace %s -o json | python3 -c \"import sys, json; d=json.load(sys.stdin); d['spec']['finalizers']=[]; print(json.dumps(d))\" | kubectl replace --raw /api/v1/namespaces/%s/finalize -f -",
+		"kubectl%s get namespace %s -o json | python3 -c \"import sys, json; d=json.load(sys.stdin); d['spec']['finalizers']=[]; print(json.dumps(d))\" | kubectl%s replace --raw /api/v1/namespaces/%s/finalize -f -",
+		kubectlArgs,
 		nsName,
+		kubectlArgs,
 		nsName,
 	)
 	cmd := exec.Command("bash", "-c", command)
