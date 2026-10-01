@@ -1,0 +1,28 @@
+apiVersion: marklogic.progress.com/v1
+kind: MarklogicCluster
+metadata:
+  name: least-privilege
+  namespace: ml-lp-test
+spec:
+  image: progressofficial/marklogic-db:12.1.0-ubi9-rootless-2.3.0
+  auth:
+    secretName: least-privilege-admin
+  tls:
+    enableOnDefaultAppServers: true
+  persistence:
+    enabled: true
+    size: 10Gi
+  markLogicGroups:
+    - name: node
+      replicas: 3
+      isBootstrap: true
+    - name: dynamic
+      replicas: 1
+      isDynamic: true
+      dynamic:
+        tokenDuration: PT15M
+      persistence:
+        enabled: false
+        size: 1Gi
+      groupConfig:
+        name: Dynamic

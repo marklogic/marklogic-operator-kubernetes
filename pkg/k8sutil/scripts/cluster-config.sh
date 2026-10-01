@@ -152,6 +152,55 @@ function restart_check {
 }
 
 ################################################################
+# Wait for a joined host to become visible through the bootstrap
+# Manage API. The joining host inherits cluster security during
+# restart, so its previous unauthenticated Admin timestamp is no
+# longer a reliable readiness signal for a least-privilege user.
+################################################################
+function join_check {
+    local hostname=$1
+    local retry_count response response_code response_content
+    info "Waiting for ${hostname} to come online in the cluster."
+    for ((retry_count = 0; retry_count < 60; retry_count = retry_count + 1)); do
+        response=$(curl -s -m 10 --anyauth \
+            --user "${MARKLOGIC_ADMIN_USERNAME}:${MARKLOGIC_ADMIN_PASSWORD}" \
+            -w '%{http_code}' $HTTPS_OPTION \
+            "$HTTP_PROTOCOL://${MARKLOGIC_BOOTSTRAP_HOST}:8002/manage/v2/hosts/${hostname}?view=status&format=xml")
+        response_code=$(tail -n1 <<< "${response}")
+        response_content=$(sed '$ d' <<< "${response}")
+        if [[ "${response_code}" == "200" ]] && grep -Eq '<online[^>]*>true</online>' <<< "${response_content}"; then
+            info "${hostname} is online in the cluster."
+            return 0
+        fi
+        sleep ${RETRY_INTERVAL}
+    done
+    error "Failed to confirm that ${hostname} is online in the cluster." exit
+}
+
+################################################################
+# Ensure the joining host reloads the cluster configuration.
+# MarkLogic normally restarts after the cluster-config POST, but
+# some container runtimes leave the original process running.
+################################################################
+function ensure_join_restart {
+    local original_pid=$1
+    local retry_count current_pid
+
+    for ((retry_count = 0; retry_count < 10; retry_count = retry_count + 1)); do
+        current_pid=$(cat "${MARKLOGIC_PID_FILE}" 2>/dev/null || true)
+        if [[ -z "${current_pid}" ]] || [[ "${current_pid}" != "${original_pid}" ]]; then
+            info "MarkLogic restart detected."
+            return 0
+        fi
+        sleep 1
+    done
+
+    info "MarkLogic did not restart automatically; restarting it to apply the cluster configuration."
+    /etc/MarkLogic/MarkLogic-service.sh stop || error "Failed to stop MarkLogic after cluster join." exit
+    /etc/MarkLogic/MarkLogic-service.sh start || error "Failed to start MarkLogic after cluster join." exit
+}
+
+################################################################
 # curl_retry_validate(return_error, endpoint, expected_response_code, curl_options...)
 # Retry a curl command until it returns the expected response
 # code or fails N_RETRY times.
@@ -295,6 +344,17 @@ function init_security_db {
         $HTTP_PROTOCOL://$MARKLOGIC_BOOTSTRAP_HOST:8002/manage/v2/hosts/$MARKLOGIC_BOOTSTRAP_HOST/properties
     )
 
+    # During an in-place TLS enablement, the desired protocol is HTTPS before
+    # configure_tls has switched the existing Manage App Server from HTTP.
+    if [[ "${response_code}" != "200" && "${MARKLOGIC_JOIN_TLS_ENABLED}" == "true" ]]; then
+        response_code=$( \
+            curl -s --anyauth \
+            -w '%{http_code}' -o "/tmp/${MARKLOGIC_BOOTSTRAP_HOST}.out" \
+            --user "${MARKLOGIC_ADMIN_USERNAME}":"${MARKLOGIC_ADMIN_PASSWORD}" \
+            http://$MARKLOGIC_BOOTSTRAP_HOST:8002/manage/v2/hosts/$MARKLOGIC_BOOTSTRAP_HOST/properties?format=xml
+        )
+    fi
+
     if [ "${response_code}" = "200" ]; then
         info "${MARKLOGIC_BOOTSTRAP_HOST} - bootstrap security already initialized"
         return 0
@@ -398,7 +458,7 @@ function join_cluster {
         "-H" "Content-type: application/x-www-form-urlencoded" \
         "-o" "/tmp/cluster.zip" $HTTPS_OPTION
 
-    timestamp=$(curl -s --anyauth --user "${MARKLOGIC_ADMIN_USERNAME}:${MARKLOGIC_ADMIN_PASSWORD}" "http://localhost:8001/admin/v1/timestamp" )
+    marklogic_pid=$(cat "${MARKLOGIC_PID_FILE}" 2>/dev/null || true)
 
     info "joining cluster of group ${MARKLOGIC_GROUP}"
     curl_retry_validate false "http://localhost:8001/admin/v1/cluster-config" 202 \
@@ -408,7 +468,8 @@ function join_cluster {
     
     # 202 causes restart
     info "restart triggered"
-    restart_check "localhost" "${timestamp}"
+    ensure_join_restart "${marklogic_pid}"
+    join_check "${HOST_FQDN}"
 
     info "joined group ${MARKLOGIC_GROUP}"
 }
