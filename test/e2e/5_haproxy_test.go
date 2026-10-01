@@ -70,11 +70,17 @@ curl --fail --silent --show-error --anyauth -u "$auth" -H "Origin: $origin" -b "
 csrf=$(awk '$6 ~ /^csrf-token-/ { print $7; exit }' "$cookies")
 test -n "$csrf"
 curl --fail --silent --show-error --anyauth -u "$auth" -H "Origin: $origin" -H "X-CSRF-Token: $csrf" -b "$cookies" "$base/qconsole/endpoints/workspaces.xqy" -o "$workspaces"
-read qid dbid sid <<EOF
-$(python3 -c 'import json,sys; workspaces=json.load(open(sys.argv[1]))["workspaces"]["workspace"]; query=next(query for workspace in workspaces for query in workspace["queries"]); print(query["id"], query["database"], query["server"])' "$workspaces")
-EOF
+query=$(tr -d '\r\n' < "$workspaces" | sed -n 's/.*"queries":[[:space:]]*\[\({[^}]*}\).*/\1/p')
+qid=$(printf '%%s' "$query" | sed -n 's/.*"id"[[:space:]]*:[[:space:]]*"\{0,1\}\([0-9][0-9]*\)"\{0,1\}.*/\1/p')
+dbid=$(printf '%%s' "$query" | sed -n 's/.*"database"[[:space:]]*:[[:space:]]*"\{0,1\}\([0-9][0-9]*\)"\{0,1\}.*/\1/p')
+sid=$(printf '%%s' "$query" | sed -n 's/.*"server"[[:space:]]*:[[:space:]]*"\{0,1\}\([0-9][0-9]*\)"\{0,1\}.*/\1/p')
+test -n "$qid" && test -n "$dbid" && test -n "$sid"
 curl --fail --silent --show-error --anyauth -u "$auth" -H "Origin: $origin" -H "X-CSRF-Token: $csrf" -b "$cookies" -X POST --data-urlencode 'data=xquery version "1.0-ml"; xdmp:version()' "$base/qconsole/endpoints/evaler.xqy?qid=$qid&dbid=$dbid&sid=$sid&crid=1234567890&querytype=xquery&action=eval" -o "$result"
-python3 -c 'import json,sys; value=json.load(open(sys.argv[1])); results=value.get("results") or []; assert value.get("resultCount")==1 and len(results)==1; assert results[0].get("result") not in (None, ""); print("xdmp:version() executed successfully")' "$result"`, consoleURL, baseURL, username+":"+password)
+result_json=$(tr -d '\r\n' < "$result")
+printf '%%s' "$result_json" | grep -Eq '"resultCount"[[:space:]]*:[[:space:]]*1([,}])'
+printf '%%s' "$result_json" | grep -Eq '"results"[[:space:]]*:[[:space:]]*\[[[:space:]]*\{'
+printf '%%s' "$result_json" | grep -Eq '"result"[[:space:]]*:[[:space:]]*"[^"]+"'
+echo 'xdmp:version() executed successfully'`, consoleURL, baseURL, username+":"+password)
 		output, err := utils.ExecCmdInPod(podName, namespace, containerName, command)
 		if err != nil {
 			t.Fatalf("Query Console execution through %s failed: %v", appServer.Path, err)
