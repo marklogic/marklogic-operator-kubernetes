@@ -19,6 +19,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
@@ -699,7 +700,9 @@ func forceDeleteNamespacedTestResources(ctx context.Context, cfg *envconf.Config
 
 	var clusters marklogicv1.MarklogicClusterList
 	if err := client.Resources(nsName).List(ctx, &clusters); err != nil {
-		return fmt.Errorf("list MarklogicClusters in namespace %s: %w", nsName, err)
+		if !apierrors.IsNotFound(err) && !apimeta.IsNoMatchError(err) {
+			return fmt.Errorf("list MarklogicClusters in namespace %s: %w", nsName, err)
+		}
 	}
 	for index := range clusters.Items {
 		if err := client.Resources(nsName).Patch(ctx, &clusters.Items[index], patch); err != nil && !apierrors.IsNotFound(err) {
@@ -709,7 +712,9 @@ func forceDeleteNamespacedTestResources(ctx context.Context, cfg *envconf.Config
 
 	var groups marklogicv1.MarklogicGroupList
 	if err := client.Resources(nsName).List(ctx, &groups); err != nil {
-		return fmt.Errorf("list MarklogicGroups in namespace %s: %w", nsName, err)
+		if !apierrors.IsNotFound(err) && !apimeta.IsNoMatchError(err) {
+			return fmt.Errorf("list MarklogicGroups in namespace %s: %w", nsName, err)
+		}
 	}
 	for index := range groups.Items {
 		if err := client.Resources(nsName).Patch(ctx, &groups.Items[index], patch); err != nil && !apierrors.IsNotFound(err) {

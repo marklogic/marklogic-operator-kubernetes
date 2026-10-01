@@ -108,6 +108,16 @@ String htmlEscape(value) {
         .replace("'", '&#39;')
 }
 
+String githubRepositoryUrl() {
+    if (!env.GIT_URL) {
+        return ''
+    }
+    return env.GIT_URL
+        .replaceFirst('^git@github\\.com:', 'https://github.com/')
+        .replaceFirst('^https?://github\\.com/', 'https://github.com/')
+        .replaceFirst('\\.git$', '')
+}
+
 Map junitSummary() {
     def output = sh(returnStdout: true, script: '''
         if ! command -v python3 >/dev/null 2>&1; then
@@ -125,7 +135,8 @@ for path in glob.glob('test/test_results/*.xml'):
     try:
         root = ET.parse(path).getroot()
     except ET.ParseError:
-        continue
+        print('unavailable')
+        raise SystemExit
     reports += 1
     for case in root.iter('testcase'):
         total += 1
@@ -171,6 +182,11 @@ void resultNotification(status) {
     def testResultSummary = testSummary.available ? "${testSummary.total} total | ${passed} passed | ${testSummary.failed} failed | ${testSummary.skipped} skipped" : 'JUnit results unavailable'
     def branch = env.CHANGE_BRANCH ?: env.BRANCH_NAME ?: 'N/A'
     def pullRequest = env.CHANGE_ID ? "#${env.CHANGE_ID}" : 'N/A'
+    def repositoryUrl = githubRepositoryUrl()
+    def branchValue = repositoryUrl && branch != 'N/A' ? "<a href='${htmlEscape("${repositoryUrl}/tree/${branch}")}'>${htmlEscape(branch)}</a>" : htmlEscape(branch)
+    def pullRequestUrl = env.CHANGE_URL ?: (repositoryUrl && env.CHANGE_ID ? "${repositoryUrl}/pull/${env.CHANGE_ID}" : '')
+    def pullRequestValue = pullRequestUrl ? "<a href='${htmlEscape(pullRequestUrl)}'>${htmlEscape(pullRequest)}</a>" : htmlEscape(pullRequest)
+    def jiraValue = JIRA_ID ? "<a href='${htmlEscape(jiraLink)}'>${htmlEscape(JIRA_ID)}</a>" : 'N/A'
     def commit = env.GIT_COMMIT ? env.GIT_COMMIT.take(7) : 'N/A'
     def trigger = env.BUILD_USER ?: env.CHANGE_AUTHOR ?: 'N/A'
     def testPlan = "${params.E2E_RUNTIME}, ${params.E2E_SCOPE}, ${params.E2E_INSTALL_MODE}, Istio ${params.VERIFY_ISTIO_AMBIENT ? 'enabled' : 'disabled'}, parallelism ${params.E2E_TOP_LEVEL_PARALLELISM}"
@@ -180,23 +196,23 @@ void resultNotification(status) {
         failedTestItems += "<li>+${testSummary.failed - testSummary.failures.size()} more; see the Test Report.</li>"
     }
     def failedTests = failedTestItems ? "<h3>Failed Tests</h3><ul>${failedTestItems}</ul>" : ''
+    def duration = currentBuild.durationString.replaceFirst(/\s+and counting$/, '').trim()
     def emailBody = """
-        <h2 style='margin:0 0 12px;color:${statusColor}'>${status}: ${htmlEscape(env.JOB_NAME)} #${env.BUILD_NUMBER} | ${currentBuild.durationString.trim()}</h2>
         <table cellpadding='7' cellspacing='0' style='border-collapse:collapse;border:1px solid #d0d5dd'>
-          <tr><th align='left'>Branch / PR</th><td>${htmlEscape(branch)} / ${htmlEscape(pullRequest)}</td><th align='left'>Commit</th><td>${htmlEscape(commit)}</td></tr>
-          <tr><th align='left'>Triggered by</th><td>${htmlEscape(trigger)}</td><th align='left'>Jira</th><td>${htmlEscape(JIRA_ID ?: 'N/A')}</td></tr>
+         <tr><th align='left'>Status</th><td style='color:${statusColor}' colspan='3'>${htmlEscape(status)} | ${duration}</td></tr>
+         <tr><th align='left'>Branch | PR</th><td>${branchValue} | ${pullRequestValue}</td><th align='left'>Commit</th><td>${htmlEscape(commit)}</td></tr>
+          <tr><th align='left'>Triggered by</th><td>${htmlEscape(trigger)}</td><th align='left'>Jira</th><td>${jiraValue}</td></tr>
           <tr><th align='left'>Test Plan</th><td colspan='3'>${htmlEscape(testPlan)}</td></tr>
           <tr><th align='left'>Tests</th><td colspan='3'>${testResultSummary}</td></tr>
         </table>
         ${failedTests}
         <p><a href='${env.BUILD_URL}'>Build</a> | <a href='${env.BUILD_URL}testReport/'>Test Report</a> | <a href='${env.BUILD_URL}artifact/test/test_results/'>JUnit Artifacts</a></p>
     """
-    def jiraEmailBody = "${emailBody}<p><a href='${jiraLink}'>Jira</a></p>"
 
     if (JIRA_ID) {
         def comment = [ body: "Jenkins pipeline build result: ${status}" ]
         jiraAddComment site: 'JIRA', idOrKey: JIRA_ID, failOnError: false, input: comment
-        mail charset: 'UTF-8', mimeType: 'text/html', to: "${emailList}", body: "${jiraEmailBody}", subject: "🥷 ${status}: ${env.JOB_NAME} #${env.BUILD_NUMBER} - ${JIRA_ID}"
+        mail charset: 'UTF-8', mimeType: 'text/html', to: "${emailList}", body: "${emailBody}", subject: "🥷 ${status}: ${env.JOB_NAME} #${env.BUILD_NUMBER} - ${JIRA_ID}"
     } else {
         mail charset: 'UTF-8', mimeType: 'text/html', to: "${emailList}", body: "${emailBody}", subject: "🥷 ${status}: ${env.JOB_NAME} #${env.BUILD_NUMBER}"
     }
