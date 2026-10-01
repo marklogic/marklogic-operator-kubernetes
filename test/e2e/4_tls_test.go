@@ -106,7 +106,6 @@ func TestTlsWithSelfSigned(t *testing.T) {
 				Labels: namespaceLabels(),
 			},
 		})
-		ensureMarklogicSchemeRegistered(t, c)
 
 		if err := client.Resources(namespace).Create(ctx, cr); err != nil {
 			t.Fatalf("Failed to create MarklogicCluster: %s", err)
@@ -260,7 +259,6 @@ func TestTlsWithNamedCert(t *testing.T) {
 				Labels: namespaceLabels(),
 			},
 		})
-		ensureMarklogicSchemeRegistered(t, c)
 		prepareTLSCertDir(t, caCertDir, "")
 		prepareTLSCertDir(t, podZeroCertDir, filepath.Join("test", "test_data", "pod_zero_certs", "server.cnf"))
 		prepareTLSCertDir(t, podOneCertDir, filepath.Join("test", "test_data", "pod_one_certs", "server.cnf"))
@@ -448,7 +446,6 @@ func TestTlsWithMultiNode(t *testing.T) {
 
 	feature.Setup(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 		client := c.Client()
-		ensureMarklogicSchemeRegistered(t, c)
 
 		// Check if namespace exists and wait if it's terminating
 		ns := &corev1.Namespace{}

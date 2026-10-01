@@ -21,6 +21,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"sigs.k8s.io/e2e-framework/klient"
 	"sigs.k8s.io/e2e-framework/klient/conf"
 	"sigs.k8s.io/e2e-framework/klient/k8s"
@@ -110,37 +111,7 @@ type testResult struct {
 var (
 	trackMu      sync.Mutex
 	trackedTests []testResult
-
-	schemeRegistrationMu     sync.Mutex
-	marklogicSchemeOnce      sync.Once
-	marklogicSchemeErr       error
-	apiextensionsSchemeOnce  sync.Once
-	apiextensionsSchemeError error
 )
-
-func ensureMarklogicSchemeRegistered(t *testing.T, c *envconf.Config) {
-	t.Helper()
-	marklogicSchemeOnce.Do(func() {
-		schemeRegistrationMu.Lock()
-		defer schemeRegistrationMu.Unlock()
-		marklogicSchemeErr = marklogicv1.AddToScheme(c.Client().Resources().GetScheme())
-	})
-	if marklogicSchemeErr != nil {
-		t.Fatalf("Failed to register MarkLogic API scheme: %v", marklogicSchemeErr)
-	}
-}
-
-func ensureAPIEExtensionsSchemeRegistered(t *testing.T, c *envconf.Config) {
-	t.Helper()
-	apiextensionsSchemeOnce.Do(func() {
-		schemeRegistrationMu.Lock()
-		defer schemeRegistrationMu.Unlock()
-		apiextensionsSchemeError = apiextensionsv1.AddToScheme(c.Client().Resources().GetScheme())
-	})
-	if apiextensionsSchemeError != nil {
-		t.Fatalf("Failed to register API extensions scheme: %v", apiextensionsSchemeError)
-	}
-}
 
 // trackTest registers t in the global summary. Call it at the top of each Test* function.
 // t.Cleanup runs after the test (and all its sub-tests) complete, so t.Failed()/t.Skipped() are final.
@@ -209,6 +180,13 @@ func printTestSummary() {
 }
 
 func TestMain(m *testing.M) {
+	if err := marklogicv1.AddToScheme(clientgoscheme.Scheme); err != nil {
+		log.Fatalf("Register MarkLogic types: %v", err)
+	}
+	if err := apiextensionsv1.AddToScheme(clientgoscheme.Scheme); err != nil {
+		log.Fatalf("Register API-extension types: %v", err)
+	}
+
 	testEnv = env.New()
 	path := conf.ResolveKubeConfigFile()
 	cfg, err := envconf.NewFromFlags()
@@ -712,13 +690,37 @@ func kubectlConfigArgs(cfg *envconf.Config) string {
 	return args
 }
 
-func forceDeleteNamespacedTestResources(cfg *envconf.Config, nsName string) {
+func forceDeleteNamespacedTestResources(ctx context.Context, cfg *envconf.Config, nsName string) error {
+	client := cfg.Client()
+	patch := k8s.Patch{
+		PatchType: types.MergePatchType,
+		Data:      []byte(`{"metadata":{"finalizers":[]}}`),
+	}
+
+	var clusters marklogicv1.MarklogicClusterList
+	if err := client.Resources(nsName).List(ctx, &clusters); err != nil {
+		return fmt.Errorf("list MarklogicClusters in namespace %s: %w", nsName, err)
+	}
+	for index := range clusters.Items {
+		if err := client.Resources(nsName).Patch(ctx, &clusters.Items[index], patch); err != nil && !apierrors.IsNotFound(err) {
+			return fmt.Errorf("remove finalizers from MarklogicCluster %s/%s: %w", nsName, clusters.Items[index].Name, err)
+		}
+	}
+
+	var groups marklogicv1.MarklogicGroupList
+	if err := client.Resources(nsName).List(ctx, &groups); err != nil {
+		return fmt.Errorf("list MarklogicGroups in namespace %s: %w", nsName, err)
+	}
+	for index := range groups.Items {
+		if err := client.Resources(nsName).Patch(ctx, &groups.Items[index], patch); err != nil && !apierrors.IsNotFound(err) {
+			return fmt.Errorf("remove finalizers from MarklogicGroup %s/%s: %w", nsName, groups.Items[index].Name, err)
+		}
+	}
+
 	kubectlArgs := kubectlConfigArgs(cfg)
 	commands := []string{
 		"kubectl%s --request-timeout=20s delete pods --all -n %s --ignore-not-found --force --grace-period=0 --wait=false",
-		"kubectl%s --request-timeout=20s patch marklogicclusters.marklogic.progress.com --all -n %s --type=merge -p '{\"metadata\":{\"finalizers\":[]}}'",
 		"kubectl%s --request-timeout=20s delete marklogicclusters.marklogic.progress.com --all -n %s --ignore-not-found --wait=false",
-		"kubectl%s --request-timeout=20s patch marklogicgroups.marklogic.progress.com --all -n %s --type=merge -p '{\"metadata\":{\"finalizers\":[]}}'",
 		"kubectl%s --request-timeout=20s delete marklogicgroups.marklogic.progress.com --all -n %s --ignore-not-found --wait=false",
 	}
 
@@ -729,6 +731,8 @@ func forceDeleteNamespacedTestResources(cfg *envconf.Config, nsName string) {
 			log.Printf("Warning: stale resource cleanup command failed for namespace %s: %s (err=%v)", nsName, command, result.Err())
 		}
 	}
+
+	return nil
 }
 
 func ensureFreshNamespace(ctx context.Context, cfg *envconf.Config, nsName string) error {
@@ -743,7 +747,9 @@ func ensureFreshNamespace(ctx context.Context, cfg *envconf.Config, nsName strin
 	}
 
 	log.Printf("Ensuring stale namespace is removed: %s", nsName)
-	forceDeleteNamespacedTestResources(cfg, nsName)
+	if err := forceDeleteNamespacedTestResources(ctx, cfg, nsName); err != nil {
+		return err
+	}
 
 	if err := client.Resources().Delete(ctx, ns); err != nil && !apierrors.IsNotFound(err) {
 		return fmt.Errorf("failed to delete namespace %s: %w", nsName, err)
@@ -754,7 +760,9 @@ func ensureFreshNamespace(ctx context.Context, cfg *envconf.Config, nsName strin
 	}
 
 	log.Printf("Namespace %s is still terminating; forcing finalizer cleanup", nsName)
-	forceDeleteNamespacedTestResources(cfg, nsName)
+	if err := forceDeleteNamespacedTestResources(ctx, cfg, nsName); err != nil {
+		return err
+	}
 	if err := forceFinalizeNamespace(cfg, nsName); err != nil {
 		return fmt.Errorf("failed to force-finalize namespace %s: %w", nsName, err)
 	}

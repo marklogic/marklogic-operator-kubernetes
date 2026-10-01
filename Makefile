@@ -102,6 +102,7 @@ E2E_UPGRADE_CLEANUP_TIMEOUT ?= 15m
 EKS_CLUSTER_NAME ?= jenkins-kube-ninjas
 EKS_NODEGROUP_NAME ?= ml-worker
 EKS_NODE_COUNT ?= 4
+EKS_NODE_READY_TIMEOUT ?= 600
 EKS_WAIT_FOR_SCALE_DOWN ?= true
 EKS_REGION ?= us-west-1
 AWS_ACCOUNT_ID ?= $(shell aws sts get-caller-identity --query Account --output text 2>/dev/null)
@@ -529,12 +530,20 @@ eks-scale-up: ## Scale EKS worker nodes to EKS_NODE_COUNT.
 	  --nodes-min 0 \
 	  --nodes-max 6 \
 	  --region $(EKS_REGION)
-	@echo "=====Waiting for nodes to register====="
-	@until kubectl get nodes 2>/dev/null | grep -q Ready; do echo "Waiting for nodes to join..."; sleep 10; done
-	@echo "=====Waiting for terminating nodes to deregister====="
-	@until [ "$$(kubectl get nodes --no-headers 2>/dev/null | grep -c NotReady)" = "0" ]; do echo "Waiting for NotReady nodes to drain..."; sleep 10; done
-	@echo "=====Waiting for nodes to be Ready====="
-	kubectl wait --for=condition=Ready nodes --all --timeout=300s
+	@echo "=====Waiting up to $(EKS_NODE_READY_TIMEOUT)s for $(EKS_NODE_COUNT) Ready $(EKS_NODEGROUP_NAME) nodes====="
+	@ready_nodes=0; timeout_seconds=$(EKS_NODE_READY_TIMEOUT); attempts=$$(( (timeout_seconds + 9) / 10 )); \
+	for attempt in $$(seq 1 $$attempts); do \
+		ready_nodes=$$(kubectl get nodes -l eks.amazonaws.com/nodegroup=$(EKS_NODEGROUP_NAME) --no-headers 2>/dev/null | awk '$$2 ~ /^Ready/ { count++ } END { print count + 0 }'); \
+		if [ "$$ready_nodes" -ge "$(EKS_NODE_COUNT)" ]; then break; fi; \
+		echo "Waiting for Ready nodes ($$ready_nodes/$(EKS_NODE_COUNT), attempt $$attempt/$$attempts)..."; \
+		sleep 10; \
+	done; \
+	if [ "$$ready_nodes" -lt "$(EKS_NODE_COUNT)" ]; then \
+		echo "Timed out waiting for $(EKS_NODE_COUNT) Ready $(EKS_NODEGROUP_NAME) nodes; found $$ready_nodes." >&2; \
+		exit 1; \
+	fi
+	@echo "=====Verifying $(EKS_NODEGROUP_NAME) nodes are Ready====="
+	kubectl wait --for=condition=Ready nodes -l eks.amazonaws.com/nodegroup=$(EKS_NODEGROUP_NAME) --timeout=300s
 
 # Scale EKS worker nodes to 0 to minimise cost when the cluster is idle.
 .PHONY: eks-scale-down

@@ -83,7 +83,6 @@ func TestVolumeResizeClusterScoped(t *testing.T) {
 	// ── Create both namespaces and both clusters in parallel ──────────────────
 	feature.Setup(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 		client := c.Client()
-		ensureMarklogicSchemeRegistered(t, c)
 
 		var wg sync.WaitGroup
 		errCh := make(chan error, len(resizeNamespaces))

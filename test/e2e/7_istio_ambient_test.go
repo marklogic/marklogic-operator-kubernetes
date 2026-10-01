@@ -446,7 +446,6 @@ func TestIstioAmbientProvisioning(t *testing.T) {
 		}
 
 		client := c.Client()
-		ensureMarklogicSchemeRegistered(t, c)
 
 		// Create admin secret
 		p := e2eutils.RunCommand(fmt.Sprintf(
@@ -671,7 +670,6 @@ func TestIstioAmbientResilience(t *testing.T) {
 		}
 
 		client := c.Client()
-		ensureMarklogicSchemeRegistered(t, c)
 
 		p := e2eutils.RunCommand(fmt.Sprintf(
 			"kubectl -n %s create secret generic %s --from-literal=username=%s --from-literal=password=%s",
@@ -978,7 +976,6 @@ func TestIstioAmbientNetworkGatekeeper(t *testing.T) {
 		}
 
 		client := c.Client()
-		ensureMarklogicSchemeRegistered(t, c)
 
 		p := e2eutils.RunCommand(fmt.Sprintf(
 			"kubectl -n %s create secret generic %s --from-literal=username=%s --from-literal=password=%s",
@@ -1148,7 +1145,6 @@ func TestNonIstioRegression(t *testing.T) {
 		}
 
 		client := c.Client()
-		ensureMarklogicSchemeRegistered(t, c)
 
 		p := e2eutils.RunCommand(fmt.Sprintf(
 			"kubectl -n %s create secret generic %s --from-literal=username=%s --from-literal=password=%s",
