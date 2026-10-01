@@ -1,0 +1,117 @@
+{
+  "role-default": {
+    "id": "4457059417378883193",
+    "name": "marklogic-operator",
+    "description": "Least-privilege role for the MarkLogic Kubernetes Operator",
+    "compartment": "",
+    "meta": {
+      "uri": "/manage/v2/roles/marklogic-operator",
+      "current-time": "2026-09-30T16:16:46.665267Z",
+      "elapsed-time": {
+        "units": "sec",
+        "value": 0.053115
+      }
+    },
+    "relations": {
+      "relation-group": [
+        {
+          "typeref": "role-names",
+          "relation-count": {
+            "units": "quantity",
+            "value": 3
+          },
+          "relation": [
+            {
+              "uriref": "/manage/v2/roles/manage-admin",
+              "nameref": "manage-admin"
+            },
+            {
+              "uriref": "/manage/v2/roles/pki",
+              "nameref": "pki"
+            },
+            {
+              "uriref": "/manage/v2/roles/admin-ui-user",
+              "nameref": "admin-ui-user"
+            }
+          ]
+        },
+        {
+          "typeref": "privileges",
+          "relation-count": {
+            "units": "quantity",
+            "value": 5
+          },
+          "relation": [
+            {
+              "nameref": "xdmp:remove-dynamic-hosts",
+              "uriref": "/manage/v2/privileges/xdmp:remove-dynamic-hosts?kind=execute",
+              "action": "http://marklogic.com/xdmp/privileges/remove-dynamic-hosts",
+              "kind": "execute"
+            },
+            {
+              "nameref": "create-user",
+              "uriref": "/manage/v2/privileges/create-user?kind=execute",
+              "action": "http://marklogic.com/xdmp/privileges/create-user",
+              "kind": "execute"
+            },
+            {
+              "nameref": "admin-issue-dynamic-host-token",
+              "uriref": "/manage/v2/privileges/admin-issue-dynamic-host-token?kind=execute",
+              "action": "http://marklogic.com/xdmp/privileges/admin/issue-dynamic-host-token",
+              "kind": "execute"
+            },
+            {
+              "nameref": "xdmp:eval",
+              "uriref": "/manage/v2/privileges/xdmp:eval?kind=execute",
+              "action": "http://marklogic.com/xdmp/privileges/xdmp-eval",
+              "kind": "execute"
+            },
+            {
+              "nameref": "create-external-security",
+              "uriref": "/manage/v2/privileges/create-external-security?kind=execute",
+              "action": "http://marklogic.com/xdmp/privileges/create-external-security",
+              "kind": "execute"
+            }
+          ]
+        },
+        {
+          "typeref": "users",
+          "relation-count": {
+            "units": "quantity",
+            "value": 1
+          },
+          "relation": [
+            {
+              "nameref": "least-privilege-operator",
+              "uriref": "/manage/v2/users/least-privilege-operator"
+            }
+          ]
+        },
+        {
+          "typeref": "security-database",
+          "relation-count": {
+            "units": "quantity",
+            "value": 1
+          },
+          "relation": [
+            {
+              "uriref": "/manage/v2/databases/Security",
+              "roleref": "database",
+              "idref": "7363236125421752522",
+              "nameref": "Security"
+            }
+          ]
+        }
+      ]
+    },
+    "related-views": {
+      "related-view": [
+        {
+          "view-type": "item",
+          "view-name": "properties",
+          "view-uri": "/manage/v2/roles/marklogic-operator/properties"
+        }
+      ]
+    }
+  }
+}

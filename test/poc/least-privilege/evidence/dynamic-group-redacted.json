@@ -1,0 +1,163 @@
+{
+  "apiVersion": "marklogic.progress.com/v1",
+  "kind": "MarklogicGroup",
+  "metadata": {
+    "annotations": {
+      "banzaicloud.com/last-applied": "UEsDBBQACAAIAAAAAAAAAAAAAAAAAAAAAAAIAAAAb3JpZ2luYWysVU9v47YT/S5zFhXJ/tn5mbdFAmwPzW6QpH+wRQ8UNVKIUBwuOcwiDfLdi5Gt2M3m0KI9yRw+ch7fzBs/g4nuZ0zZUQANk0kPnkZn65hoTJhzbWk6e2yhggcXetBwtUA+JioRKpiQTW/YgH4GEwKxYUchy9Kjyaxico/O44gqkj1LaClY57FXhkHDqlltVbNT6+au3er2XK+2X6AC9ln1T8FMzqrXIyfw1e6uOdebVm+aL/BSgTcd+jmpibF+KB2mgIy5dnRmaYoUMEi65c57ygzVO2AXMptgJdcb+u/CJxPMiL3qnk7lUxQxGab07plgJjxFC/9D7EAP9oEczUxk8spHxThTpm8B0w0OmDBYzKB/+wdFtBQ4kfeYQHMq+H1ZL3zJjAleKX2vQnFy4ny93plmaNXOdufqfwNulenWqDar9bDt7G73/7aFl98rSJipJItHhqvdZrtbb+TdOaKdq1b4Xr4ZbUL+9G7qo6ovlRygiUrgW0yPzuIHa2V1Rw8YQA/GZ6ygI+LMycQfpNwaAvWomlo+9VHUOj/a2u7fXXuyxotS+/UlTcYJ57f7S6X0M7DkvCxpbnzQcH3Xbq6E4ygWuaAwuFFwGEzn8df+a7zNftH/oPLl4bqXCtxkRgkt1aNhcNYZf3Zsr77T7apu60aVzu1UImKPOatVva4bqMDl5b5DFu8eMWDO14k6PHLpl/3BOF8S3t0nzPfke9DrClxw7Iy/RG+ebsWDfQa9biqImBz1fwnlYi3mfHJBWwG7CanwK3AjRqXxQhrQ7sV6hsF53Bt3vuFHGvPCClOidBpI+LVg5mPoRK7BFwx8tv+ozrHeiELimMKxcAYNmXsqYqKlJ/djyk2O5182lnnGNNM82CZKYutN01w5qcwh/Qm0fQNd7aEv7zoa+Rulh2vyzj7JFVE0FCUogX6WM1Eskhnn+bMockX9bHO4QdP/khzjZ9nfO8v9gbecDOMo6aNJxnuU/pQdIfjxwNz07r9pgPZfNkDC6J01eQb8PbsLbja5yPS6ODj+05tpqkRkT6bf/4sc3/o5XOJgiucPMcrQwHRsohJ7w6dK3pD3Low/zfF5ULHhkuc6/RkAAP//UEsHCP9FMWk9AwAANQcAAFBLAQIUABQACAAIAAAAAAD/RTFpPQMAADUHAAAIAAAAAAAAAAAAAAAAAAAAAABvcmlnaW5hbFBLBQYAAAAAAQABADYAAABzAwAAAAA=",
+      "least-privilege-poc/reconciled-at": "2026-09-30T16:17:26Z",
+      "tls-dynamic-reconcile": "2026-09-29T07:51:50Z"
+    },
+    "creationTimestamp": "2026-09-29T07:43:38Z",
+    "finalizers": [
+      "marklogic.progress.com/dynamic-group-cleanup"
+    ],
+    "generation": 12,
+    "labels": {
+      "app.kubernetes.io/component": "dynamic-host",
+      "app.kubernetes.io/instance": "least-privilege",
+      "app.kubernetes.io/managed-by": "marklogic-operator",
+      "app.kubernetes.io/name": "marklogic"
+    },
+    "name": "dynamic",
+    "namespace": "ml-lp-test",
+    "ownerReferences": [
+      {
+        "apiVersion": "marklogic.progress.com/v1",
+        "controller": true,
+        "kind": "MarklogicCluster",
+        "name": "least-privilege",
+        "uid": "7339a0f1-9cb7-4fe6-ab3e-523f6bc99811"
+      }
+    ],
+    "resourceVersion": "2957013",
+    "uid": "1608b7bb-d38a-4d31-bdbb-20f56b252432"
+  },
+  "spec": {
+    "auth": {
+      "secretName": "least-privilege-operator"
+    },
+    "automountServiceAccountToken": false,
+    "bootstrapHost": "node-0.node.ml-lp-test.svc.cluster.local",
+    "clusterDomain": "cluster.local",
+    "dynamic": {
+      "tokenDuration": "PT15M"
+    },
+    "groupConfig": {
+      "enableXdqpSsl": true,
+      "name": "Dynamic"
+    },
+    "hugePages": {
+      "enabled": false,
+      "mountPath": "/dev/hugepages"
+    },
+    "image": "progressofficial/marklogic-db:12.1.0-ubi9-rootless-2.3.0",
+    "imagePullPolicy": "IfNotPresent",
+    "isDynamic": true,
+    "livenessProbe": {
+      "enabled": true,
+      "failureThreshold": 3,
+      "initialDelaySeconds": 30,
+      "periodSeconds": 30,
+      "successThreshold": 1,
+      "timeoutSeconds": 5
+    },
+    "logCollection": {
+      "enabled": false,
+      "files": {
+        "accessLogs": true,
+        "errorLogs": true,
+        "requestLogs": true
+      },
+      "image": "fluent/fluent-bit:5.1.0",
+      "outputs": "stdout",
+      "resources": {
+        "limits": {
+          "cpu": "200m",
+          "memory": "500Mi"
+        },
+        "requests": {
+          "cpu": "100m",
+          "memory": "200Mi"
+        }
+      }
+    },
+    "name": "dynamic",
+    "networkPolicy": {
+      "podSelector": {}
+    },
+    "persistence": {
+      "accessModes": [
+        "ReadWriteOnce"
+      ],
+      "resizeStrategy": "parallel",
+      "size": "1Gi"
+    },
+    "podSecurityContext": {
+      "fsGroup": 2,
+      "fsGroupChangePolicy": "OnRootMismatch"
+    },
+    "readinessProbe": {
+      "enabled": true,
+      "failureThreshold": 3,
+      "initialDelaySeconds": 10,
+      "periodSeconds": 30,
+      "successThreshold": 1,
+      "timeoutSeconds": 5
+    },
+    "replicas": 1,
+    "secretName": "least-privilege-operator",
+    "securityContext": {
+      "allowPrivilegeEscalation": false,
+      "runAsNonRoot": true,
+      "runAsUser": 1000
+    },
+    "service": {
+      "type": "ClusterIP"
+    },
+    "serviceAccountName": "marklogic-workload",
+    "tls": {
+      "enableOnDefaultAppServers": true
+    },
+    "updateStrategy": "RollingUpdate"
+  },
+  "status": {
+    "conditions": [
+      {
+        "lastTransitionTime": "2026-09-30T16:20:02Z",
+        "message": "MarkLogicGroup statefulSet is ready",
+        "reason": "MarkLogicGroupStatefulSetReady",
+        "status": "True",
+        "type": "Ready"
+      },
+      {
+        "lastTransitionTime": "2026-09-30T16:19:31Z",
+        "message": "waiting for pod dynamic-1 deletion after cleanup",
+        "observedGeneration": 12,
+        "reason": "DynamicReconciling",
+        "status": "False",
+        "type": "DynamicHostsReady"
+      }
+    ],
+    "dynamic": {
+      "bootstrapReady": true,
+      "configured": true,
+      "desiredReplicas": 1,
+      "dynamicHostsEnabled": true,
+      "hosts": [
+        {
+          "hostId": "15707415402469880842",
+          "hostname": "dynamic-0.dynamic.ml-lp-test.svc.cluster.local",
+          "lastUpdated": "2026-09-30T16:18:45Z",
+          "podName": "dynamic-0",
+          "state": "joined"
+        }
+      ],
+      "lastTransitionTime": "2026-09-30T16:20:02Z",
+      "localReadyReplicas": 1,
+      "message": "dynamic hosts are configured and at desired joined replicas",
+      "phase": "Idle",
+      "readyReplicas": 1
+    },
+    "markLogicGroupStatus": "Created"
+  }
+}

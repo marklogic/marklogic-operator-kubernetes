@@ -1,0 +1,9 @@
+LAST SEEN   TYPE     REASON               OBJECT                   MESSAGE
+2m37s       Normal   SuccessfulDelete     statefulset/dynamic      Delete Pod dynamic-0 in StatefulSet dynamic successful
+85s         Normal   SuccessfulCreate     statefulset/dynamic      Create Pod dynamic-1 in StatefulSet dynamic successful
+43m         Normal   DynamicReconciling   marklogicgroup/dynamic   dynamic lifecycle transitioned from phase=Idle reason= to phase=Reconciling reason=: waiting for local-ready pods to join MarkLogic (1/2)
+2m4s        Normal   SuccessfulCreate     statefulset/dynamic      Create Pod dynamic-0 in StatefulSet dynamic successful
+2s          Normal   DynamicIdle          marklogicgroup/dynamic   dynamic lifecycle transitioned from phase=Reconciling reason= to phase=Idle reason=: dynamic hosts are configured and at desired joined replicas
+33s         Normal   DynamicReconciling   marklogicgroup/dynamic   dynamic lifecycle transitioned from phase=Idle reason= to phase=Reconciling reason=: removing dynamic host dynamic-1
+30s         Normal   SuccessfulDelete     statefulset/dynamic      Delete Pod dynamic-1 in StatefulSet dynamic successful
+88s         Normal   DynamicReconciling   marklogicgroup/dynamic   dynamic lifecycle transitioned from phase=Idle reason= to phase=Reconciling reason=: removing stale dynamic host entry for dynamic-0
