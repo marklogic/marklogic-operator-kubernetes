@@ -2,7 +2,7 @@ controllerManager:
   manager:
     image:
       repository: marklogic-operator-kubernetes
-      tag: ml-lp-tls-dynamic-fix-v4
+      tag: ml-lp-arm64
 
 scope:
   type: namespace

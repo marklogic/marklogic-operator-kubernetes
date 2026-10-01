@@ -15,13 +15,19 @@ The test creates namespaces `ml-lp-operator` and `ml-lp-test`. Change names thro
 
 ## Run
 
-From the repository root:
+For a clean end-to-end demo, run from the repository root:
 
 ```bash
+DELETE_PVCS=true DELETE_NAMESPACES=true bash test/poc/least-privilege/cleanup.sh
+kubectl wait --for=delete namespace/ml-lp-test --timeout=5m 2>/dev/null || true
+kubectl wait --for=delete namespace/ml-lp-operator --timeout=5m 2>/dev/null || true
+
 bash test/poc/least-privilege/setup.sh
 bash test/poc/least-privilege/verify.sh
 bash test/poc/least-privilege/verify-tls-dynamic.sh
 ```
+
+The destructive cleanup removes the existing static PVCs and both PoC namespaces. Omit cleanup when demonstrating verification against an already running cluster, and run only `verify.sh` followed by `verify-tls-dynamic.sh`.
 
 Verification replaces the static MarkLogic pods using the operator credential, validates self-signed TLS, scales the ephemeral dynamic group from one to two replicas and back to one, and confirms that the bootstrap Secret remains available for recovery. The PoC never deletes the bootstrap admin Secret.
 
