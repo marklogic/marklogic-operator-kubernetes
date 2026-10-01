@@ -5,6 +5,7 @@ package e2ehelm
 import (
 	"context"
 	"fmt"
+	"path"
 	"strings"
 	"testing"
 	"time"
@@ -21,6 +22,70 @@ import (
 	"sigs.k8s.io/e2e-framework/pkg/features"
 	e2eutils "sigs.k8s.io/e2e-framework/pkg/utils"
 )
+
+func verifyPathBasedHAProxyRoutes(t *testing.T, namespace, podName, containerName, username, password string, frontendPort int32, appServers []marklogicv1.AppServers) {
+	t.Helper()
+	fqdn := fmt.Sprintf("marklogic-haproxy.%s.svc.cluster.local", namespace)
+	baseURL := fmt.Sprintf("http://%s:%d", fqdn, frontendPort)
+
+	for _, appServer := range appServers {
+		targetPort := appServer.TargetPort
+		if targetPort == 0 {
+			targetPort = appServer.Port
+		}
+		if targetPort == 8000 {
+			continue
+		}
+
+		route := appServer.Path
+		if targetPort == 8002 {
+			route = path.Join(route, "manage/v2")
+		}
+		command := fmt.Sprintf("curl --fail --silent --show-error --anyauth -u %s:%s -o /dev/null %s%s", username, password, baseURL, route)
+		if _, err := utils.ExecCmdInPod(podName, namespace, containerName, command); err != nil {
+			t.Fatalf("HAProxy route %s to backend port %d failed: %v", appServer.Path, targetPort, err)
+		}
+	}
+
+	for _, appServer := range appServers {
+		targetPort := appServer.TargetPort
+		if targetPort == 0 {
+			targetPort = appServer.Port
+		}
+		if targetPort != 8000 {
+			continue
+		}
+
+		consoleURL := baseURL + appServer.Path
+		command := fmt.Sprintf(`set -eu
+base=%q
+origin=%q
+auth=%q
+cookies=/tmp/haproxy-qconsole-cookies
+workspaces=/tmp/haproxy-qconsole-workspaces.json
+result=/tmp/haproxy-qconsole-result.json
+rm -f "$cookies" "$workspaces" "$result"
+curl --fail --silent --show-error --anyauth -u "$auth" -H "Origin: $origin" -c "$cookies" "$base/qconsole" -o /dev/null
+curl --fail --silent --show-error --anyauth -u "$auth" -H "Origin: $origin" -b "$cookies" -c "$cookies" "$base/qconsole/" -o /dev/null
+curl --fail --silent --show-error --anyauth -u "$auth" -H "Origin: $origin" -b "$cookies" -c "$cookies" "$base/qconsole/endpoints/session.sjs" -o /dev/null
+csrf=$(awk '$6 ~ /^csrf-token-/ { print $7; exit }' "$cookies")
+test -n "$csrf"
+curl --fail --silent --show-error --anyauth -u "$auth" -H "Origin: $origin" -H "X-CSRF-Token: $csrf" -b "$cookies" "$base/qconsole/endpoints/workspaces.xqy" -o "$workspaces"
+read qid dbid sid <<EOF
+$(python3 -c 'import json,sys; workspaces=json.load(open(sys.argv[1]))["workspaces"]["workspace"]; query=next(query for workspace in workspaces for query in workspace["queries"]); print(query["id"], query["database"], query["server"])' "$workspaces")
+EOF
+curl --fail --silent --show-error --anyauth -u "$auth" -H "Origin: $origin" -H "X-CSRF-Token: $csrf" -b "$cookies" -X POST --data-urlencode 'data=xquery version "1.0-ml"; xdmp:version()' "$base/qconsole/endpoints/evaler.xqy?qid=$qid&dbid=$dbid&sid=$sid&crid=1234567890&querytype=xquery&action=eval" -o "$result"
+python3 -c 'import json,sys; value=json.load(open(sys.argv[1])); results=value.get("results") or []; assert value.get("resultCount")==1 and len(results)==1; assert results[0].get("result") not in (None, ""); print("xdmp:version() executed successfully")' "$result"`, consoleURL, baseURL, username+":"+password)
+		output, err := utils.ExecCmdInPod(podName, namespace, containerName, command)
+		if err != nil {
+			t.Fatalf("Query Console execution through %s failed: %v", appServer.Path, err)
+		}
+		t.Logf("Query Console through %s: %s", appServer.Path, strings.TrimSpace(output))
+		return
+	}
+
+	t.Fatal("path-based HAProxy configuration does not include a Query Console backend on port 8000")
+}
 
 func cleanupHAProxyNamespaceArtifacts(ns string) {
 	// Remove stale resources from interrupted runs so each test starts from a clean workload state.
@@ -146,13 +211,8 @@ func TestHAProxyPathBasedEnabled(t *testing.T) {
 	})
 
 	feature.Assess("HAProxy with path-based routing is working", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
-		fqdn := fmt.Sprintf("marklogic-haproxy.%s.svc.cluster.local", haProxyPathNS)
-		url := "http://" + fqdn + ":8080/adminUI"
-		cmd := fmt.Sprintf("curl --anyauth -u %s:%s %s", adminUsername, adminPassword, url)
 		time.Sleep(5 * time.Second)
-		if _, err := utils.ExecCmdInPod("ml-0", haProxyPathNS, mlContainerName, cmd); err != nil {
-			t.Fatalf("HAProxy path-based routing check failed: %v", err)
-		}
+		verifyPathBasedHAProxyRoutes(t, haProxyPathNS, "ml-0", mlContainerName, adminUsername, adminPassword, cr.Spec.HAProxy.FrontendPort, cr.Spec.HAProxy.AppServers)
 		return ctx
 	})
 
