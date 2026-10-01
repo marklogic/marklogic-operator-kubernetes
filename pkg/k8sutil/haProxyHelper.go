@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 	"text/template"
 
@@ -28,6 +29,7 @@ type HAProxyTemplate struct {
 	PortNumber       int
 	PortName         string
 	Path             string
+	ConsolePaths     []string
 	PodName          string
 	Index            int
 	ServiceName      string
@@ -202,14 +204,22 @@ func generateFrontendConfig(cr *marklogicv1.MarklogicCluster, config *HAProxyCon
 frontend marklogic-pathbased-frontend
   mode http
   option httplog
-  bind :{{ .PortNumber}} {{ .SslCert }}
-  http-request set-header Host marklogic:{{ .PortNumber}}
-  http-request set-header REFERER http://marklogic:{{ .PortNumber}}`
+  bind :{{ .PortNumber}} {{ .SslCert }}`
+		consolePaths := getQueryConsolePaths(config)
 		data = &HAProxyTemplate{
-			PortNumber: int(cr.Spec.HAProxy.FrontendPort),
-			SslCert:    getSSLConfig(cr.Spec.HAProxy.Tls),
+			PortNumber:   int(cr.Spec.HAProxy.FrontendPort),
+			SslCert:      getSSLConfig(cr.Spec.HAProxy.Tls),
+			ConsolePaths: consolePaths,
 		}
 		result = parseTemplateToString(frontEndDef, data)
+		for _, consolePath := range consolePaths {
+			result += parseTemplateToString(`
+  acl is_console path {{ . }}
+  acl is_console path_beg {{ . }}/`, consolePath)
+		}
+		result += parseTemplateToString(`
+  http-request set-header Host marklogic:{{ .PortNumber}}{{ if .ConsolePaths }} unless is_console{{ end }}
+  http-request set-header Referer http://marklogic:{{ .PortNumber}}{{ if .ConsolePaths }} unless is_console{{ end }}`, data)
 		for _, backends := range config.BackendConfigMap {
 			for _, babackend := range backends {
 				if !babackend.IsPathBased {
@@ -245,6 +255,24 @@ frontend {{ .FrontendName }}
 		result += parseTemplateToString(frontEndDef, data) + "\n"
 	}
 	return result
+}
+
+func getQueryConsolePaths(config *HAProxyConfig) []string {
+	pathSet := make(map[string]struct{})
+	for _, backends := range config.BackendConfigMap {
+		for _, backend := range backends {
+			if backend.IsPathBased && backend.Path != "" && (backend.Port == 8000 || backend.TargetPort == 8000) {
+				pathSet[backend.Path] = struct{}{}
+			}
+		}
+	}
+
+	paths := make([]string, 0, len(pathSet))
+	for path := range pathSet {
+		paths = append(paths, path)
+	}
+	sort.Strings(paths)
+	return paths
 }
 
 // generates backend config for HAProxy depending on pathBasedRouting flag and appServers
