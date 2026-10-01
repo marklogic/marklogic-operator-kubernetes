@@ -153,7 +153,7 @@ if not reports:
 else:
     print(f'available\t{total}\t{failed}\t{skipped}')
 for failure in failures[:5]:
-    print(failure.replace('\t', ' ').replace('\n', ' '))
+    print(failure.replace('\\t', ' ').replace('\\n', ' '))
 PY
     ''').trim()
 
