@@ -492,7 +492,7 @@ else
 endif
 	minikube -p $(MINIKUBE_PROFILE) image load $(IMG)
 	minikube -p $(MINIKUBE_PROFILE) image load $(E2E_MARKLOGIC_IMAGE_VERSION)
-	minikube -p $(MINIKUBE_PROFILE) image load "docker.io/haproxytech/haproxy-alpine:3.4.3"
+	minikube -p $(MINIKUBE_PROFILE) image load "docker.io/haproxytech/haproxy:alpine-3.4.6"
 	minikube -p $(MINIKUBE_PROFILE) image load $(FLUENT_BIT_IMAGE)
 	minikube -p $(MINIKUBE_PROFILE) image ls
 
