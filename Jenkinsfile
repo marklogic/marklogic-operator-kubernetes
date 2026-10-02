@@ -19,6 +19,11 @@ branchNameTag = env.BRANCH_NAME.replaceAll('/', '-')
 
 // Define local funtions
 void preBuildCheck() {
+    sh '''
+        rm -rf test/test_results
+        mkdir -p test/test_results
+    '''
+
     // Initialize parameters as env variables as workaround for https://issues.jenkins-ci.org/browse/JENKINS-41929
     evaluate """${ def script = ''; params.each { k, v -> script += "env.${k } = '''${v}'''\n" }; return script}"""
 
@@ -99,6 +104,73 @@ def getReviewState() {
     return reviewState
 }
 
+String htmlEscape(value) {
+    value.toString()
+        .replace('&', '&amp;')
+        .replace('<', '&lt;')
+        .replace('>', '&gt;')
+        .replace('"', '&quot;')
+        .replace("'", '&#39;')
+}
+
+String githubRepositoryUrl() {
+    if (!env.GIT_URL) {
+        return ''
+    }
+    return env.GIT_URL
+        .replaceFirst('^git@github\\.com:', 'https://github.com/')
+        .replaceFirst('^https?://github\\.com/', 'https://github.com/')
+        .replaceFirst('\\.git$', '')
+}
+
+Map junitSummary() {
+    def output = sh(returnStdout: true, script: '''
+        if ! command -v python3 >/dev/null 2>&1; then
+            echo unavailable
+            exit 0
+        fi
+        python3 - <<'PY' || echo unavailable
+import glob
+import xml.etree.ElementTree as ET
+
+total = failed = skipped = 0
+failures = []
+reports = 0
+for path in glob.glob('test/test_results/*.xml'):
+    try:
+        root = ET.parse(path).getroot()
+    except ET.ParseError:
+        print('unavailable')
+        raise SystemExit
+    reports += 1
+    for case in root.iter('testcase'):
+        total += 1
+        if case.find('skipped') is not None:
+            skipped += 1
+        if case.find('failure') is not None or case.find('error') is not None:
+            failed += 1
+            name = case.attrib.get('name', 'unnamed test')
+            classname = case.attrib.get('classname', '')
+            failures.append(f'{classname}.{name}' if classname else name)
+
+if not reports:
+    print('unavailable')
+else:
+    print(f'available\t{total}\t{failed}\t{skipped}')
+for failure in failures[:5]:
+    print(failure.replace('\\t', ' ').replace('\\n', ' '))
+PY
+    ''').trim()
+
+    def lines = output ? output.readLines() : []
+    def counts = lines ? lines[0].split('\\t') : []
+    def available = counts.size() == 4 && counts[0] == 'available'
+    def total = available ? counts[1].toInteger() : 0
+    def failed = available ? counts[2].toInteger() : 0
+    def skipped = available ? counts[3].toInteger() : 0
+    [available: available, total: total, failed: failed, skipped: skipped, failures: available && lines.size() > 1 ? lines[1..-1] : []]
+}
+
 void resultNotification(status) {
     def author, authorEmail, emailList
     //add author of a PR to email list if available
@@ -110,13 +182,42 @@ void resultNotification(status) {
         emailList = params.emailList
     }
     def jiraLink = "https://progresssoftware.atlassian.net/browse/${JIRA_ID}"
-    def emailBody = "<b>Jenkins pipeline for</b> ${env.JOB_NAME} <br><b>Build Number: </b>${env.BUILD_NUMBER} <br><br><b>Build URL: </b><br><a href='${env.BUILD_URL}'>${env.BUILD_URL}</a>"
-    def jiraEmailBody = "${emailBody} <br><br><b>Jira URL: </b><br><a href='${jiraLink}'>${jiraLink}</a>"
+    def testSummary = junitSummary()
+    def passed = testSummary.total - testSummary.failed - testSummary.skipped
+    def testResultSummary = testSummary.available ? "${testSummary.total} total | ${passed} passed | ${testSummary.failed} failed | ${testSummary.skipped} skipped" : 'JUnit results unavailable'
+    def branch = env.CHANGE_BRANCH ?: env.BRANCH_NAME ?: 'N/A'
+    def pullRequest = env.CHANGE_ID ? "#${env.CHANGE_ID}" : 'N/A'
+    def repositoryUrl = githubRepositoryUrl()
+    def branchValue = repositoryUrl && branch != 'N/A' ? "<a href='${htmlEscape("${repositoryUrl}/tree/${branch}")}'>${htmlEscape(branch)}</a>" : htmlEscape(branch)
+    def pullRequestUrl = env.CHANGE_URL ?: (repositoryUrl && env.CHANGE_ID ? "${repositoryUrl}/pull/${env.CHANGE_ID}" : '')
+    def pullRequestValue = pullRequestUrl ? "<a href='${htmlEscape(pullRequestUrl)}'>${htmlEscape(pullRequest)}</a>" : htmlEscape(pullRequest)
+    def jiraValue = JIRA_ID ? "<a href='${htmlEscape(jiraLink)}'>${htmlEscape(JIRA_ID)}</a>" : 'N/A'
+    def commit = env.GIT_COMMIT ? env.GIT_COMMIT.take(7) : 'N/A'
+    def trigger = env.BUILD_USER ?: env.CHANGE_AUTHOR ?: 'N/A'
+    def testPlan = "${params.E2E_RUNTIME}, ${params.E2E_SCOPE}, ${params.E2E_INSTALL_MODE}, Istio ${params.VERIFY_ISTIO_AMBIENT ? 'enabled' : 'disabled'}, parallelism ${params.E2E_TOP_LEVEL_PARALLELISM}"
+    def statusColor = status.contains('Success') ? '#067647' : status.contains('Unstable') ? '#b54708' : '#b42318'
+    def failedTestItems = testSummary.failures.collect { failure -> "<li>${htmlEscape(failure)}</li>" }.join('')
+    if (testSummary.failed > testSummary.failures.size()) {
+        failedTestItems += "<li>+${testSummary.failed - testSummary.failures.size()} more; see the Test Report.</li>"
+    }
+    def failedTests = failedTestItems ? "<h3>Failed Tests</h3><ul>${failedTestItems}</ul>" : ''
+    def duration = currentBuild.durationString.replaceFirst(/\s+and counting$/, '').trim()
+    def emailBody = """
+        <table cellpadding='7' cellspacing='0' style='border-collapse:collapse;border:1px solid #d0d5dd'>
+         <tr><th align='left'>Status</th><td style='color:${statusColor}' colspan='3'>${htmlEscape(status)} | ${duration}</td></tr>
+         <tr><th align='left'>Branch | PR</th><td>${branchValue} | ${pullRequestValue}</td><th align='left'>Commit</th><td>${htmlEscape(commit)}</td></tr>
+          <tr><th align='left'>Triggered by</th><td>${htmlEscape(trigger)}</td><th align='left'>Jira</th><td>${jiraValue}</td></tr>
+          <tr><th align='left'>Test Plan</th><td colspan='3'>${htmlEscape(testPlan)}</td></tr>
+          <tr><th align='left'>Tests</th><td colspan='3'>${testResultSummary}</td></tr>
+        </table>
+        ${failedTests}
+        <p><a href='${env.BUILD_URL}'>Build</a> | <a href='${env.BUILD_URL}testReport/'>Test Report</a> | <a href='${env.BUILD_URL}artifact/test/test_results/'>JUnit Artifacts</a></p>
+    """
 
     if (JIRA_ID) {
         def comment = [ body: "Jenkins pipeline build result: ${status}" ]
         jiraAddComment site: 'JIRA', idOrKey: JIRA_ID, failOnError: false, input: comment
-        mail charset: 'UTF-8', mimeType: 'text/html', to: "${emailList}", body: "${jiraEmailBody}", subject: "🥷 ${status}: ${env.JOB_NAME} #${env.BUILD_NUMBER} - ${JIRA_ID}"
+        mail charset: 'UTF-8', mimeType: 'text/html', to: "${emailList}", body: "${emailBody}", subject: "🥷 ${status}: ${env.JOB_NAME} #${env.BUILD_NUMBER} - ${JIRA_ID}"
     } else {
         mail charset: 'UTF-8', mimeType: 'text/html', to: "${emailList}", body: "${emailBody}", subject: "🥷 ${status}: ${env.JOB_NAME} #${env.BUILD_NUMBER}"
     }
@@ -385,10 +486,6 @@ pipeline {
         stage('Pre-Build-Check') {
             steps {
                 preBuildCheck()
-                sh '''
-                    rm -rf test/test_results
-                    mkdir -p test/test_results
-                '''
             }
         }
 
