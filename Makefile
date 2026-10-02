@@ -542,8 +542,6 @@ eks-scale-up: ## Scale EKS worker nodes to EKS_NODE_COUNT.
 		echo "Timed out waiting for $(EKS_NODE_COUNT) Ready $(EKS_NODEGROUP_NAME) nodes; found $$ready_nodes." >&2; \
 		exit 1; \
 	fi
-	@echo "=====Verifying $(EKS_NODEGROUP_NAME) nodes are Ready====="
-	kubectl wait --for=condition=Ready nodes -l eks.amazonaws.com/nodegroup=$(EKS_NODEGROUP_NAME) --timeout=300s
 
 # Scale EKS worker nodes to 0 to minimise cost when the cluster is idle.
 .PHONY: eks-scale-down

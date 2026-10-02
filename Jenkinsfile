@@ -19,6 +19,11 @@ branchNameTag = env.BRANCH_NAME.replaceAll('/', '-')
 
 // Define local funtions
 void preBuildCheck() {
+    sh '''
+        rm -rf test/test_results
+        mkdir -p test/test_results
+    '''
+
     // Initialize parameters as env variables as workaround for https://issues.jenkins-ci.org/browse/JENKINS-41929
     evaluate """${ def script = ''; params.each { k, v -> script += "env.${k } = '''${v}'''\n" }; return script}"""
 
@@ -481,10 +486,6 @@ pipeline {
         stage('Pre-Build-Check') {
             steps {
                 preBuildCheck()
-                sh '''
-                    rm -rf test/test_results
-                    mkdir -p test/test_results
-                '''
             }
         }
 
