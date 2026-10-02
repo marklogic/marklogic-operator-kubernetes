@@ -158,7 +158,7 @@ func TestHAProxyPathBasedEnabled(t *testing.T) {
 				AppServers: []marklogicv1.AppServers{
 					{Name: "app-service", Port: 8000, Path: "/console"},
 					{Name: "admin", Port: 8001, Path: "/adminUI"},
-					{Name: "manage", Port: 8002, Path: "/manage"},
+					{Name: "manage", Port: 8002, Path: "/manage-services"},
 				},
 			},
 		},
