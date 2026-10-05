@@ -15,8 +15,12 @@ spec:
   ## To create a secret, run the following command in the same namespace as the CR:
   ## kubectl create secret generic admincreds --from-literal=username=admin --from-literal=password=admin
   ## If you do not provide the admin credentials, the operator will generate a secret for you containing admin credentials
+  ## The operator also creates the MarkLogic user marklogic-kubernetes-operator with only the marklogic-operator role.
+  ## Its generated credentials are stored in the cluster-owned Secret ml-cluster-operator.
+  ## To use a user-managed operator password Secret instead, set operatorSecretName under auth:
   auth:
     secretName: admincreds
+    # operatorSecretName: my-operator-credentials
   clusterDomain: cluster.local
   persistence: 
     enabled: true

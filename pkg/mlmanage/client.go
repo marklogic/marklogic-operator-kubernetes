@@ -30,7 +30,8 @@ type Client interface {
 	CreateGroup(ctx context.Context, groupName string) error
 	EnableDynamicHosts(ctx context.Context, groupName string) error
 	EnableAdminAPITokenAuthentication(ctx context.Context, groupName string) error
-	EnsureManageAdminUser(ctx context.Context, username, password string) error
+	EnsureOperatorRole(ctx context.Context) error
+	EnsureOperatorUser(ctx context.Context, username, password string) error
 	ResolveClusterName(ctx context.Context) (string, error)
 	RequestDynamicHostToken(ctx context.Context, clusterName, groupName, hostFQDN, duration string) (string, error)
 	JoinDynamicHost(ctx context.Context, hostFQDN, token string) error
@@ -39,6 +40,17 @@ type Client interface {
 	ImportCertificateAuthority(ctx context.Context, authorityPEM string) error
 	EnsureOAuthExternalSecurity(ctx context.Context, config OAuthExternalSecurityConfig) error
 	EnsureOAuthAppServer(ctx context.Context, config OAuthAppServerConfig) error
+}
+
+const OperatorRoleName = "marklogic-operator"
+
+var operatorRoleInheritedRoles = []string{"manage-admin", "pki", "admin-ui-user"}
+var operatorRoleExecutePrivileges = []string{
+	"create-user",
+	"xdmp:remove-dynamic-hosts",
+	"admin-issue-dynamic-host-token",
+	"xdmp:eval",
+	"create-external-security",
 }
 
 type ClientOptions struct {
@@ -265,7 +277,29 @@ func (c *managementClient) EnableAdminAPITokenAuthentication(ctx context.Context
 	return err
 }
 
-func (c *managementClient) EnsureManageAdminUser(ctx context.Context, username, password string) error {
+func (c *managementClient) EnsureOperatorRole(ctx context.Context) error {
+	query := url.Values{}
+	query.Set("format", "json")
+	_, statusCode, err := c.doJSON(ctx, http.MethodGet, "/manage/v2/roles/"+url.PathEscape(OperatorRoleName), query, nil, http.StatusOK, http.StatusNotFound)
+	if err != nil {
+		return err
+	}
+
+	payload := map[string]any{
+		"role-name": OperatorRoleName,
+		"role":      operatorRoleInheritedRoles,
+		"privilege": operatorRoleExecutePrivileges,
+	}
+	if statusCode == http.StatusNotFound {
+		_, _, err = c.doJSON(ctx, http.MethodPost, "/manage/v2/roles", nil, payload, http.StatusCreated, http.StatusAccepted, http.StatusNoContent)
+		return err
+	}
+
+	_, _, err = c.doJSON(ctx, http.MethodPut, "/manage/v2/roles/"+url.PathEscape(OperatorRoleName)+"/properties", nil, payload, http.StatusAccepted, http.StatusNoContent)
+	return err
+}
+
+func (c *managementClient) EnsureOperatorUser(ctx context.Context, username, password string) error {
 	query := url.Values{}
 	query.Set("format", "json")
 	_, statusCode, err := c.doJSON(ctx, http.MethodGet, "/manage/v2/users/"+url.PathEscape(username), query, nil, http.StatusOK, http.StatusNotFound)
@@ -276,7 +310,7 @@ func (c *managementClient) EnsureManageAdminUser(ctx context.Context, username, 
 	payload := map[string]any{
 		"user-name": username,
 		"password":  password,
-		"role":      []string{"manage-admin"},
+		"role":      []string{OperatorRoleName},
 	}
 	if statusCode == http.StatusNotFound {
 		_, _, err = c.doJSON(ctx, http.MethodPost, "/manage/v2/users", nil, payload, http.StatusCreated, http.StatusAccepted, http.StatusNoContent)

@@ -93,7 +93,11 @@ get_current_host_protocol() {
 ###############################################################
 # Env Setup of MarkLogic
 ###############################################################
-MARKLOGIC_ADMIN_USERNAME="$(< /run/secrets/ml-secrets/username)"
+if [[ "${MARKLOGIC_OPERATOR_CREDENTIALS_ACTIVE:-false}" == "true" ]]; then
+    MARKLOGIC_ADMIN_USERNAME="marklogic-kubernetes-operator"
+else
+    MARKLOGIC_ADMIN_USERNAME="$(< /run/secrets/ml-secrets/username)"
+fi
 MARKLOGIC_ADMIN_PASSWORD="$(< /run/secrets/ml-secrets/password)"
 
 # Make sure username and password variables are not empty
@@ -152,6 +156,27 @@ function restart_check {
 }
 
 ################################################################
+# Wait until the bootstrap Management API reports every host online.
+################################################################
+function join_check {
+    local retry_count response_code
+    info "Waiting for all MarkLogic hosts to be online."
+    for ((retry_count = 0; retry_count < N_RETRY; retry_count = retry_count + 1)); do
+        curl_retry_validate false "${HTTP_PROTOCOL}://localhost:8002/manage/v2/hosts?view=status&format=json" 200 \
+            "--anyauth" "--user" "${MARKLOGIC_ADMIN_USERNAME}:${MARKLOGIC_ADMIN_PASSWORD}" \
+            "-o" "/tmp/marklogic-host-status.json" $HTTPS_OPTION
+        response_code=${CURL_RESPONSE_CODE:-0}
+        if [[ "${response_code}" == "200" ]] && \
+            grep -Eq '"total-hosts-offline"[^}]*"value"[[:space:]]*:[[:space:]]*0' /tmp/marklogic-host-status.json; then
+            info "All MarkLogic hosts are online."
+            return 0
+        fi
+        sleep "${RETRY_INTERVAL}"
+    done
+    error "MarkLogic hosts did not reach the online state after joining." exit
+}
+
+################################################################
 # curl_retry_validate(return_error, endpoint, expected_response_code, curl_options...)
 # Retry a curl command until it returns the expected response
 # code or fails N_RETRY times.
@@ -174,6 +199,7 @@ function curl_retry_validate {
     for ((retry_count = 0; retry_count < N_RETRY; retry_count = retry_count + 1)); do
         response=$(curl -s -m 30 -w '%{http_code}' "${curl_options[@]}" "$endpoint")
         response_code=$(tail -n1 <<< "$response")
+        CURL_RESPONSE_CODE=${response_code}
         response_content=$(sed '$ d' <<< "$response")
         if [[ ${response_code} -eq ${expected_response_code} ]]; then
             return ${response_code}
@@ -398,6 +424,12 @@ function join_cluster {
         "-H" "Content-type: application/x-www-form-urlencoded" \
         "-o" "/tmp/cluster.zip" $HTTPS_OPTION
 
+    response_code=${CURL_RESPONSE_CODE:-0}
+    if [[ "${response_code}" != "200" ]] || ! unzip -tq /tmp/cluster.zip >/dev/null 2>&1; then
+        rm -f /tmp/cluster.zip
+        error "Bootstrap host returned an invalid cluster configuration (HTTP ${response_code})." exit
+    fi
+
     timestamp=$(curl -s --anyauth --user "${MARKLOGIC_ADMIN_USERNAME}:${MARKLOGIC_ADMIN_PASSWORD}" "http://localhost:8001/admin/v1/timestamp" )
 
     info "joining cluster of group ${MARKLOGIC_GROUP}"
@@ -405,10 +437,16 @@ function join_cluster {
             "-o" "/dev/null" \
             "-X" "POST" "-H" "Content-type: application/zip" \
             "--data-binary" "@/tmp/cluster.zip"
+
+    response_code=${CURL_RESPONSE_CODE:-0}
+    if [[ "${response_code}" != "202" ]]; then
+        error "Cluster join request failed with HTTP ${response_code}." exit
+    fi
     
     # 202 causes restart
     info "restart triggered"
     restart_check "localhost" "${timestamp}"
+    join_check
 
     info "joined group ${MARKLOGIC_GROUP}"
 }

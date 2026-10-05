@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"testing"
 	"time"
 
 	marklogicv1 "github.com/marklogic/marklogic-operator-kubernetes/api/v1"
@@ -31,11 +32,15 @@ import (
 	. "github.com/onsi/gomega"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 )
 
 const (
@@ -60,6 +65,63 @@ var typeNamespaceName = types.NamespacedName{Name: Name, Namespace: Namespace}
 
 const resourceCpuValue = int64(1)
 const resourceMemoryValue = int64(268435456)
+
+func TestOperatorSecretRotationEnqueuesOwningGroups(t *testing.T) {
+	scheme := runtime.NewScheme()
+	if err := marklogicv1.AddToScheme(scheme); err != nil {
+		t.Fatalf("add Marklogic scheme: %v", err)
+	}
+	if err := corev1.AddToScheme(scheme); err != nil {
+		t.Fatalf("add core scheme: %v", err)
+	}
+
+	clusterOwnedGroup := &marklogicv1.MarklogicGroup{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "cluster-group",
+			Namespace: "database",
+			OwnerReferences: []metav1.OwnerReference{{
+				Kind: "MarklogicCluster",
+				Name: "search",
+			}},
+		},
+	}
+	customSecretName := "custom-operator-auth"
+	customSecretGroup := &marklogicv1.MarklogicGroup{
+		ObjectMeta: metav1.ObjectMeta{Name: "custom-group", Namespace: "database"},
+		Spec:       marklogicv1.MarklogicGroupSpec{Auth: &marklogicv1.AdminAuth{OperatorSecretName: &customSecretName}},
+	}
+	unrelatedGroup := &marklogicv1.MarklogicGroup{ObjectMeta: metav1.ObjectMeta{Name: "unrelated", Namespace: "database"}}
+	fakeClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(clusterOwnedGroup, customSecretGroup, unrelatedGroup).Build()
+	reconciler := &MarklogicGroupReconciler{Client: fakeClient}
+
+	ownedSecret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "search-operator",
+			Namespace: "database",
+			OwnerReferences: []metav1.OwnerReference{{
+				Kind: "MarklogicCluster",
+				Name: "search",
+			}},
+		},
+	}
+	requests := reconciler.secretToMarklogicGroups(context.Background(), ownedSecret)
+	if len(requests) != 1 || requests[0].Name != "cluster-group" {
+		t.Fatalf("cluster-owned Secret mapped to requests %+v, want cluster-group", requests)
+	}
+
+	customSecret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "custom-operator-auth", Namespace: "database"}}
+	requests = reconciler.secretToMarklogicGroups(context.Background(), customSecret)
+	if len(requests) != 1 || requests[0].Name != "custom-group" {
+		t.Fatalf("user-managed Secret mapped to requests %+v, want custom-group", requests)
+	}
+
+	oldSecret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "search-operator", Namespace: "database"}, Data: map[string][]byte{"password": []byte("old")}}
+	newSecret := oldSecret.DeepCopy()
+	newSecret.Data["password"] = []byte("rotated")
+	if !markLogicGroupCreateUpdateDeletePredicate().Update(event.UpdateEvent{ObjectOld: oldSecret, ObjectNew: newSecret}) {
+		t.Fatal("password updates should pass the controller predicate")
+	}
+}
 
 // 100Mi
 const resourceHugepageValue = int64(104857600)
@@ -182,6 +244,7 @@ var _ = Describe("MarkLogicGroup controller", func() {
 			Expect(staticReadinessProbe).ShouldNot(BeNil())
 			Expect(staticReadinessProbe.Exec).ShouldNot(BeNil())
 			Expect(staticReadinessProbe.TCPSocket).Should(BeNil())
+			Expect(staticReadinessProbe.Exec.Command).Should(ContainElement("test -f /tmp/marklogic_ready && curl -s -o /dev/null http://localhost:7997/"))
 			Expect(findEnvVar(sts.Spec.Template.Spec.Containers[0].Env, "MARKLOGIC_DYNAMIC_HOST")).Should(BeNil())
 
 			// Validating if headless Service is created successfully
@@ -465,7 +528,7 @@ var _ = Describe("MarkLogicGroup controller", func() {
 			dynamicName := "dynamic-configured"
 			clusterName := "cluster-configured"
 			adminSecretName := clusterName + "-admin"
-			dynamicSecretName := clusterName + "-manage-admin"
+			operatorSecretName := clusterName + "-operator"
 			dynamicNsName := types.NamespacedName{Name: dynamicName, Namespace: dynamicNamespace}
 			zeroReplicas := int32(0)
 
@@ -488,6 +551,11 @@ var _ = Describe("MarkLogicGroup controller", func() {
 				Data:       map[string][]byte{"username": []byte("admin"), "password": []byte("admin-password")},
 			}
 			Expect(k8sClient.Create(ctx, adminSecret)).Should(Succeed())
+			operatorSecret := &corev1.Secret{
+				ObjectMeta: metav1.ObjectMeta{Name: operatorSecretName, Namespace: dynamicNamespace},
+				Data:       map[string][]byte{"username": []byte("marklogic-kubernetes-operator"), "password": []byte("operator-password")},
+			}
+			Expect(k8sClient.Create(ctx, operatorSecret)).Should(Succeed())
 
 			mlGroup := &marklogicv1.MarklogicGroup{
 				TypeMeta:   metav1.TypeMeta{Kind: "MarklogicGroup", APIVersion: "marklogic.progress.com/v1"},
@@ -514,26 +582,26 @@ var _ = Describe("MarkLogicGroup controller", func() {
 				return createdCR.Status.Dynamic.Phase == "Idle" && createdCR.Status.Dynamic.DynamicHostsEnabled && createdCR.Status.Dynamic.Configured
 			}, timeout, interval).Should(BeTrue())
 
-			dynamicSecret := &corev1.Secret{}
-			Eventually(func() bool {
-				err := k8sClient.Get(ctx, types.NamespacedName{Name: dynamicSecretName, Namespace: dynamicNamespace}, dynamicSecret)
-				return err == nil
-			}, timeout, interval).Should(BeTrue())
+			legacyManageAdminSecret := &corev1.Secret{}
+			Consistently(func() bool {
+				err := k8sClient.Get(ctx, types.NamespacedName{Name: clusterName + "-manage-admin", Namespace: dynamicNamespace}, legacyManageAdminSecret)
+				return apierrors.IsNotFound(err)
+			}, time.Second, interval).Should(BeTrue())
 
 			Eventually(func() bool {
 				callsMu.Lock()
 				defer callsMu.Unlock()
-				expected := []string{"ListHostsStatus", "EnsureManageAdminUser", "GetGroup", "CreateGroup", "EnableDynamicHosts", "EnableAdminAPITokenAuthentication", "ListGroupHosts"}
+				expected := []string{"ListHostsStatus", "GetGroup", "CreateGroup", "EnableDynamicHosts", "EnableAdminAPITokenAuthentication", "ListGroupHosts"}
 				return hasOrderedSubsequence(calls, expected)
 			}, timeout, interval).Should(BeTrue())
 		})
 
-		It("Should reconcile shared dynamic secret ownership to cluster owner", func() {
+		It("Should preserve cluster ownership of the shared operator Secret", func() {
 			dynamicNamespace := "testns-dynamic-secret-owner"
 			dynamicName := "dynamic-secret-owner"
 			clusterName := "cluster-secret-owner"
 			adminSecretName := clusterName + "-admin"
-			dynamicSecretName := clusterName + "-manage-admin"
+			operatorSecretName := clusterName + "-operator"
 			dynamicNsName := types.NamespacedName{Name: dynamicName, Namespace: dynamicNamespace}
 			zeroReplicas := int32(0)
 
@@ -555,22 +623,20 @@ var _ = Describe("MarkLogicGroup controller", func() {
 			}
 			Expect(k8sClient.Create(ctx, adminSecret)).Should(Succeed())
 
-			groupController := true
-			legacyOwnerRef := metav1.OwnerReference{APIVersion: "marklogic.progress.com/v1", Kind: "MarklogicGroup", Name: "legacy-owner-group", UID: types.UID("legacy-owner-group-uid"), Controller: &groupController}
-			legacyDynamicSecret := &corev1.Secret{
-				TypeMeta: metav1.TypeMeta{Kind: "Secret", APIVersion: "v1"},
-				ObjectMeta: metav1.ObjectMeta{
-					Name:            dynamicSecretName,
-					Namespace:       dynamicNamespace,
-					OwnerReferences: []metav1.OwnerReference{legacyOwnerRef},
-				},
-				Type: corev1.SecretTypeOpaque,
-				Data: map[string][]byte{"username": []byte(clusterName + "-manage-admin"), "password": []byte("legacy-password")},
-			}
-			Expect(k8sClient.Create(ctx, legacyDynamicSecret)).Should(Succeed())
-
 			clusterController := true
 			clusterOwnerRef := metav1.OwnerReference{APIVersion: "marklogic.progress.com/v1", Kind: "MarklogicCluster", Name: clusterName, UID: types.UID("cluster-secret-owner-uid"), Controller: &clusterController}
+			operatorSecret := &corev1.Secret{
+				TypeMeta: metav1.TypeMeta{Kind: "Secret", APIVersion: "v1"},
+				ObjectMeta: metav1.ObjectMeta{
+					Name:            operatorSecretName,
+					Namespace:       dynamicNamespace,
+					OwnerReferences: []metav1.OwnerReference{clusterOwnerRef},
+				},
+				Type: corev1.SecretTypeOpaque,
+				Data: map[string][]byte{"username": []byte("marklogic-kubernetes-operator"), "password": []byte("operator-password")},
+			}
+			Expect(k8sClient.Create(ctx, operatorSecret)).Should(Succeed())
+
 			mlGroup := &marklogicv1.MarklogicGroup{
 				TypeMeta: metav1.TypeMeta{Kind: "MarklogicGroup", APIVersion: "marklogic.progress.com/v1"},
 				ObjectMeta: metav1.ObjectMeta{
@@ -602,7 +668,7 @@ var _ = Describe("MarkLogicGroup controller", func() {
 
 			reconciledSecret := &corev1.Secret{}
 			Eventually(func() bool {
-				err := k8sClient.Get(ctx, types.NamespacedName{Name: dynamicSecretName, Namespace: dynamicNamespace}, reconciledSecret)
+				err := k8sClient.Get(ctx, types.NamespacedName{Name: operatorSecretName, Namespace: dynamicNamespace}, reconciledSecret)
 				if err != nil {
 					return false
 				}
@@ -2602,14 +2668,19 @@ func (f *fakeDynamicManagementClient) EnableAdminAPITokenAuthentication(ctx cont
 	return f.behavior.enableTokenErr
 }
 
-func (f *fakeDynamicManagementClient) EnsureManageAdminUser(ctx context.Context, username, password string) error {
-	f.record("EnsureManageAdminUser")
+func (f *fakeDynamicManagementClient) EnsureOperatorRole(ctx context.Context) error {
+	f.record("EnsureOperatorRole")
 	if f.behavior == nil {
 		return nil
 	}
 	f.behavior.mu.Lock()
 	defer f.behavior.mu.Unlock()
 	return f.behavior.ensureUserErr
+}
+
+func (f *fakeDynamicManagementClient) EnsureOperatorUser(ctx context.Context, username, password string) error {
+	f.record("EnsureOperatorUser")
+	return nil
 }
 
 func (f *fakeDynamicManagementClient) ResolveClusterName(ctx context.Context) (string, error) {

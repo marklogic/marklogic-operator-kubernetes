@@ -101,6 +101,21 @@ kubectl get secret single-node-admin --namespace=<namespace-name> -o jsonpath='{
 kubectl get secret single-node-admin --namespace=<namespace-name> -o jsonpath='{.data.wallet-password}' | base64 --decode; echo
 ```
 
+### Operator User Credentials
+
+The Operator creates the MarkLogic user `marklogic-kubernetes-operator` and assigns it the `marklogic-operator` role. That role inherits `manage-admin`, `pki`, and `admin-ui-user`, and receives the execute privileges `create-user`, `xdmp:remove-dynamic-hosts`, `admin-issue-dynamic-host-token`, `xdmp:eval`, and `create-external-security` for the Operator's Management API tasks.
+
+The generated credential is stored in the cluster-owned Secret `<marklogicCluster-name>-operator`, with `username` and `password` keys. The password is 32 alphanumeric characters generated from a cryptographically secure random source. Kubernetes garbage collection removes this Secret when its MarklogicCluster is deleted. After the Operator verifies that the user can authenticate and the bootstrap host is online, it records the active Secret in MarklogicGroup status at `.status.credentialSecretName`. Reapplying the MarklogicCluster manifest does not reset this handoff.
+
+The bootstrap admin Secret remains in Kubernetes after handoff for initial setup, role/user reconciliation, and recovery, but is no longer mounted into MarkLogic pods. Normal controller Management API operations use the operator credential. If operator authentication fails, the controller falls back to the retained admin Secret and repairs the operator role/user using the credentials in the operator Secret. Credential changes update the pod template revision; pods are replaced one at a time, waiting for the other replicas to be Ready before each replacement. Persistent volume claims are retained. Keep the admin Secret available; deleting it removes this recovery path.
+
+To rotate the operator password, update the Secret's `password` value; the Operator reconciles the MarkLogic user and serially replaces pods using the old credential revision. The Operator does not rotate passwords automatically. To use a user-managed Secret instead, set `spec.auth.operatorSecretName` on the MarklogicCluster and provide a `password` key. The fixed MarkLogic username remains `marklogic-kubernetes-operator`; the supplied Secret is not owned or deleted by the Operator.
+
+To check which credential is active for a group, run:
+```sh
+kubectl get marklogicgroup <group-name> --namespace=<namespace> -o jsonpath='{.status.credentialSecretName}'
+```
+
 For additional manifests to deploy a MarkLogic cluster inside a Kubernetes cluster, see [Operator manifest](https://docs.progress.com/bundle/marklogic-server-on-kubernetes/operator/Operator-manifest.html) in the documentation.
 
 For Fluent Bit log collection configuration, including secret-backed environment variables for authenticated OpenTelemetry exports, see [Fluent Bit Log Collection](./docs/log-collection.md).

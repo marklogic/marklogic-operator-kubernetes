@@ -1,7 +1,11 @@
 #!/bin/bash
 # Copyright (c) 2024-2026 Progress Software Corporation and/or its subsidiaries or affiliates. All Rights Reserved.
 
-MARKLOGIC_ADMIN_USERNAME="$(< /run/secrets/ml-secrets/username)"            
+if [[ "${MARKLOGIC_OPERATOR_CREDENTIALS_ACTIVE:-false}" == "true" ]]; then
+    MARKLOGIC_ADMIN_USERNAME="marklogic-kubernetes-operator"
+else
+    MARKLOGIC_ADMIN_USERNAME="$(< /run/secrets/ml-secrets/username)"
+fi
 MARKLOGIC_ADMIN_PASSWORD="$(< /run/secrets/ml-secrets/password)"
 log () {
     local TIMESTAMP=$(date +"%Y-%m-%d %T.%3N")

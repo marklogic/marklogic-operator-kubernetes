@@ -44,6 +44,9 @@ func (oc *OperatorContext) ReconsileMarklogicGroupHandler() (reconcile.Result, e
 	if err != nil {
 		return result, err
 	}
+	if operatorUserResult := oc.ReconcileOperatorUser(); operatorUserResult.Completed() {
+		return operatorUserResult.Output()
+	}
 
 	if oc.MarklogicGroup.Spec.IsDynamic {
 		if dynamicResult := oc.ReconcileDynamicGroupConfig(); dynamicResult.Completed() {
