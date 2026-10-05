@@ -137,7 +137,7 @@ func TestHAPorxyPathBaseEnabled(t *testing.T) {
 					{
 						Name: "manage",
 						Port: 8002,
-						Path: "/manage",
+						Path: "/manage-services",
 					},
 				},
 			},
