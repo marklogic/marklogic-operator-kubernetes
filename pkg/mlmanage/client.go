@@ -44,13 +44,22 @@ type Client interface {
 
 const OperatorRoleName = "marklogic-operator"
 
+const operatorRoleDescription = "Dedicated role for the MarkLogic Kubernetes Operator"
+const operatorUserDescription = "Dedicated service account for the MarkLogic Kubernetes Operator"
+
 var operatorRoleInheritedRoles = []string{"manage-admin", "pki", "admin-ui-user"}
-var operatorRoleExecutePrivileges = []string{
-	"create-user",
-	"xdmp:remove-dynamic-hosts",
-	"admin-issue-dynamic-host-token",
-	"xdmp:eval",
-	"create-external-security",
+var operatorRoleExecutePrivileges = []operatorRolePrivilege{
+	{PrivilegeName: "create-user", Action: "http://marklogic.com/xdmp/privileges/create-user", Kind: "execute"},
+	{PrivilegeName: "xdmp:remove-dynamic-hosts", Action: "http://marklogic.com/xdmp/privileges/remove-dynamic-hosts", Kind: "execute"},
+	{PrivilegeName: "admin-issue-dynamic-host-token", Action: "http://marklogic.com/xdmp/privileges/admin/issue-dynamic-host-token", Kind: "execute"},
+	{PrivilegeName: "xdmp:eval", Action: "http://marklogic.com/xdmp/privileges/xdmp-eval", Kind: "execute"},
+	{PrivilegeName: "create-external-security", Action: "http://marklogic.com/xdmp/privileges/create-external-security", Kind: "execute"},
+}
+
+type operatorRolePrivilege struct {
+	PrivilegeName string `json:"privilege-name"`
+	Action        string `json:"action"`
+	Kind          string `json:"kind"`
 }
 
 type ClientOptions struct {
@@ -286,9 +295,10 @@ func (c *managementClient) EnsureOperatorRole(ctx context.Context) error {
 	}
 
 	payload := map[string]any{
-		"role-name": OperatorRoleName,
-		"role":      operatorRoleInheritedRoles,
-		"privilege": operatorRoleExecutePrivileges,
+		"role-name":   OperatorRoleName,
+		"description": operatorRoleDescription,
+		"role":        operatorRoleInheritedRoles,
+		"privilege":   operatorRoleExecutePrivileges,
 	}
 	if statusCode == http.StatusNotFound {
 		_, _, err = c.doJSON(ctx, http.MethodPost, "/manage/v2/roles", nil, payload, http.StatusCreated, http.StatusAccepted, http.StatusNoContent)
@@ -308,9 +318,10 @@ func (c *managementClient) EnsureOperatorUser(ctx context.Context, username, pas
 	}
 
 	payload := map[string]any{
-		"user-name": username,
-		"password":  password,
-		"role":      []string{OperatorRoleName},
+		"user-name":   username,
+		"description": operatorUserDescription,
+		"password":    password,
+		"role":        []string{OperatorRoleName},
 	}
 	if statusCode == http.StatusNotFound {
 		_, _, err = c.doJSON(ctx, http.MethodPost, "/manage/v2/users", nil, payload, http.StatusCreated, http.StatusAccepted, http.StatusNoContent)

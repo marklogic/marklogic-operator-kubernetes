@@ -98,6 +98,9 @@ func TestEnsureOperatorUserCreateExistingAndForbiddenLookup(t *testing.T) {
 			if writePayload["user-name"] != "marklogic-kubernetes-operator" || writePayload["password"] != "generated-password" {
 				t.Fatalf("unexpected user payload: %+v", writePayload)
 			}
+			if writePayload["description"] != operatorUserDescription {
+				t.Fatalf("user description = %v, want %q", writePayload["description"], operatorUserDescription)
+			}
 			roles, ok := writePayload["role"].([]any)
 			if !ok || len(roles) != 1 || roles[0] != "marklogic-operator" {
 				t.Fatalf("expected only the marklogic-operator role, got %+v", writePayload["role"])
@@ -156,12 +159,22 @@ func TestEnsureOperatorRoleCreateAndUpdate(t *testing.T) {
 			if writePayload["role-name"] != OperatorRoleName {
 				t.Fatalf("role name = %+v, want %q", writePayload["role-name"], OperatorRoleName)
 			}
+			if writePayload["description"] != operatorRoleDescription {
+				t.Fatalf("role description = %v, want %q", writePayload["description"], operatorRoleDescription)
+			}
 			roles, ok := writePayload["role"].([]any)
 			if !ok || !reflect.DeepEqual(roles, []any{"manage-admin", "pki", "admin-ui-user"}) {
 				t.Fatalf("unexpected inherited roles: %+v", writePayload["role"])
 			}
 			privileges, ok := writePayload["privilege"].([]any)
-			if !ok || !reflect.DeepEqual(privileges, []any{"create-user", "xdmp:remove-dynamic-hosts", "admin-issue-dynamic-host-token", "xdmp:eval", "create-external-security"}) {
+			expectedPrivileges := []any{
+				map[string]any{"privilege-name": "create-user", "action": "http://marklogic.com/xdmp/privileges/create-user", "kind": "execute"},
+				map[string]any{"privilege-name": "xdmp:remove-dynamic-hosts", "action": "http://marklogic.com/xdmp/privileges/remove-dynamic-hosts", "kind": "execute"},
+				map[string]any{"privilege-name": "admin-issue-dynamic-host-token", "action": "http://marklogic.com/xdmp/privileges/admin/issue-dynamic-host-token", "kind": "execute"},
+				map[string]any{"privilege-name": "xdmp:eval", "action": "http://marklogic.com/xdmp/privileges/xdmp-eval", "kind": "execute"},
+				map[string]any{"privilege-name": "create-external-security", "action": "http://marklogic.com/xdmp/privileges/create-external-security", "kind": "execute"},
+			}
+			if !ok || !reflect.DeepEqual(privileges, expectedPrivileges) {
 				t.Fatalf("unexpected execute privileges: %+v", writePayload["privilege"])
 			}
 		})

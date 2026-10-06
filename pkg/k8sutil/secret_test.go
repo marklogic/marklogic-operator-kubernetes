@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	marklogicv1 "github.com/marklogic/marklogic-operator-kubernetes/api/v1"
 	"github.com/marklogic/marklogic-operator-kubernetes/pkg/mlmanage"
@@ -15,6 +16,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
 
@@ -166,7 +168,7 @@ func TestReconcileOperatorUserUsesConfiguredSecretAndBootstrapCredentials(t *tes
 	operatorSecret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "custom-operator-auth", Namespace: "database"}, Data: map[string][]byte{
 		"password": []byte("user-provided-password"),
 	}}
-	fakeClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(group, adminSecret, operatorSecret).Build()
+	fakeClient := fake.NewClientBuilder().WithScheme(scheme).WithStatusSubresource(&marklogicv1.MarklogicGroup{}).WithObjects(group, adminSecret, operatorSecret).Build()
 	listCalls := 0
 	roleCalls := 0
 	operatorUserCalls := 0
@@ -209,7 +211,8 @@ func TestReconcileOperatorUserUsesConfiguredSecretAndBootstrapCredentials(t *tes
 	}
 	defer func() { NewDynamicManagementClient = originalFactory }()
 
-	oc := &OperatorContext{Ctx: context.Background(), Client: fakeClient, MarklogicGroup: group}
+	recorder := record.NewFakeRecorder(1)
+	oc := &OperatorContext{Ctx: context.Background(), Client: fakeClient, MarklogicGroup: group, Recorder: recorder}
 	if result := oc.ReconcileOperatorUser(); !result.Completed() {
 		t.Fatal("expected bootstrap to requeue for a follow-up reconciliation using operator credentials")
 	}
@@ -218,6 +221,87 @@ func TestReconcileOperatorUserUsesConfiguredSecretAndBootstrapCredentials(t *tes
 	}
 	if factoryCalls != 2 {
 		t.Fatalf("management clients created = %d, want operator then bootstrap admin", factoryCalls)
+	}
+	select {
+	case event := <-recorder.Events:
+		if !strings.Contains(event, "Normal OperatorIdentityReconciled") {
+			t.Fatalf("credential recovery event = %q, want Normal OperatorIdentityReconciled", event)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("reconciling the operator identity did not emit a Normal event")
+	}
+}
+
+func TestReconcileOperatorUserReportsMissingSecret(t *testing.T) {
+	scheme := runtime.NewScheme()
+	if err := marklogicv1.AddToScheme(scheme); err != nil {
+		t.Fatalf("add Marklogic scheme: %v", err)
+	}
+	if err := corev1.AddToScheme(scheme); err != nil {
+		t.Fatalf("add core scheme: %v", err)
+	}
+
+	group := &marklogicv1.MarklogicGroup{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "bootstrap",
+			Namespace: "database",
+			OwnerReferences: []metav1.OwnerReference{{
+				APIVersion: "marklogic.progress.com/v1",
+				Kind:       "MarklogicCluster",
+				Name:       "search",
+			}},
+		},
+		Spec: marklogicv1.MarklogicGroupSpec{Name: "bootstrap"},
+	}
+	fakeClient := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithStatusSubresource(&marklogicv1.MarklogicGroup{}).
+		WithObjects(group).
+		Build()
+	recorder := record.NewFakeRecorder(1)
+	oc := &OperatorContext{
+		Ctx:            context.Background(),
+		Client:         fakeClient,
+		MarklogicGroup: group,
+		Recorder:       recorder,
+	}
+
+	reconcileResult := oc.ReconcileOperatorUser()
+	output, err := reconcileResult.Output()
+	if err != nil {
+		t.Fatalf("reconcile operator credentials: %v", err)
+	}
+	if !output.Requeue || output.RequeueAfter <= 0 {
+		t.Fatalf("missing operator Secret should requeue, got %+v", output)
+	}
+
+	updated := &marklogicv1.MarklogicGroup{}
+	if err := fakeClient.Get(context.Background(), types.NamespacedName{Namespace: group.Namespace, Name: group.Name}, updated); err != nil {
+		t.Fatalf("get updated MarklogicGroup: %v", err)
+	}
+	var condition *metav1.Condition
+	for i := range updated.Status.Conditions {
+		if updated.Status.Conditions[i].Type == operatorCredentialsReadyCondition {
+			condition = &updated.Status.Conditions[i]
+			break
+		}
+	}
+	if condition == nil {
+		t.Fatal("OperatorCredentialsReady condition was not set")
+	}
+	if condition.Status != metav1.ConditionFalse || condition.Reason != "OperatorSecretUnavailable" {
+		t.Fatalf("credential condition = %s/%s, want False/OperatorSecretUnavailable", condition.Status, condition.Reason)
+	}
+	if !strings.Contains(condition.Message, "search-operator") || !strings.Contains(condition.Message, "database") {
+		t.Fatalf("credential condition is not actionable: %q", condition.Message)
+	}
+	select {
+	case event := <-recorder.Events:
+		if !strings.Contains(event, "Warning OperatorSecretUnavailable") {
+			t.Fatalf("credential event = %q, want Warning OperatorSecretUnavailable", event)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("missing operator Secret did not emit a Kubernetes Warning event")
 	}
 }
 
@@ -269,7 +353,8 @@ func TestReconcileOperatorUserRepairsRoleDriftWhenOperatorCredentialsWork(t *tes
 	}
 	defer func() { NewDynamicManagementClient = originalFactory }()
 
-	oc := &OperatorContext{Ctx: context.Background(), Client: fakeClient, MarklogicGroup: group}
+	recorder := record.NewFakeRecorder(1)
+	oc := &OperatorContext{Ctx: context.Background(), Client: fakeClient, MarklogicGroup: group, Recorder: recorder}
 	reconcileResult := oc.ReconcileOperatorUser()
 	output, err := reconcileResult.Output()
 	if err != nil {
@@ -287,6 +372,24 @@ func TestReconcileOperatorUserRepairsRoleDriftWhenOperatorCredentialsWork(t *tes
 	}
 	if updated.Status.CredentialSecretName != "search-operator" {
 		t.Fatalf("active credential Secret = %q, want search-operator", updated.Status.CredentialSecretName)
+	}
+	var condition *metav1.Condition
+	for i := range updated.Status.Conditions {
+		if updated.Status.Conditions[i].Type == operatorCredentialsReadyCondition {
+			condition = &updated.Status.Conditions[i]
+			break
+		}
+	}
+	if condition == nil || condition.Status != metav1.ConditionTrue || condition.Reason != "OperatorCredentialsActive" {
+		t.Fatalf("credential condition = %+v, want True/OperatorCredentialsActive", condition)
+	}
+	select {
+	case event := <-recorder.Events:
+		if !strings.Contains(event, "Normal OperatorCredentialsActive") {
+			t.Fatalf("credential activation event = %q, want Normal OperatorCredentialsActive", event)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("activating operator credentials did not emit a Normal event")
 	}
 }
 
