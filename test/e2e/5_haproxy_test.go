@@ -5,6 +5,7 @@ package e2e
 import (
 	"context"
 	"fmt"
+	"path"
 	"strings"
 	"testing"
 	"time"
@@ -20,6 +21,72 @@ import (
 	"sigs.k8s.io/e2e-framework/pkg/envconf"
 	"sigs.k8s.io/e2e-framework/pkg/features"
 )
+
+func verifyPathBasedHAProxyRoutes(t *testing.T, namespace, podName, containerName, username, password string, frontendPort int32, appServers []marklogicv1.AppServers) {
+	t.Helper()
+	fqdn := fmt.Sprintf("marklogic-haproxy.%s.svc.cluster.local", namespace)
+	baseURL := fmt.Sprintf("http://%s:%d", fqdn, frontendPort)
+
+	for _, appServer := range appServers {
+		targetPort := appServer.TargetPort
+		if targetPort == 0 {
+			targetPort = appServer.Port
+		}
+		if targetPort == 8000 {
+			continue
+		}
+
+		route := appServer.Path
+		if targetPort == 8002 {
+			directURL := "http://localhost:8002/manage/v2/groups"
+			directCommand := fmt.Sprintf("curl --fail --silent --show-error --anyauth -u %s:%s -o /dev/null %s", username, password, directURL)
+			if _, err := utils.ExecCmdInPod(podName, namespace, containerName, directCommand); err != nil {
+				t.Fatalf("direct Management API check at %s failed: %v", directURL, err)
+			}
+			route = path.Join(route, "manage/v2/groups")
+		}
+		command := fmt.Sprintf("curl --fail --silent --show-error --anyauth -u %s:%s -o /dev/null %s%s", username, password, baseURL, route)
+		if _, err := utils.ExecCmdInPod(podName, namespace, containerName, command); err != nil {
+			t.Fatalf("HAProxy route %s to backend port %d failed: %v", appServer.Path, targetPort, err)
+		}
+	}
+
+	for _, appServer := range appServers {
+		targetPort := appServer.TargetPort
+		if targetPort == 0 {
+			targetPort = appServer.Port
+		}
+		if targetPort != 8000 {
+			continue
+		}
+
+		consoleURL := baseURL + appServer.Path
+		qconsoleURL := consoleURL + "/qconsole"
+		command := fmt.Sprintf(`set -eu
+qconsole=%q
+origin=%q
+auth=%q
+cookies=/tmp/haproxy-qconsole-cookies
+workspaces=/tmp/haproxy-qconsole-workspaces.json
+rm -f "$cookies" "$workspaces"
+curl --fail --silent --show-error --anyauth -u "$auth" -H "Origin: $origin" -c "$cookies" "$qconsole" -o /dev/null
+curl --fail --silent --show-error --anyauth -u "$auth" -H "Origin: $origin" -b "$cookies" -c "$cookies" "$qconsole/" -o /dev/null
+curl --fail --silent --show-error --anyauth -u "$auth" -H "Origin: $origin" -b "$cookies" -c "$cookies" "$qconsole/endpoints/session.sjs" -o /dev/null
+csrf=$(awk '$6 ~ /^csrf-token-/ { print $7; exit }' "$cookies")
+test -n "$csrf"
+curl --fail --silent --show-error --anyauth -u "$auth" -H "Origin: $origin" -H "X-CSRF-Token: $csrf" -b "$cookies" "$qconsole/endpoints/workspaces.xqy" -o "$workspaces"
+test -s "$workspaces"
+echo 'Query Console page and API endpoints responded successfully'`, qconsoleURL, baseURL, username+":"+password)
+		output, err := utils.ExecCmdInPod(podName, namespace, containerName, command)
+		if err != nil {
+			t.Fatalf("Query Console endpoints through %s failed: %v", appServer.Path, err)
+		}
+		t.Logf("Query Console through %s: %s", appServer.Path, strings.TrimSpace(output))
+		return
+	}
+
+	t.Fatal("path-based HAProxy configuration does not include a Query Console backend on port 8000")
+}
 
 func TestHAPorxyPathBaseEnabled(t *testing.T) {
 	trackTest(t)
@@ -70,7 +137,7 @@ func TestHAPorxyPathBaseEnabled(t *testing.T) {
 					{
 						Name: "manage",
 						Port: 8002,
-						Path: "/manage",
+						Path: "/manage-services",
 					},
 				},
 			},
@@ -115,17 +182,8 @@ func TestHAPorxyPathBaseEnabled(t *testing.T) {
 	})
 
 	feature.Assess("HAProxy with PathBased Route is working", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
-		podName := "ml-0"
-		fqdn := fmt.Sprintf("marklogic-haproxy.%s.svc.cluster.local", namespace)
-		url := "http://" + fqdn + ":8080/adminUI"
-		t.Log("URL for testing haproxy service: ", url)
-		// curl command to check if haproxy is working for path based routing
-		command := fmt.Sprintf("curl --anyauth -u %s:%s %s", adminUsername, adminPassword, url)
 		time.Sleep(5 * time.Second)
-		_, err := utils.ExecCmdInPod(podName, namespace, mlContainerName, command)
-		if err != nil {
-			t.Fatalf("Failed to execute curl command to check haproxy service: %v", err)
-		}
+		verifyPathBasedHAProxyRoutes(t, namespace, "ml-0", mlContainerName, adminUsername, adminPassword, cr.Spec.HAProxy.FrontendPort, cr.Spec.HAProxy.AppServers)
 		return ctx
 	})
 
