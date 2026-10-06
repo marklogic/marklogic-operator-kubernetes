@@ -116,6 +116,10 @@ func markLogicClusterCreateUpdateDeletePredicate() predicate.Predicate {
 				if !reflect.DeepEqual(oldObj.Spec, newObj.Spec) {
 					return true // Reconcile if spec has changed
 				}
+			case *corev1.Secret:
+				oldObj := e.ObjectOld.(*corev1.Secret)
+				newObj := e.ObjectNew.(*corev1.Secret)
+				return !reflect.DeepEqual(oldObj.Data, newObj.Data) || !reflect.DeepEqual(oldObj.OwnerReferences, newObj.OwnerReferences)
 			default:
 				return false // Ignore updates for other types
 			}

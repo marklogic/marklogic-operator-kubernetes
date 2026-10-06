@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+	"testing"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -29,9 +30,78 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 
 	marklogicv1 "github.com/marklogic/marklogic-operator-kubernetes/api/v1"
 )
+
+func TestMarkLogicClusterSecretUpdatesPassPredicate(t *testing.T) {
+	controller := true
+	oldSecret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "search-operator",
+			Namespace: "database",
+			OwnerReferences: []metav1.OwnerReference{{
+				Kind:       "MarklogicCluster",
+				Name:       "search",
+				Controller: &controller,
+			}},
+		},
+		Data: map[string][]byte{
+			"username": []byte("marklogic-kubernetes-operator"),
+			"password": []byte("generated-password"),
+		},
+	}
+
+	tests := []struct {
+		name   string
+		mutate func(*corev1.Secret)
+		want   bool
+	}{
+		{
+			name: "cleared password",
+			mutate: func(secret *corev1.Secret) {
+				secret.Data["password"] = nil
+			},
+			want: true,
+		},
+		{
+			name: "drifted username",
+			mutate: func(secret *corev1.Secret) {
+				secret.Data["username"] = []byte("unexpected-user")
+			},
+			want: true,
+		},
+		{
+			name: "removed owner reference",
+			mutate: func(secret *corev1.Secret) {
+				secret.OwnerReferences = nil
+			},
+			want: true,
+		},
+		{
+			name: "unrelated label update",
+			mutate: func(secret *corev1.Secret) {
+				secret.Labels = map[string]string{"unrelated": "value"}
+			},
+			want: false,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			newSecret := oldSecret.DeepCopy()
+			test.mutate(newSecret)
+			got := markLogicClusterCreateUpdateDeletePredicate().Update(event.UpdateEvent{
+				ObjectOld: oldSecret,
+				ObjectNew: newSecret,
+			})
+			if got != test.want {
+				t.Fatalf("Secret update predicate = %t, want %t", got, test.want)
+			}
+		})
+	}
+}
 
 var clusterName = "marklogic-cluster-test"
 var clusterNS = "cluster-test-ns"
