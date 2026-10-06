@@ -17,8 +17,7 @@ const (
 	credentialRevisionAnnotation = "marklogic.progress.com/credential-revision"
 )
 
-// WaitForOperatorCredentialHandoff verifies the generated operator identity is active
-// and that the StatefulSet has replaced its bootstrap-credential pod.
+// WaitForOperatorCredentialHandoff verifies the operator identity and both credential mounts are active.
 func WaitForOperatorCredentialHandoff(ctx context.Context, client klient.Client, namespace, clusterName, groupName string, timeout time.Duration) error {
 	waitCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
@@ -85,7 +84,11 @@ func checkOperatorCredentialHandoff(ctx context.Context, client klient.Client, n
 		}
 		return false, fmt.Errorf("get StatefulSet %s/%s: %w", namespace, groupName, err)
 	}
-	if statefulSet.Spec.UpdateStrategy.Type != appsv1.OnDeleteStatefulSetStrategyType {
+	expectedStrategy := group.Spec.UpdateStrategy
+	if expectedStrategy == "" {
+		expectedStrategy = appsv1.RollingUpdateStatefulSetStrategyType
+	}
+	if statefulSet.Spec.UpdateStrategy.Type != expectedStrategy {
 		return false, nil
 	}
 	revision := statefulSet.Spec.Template.Annotations[credentialRevisionAnnotation]
@@ -113,19 +116,20 @@ func checkOperatorCredentialHandoff(ctx context.Context, client klient.Client, n
 }
 
 func credentialSecretVolumesReady(volumes []corev1.Volume, operatorSecretName, adminSecretName string) bool {
+	adminSecretMounted := false
 	operatorSecretMounted := false
 	for _, volume := range volumes {
 		if volume.Secret == nil {
 			continue
 		}
 		if volume.Secret.SecretName == adminSecretName {
-			return false
+			adminSecretMounted = true
 		}
 		if volume.Secret.SecretName == operatorSecretName {
 			operatorSecretMounted = true
 		}
 	}
-	return operatorSecretMounted
+	return adminSecretMounted && operatorSecretMounted
 }
 
 func isPodReady(pod *corev1.Pod) bool {

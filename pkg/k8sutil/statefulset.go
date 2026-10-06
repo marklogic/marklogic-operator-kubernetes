@@ -88,17 +88,14 @@ func (oc *OperatorContext) ReconcileStatefulset() (reconcile.Result, error) {
 	currentSts, err := oc.GetStatefulSet(cr.Namespace, objectMeta.Name)
 	containerParams := generateContainerParams(cr)
 	if containerParams.SecretName != "" {
-		activeSecret := &corev1.Secret{}
-		if secretErr := oc.Client.Get(oc.Ctx, client.ObjectKey{Namespace: cr.Namespace, Name: containerParams.SecretName}, activeSecret); secretErr != nil {
+		activeSecret, secretErr := oc.getStatefulSetCredentialSecret(&containerParams)
+		if secretErr != nil {
 			return result.Error(secretErr).Output()
 		}
 		secretHash := sha256.Sum256(secretDataForCredentialRevision(activeSecret.Data))
 		containerParams.CredentialRevision = hex.EncodeToString(secretHash[:])
 	}
 	statefulSetParams := generateStatefulSetsParams(cr)
-	if containerParams.OperatorCredentialsActive {
-		statefulSetParams.UpdateStrategy = appsv1.OnDeleteStatefulSetStrategyType
-	}
 	statefulSetDef := generateStatefulSetsDef(objectMeta, statefulSetParams, marklogicServerAsOwner(cr), containerParams)
 	if err != nil {
 		if apierrors.IsNotFound(err) {
@@ -144,15 +141,6 @@ func (oc *OperatorContext) ReconcileStatefulset() (reconcile.Result, error) {
 		}
 	} else {
 		logger.Info("MarkLogic statefulSet spec is the same as the current spec, no update needed")
-	}
-	if containerParams.OperatorCredentialsActive {
-		rotated, rotationErr := oc.rotateCredentialPods(statefulSetDef, statefulSetParams)
-		if rotationErr != nil {
-			return result.Error(rotationErr).Output()
-		}
-		if rotated {
-			return result.RequeueSoon(5).Output()
-		}
 	}
 	logger.Info("Operator Status:", "Stage", cr.Status.Stage)
 	if cr.Status.Stage == "STS_CREATED" {
@@ -200,6 +188,37 @@ func (oc *OperatorContext) ReconcileStatefulset() (reconcile.Result, error) {
 	}
 
 	return result.Done().Output()
+}
+
+func (oc *OperatorContext) getStatefulSetCredentialSecret(containerParams *containerParameters) (*corev1.Secret, error) {
+	secretName := containerParams.SecretName
+	if containerParams.OperatorCredentialsActive {
+		secretName = containerParams.OperatorSecretName
+	}
+	secret := &corev1.Secret{}
+	err := oc.Client.Get(oc.Ctx, client.ObjectKey{Namespace: oc.MarklogicGroup.Namespace, Name: secretName}, secret)
+	if err == nil || !apierrors.IsNotFound(err) || !containerParams.OperatorCredentialsActive {
+		return secret, err
+	}
+
+	containerParams.OperatorCredentialsActive = false
+	secret = &corev1.Secret{}
+	err = oc.Client.Get(oc.Ctx, client.ObjectKey{Namespace: oc.MarklogicGroup.Namespace, Name: containerParams.SecretName}, secret)
+	return secret, err
+}
+
+func (oc *OperatorContext) rotateCredentialPodsIfNeeded() (bool, error) {
+	if oc.MarklogicGroup.Status.CredentialSecretName == "" || oc.MarklogicGroup.Spec.UpdateStrategy != appsv1.OnDeleteStatefulSetStrategyType {
+		return false, nil
+	}
+	statefulSet := &appsv1.StatefulSet{}
+	if err := oc.Client.Get(oc.Ctx, client.ObjectKey{Namespace: oc.MarklogicGroup.Namespace, Name: oc.MarklogicGroup.Spec.Name}, statefulSet); err != nil {
+		if apierrors.IsNotFound(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	return oc.rotateCredentialPods(statefulSet, generateStatefulSetsParams(oc.MarklogicGroup))
 }
 
 func (oc *OperatorContext) rotateCredentialPods(desired *appsv1.StatefulSet, params statefulSetParameters) (bool, error) {
@@ -523,14 +542,7 @@ func generateContainerParams(cr *marklogicv1.MarklogicGroup) containerParameters
 		OperatorCredentialsActive: cr.Status.CredentialSecretName != "",
 	}
 
-	// Set SecretName with fallback to default if not specified
-	if cr.Status.CredentialSecretName != "" {
-		containerParams.SecretName = cr.Status.CredentialSecretName
-	} else if cr.Spec.SecretName != "" {
-		containerParams.SecretName = cr.Spec.SecretName
-	} else {
-		containerParams.SecretName = cr.ObjectMeta.Name + "-admin"
-	}
+	containerParams.SecretName = adminCredentialSecretNameForGroup(cr)
 
 	if cr.Spec.License != nil {
 		containerParams.LicenseKey = cr.Spec.License.Key
@@ -613,6 +625,7 @@ func generateVolumes(stsName string, containerParams containerParameters) []core
 		VolumeSource: corev1.VolumeSource{
 			Secret: &corev1.SecretVolumeSource{
 				SecretName: containerParams.OperatorSecretName,
+				Optional:   func(value bool) *bool { return &value }(true),
 			},
 		},
 	})
@@ -928,7 +941,7 @@ func getReadinessProbe(probe marklogicv1.ContainerProbe) *corev1.Probe {
 					"/bin/bash",
 					"-c",
 					// Only pass if MarkLogic is healthy AND the Wrapper finished successfully
-					"test -f /tmp/marklogic_ready && curl -s -o /dev/null http://localhost:7997/",
+					"test -f /tmp/marklogic_ready && [ \"$(curl -f -s -o /dev/null -w '%{http_code}' http://localhost:7997/)\" = \"200\" ]",
 				},
 			},
 		},

@@ -68,7 +68,7 @@ func TestOperatorCredentialHandoff(t *testing.T) {
 		return ctx
 	})
 
-	feature.Assess("Operator Secret replaces the bootstrap admin Secret mount", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
+	feature.Assess("Operator credential handoff preserves both credential mounts", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 		if err := utils.WaitForOperatorCredentialHandoff(ctx, c.Client(), namespaceName, clusterName, groupName, 10*time.Minute); err != nil {
 			logDiagnostics(t, namespaceName)
 			t.Fatalf("Operator credential handoff did not complete: %v", err)
