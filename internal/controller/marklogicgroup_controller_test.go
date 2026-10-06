@@ -244,7 +244,7 @@ var _ = Describe("MarkLogicGroup controller", func() {
 			Expect(staticReadinessProbe).ShouldNot(BeNil())
 			Expect(staticReadinessProbe.Exec).ShouldNot(BeNil())
 			Expect(staticReadinessProbe.TCPSocket).Should(BeNil())
-			Expect(staticReadinessProbe.Exec.Command).Should(ContainElement("test -f /tmp/marklogic_ready && curl -s -o /dev/null http://localhost:7997/"))
+			Expect(staticReadinessProbe.Exec.Command).Should(ContainElement("test -f /tmp/marklogic_ready && [ \"$(curl -f -s -o /dev/null -w '%{http_code}' http://localhost:7997/)\" = \"200\" ]"))
 			Expect(findEnvVar(sts.Spec.Template.Spec.Containers[0].Env, "MARKLOGIC_DYNAMIC_HOST")).Should(BeNil())
 
 			// Validating if headless Service is created successfully

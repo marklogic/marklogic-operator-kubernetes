@@ -5,6 +5,7 @@ package k8sutil
 import (
 	"github.com/marklogic/marklogic-operator-kubernetes/pkg/result"
 	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
@@ -56,15 +57,22 @@ func (oc *OperatorContext) ReconsileMarklogicGroupHandler() (reconcile.Result, e
 		}
 	}
 
+	var pendingOperatorUserResult result.ReconcileResult
 	if credentialsActive && statefulSetExists {
 		if operatorUserResult := oc.ReconcileOperatorUser(); operatorUserResult.Completed() {
-			return operatorUserResult.Output()
+			if !oc.activeOperatorCredentialSecretMissing() {
+				return operatorUserResult.Output()
+			}
+			pendingOperatorUserResult = operatorUserResult
 		}
 	}
 
 	statefulSetResult, err := oc.ReconcileStatefulset()
 	if err != nil {
 		return statefulSetResult, err
+	}
+	if pendingOperatorUserResult != nil {
+		return pendingOperatorUserResult.Output()
 	}
 	if !credentialsActive || !statefulSetExists {
 		if operatorUserResult := oc.ReconcileOperatorUser(); operatorUserResult.Completed() {
@@ -84,6 +92,15 @@ func (oc *OperatorContext) ReconsileMarklogicGroupHandler() (reconcile.Result, e
 	}
 
 	return statefulSetResult, err
+}
+
+func (oc *OperatorContext) activeOperatorCredentialSecretMissing() bool {
+	secret := &corev1.Secret{}
+	err := oc.Client.Get(oc.Ctx, client.ObjectKey{
+		Namespace: oc.MarklogicGroup.Namespace,
+		Name:      operatorCredentialSecretNameForGroup(oc.MarklogicGroup),
+	}, secret)
+	return apierrors.IsNotFound(err)
 }
 
 func (cc *ClusterContext) ReconsileMarklogicClusterHandler() (reconcile.Result, error) {

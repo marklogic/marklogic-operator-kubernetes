@@ -113,6 +113,9 @@ func TestCredentialVolumesKeepAdminAndOperatorSecretsSeparate(t *testing.T) {
 
 func TestMissingActiveOperatorSecretFallsBackToAdminSecret(t *testing.T) {
 	scheme := runtime.NewScheme()
+	if err := marklogicv1.AddToScheme(scheme); err != nil {
+		t.Fatalf("add Marklogic scheme: %v", err)
+	}
 	if err := corev1.AddToScheme(scheme); err != nil {
 		t.Fatalf("add core scheme: %v", err)
 	}
@@ -130,7 +133,7 @@ func TestMissingActiveOperatorSecretFallsBackToAdminSecret(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: "search-admin", Namespace: "database"},
 		Data:       map[string][]byte{"username": []byte("admin"), "password": []byte("admin-password")},
 	}
-	fakeClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(adminSecret).Build()
+	fakeClient := fake.NewClientBuilder().WithScheme(scheme).WithStatusSubresource(&marklogicv1.MarklogicGroup{}).WithObjects(group, adminSecret).Build()
 	oc := &OperatorContext{Ctx: context.Background(), Client: fakeClient, MarklogicGroup: group}
 	params := generateContainerParams(group)
 
@@ -140,6 +143,13 @@ func TestMissingActiveOperatorSecretFallsBackToAdminSecret(t *testing.T) {
 	}
 	if secret.Name != "search-admin" || params.OperatorCredentialsActive {
 		t.Fatalf("fallback Secret=%q, operator credentials active=%t; want admin Secret and inactive operator credentials", secret.Name, params.OperatorCredentialsActive)
+	}
+	updatedGroup := &marklogicv1.MarklogicGroup{}
+	if err := fakeClient.Get(context.Background(), client.ObjectKeyFromObject(group), updatedGroup); err != nil {
+		t.Fatalf("get updated MarklogicGroup: %v", err)
+	}
+	if updatedGroup.Status.CredentialSecretName != "" {
+		t.Fatalf("active credential Secret status = %q, want empty after admin fallback", updatedGroup.Status.CredentialSecretName)
 	}
 }
 

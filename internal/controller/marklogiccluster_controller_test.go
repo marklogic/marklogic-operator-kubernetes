@@ -190,6 +190,33 @@ var _ = Describe("MarklogicCluster Controller", func() {
 			}, timeout, interval).Should(BeTrue())
 		})
 
+		It("Should recreate the generated operator Secret when deleted", func() {
+			secretName := clusterName + "-operator"
+			secretKey := types.NamespacedName{Name: secretName, Namespace: clusterNS}
+			secret := &corev1.Secret{}
+			Eventually(func() error {
+				return k8sClient.Get(ctx, secretKey, secret)
+			}, timeout, interval).Should(Succeed())
+
+			Expect(k8sClient.Delete(ctx, secret)).Should(Succeed())
+
+			recreatedSecret := &corev1.Secret{}
+			Eventually(func() error {
+				return k8sClient.Get(ctx, secretKey, recreatedSecret)
+			}, timeout, interval).Should(Succeed())
+			Expect(string(recreatedSecret.Data["username"])).Should(Equal("marklogic-kubernetes-operator"))
+			Expect(recreatedSecret.Data["password"]).Should(HaveLen(32))
+
+			controllerOwnedByCluster := false
+			for _, ownerReference := range recreatedSecret.OwnerReferences {
+				if ownerReference.Kind == "MarklogicCluster" && ownerReference.Name == clusterName && ownerReference.Controller != nil && *ownerReference.Controller {
+					controllerOwnedByCluster = true
+					break
+				}
+			}
+			Expect(controllerOwnedByCluster).Should(BeTrue())
+		})
+
 		It("Should not create a dynamic manage-admin secret for static-only clusters", func() {
 			dynamicSecret := &corev1.Secret{}
 			dynamicSecretName := clusterName + "-manage-admin"
