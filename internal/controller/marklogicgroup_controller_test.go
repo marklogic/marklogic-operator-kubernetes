@@ -18,8 +18,11 @@ package controller
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -2508,10 +2511,14 @@ func createOperatorCredentialSecret(ctx context.Context, namespace, adminSecretN
 }
 
 func createReadyDynamicPod(ctx context.Context, namespace, groupName, podName string) {
+	credentialRevision := activeDynamicCredentialRevision(ctx, namespace, groupName)
 	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      podName,
 			Namespace: namespace,
+			Annotations: map[string]string{
+				"marklogic.progress.com/credential-revision": credentialRevision,
+			},
 			Labels: map[string]string{
 				"app.kubernetes.io/name":       "marklogic",
 				"app.kubernetes.io/instance":   groupName,
@@ -2535,6 +2542,45 @@ func createReadyDynamicPod(ctx context.Context, namespace, groupName, podName st
 	}, timeout, interval).Should(BeTrue())
 
 	updateDynamicStatefulSetStatus(ctx, namespace, groupName)
+}
+
+func activeDynamicCredentialRevision(ctx context.Context, namespace, groupName string) string {
+	credentialRevision := ""
+	Eventually(func() bool {
+		group := &marklogicv1.MarklogicGroup{}
+		if err := k8sClient.Get(ctx, types.NamespacedName{Name: groupName, Namespace: namespace}, group); err != nil || group.Status.CredentialSecretName == "" {
+			return false
+		}
+		operatorSecret := &corev1.Secret{}
+		if err := k8sClient.Get(ctx, types.NamespacedName{Name: group.Status.CredentialSecretName, Namespace: namespace}, operatorSecret); err != nil {
+			return false
+		}
+		expectedRevision := credentialRevisionForSecret(operatorSecret.Data)
+		statefulSet := &appsv1.StatefulSet{}
+		if err := k8sClient.Get(ctx, types.NamespacedName{Name: groupName, Namespace: namespace}, statefulSet); err != nil {
+			return false
+		}
+		credentialRevision = statefulSet.Spec.Template.Annotations["marklogic.progress.com/credential-revision"]
+		return credentialRevision == expectedRevision
+	}, timeout, interval).Should(BeTrue())
+	return credentialRevision
+}
+
+func credentialRevisionForSecret(data map[string][]byte) string {
+	keys := make([]string, 0, len(data))
+	for key := range data {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	serialized := []byte{}
+	for _, key := range keys {
+		serialized = append(serialized, key...)
+		serialized = append(serialized, 0)
+		serialized = append(serialized, data[key]...)
+		serialized = append(serialized, 0)
+	}
+	hash := sha256.Sum256(serialized)
+	return hex.EncodeToString(hash[:])
 }
 
 func updateDynamicStatefulSetStatus(ctx context.Context, namespace, groupName string) {
@@ -2571,10 +2617,14 @@ func updateDynamicStatefulSetStatus(ctx context.Context, namespace, groupName st
 }
 
 func createUnreadyDynamicPod(ctx context.Context, namespace, groupName, podName string) {
+	credentialRevision := activeDynamicCredentialRevision(ctx, namespace, groupName)
 	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      podName,
 			Namespace: namespace,
+			Annotations: map[string]string{
+				"marklogic.progress.com/credential-revision": credentialRevision,
+			},
 			Labels: map[string]string{
 				"app.kubernetes.io/name":       "marklogic",
 				"app.kubernetes.io/instance":   groupName,
