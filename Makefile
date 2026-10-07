@@ -32,8 +32,9 @@ export E2E_HELM_TEST_TIMEOUT ?= 45m
 export E2E_SETUP_ISTIO ?= true
 # Enables t.Parallel() for top-level tests in ./test/e2e. Set false to force sequential execution.
 export E2E_TOP_LEVEL_PARALLEL ?= true
-# Caps concurrent top-level tests when E2E_TOP_LEVEL_PARALLEL=true.
-export E2E_TOP_LEVEL_PARALLELISM ?= 4
+# Caps concurrent top-level tests when E2E_TOP_LEVEL_PARALLEL=true. Minikube
+# runs independent profile shards in parallel, so each shard defaults to one worker.
+export E2E_TOP_LEVEL_PARALLELISM ?= 1
 
 # MINIKUBE_PROFILE names the minikube cluster/profile targeted by the e2e-* targets below.
 # Override it to run independent e2e suites in parallel against separate minikube instances,
