@@ -429,6 +429,7 @@ var _ = Describe("MarkLogicGroup controller", func() {
 			dynamicName := "dynamic-version-failed"
 			clusterName := "cluster-version-failed"
 			adminSecretName := clusterName + "-admin"
+			operatorSecretName := clusterName + "-operator"
 			dynamicNsName := types.NamespacedName{Name: dynamicName, Namespace: dynamicNamespace}
 
 			behavior := &fakeDynamicManagementBehavior{hosts: []mlmanage.HostStatus{{Name: "bootstrap-0", Online: true, Version: "11.0-1"}}}
@@ -445,6 +446,11 @@ var _ = Describe("MarkLogicGroup controller", func() {
 				Data:       map[string][]byte{"username": []byte("admin"), "password": []byte("admin-password")},
 			}
 			Expect(k8sClient.Create(ctx, adminSecret)).Should(Succeed())
+			operatorSecret := &corev1.Secret{
+				ObjectMeta: metav1.ObjectMeta{Name: operatorSecretName, Namespace: dynamicNamespace},
+				Data:       map[string][]byte{"username": []byte("operator"), "password": []byte("operator-password")},
+			}
+			Expect(k8sClient.Create(ctx, operatorSecret)).Should(Succeed())
 
 			mlGroup := &marklogicv1.MarklogicGroup{
 				TypeMeta:   metav1.TypeMeta{Kind: "MarklogicGroup", APIVersion: "marklogic.progress.com/v1"},
