@@ -146,6 +146,35 @@ var hugePages = marklogicv1.HugePages{
 var _ = Describe("MarkLogicGroup controller", func() {
 	Context("When creating an MarklogicGroup", func() {
 		ctx := context.Background()
+
+		AfterEach(func() {
+			dynamicGroups := &marklogicv1.MarklogicGroupList{}
+			Expect(k8sClient.List(ctx, dynamicGroups)).Should(Succeed())
+			for i := range dynamicGroups.Items {
+				group := &dynamicGroups.Items[i]
+				if !group.Spec.IsDynamic {
+					continue
+				}
+
+				groupKey := ctrlclient.ObjectKeyFromObject(group)
+				Eventually(func() error {
+					current := &marklogicv1.MarklogicGroup{}
+					if err := k8sClient.Get(ctx, groupKey, current); err != nil {
+						return ctrlclient.IgnoreNotFound(err)
+					}
+					current.Finalizers = nil
+					if err := k8sClient.Update(ctx, current); err != nil {
+						return err
+					}
+					return ctrlclient.IgnoreNotFound(k8sClient.Delete(ctx, current))
+				}, timeout, interval).Should(Succeed())
+				Eventually(func() bool {
+					err := k8sClient.Get(ctx, groupKey, &marklogicv1.MarklogicGroup{})
+					return apierrors.IsNotFound(err)
+				}, timeout, interval).Should(BeTrue())
+			}
+		})
+
 		It("Should create a MarklogicGroup CR, StatefulSet and Service", func() {
 			// Create the namespace
 			ns := corev1.Namespace{
