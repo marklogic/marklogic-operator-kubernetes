@@ -1341,7 +1341,7 @@ var _ = Describe("MarkLogicGroup controller", func() {
 
 			removeHostCalls := []string{}
 			callsMu := &sync.Mutex{}
-			behavior := &fakeDynamicManagementBehavior{hosts: []mlmanage.HostStatus{{Name: "bootstrap-0", Online: true, Version: "12.0-1"}}, groupInfo: mlmanage.GroupInfo{Exists: false}, autoRegisterOnJoin: true, hostIDsByHost: map[string]string{emptyDirHost: "host-id-emptydir", pvcHost: "host-id-pvc"}}
+			behavior := &fakeDynamicManagementBehavior{hosts: []mlmanage.HostStatus{{Name: "bootstrap-0", Online: true, Version: "12.0-1"}}, groupInfo: mlmanage.GroupInfo{Exists: false}, autoRegisterOnJoin: true, hostIDsByHost: map[string]string{emptyDirHost: "host-id-emptydir", pvcHost: "host-id-pvc"}, groupHostsByGroup: map[string][]mlmanage.GroupHost{}}
 
 			originalFactory := k8sutil.NewDynamicManagementClient
 			k8sutil.NewDynamicManagementClient = func(opts mlmanage.ClientOptions) mlmanage.Client {
@@ -1356,6 +1356,8 @@ var _ = Describe("MarkLogicGroup controller", func() {
 
 			Expect(k8sClient.Create(ctx, &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: emptyDirSecret, Namespace: emptyDirNamespace}, Data: map[string][]byte{"username": []byte("admin"), "password": []byte("admin-password")}})).Should(Succeed())
 			Expect(k8sClient.Create(ctx, &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: pvcSecret, Namespace: pvcNamespace}, Data: map[string][]byte{"username": []byte("admin"), "password": []byte("admin-password")}})).Should(Succeed())
+			createOperatorCredentialSecret(ctx, emptyDirNamespace, emptyDirSecret)
+			createOperatorCredentialSecret(ctx, pvcNamespace, pvcSecret)
 
 			oneReplica := int32(1)
 			emptyDirGroup := &marklogicv1.MarklogicGroup{TypeMeta: metav1.TypeMeta{Kind: "MarklogicGroup", APIVersion: "marklogic.progress.com/v1"}, ObjectMeta: metav1.ObjectMeta{Name: emptyDirName, Namespace: emptyDirNamespace}, Spec: marklogicv1.MarklogicGroupSpec{Replicas: &oneReplica, Name: emptyDirName, Image: imageName, ClusterDomain: "cluster.local", GroupConfig: &marklogicv1.GroupConfig{Name: "DynamicZeroEmptyDir", EnableXdqpSsl: true}, IsDynamic: true, BootstrapHost: "bootstrap-0.bootstrap.svc.cluster.local", SecretName: emptyDirSecret}}
@@ -1432,7 +1434,7 @@ var _ = Describe("MarkLogicGroup controller", func() {
 			host0 := dynamicHostFQDN(dynamicName, dynamicNamespace, dynamicName+"-0")
 			removeHostCalls := []string{}
 			callsMu := &sync.Mutex{}
-			behavior := &fakeDynamicManagementBehavior{hosts: []mlmanage.HostStatus{{Name: "bootstrap-0", Online: true, Version: "12.0-1"}}, groupInfo: mlmanage.GroupInfo{Exists: false}, autoRegisterOnJoin: true, hostIDsByHost: map[string]string{host0: "host-id-0"}}
+			behavior := &fakeDynamicManagementBehavior{hosts: []mlmanage.HostStatus{{Name: "bootstrap-0", Online: true, Version: "12.0-1"}}, groupInfo: mlmanage.GroupInfo{Exists: false}, autoRegisterOnJoin: true, hostIDsByHost: map[string]string{host0: "host-id-0"}, groupHostsByGroup: map[string][]mlmanage.GroupHost{}}
 
 			originalFactory := k8sutil.NewDynamicManagementClient
 			k8sutil.NewDynamicManagementClient = func(opts mlmanage.ClientOptions) mlmanage.Client {
