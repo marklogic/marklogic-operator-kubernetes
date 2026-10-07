@@ -27,8 +27,6 @@ String resolveTopLevelParallelism() {
 }
 
 void preBuildCheck() {
-    env.E2E_TOP_LEVEL_PARALLELISM = resolveTopLevelParallelism()
-
     sh '''
         rm -rf test/test_results
         mkdir -p test/test_results
@@ -36,6 +34,7 @@ void preBuildCheck() {
 
     // Initialize parameters as env variables as workaround for https://issues.jenkins-ci.org/browse/JENKINS-41929
     evaluate """${ def script = ''; params.each { k, v -> script += "env.${k } = '''${v}'''\n" }; return script}"""
+    env.E2E_TOP_LEVEL_PARALLELISM = resolveTopLevelParallelism()
 
     JIRA_ID = extractJiraID()
     echo 'Jira ticket number: ' + JIRA_ID
