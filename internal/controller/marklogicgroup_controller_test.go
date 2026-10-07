@@ -397,6 +397,7 @@ var _ = Describe("MarkLogicGroup controller", func() {
 				Data:       map[string][]byte{"username": []byte("admin"), "password": []byte("admin-password")},
 			}
 			Expect(k8sClient.Create(ctx, adminSecret)).Should(Succeed())
+			createOperatorCredentialSecret(ctx, dynamicNamespace, adminSecretName)
 
 			mlGroup := &marklogicv1.MarklogicGroup{
 				TypeMeta:   metav1.TypeMeta{Kind: "MarklogicGroup", APIVersion: "marklogic.progress.com/v1"},
@@ -417,10 +418,11 @@ var _ = Describe("MarkLogicGroup controller", func() {
 			createdCR := &marklogicv1.MarklogicGroup{}
 			Eventually(func() bool {
 				err := k8sClient.Get(ctx, dynamicNsName, createdCR)
-				if err != nil || createdCR.Status.Dynamic == nil {
+				if err != nil {
 					return false
 				}
-				return createdCR.Status.Dynamic.Phase == "Degraded" && createdCR.Status.Dynamic.Reason == "BootstrapNotReady"
+				condition := findCondition(createdCR.Status.Conditions, "OperatorCredentialsReady")
+				return condition != nil && condition.Status == metav1.ConditionFalse && condition.Reason == "BootstrapHostNotReady"
 			}, timeout, interval).Should(BeTrue())
 		})
 
@@ -727,6 +729,7 @@ var _ = Describe("MarkLogicGroup controller", func() {
 				Data:       map[string][]byte{"username": []byte("admin"), "password": []byte("admin-password")},
 			}
 			Expect(k8sClient.Create(ctx, adminSecret)).Should(Succeed())
+			createOperatorCredentialSecret(ctx, dynamicNamespace, adminSecretName)
 
 			mlGroup := &marklogicv1.MarklogicGroup{
 				TypeMeta:   metav1.TypeMeta{Kind: "MarklogicGroup", APIVersion: "marklogic.progress.com/v1"},
@@ -813,6 +816,7 @@ var _ = Describe("MarkLogicGroup controller", func() {
 				Data:       map[string][]byte{"username": []byte("admin"), "password": []byte("admin-password")},
 			}
 			Expect(k8sClient.Create(ctx, adminSecret)).Should(Succeed())
+			createOperatorCredentialSecret(ctx, dynamicNamespace, adminSecretName)
 
 			oneReplica := int32(1)
 			mlGroup := &marklogicv1.MarklogicGroup{
@@ -875,6 +879,7 @@ var _ = Describe("MarkLogicGroup controller", func() {
 				Data:       map[string][]byte{"username": []byte("admin"), "password": []byte("admin-password")},
 			}
 			Expect(k8sClient.Create(ctx, adminSecret)).Should(Succeed())
+			createOperatorCredentialSecret(ctx, dynamicNamespace, adminSecretName)
 
 			oneReplica := int32(1)
 			mlGroup := &marklogicv1.MarklogicGroup{
@@ -941,6 +946,7 @@ var _ = Describe("MarkLogicGroup controller", func() {
 				Data:       map[string][]byte{"username": []byte("admin"), "password": []byte("admin-password")},
 			}
 			Expect(k8sClient.Create(ctx, adminSecret)).Should(Succeed())
+			createOperatorCredentialSecret(ctx, dynamicNamespace, adminSecretName)
 
 			mlGroup := &marklogicv1.MarklogicGroup{
 				TypeMeta:   metav1.TypeMeta{Kind: "MarklogicGroup", APIVersion: "marklogic.progress.com/v1"},
@@ -1001,6 +1007,7 @@ var _ = Describe("MarkLogicGroup controller", func() {
 			Expect(k8sClient.Create(ctx, &dynamicNS)).Should(Succeed())
 			adminSecret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: adminSecretName, Namespace: dynamicNamespace}, Data: map[string][]byte{"username": []byte("admin"), "password": []byte("admin-password")}}
 			Expect(k8sClient.Create(ctx, adminSecret)).Should(Succeed())
+			createOperatorCredentialSecret(ctx, dynamicNamespace, adminSecretName)
 
 			oneReplica := int32(1)
 			dynamicGroup := &marklogicv1.MarklogicGroup{
@@ -1098,6 +1105,7 @@ var _ = Describe("MarkLogicGroup controller", func() {
 			Expect(k8sClient.Create(ctx, &ns)).Should(Succeed())
 			adminSecret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: adminSecretName, Namespace: dynamicNamespace}, Data: map[string][]byte{"username": []byte("admin"), "password": []byte("admin-password")}}
 			Expect(k8sClient.Create(ctx, adminSecret)).Should(Succeed())
+			createOperatorCredentialSecret(ctx, dynamicNamespace, adminSecretName)
 
 			oneReplica := int32(1)
 			dynamicGroup := &marklogicv1.MarklogicGroup{
@@ -1188,6 +1196,7 @@ var _ = Describe("MarkLogicGroup controller", func() {
 			Expect(k8sClient.Create(ctx, &ns)).Should(Succeed())
 			adminSecret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: adminSecretName, Namespace: dynamicNamespace}, Data: map[string][]byte{"username": []byte("admin"), "password": []byte("admin-password")}}
 			Expect(k8sClient.Create(ctx, adminSecret)).Should(Succeed())
+			createOperatorCredentialSecret(ctx, dynamicNamespace, adminSecretName)
 
 			twoReplicas := int32(2)
 			dynamicGroup := &marklogicv1.MarklogicGroup{
@@ -1268,6 +1277,7 @@ var _ = Describe("MarkLogicGroup controller", func() {
 			Expect(k8sClient.Create(ctx, &ns)).Should(Succeed())
 			adminSecret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: adminSecretName, Namespace: dynamicNamespace}, Data: map[string][]byte{"username": []byte("admin"), "password": []byte("admin-password")}}
 			Expect(k8sClient.Create(ctx, adminSecret)).Should(Succeed())
+			createOperatorCredentialSecret(ctx, dynamicNamespace, adminSecretName)
 
 			twoReplicas := int32(2)
 			dynamicGroup := &marklogicv1.MarklogicGroup{
@@ -1434,6 +1444,7 @@ var _ = Describe("MarkLogicGroup controller", func() {
 			Expect(k8sClient.Create(ctx, &ns)).Should(Succeed())
 			adminSecret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: adminSecretName, Namespace: dynamicNamespace}, Data: map[string][]byte{"username": []byte("admin"), "password": []byte("admin-password")}}
 			Expect(k8sClient.Create(ctx, adminSecret)).Should(Succeed())
+			createOperatorCredentialSecret(ctx, dynamicNamespace, adminSecretName)
 
 			oneReplica := int32(1)
 			dynamicGroup := &marklogicv1.MarklogicGroup{
@@ -1512,6 +1523,7 @@ var _ = Describe("MarkLogicGroup controller", func() {
 			Expect(k8sClient.Create(ctx, &ns)).Should(Succeed())
 			adminSecret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: adminSecretName, Namespace: dynamicNamespace}, Data: map[string][]byte{"username": []byte("admin"), "password": []byte("admin-password")}}
 			Expect(k8sClient.Create(ctx, adminSecret)).Should(Succeed())
+			createOperatorCredentialSecret(ctx, dynamicNamespace, adminSecretName)
 
 			oneReplica := int32(1)
 			dynamicGroup := &marklogicv1.MarklogicGroup{TypeMeta: metav1.TypeMeta{Kind: "MarklogicGroup", APIVersion: "marklogic.progress.com/v1"}, ObjectMeta: metav1.ObjectMeta{Name: dynamicName, Namespace: dynamicNamespace}, Spec: marklogicv1.MarklogicGroupSpec{Replicas: &oneReplica, Name: dynamicName, Image: imageName, ClusterDomain: "cluster.local", GroupConfig: &marklogicv1.GroupConfig{Name: "DynamicBootstrapUnavailable", EnableXdqpSsl: true}, IsDynamic: true, BootstrapHost: "bootstrap-0.bootstrap.svc.cluster.local", SecretName: adminSecretName}}
@@ -1574,6 +1586,7 @@ var _ = Describe("MarkLogicGroup controller", func() {
 			Expect(k8sClient.Create(ctx, &ns)).Should(Succeed())
 			adminSecret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: adminSecretName, Namespace: dynamicNamespace}, Data: map[string][]byte{"username": []byte("admin"), "password": []byte("admin-password")}}
 			Expect(k8sClient.Create(ctx, adminSecret)).Should(Succeed())
+			createOperatorCredentialSecret(ctx, dynamicNamespace, adminSecretName)
 
 			oneReplica := int32(1)
 			dynamicGroup := &marklogicv1.MarklogicGroup{TypeMeta: metav1.TypeMeta{Kind: "MarklogicGroup", APIVersion: "marklogic.progress.com/v1"}, ObjectMeta: metav1.ObjectMeta{Name: dynamicName, Namespace: dynamicNamespace}, Spec: marklogicv1.MarklogicGroupSpec{Replicas: &oneReplica, Name: dynamicName, Image: imageName, ClusterDomain: "cluster.local", GroupConfig: &marklogicv1.GroupConfig{Name: "DynamicRemoveRetry", EnableXdqpSsl: true}, IsDynamic: true, BootstrapHost: "bootstrap-0.bootstrap.svc.cluster.local", SecretName: adminSecretName}}
@@ -1643,6 +1656,7 @@ var _ = Describe("MarkLogicGroup controller", func() {
 			Expect(k8sClient.Create(ctx, &ns)).Should(Succeed())
 			adminSecret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: adminSecretName, Namespace: dynamicNamespace}, Data: map[string][]byte{"username": []byte("admin"), "password": []byte("admin-password")}}
 			Expect(k8sClient.Create(ctx, adminSecret)).Should(Succeed())
+			createOperatorCredentialSecret(ctx, dynamicNamespace, adminSecretName)
 
 			oneReplica := int32(1)
 			dynamicGroup := &marklogicv1.MarklogicGroup{TypeMeta: metav1.TypeMeta{Kind: "MarklogicGroup", APIVersion: "marklogic.progress.com/v1"}, ObjectMeta: metav1.ObjectMeta{Name: dynamicName, Namespace: dynamicNamespace}, Spec: marklogicv1.MarklogicGroupSpec{Replicas: &oneReplica, Name: dynamicName, Image: imageName, ClusterDomain: "cluster.local", GroupConfig: &marklogicv1.GroupConfig{Name: groupName, EnableXdqpSsl: true}, IsDynamic: true, BootstrapHost: "bootstrap-0.bootstrap.svc.cluster.local", SecretName: adminSecretName}}
@@ -1727,6 +1741,7 @@ var _ = Describe("MarkLogicGroup controller", func() {
 			Expect(k8sClient.Create(ctx, &ns)).Should(Succeed())
 			adminSecret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: adminSecretName, Namespace: dynamicNamespace}, Data: map[string][]byte{"username": []byte("admin"), "password": []byte("admin-password")}}
 			Expect(k8sClient.Create(ctx, adminSecret)).Should(Succeed())
+			createOperatorCredentialSecret(ctx, dynamicNamespace, adminSecretName)
 
 			oneReplica := int32(1)
 			dynamicGroup := &marklogicv1.MarklogicGroup{TypeMeta: metav1.TypeMeta{Kind: "MarklogicGroup", APIVersion: "marklogic.progress.com/v1"}, ObjectMeta: metav1.ObjectMeta{Name: dynamicName, Namespace: dynamicNamespace}, Spec: marklogicv1.MarklogicGroupSpec{Replicas: &oneReplica, Name: dynamicName, Image: imageName, ClusterDomain: "cluster.local", GroupConfig: &marklogicv1.GroupConfig{Name: groupName, EnableXdqpSsl: true}, IsDynamic: true, BootstrapHost: "bootstrap-0.bootstrap.svc.cluster.local", SecretName: adminSecretName}}
@@ -1820,6 +1835,7 @@ var _ = Describe("MarkLogicGroup controller", func() {
 			Expect(k8sClient.Create(ctx, &ns)).Should(Succeed())
 			adminSecret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: adminSecretName, Namespace: dynamicNamespace}, Data: map[string][]byte{"username": []byte("admin"), "password": []byte("admin-password")}}
 			Expect(k8sClient.Create(ctx, adminSecret)).Should(Succeed())
+			createOperatorCredentialSecret(ctx, dynamicNamespace, adminSecretName)
 
 			oneReplica := int32(1)
 			dynamicGroup := &marklogicv1.MarklogicGroup{TypeMeta: metav1.TypeMeta{Kind: "MarklogicGroup", APIVersion: "marklogic.progress.com/v1"}, ObjectMeta: metav1.ObjectMeta{Name: dynamicName, Namespace: dynamicNamespace}, Spec: marklogicv1.MarklogicGroupSpec{Replicas: &oneReplica, Name: dynamicName, Image: imageName, ClusterDomain: "cluster.local", GroupConfig: &marklogicv1.GroupConfig{Name: groupName, EnableXdqpSsl: true}, IsDynamic: true, BootstrapHost: "bootstrap-0.bootstrap.svc.cluster.local", SecretName: adminSecretName}}
@@ -1987,6 +2003,7 @@ var _ = Describe("MarkLogicGroup controller", func() {
 			Expect(k8sClient.Create(ctx, &ns)).Should(Succeed())
 			adminSecret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: adminSecretName, Namespace: dynamicNamespace}, Data: map[string][]byte{"username": []byte("admin"), "password": []byte("admin-password")}}
 			Expect(k8sClient.Create(ctx, adminSecret)).Should(Succeed())
+			createOperatorCredentialSecret(ctx, dynamicNamespace, adminSecretName)
 
 			oneReplica := int32(1)
 			dynamicGroup := &marklogicv1.MarklogicGroup{TypeMeta: metav1.TypeMeta{Kind: "MarklogicGroup", APIVersion: "marklogic.progress.com/v1"}, ObjectMeta: metav1.ObjectMeta{Name: dynamicName, Namespace: dynamicNamespace}, Spec: marklogicv1.MarklogicGroupSpec{Replicas: &oneReplica, Name: dynamicName, Image: imageName, ClusterDomain: "cluster.local", GroupConfig: &marklogicv1.GroupConfig{Name: groupName, EnableXdqpSsl: true}, IsDynamic: true, BootstrapHost: "bootstrap-0.bootstrap.svc.cluster.local", SecretName: adminSecretName, Persistence: &marklogicv1.Persistence{Enabled: true, Size: "10Gi"}}}
@@ -2113,6 +2130,7 @@ var _ = Describe("MarkLogicGroup controller", func() {
 			Expect(k8sClient.Create(ctx, &ns)).Should(Succeed())
 			adminSecret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: adminSecretName, Namespace: dynamicNamespace}, Data: map[string][]byte{"username": []byte("admin"), "password": []byte("admin-password")}}
 			Expect(k8sClient.Create(ctx, adminSecret)).Should(Succeed())
+			createOperatorCredentialSecret(ctx, dynamicNamespace, adminSecretName)
 
 			twoReplicas := int32(2)
 			dynamicGroup := &marklogicv1.MarklogicGroup{TypeMeta: metav1.TypeMeta{Kind: "MarklogicGroup", APIVersion: "marklogic.progress.com/v1"}, ObjectMeta: metav1.ObjectMeta{Name: dynamicName, Namespace: dynamicNamespace}, Spec: marklogicv1.MarklogicGroupSpec{Replicas: &twoReplicas, Name: dynamicName, Image: imageName, ClusterDomain: "cluster.local", GroupConfig: &marklogicv1.GroupConfig{Name: groupName, EnableXdqpSsl: true}, IsDynamic: true, BootstrapHost: "bootstrap-0.bootstrap.svc.cluster.local", SecretName: adminSecretName}}
@@ -2196,6 +2214,7 @@ var _ = Describe("MarkLogicGroup controller", func() {
 			Expect(k8sClient.Create(ctx, &ns)).Should(Succeed())
 			adminSecret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: adminSecretName, Namespace: dynamicNamespace}, Data: map[string][]byte{"username": []byte("admin"), "password": []byte("admin-password")}}
 			Expect(k8sClient.Create(ctx, adminSecret)).Should(Succeed())
+			createOperatorCredentialSecret(ctx, dynamicNamespace, adminSecretName)
 
 			oneReplica := int32(1)
 			dynamicGroup := &marklogicv1.MarklogicGroup{TypeMeta: metav1.TypeMeta{Kind: "MarklogicGroup", APIVersion: "marklogic.progress.com/v1"}, ObjectMeta: metav1.ObjectMeta{Name: dynamicName, Namespace: dynamicNamespace}, Spec: marklogicv1.MarklogicGroupSpec{Replicas: &oneReplica, Name: dynamicName, Image: imageName, ClusterDomain: "cluster.local", GroupConfig: &marklogicv1.GroupConfig{Name: groupName, EnableXdqpSsl: true}, IsDynamic: true, BootstrapHost: "bootstrap-0.bootstrap.svc.cluster.local", SecretName: adminSecretName}}
@@ -2446,6 +2465,15 @@ func findEnvVar(envVars []corev1.EnvVar, envName string) *corev1.EnvVar {
 		}
 	}
 	return nil
+}
+
+func createOperatorCredentialSecret(ctx context.Context, namespace, adminSecretName string) {
+	operatorSecretName := strings.TrimSuffix(adminSecretName, "-admin") + "-operator"
+	operatorSecret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: operatorSecretName, Namespace: namespace},
+		Data:       map[string][]byte{"username": []byte("operator"), "password": []byte("operator-password")},
+	}
+	Expect(k8sClient.Create(ctx, operatorSecret)).Should(Succeed())
 }
 
 func createReadyDynamicPod(ctx context.Context, namespace, groupName, podName string) {
