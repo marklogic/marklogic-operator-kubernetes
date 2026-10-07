@@ -2533,6 +2533,41 @@ func createReadyDynamicPod(ctx context.Context, namespace, groupName, podName st
 		created.Status.Conditions = []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionTrue, LastTransitionTime: metav1.Now()}}
 		return k8sClient.Status().Update(ctx, created) == nil
 	}, timeout, interval).Should(BeTrue())
+
+	updateDynamicStatefulSetStatus(ctx, namespace, groupName)
+}
+
+func updateDynamicStatefulSetStatus(ctx context.Context, namespace, groupName string) {
+	Eventually(func() bool {
+		statefulSet := &appsv1.StatefulSet{}
+		if err := k8sClient.Get(ctx, types.NamespacedName{Name: groupName, Namespace: namespace}, statefulSet); err != nil {
+			return false
+		}
+		pods := &corev1.PodList{}
+		if err := k8sClient.List(ctx, pods,
+			ctrlclient.InNamespace(namespace),
+			ctrlclient.MatchingLabels{
+				"app.kubernetes.io/instance":  groupName,
+				"app.kubernetes.io/component": "dynamic-host",
+			},
+		); err != nil {
+			return false
+		}
+		readyReplicas := int32(0)
+		for podIndex := range pods.Items {
+			for _, condition := range pods.Items[podIndex].Status.Conditions {
+				if condition.Type == corev1.PodReady && condition.Status == corev1.ConditionTrue {
+					readyReplicas++
+					break
+				}
+			}
+		}
+		statefulSet.Status.Replicas = *statefulSet.Spec.Replicas
+		statefulSet.Status.ReadyReplicas = readyReplicas
+		statefulSet.Status.CurrentReplicas = readyReplicas
+		statefulSet.Status.AvailableReplicas = readyReplicas
+		return k8sClient.Status().Update(ctx, statefulSet) == nil
+	}, timeout, interval).Should(BeTrue())
 }
 
 func createUnreadyDynamicPod(ctx context.Context, namespace, groupName, podName string) {
@@ -2561,6 +2596,8 @@ func createUnreadyDynamicPod(ctx context.Context, namespace, groupName, podName 
 		created.Status.Conditions = []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionFalse, LastTransitionTime: metav1.Now()}}
 		return k8sClient.Status().Update(ctx, created) == nil
 	}, timeout, interval).Should(BeTrue())
+
+	updateDynamicStatefulSetStatus(ctx, namespace, groupName)
 }
 
 func createReadyStaticPod(ctx context.Context, namespace, groupName, podName string) {
