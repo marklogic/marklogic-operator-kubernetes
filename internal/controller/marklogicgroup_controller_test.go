@@ -399,7 +399,9 @@ var _ = Describe("MarkLogicGroup controller", func() {
 			adminSecretName := clusterName + "-admin"
 			dynamicNsName := types.NamespacedName{Name: dynamicName, Namespace: dynamicNamespace}
 
-			behavior := &fakeDynamicManagementBehavior{listHostsErr: errors.New("connection refused")}
+			behavior := &fakeDynamicManagementBehavior{
+				hosts: []mlmanage.HostStatus{{Name: "bootstrap-0", Online: false, Version: "12.0-1"}},
+			}
 			originalFactory := k8sutil.NewDynamicManagementClient
 			k8sutil.NewDynamicManagementClient = func(opts mlmanage.ClientOptions) mlmanage.Client {
 				return &fakeDynamicManagementClient{behavior: behavior}
