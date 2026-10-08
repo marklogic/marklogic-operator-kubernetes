@@ -18,6 +18,14 @@ timeStamp = new Date().format('yyyyMMdd')
 branchNameTag = env.BRANCH_NAME.replaceAll('/', '-')
 
 // Define local funtions
+String resolveTopLevelParallelism() {
+    def topLevelParallelism = params.E2E_TOP_LEVEL_PARALLELISM?.trim() ?: (params.E2E_RUNTIME == 'eks' ? '4' : '1')
+    if (!(topLevelParallelism ==~ /[1-4]/)) {
+        error "E2E_TOP_LEVEL_PARALLELISM must be an integer from 1 to 4 (got: '${params.E2E_TOP_LEVEL_PARALLELISM}')."
+    }
+    return topLevelParallelism
+}
+
 void preBuildCheck() {
     sh '''
         rm -rf test/test_results
@@ -26,6 +34,7 @@ void preBuildCheck() {
 
     // Initialize parameters as env variables as workaround for https://issues.jenkins-ci.org/browse/JENKINS-41929
     evaluate """${ def script = ''; params.each { k, v -> script += "env.${k } = '''${v}'''\n" }; return script}"""
+    env.E2E_TOP_LEVEL_PARALLELISM = resolveTopLevelParallelism()
 
     JIRA_ID = extractJiraID()
     echo 'Jira ticket number: ' + JIRA_ID
@@ -194,19 +203,22 @@ void resultNotification(status) {
     def jiraValue = JIRA_ID ? "<a href='${htmlEscape(jiraLink)}'>${htmlEscape(JIRA_ID)}</a>" : 'N/A'
     def commit = env.GIT_COMMIT ? env.GIT_COMMIT.take(7) : 'N/A'
     def trigger = env.BUILD_USER ?: env.CHANGE_AUTHOR ?: 'N/A'
-    def testPlan = "${params.E2E_RUNTIME}, ${params.E2E_SCOPE}, ${params.E2E_INSTALL_MODE}, Istio ${params.VERIFY_ISTIO_AMBIENT ? 'enabled' : 'disabled'}, parallelism ${params.E2E_TOP_LEVEL_PARALLELISM}"
+    def testPlan = "${params.E2E_RUNTIME}, ${params.E2E_SCOPE}, ${params.E2E_INSTALL_MODE}, Istio ${params.VERIFY_ISTIO_AMBIENT ? 'enabled' : 'disabled'}, parallelism ${env.E2E_TOP_LEVEL_PARALLELISM}"
     def statusColor = status.contains('Success') ? '#067647' : status.contains('Unstable') ? '#b54708' : '#b42318'
     def failedTestItems = testSummary.failures.collect { failure -> "<li>${htmlEscape(failure)}</li>" }.join('')
     if (testSummary.failed > testSummary.failures.size()) {
         failedTestItems += "<li>+${testSummary.failed - testSummary.failures.size()} more; see the Test Report.</li>"
     }
     def failedTests = failedTestItems ? "<h3>Failed Tests</h3><ul>${failedTestItems}</ul>" : ''
+    def failedStage = env.FAILED_STAGE ?: 'Not recorded; see build log'
+    def failedStageRow = (status.contains('Failure') || status.contains('Unstable')) ? "<tr><th align='left'>Failed Stage</th><td colspan='3'>${htmlEscape(failedStage)}</td></tr>" : ''
     def duration = currentBuild.durationString.replaceFirst(/\s+and counting$/, '').trim()
     def emailBody = """
         <table cellpadding='7' cellspacing='0' style='border-collapse:collapse;border:1px solid #d0d5dd'>
          <tr><th align='left'>Status</th><td style='color:${statusColor}' colspan='3'>${htmlEscape(status)} | ${duration}</td></tr>
          <tr><th align='left'>Branch | PR</th><td>${branchValue} | ${pullRequestValue}</td><th align='left'>Commit</th><td>${htmlEscape(commit)}</td></tr>
           <tr><th align='left'>Triggered by</th><td>${htmlEscape(trigger)}</td><th align='left'>Jira</th><td>${jiraValue}</td></tr>
+          ${failedStageRow}
           <tr><th align='left'>Test Plan</th><td colspan='3'>${htmlEscape(testPlan)}</td></tr>
           <tr><th align='left'>Tests</th><td colspan='3'>${testResultSummary}</td></tr>
         </table>
@@ -389,7 +401,7 @@ void runHelmNamespaceScopedE2eTests(String installMode = 'fresh', String profile
 // PUBLISH_IMAGE=true also prepends the published operator registry image.
 void runBlackDuckScan() {
     def fluentBitImage = sh(returnStdout: true, script: "grep -E '^export FLUENT_BIT_IMAGE' Makefile | cut -d'=' -f2 | tr -d ' '").trim()
-    def haProxyImage   = sh(returnStdout: true, script: "grep -oE 'haproxytech/haproxy-alpine:[0-9.]+' Makefile | head -1").trim()
+    def haProxyImage   = sh(returnStdout: true, script: "grep -oE 'haproxytech/haproxy:alpine-[0-9.]+' Makefile | head -1").trim()
     def ubi9Image      = sh(returnStdout: true, script: "grep -oE 'redhat/ubi9:[0-9.]+' pkg/k8sutil/statefulset.go | head -1").trim()
 
     if (!fluentBitImage) { error "runBlackDuckScan: could not resolve FLUENT_BIT_IMAGE from Makefile" }
@@ -478,7 +490,7 @@ pipeline {
         booleanParam(name: 'PUBLISH_IMAGE', defaultValue: false, description: 'Publish image to internal registry')
         string(name: 'emailList', defaultValue: emailList, description: 'List of email for build notification', trim: true)
         booleanParam(name: 'VERIFY_ISTIO_AMBIENT', defaultValue: true, description: 'Run Istio ambient mode e2e tests. For Minikube, Istio is installed only when this test path is selected; no dedicated cluster is created.')
-        string(name: 'E2E_TOP_LEVEL_PARALLELISM', defaultValue: '1', description: 'Max e2e test parallelism (positive integer). Use 1 for minikube because profiles already run as parallel shards; use at most 4 for EKS.', trim: true)
+        string(name: 'E2E_TOP_LEVEL_PARALLELISM', defaultValue: '', description: 'Max e2e test parallelism (integer 1-4). Defaults to 4 for EKS and 1 for minikube, because minikube profiles already run as parallel shards.', trim: true)
         string(name: 'EKS_MARKLOGIC_IMAGE_TAG', defaultValue: 'latest-12', description: 'MarkLogic image tag to pull from the EKS ECR registry when E2E_RUNTIME=eks. The full ECR URL is constructed at runtime from the AWS account ID resolved via STS.', trim: true)
     }
 
@@ -487,11 +499,27 @@ pipeline {
             steps {
                 preBuildCheck()
             }
+            post {
+                failure {
+                    script { env.FAILED_STAGE = 'Pre-Build-Check' }
+                }
+                unstable {
+                    script { env.FAILED_STAGE = 'Pre-Build-Check' }
+                }
+            }
         }
 
         stage('Run-tests') {
             steps {
                 runTests()
+            }
+            post {
+                failure {
+                    script { env.FAILED_STAGE = 'Run-tests' }
+                }
+                unstable {
+                    script { env.FAILED_STAGE = 'Run-tests' }
+                }
             }
         }
 
@@ -509,10 +537,7 @@ pipeline {
                     def runClusterScoped = params.E2E_SCOPE in ['cluster', 'both', 'dynamic-host', 'volume-resize']
                     def runNamespaceScoped = params.E2E_SCOPE in ['namespace-only', 'both']
                     def clusterScope = params.E2E_SCOPE in ['dynamic-host', 'volume-resize'] ? params.E2E_SCOPE : 'cluster'
-                    def topLevelParallelism = params.E2E_TOP_LEVEL_PARALLELISM?.trim() ?: '1'
-					if (!(topLevelParallelism ==~ /[1-4]/)) {
-						error "E2E_TOP_LEVEL_PARALLELISM must be an integer from 1 to 4 (got: '${params.E2E_TOP_LEVEL_PARALLELISM}')."
-					}
+                    def topLevelParallelism = env.E2E_TOP_LEVEL_PARALLELISM
 
                     if (!runClusterScoped && !runNamespaceScoped) {
                         echo "No e2e suites selected (E2E_SCOPE=${params.E2E_SCOPE}); skipping e2e tests."
@@ -650,6 +675,14 @@ pipeline {
                     """
                 }
             }
+            post {
+                failure {
+                    script { env.FAILED_STAGE = 'E2E Tests' }
+                }
+                unstable {
+                    script { env.FAILED_STAGE = 'E2E Tests' }
+                }
+            }
         }
 
         // Publish image to internal registries (conditional)
@@ -663,6 +696,14 @@ pipeline {
             steps {
                 publishToInternalRegistry()
             }
+            post {
+                failure {
+                    script { env.FAILED_STAGE = 'Publish Image' }
+                }
+                unstable {
+                    script { env.FAILED_STAGE = 'Publish Image' }
+                }
+            }
         }
 
         stage('Run-BlackDuck-Scan') {
@@ -671,6 +712,14 @@ pipeline {
             }
             steps {
                 runBlackDuckScan()
+            }
+            post {
+                failure {
+                    script { env.FAILED_STAGE = 'Run-BlackDuck-Scan' }
+                }
+                unstable {
+                    script { env.FAILED_STAGE = 'Run-BlackDuck-Scan' }
+                }
             }
         }
         
