@@ -164,6 +164,7 @@ var _ = Describe("MarkLogicGroup controller", func() {
 				ObjectMeta: metav1.ObjectMeta{Name: Namespace},
 			}
 			Expect(k8sClient.Create(ctx, &ns)).Should(Succeed())
+			createGroupCredentialSecrets(ctx, Namespace, Name)
 
 			// Declaring the Marklogic Group object and create CR
 			mlGroup := &marklogicv1.MarklogicGroup{
@@ -294,6 +295,7 @@ var _ = Describe("MarkLogicGroup controller", func() {
 				ObjectMeta: metav1.ObjectMeta{Name: dynamicNamespace},
 			}
 			Expect(k8sClient.Create(ctx, &ns)).Should(Succeed())
+			createGroupCredentialSecrets(ctx, dynamicNamespace, dynamicName)
 
 			mlGroup := &marklogicv1.MarklogicGroup{
 				TypeMeta: metav1.TypeMeta{
@@ -356,18 +358,15 @@ var _ = Describe("MarkLogicGroup controller", func() {
 			staticName := "static-branch-group"
 			staticNsName := types.NamespacedName{Name: staticName, Namespace: staticNamespace}
 
-			factoryCallCount := 0
 			originalFactory := k8sutil.NewDynamicManagementClient
 			k8sutil.NewDynamicManagementClient = func(opts mlmanage.ClientOptions) mlmanage.Client {
-				if strings.Contains(opts.Host, staticName) {
-					factoryCallCount++
-				}
 				return &fakeDynamicManagementClient{}
 			}
 			defer func() { k8sutil.NewDynamicManagementClient = originalFactory }()
 
 			ns := corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: staticNamespace}}
 			Expect(k8sClient.Create(ctx, &ns)).Should(Succeed())
+			createGroupCredentialSecrets(ctx, staticNamespace, staticName)
 
 			mlGroup := &marklogicv1.MarklogicGroup{
 				TypeMeta:   metav1.TypeMeta{Kind: "MarklogicGroup", APIVersion: "marklogic.progress.com/v1"},
@@ -385,7 +384,12 @@ var _ = Describe("MarkLogicGroup controller", func() {
 				err := k8sClient.Get(ctx, staticNsName, sts)
 				return err == nil
 			}, timeout, interval).Should(BeTrue())
-			Expect(factoryCallCount).Should(Equal(0))
+			Expect(sts.Spec.Template.Labels["app.kubernetes.io/component"]).Should(Equal("database"))
+			Expect(findEnvVar(sts.Spec.Template.Spec.Containers[0].Env, "MARKLOGIC_DYNAMIC_HOST")).Should(BeNil())
+
+			staticGroup := &marklogicv1.MarklogicGroup{}
+			Expect(k8sClient.Get(ctx, staticNsName, staticGroup)).Should(Succeed())
+			Expect(staticGroup.Status.Dynamic).Should(BeNil())
 		})
 
 		It("Should transition dynamic group to degraded when bootstrap is not ready", func() {
@@ -1061,6 +1065,7 @@ var _ = Describe("MarkLogicGroup controller", func() {
 			staticName := "static-finalizers"
 			staticNS := corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: staticNamespace}}
 			Expect(k8sClient.Create(ctx, &staticNS)).Should(Succeed())
+			createGroupCredentialSecrets(ctx, staticNamespace, staticName)
 
 			staticGroup := &marklogicv1.MarklogicGroup{
 				TypeMeta:   metav1.TypeMeta{Kind: "MarklogicGroup", APIVersion: "marklogic.progress.com/v1"},
@@ -2313,6 +2318,7 @@ var _ = Describe("MarkLogicGroup controller", func() {
 
 			ns := corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: nsName}}
 			Expect(k8sClient.Create(ctx, &ns)).Should(Succeed())
+			createGroupCredentialSecrets(ctx, nsName, groupName)
 
 			group := newPersistentGroup(nsName, groupName, "20Gi", appsv1.OnDeleteStatefulSetStrategyType)
 			Expect(k8sClient.Create(ctx, group)).Should(Succeed())
@@ -2356,6 +2362,7 @@ var _ = Describe("MarkLogicGroup controller", func() {
 
 			ns := corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: nsName}}
 			Expect(k8sClient.Create(ctx, &ns)).Should(Succeed())
+			createGroupCredentialSecrets(ctx, nsName, groupName)
 
 			group := newPersistentGroup(nsName, groupName, "20Gi", appsv1.OnDeleteStatefulSetStrategyType)
 			Expect(k8sClient.Create(ctx, group)).Should(Succeed())
@@ -2396,6 +2403,7 @@ var _ = Describe("MarkLogicGroup controller", func() {
 
 			ns := corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: nsName}}
 			Expect(k8sClient.Create(ctx, &ns)).Should(Succeed())
+			createGroupCredentialSecrets(ctx, nsName, groupName)
 
 			group := newPersistentGroup(nsName, groupName, "20Gi", appsv1.OnDeleteStatefulSetStrategyType)
 			Expect(k8sClient.Create(ctx, group)).Should(Succeed())
@@ -2520,6 +2528,16 @@ func createOperatorCredentialSecret(ctx context.Context, namespace, adminSecretN
 		Data:       map[string][]byte{"username": []byte("operator"), "password": []byte("operator-password")},
 	}
 	Expect(k8sClient.Create(ctx, operatorSecret)).Should(Succeed())
+}
+
+func createGroupCredentialSecrets(ctx context.Context, namespace, groupName string) {
+	adminSecretName := groupName + "-admin"
+	adminSecret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: adminSecretName, Namespace: namespace},
+		Data:       map[string][]byte{"username": []byte("admin"), "password": []byte("admin-password")},
+	}
+	Expect(k8sClient.Create(ctx, adminSecret)).Should(Succeed())
+	createOperatorCredentialSecret(ctx, namespace, adminSecretName)
 }
 
 func createReadyDynamicPod(ctx context.Context, namespace, groupName, podName string) {
