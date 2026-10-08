@@ -20,16 +20,20 @@ import (
 	"context"
 	"testing"
 
+	"github.com/marklogic/marklogic-operator-kubernetes/pkg/k8sutil"
+	"github.com/marklogic/marklogic-operator-kubernetes/pkg/mlmanage"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 
 	networkingv1 "k8s.io/api/networking/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
+	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/event"
 
 	marklogicv1 "github.com/marklogic/marklogic-operator-kubernetes/api/v1"
@@ -143,8 +147,49 @@ var marklogicGroups = []*marklogicv1.MarklogicGroups{
 }
 
 var _ = Describe("MarklogicCluster Controller", func() {
-	Context("When reconciling a resource", func() {
+	Context("When reconciling a resource", Ordered, func() {
 		ctx := context.Background()
+		originalFactory := k8sutil.NewDynamicManagementClient
+
+		BeforeAll(func() {
+			behavior := &fakeDynamicManagementBehavior{
+				hosts: []mlmanage.HostStatus{
+					{Name: "dnode-0", Online: true, Version: "12.0-1"},
+					{Name: "bootstrap-static-0", Online: true, Version: "12.0-1"},
+				},
+				groupInfo: mlmanage.GroupInfo{Exists: false},
+			}
+			k8sutil.NewDynamicManagementClient = func(opts mlmanage.ClientOptions) mlmanage.Client {
+				return &fakeDynamicManagementClient{behavior: behavior}
+			}
+		})
+
+		AfterAll(func() {
+			defer func() { k8sutil.NewDynamicManagementClient = originalFactory }()
+			clusters := &marklogicv1.MarklogicClusterList{}
+			Expect(k8sClient.List(ctx, clusters)).Should(Succeed())
+			for clusterIndex := range clusters.Items {
+				cluster := &clusters.Items[clusterIndex]
+				clusterKey := ctrlclient.ObjectKeyFromObject(cluster)
+				Eventually(func() error {
+					current := &marklogicv1.MarklogicCluster{}
+					if err := k8sClient.Get(ctx, clusterKey, current); err != nil {
+						return ctrlclient.IgnoreNotFound(err)
+					}
+					current.Finalizers = nil
+					if err := k8sClient.Update(ctx, current); err != nil {
+						return err
+					}
+					return ctrlclient.IgnoreNotFound(k8sClient.Delete(ctx, current))
+				}, timeout, interval).Should(Succeed())
+				Eventually(func() bool {
+					err := k8sClient.Get(ctx, clusterKey, &marklogicv1.MarklogicCluster{})
+					return apierrors.IsNotFound(err)
+				}, timeout, interval).Should(BeTrue())
+			}
+			deleteMarklogicGroups(ctx, false)
+		})
+
 		It("should successfully reconcile the resource", func() {
 			ns := corev1.Namespace{
 				ObjectMeta: metav1.ObjectMeta{Name: clusterNS},
@@ -375,13 +420,13 @@ var _ = Describe("MarklogicCluster Controller", func() {
 			Expect(dynamicWithPersistence.Spec.Persistence.Enabled).Should(BeTrue())
 			Expect(dynamicWithPersistence.Spec.Persistence.Size).Should(Equal("5Gi"))
 
-			dynamicSecret := &corev1.Secret{}
+			operatorSecret := &corev1.Secret{}
 			Eventually(func() bool {
-				err := k8sClient.Get(ctx, types.NamespacedName{Name: dynamicClusterName + "-manage-admin", Namespace: dynamicClusterNS}, dynamicSecret)
+				err := k8sClient.Get(ctx, types.NamespacedName{Name: dynamicClusterName + "-operator", Namespace: dynamicClusterNS}, operatorSecret)
 				return err == nil
 			}, timeout, interval).Should(BeTrue())
-			Expect(string(dynamicSecret.Data["username"])).Should(Equal(dynamicClusterName + "-manage-admin"))
-			Expect(len(dynamicSecret.Data["password"])).Should(BeNumerically(">", 0))
+			Expect(string(operatorSecret.Data["username"])).Should(Equal("marklogic-kubernetes-operator"))
+			Expect(len(operatorSecret.Data["password"])).Should(BeNumerically(">", 0))
 
 			bootstrapStatic := &marklogicv1.MarklogicGroup{}
 			Eventually(func() bool {
