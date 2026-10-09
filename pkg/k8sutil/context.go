@@ -7,6 +7,7 @@ import (
 
 	"github.com/go-logr/logr"
 	marklogicv1 "github.com/marklogic/marklogic-operator-kubernetes/api/v1"
+	"github.com/marklogic/marklogic-operator-kubernetes/pkg/mlmanage"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -40,6 +41,11 @@ type ClusterContext struct {
 	MarklogicCluster *marklogicv1.MarklogicCluster
 	ReqLogger        logr.Logger
 	Recorder         record.EventRecorder
+
+	// APIReader reads uncached; when nil the cached Client is used.
+	APIReader controllerClient.Reader
+	// CredentialClientFactory builds the object storage credential client; nil uses the default.
+	CredentialClientFactory func(mlmanage.ClientOptions) mlmanage.CredentialClient
 
 	Services     []*corev1.Service
 	StatefulSets []*appsv1.StatefulSet
@@ -187,9 +193,7 @@ func (cc *ClusterContext) SetClusterLabels(labels map[string]string) {
 }
 
 func (cc *ClusterContext) SetClusterAnnotations(annotations map[string]string) {
-	delete(annotations, "kubectl.kubernetes.io/last-applied-configuration")
-	delete(annotations, "e2e.marklogic.progress.com/reconcile-kick")
-	cc.Annotations = annotations
+	cc.Annotations = propagatedAnnotations(annotations)
 }
 
 func (oc *OperatorContext) GetOperatorLabels(name string) map[string]string {
@@ -219,7 +223,23 @@ func (oc *OperatorContext) SetOperatorLabels(labels map[string]string) {
 }
 
 func (oc *OperatorContext) SetOperatorAnnotations(annotations map[string]string) {
-	delete(annotations, "kubectl.kubernetes.io/last-applied-configuration")
-	delete(annotations, "e2e.marklogic.progress.com/reconcile-kick")
-	oc.Annotations = annotations
+	oc.Annotations = propagatedAnnotations(annotations)
+}
+
+// ReconcileRequestAnnotation triggers a cluster reconcile without being propagated to child resources.
+const ReconcileRequestAnnotation = "marklogic.progress.com/reconcile-request"
+
+// propagatedAnnotations copies the map and drops keys that must not reach child resources.
+func propagatedAnnotations(annotations map[string]string) map[string]string {
+	if annotations == nil {
+		return nil
+	}
+	copied := make(map[string]string, len(annotations))
+	for key, value := range annotations {
+		copied[key] = value
+	}
+	delete(copied, "kubectl.kubernetes.io/last-applied-configuration")
+	delete(copied, "e2e.marklogic.progress.com/reconcile-kick")
+	delete(copied, ReconcileRequestAnnotation)
+	return copied
 }
