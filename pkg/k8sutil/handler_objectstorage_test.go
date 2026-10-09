@@ -9,6 +9,7 @@ import (
 	"time"
 
 	marklogicv1 "github.com/marklogic/marklogic-operator-kubernetes/api/v1"
+	"github.com/marklogic/marklogic-operator-kubernetes/pkg/mlmanage"
 	"github.com/marklogic/marklogic-operator-kubernetes/pkg/result"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
@@ -286,4 +287,130 @@ func TestClusterAnnotationsExcludeTrackingAndReconcileRequestKeys(t *testing.T) 
 	if len(source) != 4 {
 		t.Fatalf("the source map (an informer-owned object in other callers) must not be mutated")
 	}
+}
+
+func (h *osHarness) groupReplicas(name string) int32 {
+	h.t.Helper()
+	group := &marklogicv1.MarklogicGroup{}
+	if err := h.c.Get(context.Background(), types.NamespacedName{Namespace: osNamespace, Name: name}, group); err != nil {
+		h.t.Fatalf("get group: %v", err)
+	}
+	if group.Spec.Replicas == nil {
+		return -1
+	}
+	return *group.Spec.Replicas
+}
+
+func (h *osHarness) objectExists(obj client.Object, name string) bool {
+	h.t.Helper()
+	err := h.c.Get(context.Background(), types.NamespacedName{Namespace: osNamespace, Name: name}, obj)
+	if err != nil && !apierrors.IsNotFound(err) {
+		h.t.Fatalf("get %T: %v", obj, err)
+	}
+	return err == nil
+}
+
+func withHAProxy(ingress bool) func(*marklogicv1.MarklogicCluster) {
+	return func(c *marklogicv1.MarklogicCluster) {
+		pathBased := false
+		replicas := int32(1) // the CRD defaults replicas; the HAProxy config generator dereferences it
+		c.Spec.MarkLogicGroups[0].Replicas = &replicas
+		c.Spec.HAProxy = &marklogicv1.HAProxy{
+			Enabled:          true,
+			ReplicaCount:     1,
+			FrontendPort:     80,
+			PathBasedRouting: &pathBased,
+			AppServers:       []marklogicv1.AppServers{{Name: "AppServices", Type: "http", Port: 8000, TargetPort: 8000, Path: "/console"}},
+			Ingress:          marklogicv1.Ingress{Enabled: ingress, IngressClassName: "alb", Host: "ml.example.test"},
+		}
+	}
+}
+
+func TestClusterHandlerScalesGroupsWhileCredentialApplicationFails(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name  string
+		fault func(h *osHarness)
+	}{
+		{"PUT rejected", func(h *osHarness) {
+			h.creds.putErr[providerAWS] = &mlmanage.CredentialError{Operation: "PUT /x", StatusCode: 500}
+		}},
+		{"bootstrap not ready", func(h *osHarness) { h.creds.readyErr = errors.New("not ready") }},
+		{"status writes fail", func(h *osHarness) { h.statusWriteErr = func() error { return errors.New("status unavailable") } }},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			h := handlerHarness(t, func(c *marklogicv1.MarklogicCluster) {
+				one := int32(1)
+				c.Spec.MarkLogicGroups[0].Replicas = &one
+			})
+			if _, err := h.context().ReconsileMarklogicClusterHandler(); err != nil {
+				t.Fatalf("initial reconcile: %v", err)
+			}
+			if got := h.groupReplicas("dnode"); got != 1 {
+				t.Fatalf("initial replicas = %d, want 1", got)
+			}
+
+			// New credential material forces an application, which is then made to fail.
+			h.setSecret("aws-creds", "aws-uid-1", awsMaterial("2"))
+			test.fault(h)
+			h.mutateSpec(func(c *marklogicv1.MarklogicCluster) {
+				two := int32(2)
+				c.Spec.MarkLogicGroups[0].Replicas = &two
+			})
+
+			_, _ = h.context().ReconsileMarklogicClusterHandler()
+			if got := h.groupReplicas("dnode"); got != 2 {
+				t.Fatalf("scaling must proceed while credential application fails; replicas = %d, want 2", got)
+			}
+		})
+	}
+}
+
+func TestClusterHandlerHAProxyFailureSkipsIngressButNotObjectStorage(t *testing.T) {
+	t.Parallel()
+	failure := errors.New("haproxy configmap create failed")
+	h := handlerHarness(t, withHAProxy(true))
+	h.createErr = failCreateOf[*corev1.ConfigMap](failure)
+
+	_, err := h.context().ReconsileMarklogicClusterHandler()
+	if !errors.Is(err, failure) {
+		t.Fatalf("expected the HAProxy error, got %v", err)
+	}
+	if !h.groupExists("dnode") {
+		t.Fatalf("group reconciliation precedes HAProxy")
+	}
+	if h.objectExists(&networkingv1.Ingress{}, osCluster) {
+		t.Fatalf("the existing dependency must be preserved: no Ingress after an HAProxy failure")
+	}
+	assertPhase(t, h.entry(providerAWS), marklogicv1.ObjectStoragePhaseApplied, "")
+}
+
+func TestClusterHandlerIngressFailureDoesNotSkipObjectStorage(t *testing.T) {
+	t.Parallel()
+	failure := errors.New("ingress create failed")
+	h := handlerHarness(t, withHAProxy(true))
+	h.createErr = failCreateOf[*networkingv1.Ingress](failure)
+
+	_, err := h.context().ReconsileMarklogicClusterHandler()
+	if !errors.Is(err, failure) {
+		t.Fatalf("expected the Ingress error, got %v", err)
+	}
+	if !h.objectExists(&corev1.Service{}, "marklogic-haproxy") {
+		t.Fatalf("HAProxy resources precede the failing Ingress step")
+	}
+	assertPhase(t, h.entry(providerAWS), marklogicv1.ObjectStoragePhaseApplied, "")
+}
+
+func TestClusterHandlerHAProxyAndIngressHappyPath(t *testing.T) {
+	t.Parallel()
+	h := handlerHarness(t, withHAProxy(true))
+	if _, err := h.context().ReconsileMarklogicClusterHandler(); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !h.objectExists(&networkingv1.Ingress{}, osCluster) {
+		t.Fatalf("the Ingress should be created when HAProxy succeeds")
+	}
+	assertPhase(t, h.entry(providerAWS), marklogicv1.ObjectStoragePhaseApplied, "")
 }

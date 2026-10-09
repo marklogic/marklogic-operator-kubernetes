@@ -278,6 +278,7 @@ func (h *osHarness) context() *ClusterContext {
 	cluster := h.cluster()
 	return &ClusterContext{
 		Ctx:                     context.Background(),
+		Request:                 &reconcile.Request{NamespacedName: types.NamespacedName{Namespace: osNamespace, Name: osCluster}},
 		Client:                  h.c,
 		Scheme:                  h.scheme,
 		MarklogicCluster:        cluster,

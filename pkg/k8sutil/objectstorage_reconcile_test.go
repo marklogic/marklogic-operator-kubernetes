@@ -3,6 +3,7 @@
 package k8sutil
 
 import (
+	"context"
 	"errors"
 	"regexp"
 	"strings"
@@ -11,9 +12,13 @@ import (
 
 	marklogicv1 "github.com/marklogic/marklogic-operator-kubernetes/api/v1"
 	"github.com/marklogic/marklogic-operator-kubernetes/pkg/mlmanage"
+	testutils "github.com/marklogic/marklogic-operator-kubernetes/test/utils"
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
 )
 
 func TestObjectStorageInitialApplyOrderingAndRecord(t *testing.T) {
@@ -89,9 +94,15 @@ func TestObjectStorageRotationCheckpointsEligibilityBeforePut(t *testing.T) {
 
 	h.setSecret("aws-creds", "aws-uid-1", awsMaterial("2"))
 	var duringPut *marklogicv1.ObjectStorageProviderStatus
+	var duringPutCluster *marklogicv1.MarklogicCluster
+	var duringPutSecret testutils.SecretMeta
 	h.creds.onPut = func(provider objectStorageProvider) {
 		if provider == providerAWS {
-			duringPut = h.entry(providerAWS)
+			duringPutCluster = h.cluster()
+			duringPut = providerEntry(duringPutCluster.Status.ObjectStorage, providerAWS)
+			secret := &corev1.Secret{}
+			_ = h.c.Get(context.Background(), types.NamespacedName{Namespace: osNamespace, Name: "aws-creds"}, secret)
+			duringPutSecret = testutils.SecretMeta{Name: secret.Name, UID: string(secret.UID), ResourceVersion: secret.ResourceVersion}
 		}
 	}
 
@@ -101,11 +112,14 @@ func TestObjectStorageRotationCheckpointsEligibilityBeforePut(t *testing.T) {
 	if duringPut == nil || isDetachEligible(duringPut) {
 		t.Fatalf("eligibility must be durably false before the PUT")
 	}
+	// Every field other than detachEligible, including observed markers and success history, is unchanged.
 	preserved := duringPut.DeepCopy()
 	preserved.DetachEligible = before.DetachEligible
-	if !strings.EqualFold(string(preserved.Phase), string(before.Phase)) || preserved.ObservedSecret.ResourceVersion != before.ObservedSecret.ResourceVersion ||
-		preserved.AppliedFingerprint != before.AppliedFingerprint || preserved.Message != before.Message {
-		t.Fatalf("checkpoint must change only detachEligible")
+	if !equality.Semantic.DeepEqual(preserved, before) {
+		t.Fatalf("the checkpoint must change only detachEligible")
+	}
+	if ready, _ := testutils.ObjectStorageReady(duringPutCluster, testutils.ObjectStorageAWS, duringPutSecret); ready {
+		t.Fatalf("the shared readiness check must stay blocked at the checkpoint")
 	}
 	if h.countOps("put:azure") != 0 {
 		t.Fatalf("the unchanged provider must not be rewritten")
@@ -779,6 +793,45 @@ func TestObjectStorageLegacyStatusRequiresFreshPut(t *testing.T) {
 	h.mustReconcile()
 	if len(h.ops) != 0 {
 		t.Fatalf("subsequent unchanged reconciles skip: %v", h.ops)
+	}
+}
+
+func TestObjectStorageLegacyAppliedStaysNotReadyUntilFreshPut(t *testing.T) {
+	t.Parallel()
+	h := newOSHarness(t, func(c *marklogicv1.MarklogicCluster) { c.Spec.ObjectStorage.Azure = nil })
+	h.setSecret("aws-creds", "aws-uid-1", awsMaterial("1"))
+	secret := &corev1.Secret{}
+	if err := h.c.Get(context.Background(), types.NamespacedName{Namespace: osNamespace, Name: "aws-creds"}, secret); err != nil {
+		t.Fatal(err)
+	}
+	secretMeta := testutils.SecretMeta{Name: secret.Name, UID: string(secret.UID), ResourceVersion: secret.ResourceVersion}
+
+	// Legacy entry: Applied with observed markers that already match the current Secret and generation,
+	// but no eligibility or success record. Phase and markers alone must not satisfy readiness.
+	cluster := h.cluster()
+	cluster.Status.ObjectStorage = &marklogicv1.ObjectStorageStatus{AWS: &marklogicv1.ObjectStorageProviderStatus{
+		Phase:              marklogicv1.ObjectStoragePhaseApplied,
+		ObservedGeneration: cluster.Generation,
+		ObservedSecret:     &marklogicv1.ObjectStorageSecretRef{Name: secretMeta.Name, UID: secretMeta.UID, ResourceVersion: secretMeta.ResourceVersion},
+	}}
+	if err := h.c.Status().Update(context.Background(), cluster); err != nil {
+		t.Fatal(err)
+	}
+	if ready, _ := testutils.ObjectStorageReady(h.cluster(), testutils.ObjectStorageAWS, secretMeta); ready {
+		t.Fatalf("a legacy Applied entry must not be ready")
+	}
+
+	var duringPut bool
+	h.creds.onPut = func(objectStorageProvider) {
+		ready, _ := testutils.ObjectStorageReady(h.cluster(), testutils.ObjectStorageAWS, secretMeta)
+		duringPut = ready
+	}
+	h.mustReconcile()
+	if duringPut {
+		t.Fatalf("readiness must stay blocked while the fresh PUT is in flight")
+	}
+	if ready, reason := testutils.ObjectStorageReady(h.cluster(), testutils.ObjectStorageAWS, secretMeta); !ready {
+		t.Fatalf("readiness is expected after the PUT and outcome write: %s", reason)
 	}
 }
 
