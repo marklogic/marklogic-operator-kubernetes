@@ -10442,6 +10442,64 @@ spec:
                 additionalProperties:
                   type: string
                 type: object
+              objectStorage:
+                description: ObjectStorage configures cluster-wide AWS S3 and Azure
+                  Blob credentials from Secrets.
+                properties:
+                  aws:
+                    description: AWS S3 credentials.
+                    properties:
+                      authType:
+                        default: secret
+                        description: ObjectStorageAuthType selects how a provider's
+                          credentials are sourced.
+                        enum:
+                        - secret
+                        - instanceRole
+                        - managedIdentity
+                        type: string
+                      region:
+                        description: Region is informational only and is not applied
+                          to MarkLogic.
+                        type: string
+                      secretName:
+                        description: SecretName is a Secret in the MarklogicCluster
+                          namespace with keys accessKey, secretKey and optional sessionToken.
+                        maxLength: 253
+                        minLength: 1
+                        type: string
+                    required:
+                    - secretName
+                    type: object
+                    x-kubernetes-validations:
+                    - message: authType must be 'secret'; instanceRole (IRSA / instance
+                        profile) is not supported
+                      rule: '!has(self.authType) || self.authType == ''secret'''
+                  azure:
+                    description: Azure Blob credentials.
+                    properties:
+                      authType:
+                        default: secret
+                        description: ObjectStorageAuthType selects how a provider's
+                          credentials are sourced.
+                        enum:
+                        - secret
+                        - instanceRole
+                        - managedIdentity
+                        type: string
+                      secretName:
+                        description: SecretName is a Secret in the MarklogicCluster
+                          namespace with keys storageAccount and storageKey.
+                        maxLength: 253
+                        minLength: 1
+                        type: string
+                    required:
+                    - secretName
+                    type: object
+                    x-kubernetes-validations:
+                    - message: authType must be 'secret'; managedIdentity is not supported
+                      rule: '!has(self.authType) || self.authType == ''secret'''
+                type: object
               persistence:
                 default:
                   enabled: true
@@ -11245,6 +11303,159 @@ spec:
                   - type
                   type: object
                 type: array
+              objectStorage:
+                description: ObjectStorage reports the per-provider object storage credential
+                  results.
+                properties:
+                  aws:
+                    description: ObjectStorageProviderStatus is the observed state of
+                      one provider.
+                    properties:
+                      appliedFingerprint:
+                        description: AppliedFingerprint is an opaque, cluster-specific
+                          marker of the last applied material.
+                        maxLength: 128
+                        type: string
+                      appliedSecret:
+                        description: AppliedSecret identifies the Secret used for the
+                          last successful PUT.
+                        properties:
+                          name:
+                            type: string
+                          resourceVersion:
+                            type: string
+                          uid:
+                            type: string
+                        type: object
+                      authType:
+                        description: AuthType used for the last successful PUT.
+                        type: string
+                      detachEligible:
+                        description: DetachEligible is the durable eligibility for Secret
+                          deletion; absent means false.
+                        type: boolean
+                      lastAppliedTime:
+                        format: date-time
+                        type: string
+                      message:
+                        maxLength: 512
+                        type: string
+                      observedGeneration:
+                        description: ObservedGeneration is the cluster generation evaluated
+                          for the current result.
+                        format: int64
+                        type: integer
+                      observedSecret:
+                        description: ObservedSecret is the Secret reference, identity
+                          and revision most recently evaluated.
+                        properties:
+                          name:
+                            type: string
+                          resourceVersion:
+                            type: string
+                          uid:
+                            type: string
+                        type: object
+                      phase:
+                        description: ObjectStoragePhase is the per-provider result of
+                          the latest evaluation.
+                        enum:
+                        - Pending
+                        - Applied
+                        - Detached
+                        - Failed
+                        type: string
+                      reason:
+                        description: ObjectStorageReason is the machine-readable reason
+                          for non-Applied phases.
+                        enum:
+                        - BootstrapNotReady
+                        - SecretDeletedAfterApply
+                        - SecretNotFound
+                        - SecretReadFailed
+                        - SecretKeyMissing
+                        - InvalidPayload
+                        - AuthenticationFailed
+                        - InsufficientPrivilege
+                        - ManagementAPIUnreachable
+                        - ManagementAPIError
+                        type: string
+                    type: object
+                  azure:
+                    description: ObjectStorageProviderStatus is the observed state of
+                      one provider.
+                    properties:
+                      appliedFingerprint:
+                        description: AppliedFingerprint is an opaque, cluster-specific
+                          marker of the last applied material.
+                        maxLength: 128
+                        type: string
+                      appliedSecret:
+                        description: AppliedSecret identifies the Secret used for the
+                          last successful PUT.
+                        properties:
+                          name:
+                            type: string
+                          resourceVersion:
+                            type: string
+                          uid:
+                            type: string
+                        type: object
+                      authType:
+                        description: AuthType used for the last successful PUT.
+                        type: string
+                      detachEligible:
+                        description: DetachEligible is the durable eligibility for Secret
+                          deletion; absent means false.
+                        type: boolean
+                      lastAppliedTime:
+                        format: date-time
+                        type: string
+                      message:
+                        maxLength: 512
+                        type: string
+                      observedGeneration:
+                        description: ObservedGeneration is the cluster generation evaluated
+                          for the current result.
+                        format: int64
+                        type: integer
+                      observedSecret:
+                        description: ObservedSecret is the Secret reference, identity
+                          and revision most recently evaluated.
+                        properties:
+                          name:
+                            type: string
+                          resourceVersion:
+                            type: string
+                          uid:
+                            type: string
+                        type: object
+                      phase:
+                        description: ObjectStoragePhase is the per-provider result of
+                          the latest evaluation.
+                        enum:
+                        - Pending
+                        - Applied
+                        - Detached
+                        - Failed
+                        type: string
+                      reason:
+                        description: ObjectStorageReason is the machine-readable reason
+                          for non-Applied phases.
+                        enum:
+                        - BootstrapNotReady
+                        - SecretDeletedAfterApply
+                        - SecretNotFound
+                        - SecretReadFailed
+                        - SecretKeyMissing
+                        - InvalidPayload
+                        - AuthenticationFailed
+                        - InsufficientPrivilege
+                        - ManagementAPIUnreachable
+                        - ManagementAPIError
+                        type: string
+                    type: object
+                type: object
             type: object
         type: object
     served: true
