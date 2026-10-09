@@ -227,6 +227,8 @@ func main() {
 		Scheme:   mgr.GetScheme(),
 		Log:      ctrl.Log.WithName("controllers").WithName("MarklogicCluster"),
 		Recorder: mgr.GetEventRecorderFor("marklogiccluster-controller"),
+
+		APIReader: mgr.GetAPIReader(),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "MarklogicCluster")
 		os.Exit(1)
