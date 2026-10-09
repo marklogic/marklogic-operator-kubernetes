@@ -380,3 +380,45 @@ func TestResponseHandlingFailureIsNotSuccess(t *testing.T) {
 		}
 	})
 }
+
+func TestCredentialResponseDiscardLimit(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		size int
+	}{
+		{"empty", 0},
+		{"below limit", maxDiscardedResponseBytes - 1},
+		{"exactly at limit", maxDiscardedResponseBytes},
+		{"one byte over limit", maxDiscardedResponseBytes + 1},
+		{"well over limit", maxDiscardedResponseBytes * 2},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			reader := strings.NewReader(strings.Repeat("x", test.size))
+			body := &failingBody{reader: reader}
+			err := clientWithBody(http.StatusNoContent, body).ApplyAzureCredentials(context.Background(), AzureCredentials{StorageAccount: "a", StorageKey: "k"})
+			if test.size <= maxDiscardedResponseBytes {
+				if err != nil {
+					t.Fatalf("a complete response within the limit should succeed: %v", err)
+				}
+			} else {
+				var credErr *CredentialError
+				if !errors.As(err, &credErr) || !credErr.ResponseIncomplete || credErr.StatusCode != http.StatusNoContent || credErr.IsTransport() {
+					t.Fatalf("an oversized 204 must be an unconfirmed failure carrying its status code: %v", err)
+				}
+				if !strings.Contains(err.Error(), "204") || !strings.Contains(err.Error(), CredentialsPropertiesPath) {
+					t.Fatal("failure must identify the status code and credential endpoint")
+				}
+				if strings.Contains(err.Error(), "xxxxxxxx") {
+					t.Fatal("failure must not expose response content")
+				}
+			}
+			if consumed := test.size - reader.Len(); consumed != min(test.size, maxDiscardedResponseBytes+1) {
+				t.Fatalf("discarded %d bytes, want a bounded one-byte lookahead", consumed)
+			}
+		})
+	}
+}

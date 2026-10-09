@@ -211,7 +211,11 @@ func (c *managementClient) doSafe(ctx context.Context, method, pathAndQuery stri
 			readErr = errors.New("response too large")
 		}
 	} else {
-		_, readErr = io.Copy(io.Discard, io.LimitReader(resp.Body, maxDiscardedResponseBytes))
+		discarded, err := io.Copy(io.Discard, io.LimitReader(resp.Body, maxDiscardedResponseBytes+1))
+		readErr = err
+		if readErr == nil && discarded > maxDiscardedResponseBytes {
+			readErr = errors.New("response too large")
+		}
 	}
 	closeErr := resp.Body.Close()
 
