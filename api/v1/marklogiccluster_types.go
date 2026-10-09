@@ -76,6 +76,9 @@ type MarklogicClusterSpec struct {
 	AdditionalVolumeMounts         *[]corev1.VolumeMount           `json:"additionalVolumeMounts,omitempty"`
 	AdditionalVolumeClaimTemplates *[]corev1.PersistentVolumeClaim `json:"additionalVolumeClaimTemplates,omitempty"`
 
+	// ObjectStorage configures cluster-wide AWS S3 and Azure Blob credentials from Secrets.
+	ObjectStorage *ObjectStorageConfig `json:"objectStorage,omitempty"`
+
 	// +kubebuilder:validation:MaxItems=100
 	// +kubebuilder:validation:MinItems=1
 	// +kubebuilder:validation:Required
@@ -147,6 +150,8 @@ type MarklogicClusterStatus struct {
 	// INSERT ADDITIONAL STATUS FIELD - define observed state of cluster
 	// Important: Run "make" to regenerate code after modifying this file
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
+	// ObjectStorage reports the per-provider object storage credential results.
+	ObjectStorage *ObjectStorageStatus `json:"objectStorage,omitempty"`
 }
 
 //+kubebuilder:object:root=true
