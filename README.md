@@ -105,6 +105,40 @@ For additional manifests to deploy a MarkLogic cluster inside a Kubernetes clust
 
 For Fluent Bit log collection configuration, including secret-backed environment variables for authenticated OpenTelemetry exports, see [Fluent Bit Log Collection](./docs/log-collection.md).
 
+### Configure Object Storage Credentials
+`spec.objectStorage` on a `MarklogicCluster` applies AWS S3 and/or Azure Blob credentials as a cluster-wide MarkLogic setting through the bootstrap host's Management API. Credentials always come from Secrets in the cluster's namespace; see [object-storage.yaml](./config/samples/object-storage.yaml).
+
+| Provider | Required Secret keys | Optional keys |
+|---|---|---|
+| `aws` | `accessKey`, `secretKey` | `sessionToken` |
+| `azure` | `storageAccount`, `storageKey` | none |
+
+* Leading and trailing whitespace is trimmed; extra keys are ignored. Removing or emptying `sessionToken` applies the credentials without a token. Refreshing temporary credentials before they expire is up to you.
+* Only `authType: secret` is supported. `region` is informational.
+* The bootstrap admin identity needs the `manage-admin` and `security` roles (or `manage`/`manage-admin` plus the `credentials-set-aws`/`credentials-set-azure` privileges).
+* Updating a referenced Secret rotates the credentials; no change to the cluster spec is needed.
+
+Each provider reports an independent result in `status.objectStorage.<provider>`:
+
+| Phase | Meaning |
+|---|---|
+| `Pending` | A required application is waiting for the bootstrap host (`BootstrapNotReady`). |
+| `Applied` | MarkLogic accepted the credentials. |
+| `Detached` | The Secret was deleted after a recorded successful application. |
+| `Failed` | The Secret or the application failed; see `reason` and `message`. |
+
+`Applied` alone does not mean the current Secret was applied. Before relying on the credentials (or deleting the Secret), check that `observedGeneration` equals the cluster's `metadata.generation`, `observedSecret` equals the current Secret's name, UID and resourceVersion, and `detachEligible` is `true`. Cloud access is not verified by the operator.
+
+You can delete a provider's Secret after a successful application; the provider becomes `Detached` and the credentials already stored in MarkLogic keep working (temporary credentials can still expire). Recreating the Secret re-applies the credentials. Removing a provider from the spec stops management but does not revoke credentials in MarkLogic.
+
+After fixing an external problem, such as MarkLogic privileges, retry a failed provider by changing the value of the `marklogic.progress.com/reconcile-request` annotation on the `MarklogicCluster`. This annotation is not propagated to the MarkLogic pods, so it does not restart them. Do not put credentials in annotations or manifests.
+
+**Install and upgrade:** apply the updated `MarklogicCluster` CRD before starting an operator version that reconciles `spec.objectStorage`, because an older schema prunes the new status fields. For Helm, apply the CRD template first, then upgrade the release:
+```sh
+helm template <release> <chart> --show-only templates/marklogiccluster-crd.yaml | kubectl apply --server-side --force-conflicts -f -
+```
+Keep the provider Secrets until each provider reports the checks above.
+
 ## Clean Up
 
 #### Cleaning up MarkLogic Cluster
