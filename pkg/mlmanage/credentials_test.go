@@ -351,8 +351,12 @@ func TestResponseHandlingFailureIsNotSuccess(t *testing.T) {
 		})
 		t.Run("probe 200 with "+test.name, func(t *testing.T) {
 			t.Parallel()
-			test.body.reader = strings.NewReader(hostStatusBody(testBootstrapHost, "online"))
-			err := clientWithBody(http.StatusOK, test.body).CheckBootstrapReady(context.Background(), testBootstrapHost)
+			body := &failingBody{
+				reader:   strings.NewReader(hostStatusBody(testBootstrapHost, "online")),
+				readErr:  test.body.readErr,
+				closeErr: test.body.closeErr,
+			}
+			err := clientWithBody(http.StatusOK, body).CheckBootstrapReady(context.Background(), testBootstrapHost)
 			var credErr *CredentialError
 			if !errors.As(err, &credErr) || !credErr.ResponseIncomplete {
 				t.Fatalf("an unreadable probe response must not be ready, got %v", err)
