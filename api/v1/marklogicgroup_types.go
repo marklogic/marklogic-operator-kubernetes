@@ -210,6 +210,8 @@ type MarklogicGroupStatus struct {
 
 	// +optional
 	MarklogicGroupStatus InternalState `json:"markLogicGroupStatus,omitempty"`
+	// CredentialSecretName records the active MarkLogic identity Secret after bootstrap handoff.
+	CredentialSecretName string `json:"credentialSecretName,omitempty"`
 	// +optional
 	Dynamic *DynamicGroupStatus `json:"dynamic,omitempty"`
 }

@@ -140,6 +140,10 @@ func markLogicGroupCreateUpdateDeletePredicate() predicate.Predicate {
 					return true // Reconcile if the spec has changed
 				}
 				return false // Reconcile on update of Service
+			case *corev1.Secret:
+				oldObj := e.ObjectOld.(*corev1.Secret)
+				newObj := e.ObjectNew.(*corev1.Secret)
+				return !reflect.DeepEqual(oldObj.Data, newObj.Data) || !reflect.DeepEqual(oldObj.OwnerReferences, newObj.OwnerReferences)
 			case *corev1.Pod:
 				return true // Reconcile on pod updates for dynamic host finalizer lifecycle
 			default:
@@ -164,7 +168,8 @@ func (r *MarklogicGroupReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		WithEventFilter(markLogicGroupCreateUpdateDeletePredicate()).
 		Owns(&appsv1.StatefulSet{}).
 		Owns(&corev1.Service{}).
-		Watches(&corev1.Pod{}, handler.EnqueueRequestsFromMapFunc(r.podToMarklogicGroup))
+		Watches(&corev1.Pod{}, handler.EnqueueRequestsFromMapFunc(r.podToMarklogicGroup)).
+		Watches(&corev1.Secret{}, handler.EnqueueRequestsFromMapFunc(r.secretToMarklogicGroups))
 
 	return builder.Complete(r)
 }
@@ -203,4 +208,49 @@ func (r *MarklogicGroupReconciler) podToMarklogicGroup(ctx context.Context, obj 
 	}
 
 	return nil
+}
+
+func (r *MarklogicGroupReconciler) secretToMarklogicGroups(ctx context.Context, obj client.Object) []reconcile.Request {
+	secret, ok := obj.(*corev1.Secret)
+	if !ok {
+		return nil
+	}
+
+	var groups marklogicv1.MarklogicGroupList
+	if err := r.List(ctx, &groups, client.InNamespace(secret.Namespace)); err != nil {
+		return nil
+	}
+
+	clusterOwnerNames := make(map[string]struct{})
+	for _, ownerRef := range secret.GetOwnerReferences() {
+		if ownerRef.Kind == "MarklogicCluster" {
+			clusterOwnerNames[ownerRef.Name] = struct{}{}
+		}
+	}
+
+	requests := make([]reconcile.Request, 0)
+	for index := range groups.Items {
+		group := &groups.Items[index]
+		matches := group.Spec.SecretName == secret.Name
+		if auth := group.Spec.Auth; auth != nil && auth.OperatorSecretName != nil && *auth.OperatorSecretName == secret.Name {
+			matches = true
+		}
+		if !matches {
+			for _, ownerRef := range group.GetOwnerReferences() {
+				if ownerRef.Kind == "MarklogicCluster" {
+					_, matches = clusterOwnerNames[ownerRef.Name]
+					if matches {
+						break
+					}
+				}
+			}
+		}
+		if matches {
+			requests = append(requests, reconcile.Request{NamespacedName: types.NamespacedName{
+				Name:      group.Name,
+				Namespace: group.Namespace,
+			}})
+		}
+	}
+	return requests
 }

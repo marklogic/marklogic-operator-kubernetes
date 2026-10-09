@@ -3349,6 +3349,11 @@ spec:
                     type: string
                   adminUsername:
                     type: string
+                  operatorSecretName:
+                    description: OperatorSecretName references a Secret containing
+                      the operator user's password. When omitted, the Operator creates
+                      <cluster>-operator.
+                    type: string
                   secretName:
                     type: string
                   walletPassword:
@@ -5372,6 +5377,10 @@ spec:
                   - type
                   type: object
                 type: array
+              credentialSecretName:
+                description: CredentialSecretName records the active MarkLogic identity
+                  Secret after bootstrap handoff.
+                type: string
               dynamic:
                 properties:
                   bootstrapReady:

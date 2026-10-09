@@ -30,7 +30,8 @@ type Client interface {
 	CreateGroup(ctx context.Context, groupName string) error
 	EnableDynamicHosts(ctx context.Context, groupName string) error
 	EnableAdminAPITokenAuthentication(ctx context.Context, groupName string) error
-	EnsureManageAdminUser(ctx context.Context, username, password string) error
+	EnsureOperatorRole(ctx context.Context) error
+	EnsureOperatorUser(ctx context.Context, username, password string) error
 	ResolveClusterName(ctx context.Context) (string, error)
 	RequestDynamicHostToken(ctx context.Context, clusterName, groupName, hostFQDN, duration string) (string, error)
 	JoinDynamicHost(ctx context.Context, hostFQDN, token string) error
@@ -39,6 +40,26 @@ type Client interface {
 	ImportCertificateAuthority(ctx context.Context, authorityPEM string) error
 	EnsureOAuthExternalSecurity(ctx context.Context, config OAuthExternalSecurityConfig) error
 	EnsureOAuthAppServer(ctx context.Context, config OAuthAppServerConfig) error
+}
+
+const OperatorRoleName = "marklogic-operator"
+
+const operatorRoleDescription = "Dedicated role for the MarkLogic Kubernetes Operator"
+const operatorUserDescription = "Dedicated service account for the MarkLogic Kubernetes Operator"
+
+var operatorRoleInheritedRoles = []string{"manage-admin", "pki", "admin-ui-user"}
+var operatorRoleExecutePrivileges = []operatorRolePrivilege{
+	{PrivilegeName: "create-user", Action: "http://marklogic.com/xdmp/privileges/create-user", Kind: "execute"},
+	{PrivilegeName: "xdmp:remove-dynamic-hosts", Action: "http://marklogic.com/xdmp/privileges/remove-dynamic-hosts", Kind: "execute"},
+	{PrivilegeName: "admin-issue-dynamic-host-token", Action: "http://marklogic.com/xdmp/privileges/admin/issue-dynamic-host-token", Kind: "execute"},
+	{PrivilegeName: "xdmp:eval", Action: "http://marklogic.com/xdmp/privileges/xdmp-eval", Kind: "execute"},
+	{PrivilegeName: "create-external-security", Action: "http://marklogic.com/xdmp/privileges/create-external-security", Kind: "execute"},
+}
+
+type operatorRolePrivilege struct {
+	PrivilegeName string `json:"privilege-name"`
+	Action        string `json:"action"`
+	Kind          string `json:"kind"`
 }
 
 type ClientOptions struct {
@@ -161,7 +182,15 @@ func (c *managementClient) ListHostsStatus(ctx context.Context) ([]HostStatus, e
 		version := firstString(item, "version", "product-version")
 		online := status == "online"
 		if status == "" && hasTotalOffline {
-			online = totalOffline == 0
+			if totalOffline == 0 {
+				online = true
+			} else {
+				var detailErr error
+				online, version, detailErr = c.fetchHostStatus(ctx, name)
+				if detailErr != nil {
+					return nil, fmt.Errorf("get status for host %q: %w", name, detailErr)
+				}
+			}
 		}
 		hosts = append(hosts, HostStatus{
 			Name:    name,
@@ -196,6 +225,26 @@ func (c *managementClient) ListHostsStatus(ctx context.Context) ([]HostStatus, e
 	}
 
 	return hosts, nil
+}
+
+func (c *managementClient) fetchHostStatus(ctx context.Context, hostName string) (bool, string, error) {
+	query := url.Values{}
+	query.Set("view", "status")
+	query.Set("format", "json")
+	data, _, err := c.doJSON(ctx, http.MethodGet, "/manage/v2/hosts/"+url.PathEscape(hostName), query, nil, http.StatusOK)
+	if err != nil {
+		return false, "", err
+	}
+
+	var payload any
+	if err := json.Unmarshal(data, &payload); err != nil {
+		return false, "", err
+	}
+	onlineValue := strings.ToLower(findFirstStringByKeys(payload, "online"))
+	if onlineValue != "true" && onlineValue != "false" {
+		return false, "", errors.New("host status response does not contain an online value")
+	}
+	return onlineValue == "true", findFirstStringByKeys(payload, "version", "product-version"), nil
 }
 
 func (c *managementClient) GetGroup(ctx context.Context, groupName string) (GroupInfo, error) {
@@ -265,7 +314,30 @@ func (c *managementClient) EnableAdminAPITokenAuthentication(ctx context.Context
 	return err
 }
 
-func (c *managementClient) EnsureManageAdminUser(ctx context.Context, username, password string) error {
+func (c *managementClient) EnsureOperatorRole(ctx context.Context) error {
+	query := url.Values{}
+	query.Set("format", "json")
+	_, statusCode, err := c.doJSON(ctx, http.MethodGet, "/manage/v2/roles/"+url.PathEscape(OperatorRoleName), query, nil, http.StatusOK, http.StatusNotFound)
+	if err != nil {
+		return err
+	}
+
+	payload := map[string]any{
+		"role-name":   OperatorRoleName,
+		"description": operatorRoleDescription,
+		"role":        operatorRoleInheritedRoles,
+		"privilege":   operatorRoleExecutePrivileges,
+	}
+	if statusCode == http.StatusNotFound {
+		_, _, err = c.doJSON(ctx, http.MethodPost, "/manage/v2/roles", nil, payload, http.StatusCreated, http.StatusAccepted, http.StatusNoContent)
+		return err
+	}
+
+	_, _, err = c.doJSON(ctx, http.MethodPut, "/manage/v2/roles/"+url.PathEscape(OperatorRoleName)+"/properties", nil, payload, http.StatusAccepted, http.StatusNoContent)
+	return err
+}
+
+func (c *managementClient) EnsureOperatorUser(ctx context.Context, username, password string) error {
 	query := url.Values{}
 	query.Set("format", "json")
 	_, statusCode, err := c.doJSON(ctx, http.MethodGet, "/manage/v2/users/"+url.PathEscape(username), query, nil, http.StatusOK, http.StatusNotFound)
@@ -274,9 +346,10 @@ func (c *managementClient) EnsureManageAdminUser(ctx context.Context, username, 
 	}
 
 	payload := map[string]any{
-		"user-name": username,
-		"password":  password,
-		"role":      []string{"manage-admin"},
+		"user-name":   username,
+		"description": operatorUserDescription,
+		"password":    password,
+		"role":        []string{OperatorRoleName},
 	}
 	if statusCode == http.StatusNotFound {
 		_, _, err = c.doJSON(ctx, http.MethodPost, "/manage/v2/users", nil, payload, http.StatusCreated, http.StatusAccepted, http.StatusNoContent)

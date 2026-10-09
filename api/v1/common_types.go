@@ -74,6 +74,8 @@ type AdminAuth struct {
 	AdminUsername  *string `json:"adminUsername,omitempty"`
 	AdminPassword  *string `json:"adminPassword,omitempty"`
 	WalletPassword *string `json:"walletPassword,omitempty"`
+	// OperatorSecretName references a Secret containing the operator user's password. When omitted, the Operator creates <cluster>-operator.
+	OperatorSecretName *string `json:"operatorSecretName,omitempty"`
 }
 
 type LogCollection struct {

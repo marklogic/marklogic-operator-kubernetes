@@ -47,6 +47,7 @@ var (
 	staleE2ENamespaces = []string{
 		"ml-dynamic-host",
 		"ml-cluster-test",
+		"ml-operator-credentials-test",
 		"ednode",
 		"tls-self-signed",
 		"marklogic-tlsnamed",

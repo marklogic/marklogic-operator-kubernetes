@@ -18,10 +18,14 @@ package controller
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
+	"testing"
 	"time"
 
 	marklogicv1 "github.com/marklogic/marklogic-operator-kubernetes/api/v1"
@@ -31,11 +35,15 @@ import (
 	. "github.com/onsi/gomega"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 )
 
 const (
@@ -61,6 +69,63 @@ var typeNamespaceName = types.NamespacedName{Name: Name, Namespace: Namespace}
 const resourceCpuValue = int64(1)
 const resourceMemoryValue = int64(268435456)
 
+func TestOperatorSecretRotationEnqueuesOwningGroups(t *testing.T) {
+	scheme := runtime.NewScheme()
+	if err := marklogicv1.AddToScheme(scheme); err != nil {
+		t.Fatalf("add Marklogic scheme: %v", err)
+	}
+	if err := corev1.AddToScheme(scheme); err != nil {
+		t.Fatalf("add core scheme: %v", err)
+	}
+
+	clusterOwnedGroup := &marklogicv1.MarklogicGroup{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "cluster-group",
+			Namespace: "database",
+			OwnerReferences: []metav1.OwnerReference{{
+				Kind: "MarklogicCluster",
+				Name: "search",
+			}},
+		},
+	}
+	customSecretName := "custom-operator-auth"
+	customSecretGroup := &marklogicv1.MarklogicGroup{
+		ObjectMeta: metav1.ObjectMeta{Name: "custom-group", Namespace: "database"},
+		Spec:       marklogicv1.MarklogicGroupSpec{Auth: &marklogicv1.AdminAuth{OperatorSecretName: &customSecretName}},
+	}
+	unrelatedGroup := &marklogicv1.MarklogicGroup{ObjectMeta: metav1.ObjectMeta{Name: "unrelated", Namespace: "database"}}
+	fakeClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(clusterOwnedGroup, customSecretGroup, unrelatedGroup).Build()
+	reconciler := &MarklogicGroupReconciler{Client: fakeClient}
+
+	ownedSecret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "search-operator",
+			Namespace: "database",
+			OwnerReferences: []metav1.OwnerReference{{
+				Kind: "MarklogicCluster",
+				Name: "search",
+			}},
+		},
+	}
+	requests := reconciler.secretToMarklogicGroups(context.Background(), ownedSecret)
+	if len(requests) != 1 || requests[0].Name != "cluster-group" {
+		t.Fatalf("cluster-owned Secret mapped to requests %+v, want cluster-group", requests)
+	}
+
+	customSecret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "custom-operator-auth", Namespace: "database"}}
+	requests = reconciler.secretToMarklogicGroups(context.Background(), customSecret)
+	if len(requests) != 1 || requests[0].Name != "custom-group" {
+		t.Fatalf("user-managed Secret mapped to requests %+v, want custom-group", requests)
+	}
+
+	oldSecret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "search-operator", Namespace: "database"}, Data: map[string][]byte{"password": []byte("old")}}
+	newSecret := oldSecret.DeepCopy()
+	newSecret.Data["password"] = []byte("rotated")
+	if !markLogicGroupCreateUpdateDeletePredicate().Update(event.UpdateEvent{ObjectOld: oldSecret, ObjectNew: newSecret}) {
+		t.Fatal("password updates should pass the controller predicate")
+	}
+}
+
 // 100Mi
 const resourceHugepageValue = int64(104857600)
 
@@ -82,14 +147,24 @@ var hugePages = marklogicv1.HugePages{
 }
 
 var _ = Describe("MarkLogicGroup controller", func() {
-	Context("When creating an MarklogicGroup", func() {
+	Context("When creating an MarklogicGroup", Ordered, func() {
 		ctx := context.Background()
+
+		AfterEach(func() {
+			deleteMarklogicGroups(ctx, true)
+		})
+
+		AfterAll(func() {
+			deleteMarklogicGroups(ctx, false)
+		})
+
 		It("Should create a MarklogicGroup CR, StatefulSet and Service", func() {
 			// Create the namespace
 			ns := corev1.Namespace{
 				ObjectMeta: metav1.ObjectMeta{Name: Namespace},
 			}
 			Expect(k8sClient.Create(ctx, &ns)).Should(Succeed())
+			createGroupCredentialSecrets(ctx, Namespace, Name)
 
 			// Declaring the Marklogic Group object and create CR
 			mlGroup := &marklogicv1.MarklogicGroup{
@@ -182,6 +257,7 @@ var _ = Describe("MarkLogicGroup controller", func() {
 			Expect(staticReadinessProbe).ShouldNot(BeNil())
 			Expect(staticReadinessProbe.Exec).ShouldNot(BeNil())
 			Expect(staticReadinessProbe.TCPSocket).Should(BeNil())
+			Expect(staticReadinessProbe.Exec.Command).Should(ContainElement("test -f /tmp/marklogic_ready && [ \"$(curl -f -s -o /dev/null -w '%{http_code}' http://localhost:7997/)\" = \"200\" ]"))
 			Expect(findEnvVar(sts.Spec.Template.Spec.Containers[0].Env, "MARKLOGIC_DYNAMIC_HOST")).Should(BeNil())
 
 			// Validating if headless Service is created successfully
@@ -219,6 +295,7 @@ var _ = Describe("MarkLogicGroup controller", func() {
 				ObjectMeta: metav1.ObjectMeta{Name: dynamicNamespace},
 			}
 			Expect(k8sClient.Create(ctx, &ns)).Should(Succeed())
+			createGroupCredentialSecrets(ctx, dynamicNamespace, dynamicName)
 
 			mlGroup := &marklogicv1.MarklogicGroup{
 				TypeMeta: metav1.TypeMeta{
@@ -281,18 +358,15 @@ var _ = Describe("MarkLogicGroup controller", func() {
 			staticName := "static-branch-group"
 			staticNsName := types.NamespacedName{Name: staticName, Namespace: staticNamespace}
 
-			factoryCallCount := 0
 			originalFactory := k8sutil.NewDynamicManagementClient
 			k8sutil.NewDynamicManagementClient = func(opts mlmanage.ClientOptions) mlmanage.Client {
-				if strings.Contains(opts.Host, staticName) {
-					factoryCallCount++
-				}
 				return &fakeDynamicManagementClient{}
 			}
 			defer func() { k8sutil.NewDynamicManagementClient = originalFactory }()
 
 			ns := corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: staticNamespace}}
 			Expect(k8sClient.Create(ctx, &ns)).Should(Succeed())
+			createGroupCredentialSecrets(ctx, staticNamespace, staticName)
 
 			mlGroup := &marklogicv1.MarklogicGroup{
 				TypeMeta:   metav1.TypeMeta{Kind: "MarklogicGroup", APIVersion: "marklogic.progress.com/v1"},
@@ -310,7 +384,12 @@ var _ = Describe("MarkLogicGroup controller", func() {
 				err := k8sClient.Get(ctx, staticNsName, sts)
 				return err == nil
 			}, timeout, interval).Should(BeTrue())
-			Expect(factoryCallCount).Should(Equal(0))
+			Expect(sts.Spec.Template.Labels["app.kubernetes.io/component"]).Should(Equal("database"))
+			Expect(findEnvVar(sts.Spec.Template.Spec.Containers[0].Env, "MARKLOGIC_DYNAMIC_HOST")).Should(BeNil())
+
+			staticGroup := &marklogicv1.MarklogicGroup{}
+			Expect(k8sClient.Get(ctx, staticNsName, staticGroup)).Should(Succeed())
+			Expect(staticGroup.Status.Dynamic).Should(BeNil())
 		})
 
 		It("Should transition dynamic group to degraded when bootstrap is not ready", func() {
@@ -320,7 +399,9 @@ var _ = Describe("MarkLogicGroup controller", func() {
 			adminSecretName := clusterName + "-admin"
 			dynamicNsName := types.NamespacedName{Name: dynamicName, Namespace: dynamicNamespace}
 
-			behavior := &fakeDynamicManagementBehavior{listHostsErr: errors.New("connection refused")}
+			behavior := &fakeDynamicManagementBehavior{
+				hosts: []mlmanage.HostStatus{{Name: "bootstrap-0", Online: false, Version: "12.0-1"}},
+			}
 			originalFactory := k8sutil.NewDynamicManagementClient
 			k8sutil.NewDynamicManagementClient = func(opts mlmanage.ClientOptions) mlmanage.Client {
 				return &fakeDynamicManagementClient{behavior: behavior}
@@ -334,6 +415,7 @@ var _ = Describe("MarkLogicGroup controller", func() {
 				Data:       map[string][]byte{"username": []byte("admin"), "password": []byte("admin-password")},
 			}
 			Expect(k8sClient.Create(ctx, adminSecret)).Should(Succeed())
+			createOperatorCredentialSecret(ctx, dynamicNamespace, adminSecretName)
 
 			mlGroup := &marklogicv1.MarklogicGroup{
 				TypeMeta:   metav1.TypeMeta{Kind: "MarklogicGroup", APIVersion: "marklogic.progress.com/v1"},
@@ -354,10 +436,11 @@ var _ = Describe("MarkLogicGroup controller", func() {
 			createdCR := &marklogicv1.MarklogicGroup{}
 			Eventually(func() bool {
 				err := k8sClient.Get(ctx, dynamicNsName, createdCR)
-				if err != nil || createdCR.Status.Dynamic == nil {
+				if err != nil {
 					return false
 				}
-				return createdCR.Status.Dynamic.Phase == "Degraded" && createdCR.Status.Dynamic.Reason == "BootstrapNotReady"
+				condition := findCondition(createdCR.Status.Conditions, "OperatorCredentialsReady")
+				return condition != nil && condition.Status == metav1.ConditionFalse && condition.Reason == "BootstrapHostNotReady"
 			}, timeout, interval).Should(BeTrue())
 		})
 
@@ -366,6 +449,7 @@ var _ = Describe("MarkLogicGroup controller", func() {
 			dynamicName := "dynamic-version-failed"
 			clusterName := "cluster-version-failed"
 			adminSecretName := clusterName + "-admin"
+			operatorSecretName := clusterName + "-operator"
 			dynamicNsName := types.NamespacedName{Name: dynamicName, Namespace: dynamicNamespace}
 
 			behavior := &fakeDynamicManagementBehavior{hosts: []mlmanage.HostStatus{{Name: "bootstrap-0", Online: true, Version: "11.0-1"}}}
@@ -382,6 +466,11 @@ var _ = Describe("MarkLogicGroup controller", func() {
 				Data:       map[string][]byte{"username": []byte("admin"), "password": []byte("admin-password")},
 			}
 			Expect(k8sClient.Create(ctx, adminSecret)).Should(Succeed())
+			operatorSecret := &corev1.Secret{
+				ObjectMeta: metav1.ObjectMeta{Name: operatorSecretName, Namespace: dynamicNamespace},
+				Data:       map[string][]byte{"username": []byte("operator"), "password": []byte("operator-password")},
+			}
+			Expect(k8sClient.Create(ctx, operatorSecret)).Should(Succeed())
 
 			mlGroup := &marklogicv1.MarklogicGroup{
 				TypeMeta:   metav1.TypeMeta{Kind: "MarklogicGroup", APIVersion: "marklogic.progress.com/v1"},
@@ -465,7 +554,7 @@ var _ = Describe("MarkLogicGroup controller", func() {
 			dynamicName := "dynamic-configured"
 			clusterName := "cluster-configured"
 			adminSecretName := clusterName + "-admin"
-			dynamicSecretName := clusterName + "-manage-admin"
+			operatorSecretName := clusterName + "-operator"
 			dynamicNsName := types.NamespacedName{Name: dynamicName, Namespace: dynamicNamespace}
 			zeroReplicas := int32(0)
 
@@ -488,6 +577,11 @@ var _ = Describe("MarkLogicGroup controller", func() {
 				Data:       map[string][]byte{"username": []byte("admin"), "password": []byte("admin-password")},
 			}
 			Expect(k8sClient.Create(ctx, adminSecret)).Should(Succeed())
+			operatorSecret := &corev1.Secret{
+				ObjectMeta: metav1.ObjectMeta{Name: operatorSecretName, Namespace: dynamicNamespace},
+				Data:       map[string][]byte{"username": []byte("marklogic-kubernetes-operator"), "password": []byte("operator-password")},
+			}
+			Expect(k8sClient.Create(ctx, operatorSecret)).Should(Succeed())
 
 			mlGroup := &marklogicv1.MarklogicGroup{
 				TypeMeta:   metav1.TypeMeta{Kind: "MarklogicGroup", APIVersion: "marklogic.progress.com/v1"},
@@ -514,26 +608,26 @@ var _ = Describe("MarkLogicGroup controller", func() {
 				return createdCR.Status.Dynamic.Phase == "Idle" && createdCR.Status.Dynamic.DynamicHostsEnabled && createdCR.Status.Dynamic.Configured
 			}, timeout, interval).Should(BeTrue())
 
-			dynamicSecret := &corev1.Secret{}
-			Eventually(func() bool {
-				err := k8sClient.Get(ctx, types.NamespacedName{Name: dynamicSecretName, Namespace: dynamicNamespace}, dynamicSecret)
-				return err == nil
-			}, timeout, interval).Should(BeTrue())
+			legacyManageAdminSecret := &corev1.Secret{}
+			Consistently(func() bool {
+				err := k8sClient.Get(ctx, types.NamespacedName{Name: clusterName + "-manage-admin", Namespace: dynamicNamespace}, legacyManageAdminSecret)
+				return apierrors.IsNotFound(err)
+			}, time.Second, interval).Should(BeTrue())
 
 			Eventually(func() bool {
 				callsMu.Lock()
 				defer callsMu.Unlock()
-				expected := []string{"ListHostsStatus", "EnsureManageAdminUser", "GetGroup", "CreateGroup", "EnableDynamicHosts", "EnableAdminAPITokenAuthentication", "ListGroupHosts"}
+				expected := []string{"ListHostsStatus", "GetGroup", "CreateGroup", "EnableDynamicHosts", "EnableAdminAPITokenAuthentication", "ListGroupHosts"}
 				return hasOrderedSubsequence(calls, expected)
 			}, timeout, interval).Should(BeTrue())
 		})
 
-		It("Should reconcile shared dynamic secret ownership to cluster owner", func() {
+		It("Should preserve cluster ownership of the shared operator Secret", func() {
 			dynamicNamespace := "testns-dynamic-secret-owner"
 			dynamicName := "dynamic-secret-owner"
 			clusterName := "cluster-secret-owner"
 			adminSecretName := clusterName + "-admin"
-			dynamicSecretName := clusterName + "-manage-admin"
+			operatorSecretName := clusterName + "-operator"
 			dynamicNsName := types.NamespacedName{Name: dynamicName, Namespace: dynamicNamespace}
 			zeroReplicas := int32(0)
 
@@ -555,22 +649,20 @@ var _ = Describe("MarkLogicGroup controller", func() {
 			}
 			Expect(k8sClient.Create(ctx, adminSecret)).Should(Succeed())
 
-			groupController := true
-			legacyOwnerRef := metav1.OwnerReference{APIVersion: "marklogic.progress.com/v1", Kind: "MarklogicGroup", Name: "legacy-owner-group", UID: types.UID("legacy-owner-group-uid"), Controller: &groupController}
-			legacyDynamicSecret := &corev1.Secret{
-				TypeMeta: metav1.TypeMeta{Kind: "Secret", APIVersion: "v1"},
-				ObjectMeta: metav1.ObjectMeta{
-					Name:            dynamicSecretName,
-					Namespace:       dynamicNamespace,
-					OwnerReferences: []metav1.OwnerReference{legacyOwnerRef},
-				},
-				Type: corev1.SecretTypeOpaque,
-				Data: map[string][]byte{"username": []byte(clusterName + "-manage-admin"), "password": []byte("legacy-password")},
-			}
-			Expect(k8sClient.Create(ctx, legacyDynamicSecret)).Should(Succeed())
-
 			clusterController := true
 			clusterOwnerRef := metav1.OwnerReference{APIVersion: "marklogic.progress.com/v1", Kind: "MarklogicCluster", Name: clusterName, UID: types.UID("cluster-secret-owner-uid"), Controller: &clusterController}
+			operatorSecret := &corev1.Secret{
+				TypeMeta: metav1.TypeMeta{Kind: "Secret", APIVersion: "v1"},
+				ObjectMeta: metav1.ObjectMeta{
+					Name:            operatorSecretName,
+					Namespace:       dynamicNamespace,
+					OwnerReferences: []metav1.OwnerReference{clusterOwnerRef},
+				},
+				Type: corev1.SecretTypeOpaque,
+				Data: map[string][]byte{"username": []byte("marklogic-kubernetes-operator"), "password": []byte("operator-password")},
+			}
+			Expect(k8sClient.Create(ctx, operatorSecret)).Should(Succeed())
+
 			mlGroup := &marklogicv1.MarklogicGroup{
 				TypeMeta: metav1.TypeMeta{Kind: "MarklogicGroup", APIVersion: "marklogic.progress.com/v1"},
 				ObjectMeta: metav1.ObjectMeta{
@@ -602,7 +694,7 @@ var _ = Describe("MarkLogicGroup controller", func() {
 
 			reconciledSecret := &corev1.Secret{}
 			Eventually(func() bool {
-				err := k8sClient.Get(ctx, types.NamespacedName{Name: dynamicSecretName, Namespace: dynamicNamespace}, reconciledSecret)
+				err := k8sClient.Get(ctx, types.NamespacedName{Name: operatorSecretName, Namespace: dynamicNamespace}, reconciledSecret)
 				if err != nil {
 					return false
 				}
@@ -655,6 +747,7 @@ var _ = Describe("MarkLogicGroup controller", func() {
 				Data:       map[string][]byte{"username": []byte("admin"), "password": []byte("admin-password")},
 			}
 			Expect(k8sClient.Create(ctx, adminSecret)).Should(Succeed())
+			createOperatorCredentialSecret(ctx, dynamicNamespace, adminSecretName)
 
 			mlGroup := &marklogicv1.MarklogicGroup{
 				TypeMeta:   metav1.TypeMeta{Kind: "MarklogicGroup", APIVersion: "marklogic.progress.com/v1"},
@@ -741,6 +834,7 @@ var _ = Describe("MarkLogicGroup controller", func() {
 				Data:       map[string][]byte{"username": []byte("admin"), "password": []byte("admin-password")},
 			}
 			Expect(k8sClient.Create(ctx, adminSecret)).Should(Succeed())
+			createOperatorCredentialSecret(ctx, dynamicNamespace, adminSecretName)
 
 			oneReplica := int32(1)
 			mlGroup := &marklogicv1.MarklogicGroup{
@@ -803,6 +897,7 @@ var _ = Describe("MarkLogicGroup controller", func() {
 				Data:       map[string][]byte{"username": []byte("admin"), "password": []byte("admin-password")},
 			}
 			Expect(k8sClient.Create(ctx, adminSecret)).Should(Succeed())
+			createOperatorCredentialSecret(ctx, dynamicNamespace, adminSecretName)
 
 			oneReplica := int32(1)
 			mlGroup := &marklogicv1.MarklogicGroup{
@@ -869,6 +964,7 @@ var _ = Describe("MarkLogicGroup controller", func() {
 				Data:       map[string][]byte{"username": []byte("admin"), "password": []byte("admin-password")},
 			}
 			Expect(k8sClient.Create(ctx, adminSecret)).Should(Succeed())
+			createOperatorCredentialSecret(ctx, dynamicNamespace, adminSecretName)
 
 			mlGroup := &marklogicv1.MarklogicGroup{
 				TypeMeta:   metav1.TypeMeta{Kind: "MarklogicGroup", APIVersion: "marklogic.progress.com/v1"},
@@ -929,6 +1025,7 @@ var _ = Describe("MarkLogicGroup controller", func() {
 			Expect(k8sClient.Create(ctx, &dynamicNS)).Should(Succeed())
 			adminSecret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: adminSecretName, Namespace: dynamicNamespace}, Data: map[string][]byte{"username": []byte("admin"), "password": []byte("admin-password")}}
 			Expect(k8sClient.Create(ctx, adminSecret)).Should(Succeed())
+			createOperatorCredentialSecret(ctx, dynamicNamespace, adminSecretName)
 
 			oneReplica := int32(1)
 			dynamicGroup := &marklogicv1.MarklogicGroup{
@@ -970,6 +1067,7 @@ var _ = Describe("MarkLogicGroup controller", func() {
 			staticName := "static-finalizers"
 			staticNS := corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: staticNamespace}}
 			Expect(k8sClient.Create(ctx, &staticNS)).Should(Succeed())
+			createGroupCredentialSecrets(ctx, staticNamespace, staticName)
 
 			staticGroup := &marklogicv1.MarklogicGroup{
 				TypeMeta:   metav1.TypeMeta{Kind: "MarklogicGroup", APIVersion: "marklogic.progress.com/v1"},
@@ -1026,6 +1124,7 @@ var _ = Describe("MarkLogicGroup controller", func() {
 			Expect(k8sClient.Create(ctx, &ns)).Should(Succeed())
 			adminSecret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: adminSecretName, Namespace: dynamicNamespace}, Data: map[string][]byte{"username": []byte("admin"), "password": []byte("admin-password")}}
 			Expect(k8sClient.Create(ctx, adminSecret)).Should(Succeed())
+			createOperatorCredentialSecret(ctx, dynamicNamespace, adminSecretName)
 
 			oneReplica := int32(1)
 			dynamicGroup := &marklogicv1.MarklogicGroup{
@@ -1116,6 +1215,7 @@ var _ = Describe("MarkLogicGroup controller", func() {
 			Expect(k8sClient.Create(ctx, &ns)).Should(Succeed())
 			adminSecret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: adminSecretName, Namespace: dynamicNamespace}, Data: map[string][]byte{"username": []byte("admin"), "password": []byte("admin-password")}}
 			Expect(k8sClient.Create(ctx, adminSecret)).Should(Succeed())
+			createOperatorCredentialSecret(ctx, dynamicNamespace, adminSecretName)
 
 			twoReplicas := int32(2)
 			dynamicGroup := &marklogicv1.MarklogicGroup{
@@ -1196,6 +1296,7 @@ var _ = Describe("MarkLogicGroup controller", func() {
 			Expect(k8sClient.Create(ctx, &ns)).Should(Succeed())
 			adminSecret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: adminSecretName, Namespace: dynamicNamespace}, Data: map[string][]byte{"username": []byte("admin"), "password": []byte("admin-password")}}
 			Expect(k8sClient.Create(ctx, adminSecret)).Should(Succeed())
+			createOperatorCredentialSecret(ctx, dynamicNamespace, adminSecretName)
 
 			twoReplicas := int32(2)
 			dynamicGroup := &marklogicv1.MarklogicGroup{
@@ -1259,7 +1360,7 @@ var _ = Describe("MarkLogicGroup controller", func() {
 
 			removeHostCalls := []string{}
 			callsMu := &sync.Mutex{}
-			behavior := &fakeDynamicManagementBehavior{hosts: []mlmanage.HostStatus{{Name: "bootstrap-0", Online: true, Version: "12.0-1"}}, groupInfo: mlmanage.GroupInfo{Exists: false}, autoRegisterOnJoin: true, hostIDsByHost: map[string]string{emptyDirHost: "host-id-emptydir", pvcHost: "host-id-pvc"}}
+			behavior := &fakeDynamicManagementBehavior{hosts: []mlmanage.HostStatus{{Name: "bootstrap-0", Online: true, Version: "12.0-1"}}, groupInfo: mlmanage.GroupInfo{Exists: false}, autoRegisterOnJoin: true, hostIDsByHost: map[string]string{emptyDirHost: "host-id-emptydir", pvcHost: "host-id-pvc"}, groupHostsByGroup: map[string][]mlmanage.GroupHost{}}
 
 			originalFactory := k8sutil.NewDynamicManagementClient
 			k8sutil.NewDynamicManagementClient = func(opts mlmanage.ClientOptions) mlmanage.Client {
@@ -1274,6 +1375,8 @@ var _ = Describe("MarkLogicGroup controller", func() {
 
 			Expect(k8sClient.Create(ctx, &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: emptyDirSecret, Namespace: emptyDirNamespace}, Data: map[string][]byte{"username": []byte("admin"), "password": []byte("admin-password")}})).Should(Succeed())
 			Expect(k8sClient.Create(ctx, &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: pvcSecret, Namespace: pvcNamespace}, Data: map[string][]byte{"username": []byte("admin"), "password": []byte("admin-password")}})).Should(Succeed())
+			createOperatorCredentialSecret(ctx, emptyDirNamespace, emptyDirSecret)
+			createOperatorCredentialSecret(ctx, pvcNamespace, pvcSecret)
 
 			oneReplica := int32(1)
 			emptyDirGroup := &marklogicv1.MarklogicGroup{TypeMeta: metav1.TypeMeta{Kind: "MarklogicGroup", APIVersion: "marklogic.progress.com/v1"}, ObjectMeta: metav1.ObjectMeta{Name: emptyDirName, Namespace: emptyDirNamespace}, Spec: marklogicv1.MarklogicGroupSpec{Replicas: &oneReplica, Name: emptyDirName, Image: imageName, ClusterDomain: "cluster.local", GroupConfig: &marklogicv1.GroupConfig{Name: "DynamicZeroEmptyDir", EnableXdqpSsl: true}, IsDynamic: true, BootstrapHost: "bootstrap-0.bootstrap.svc.cluster.local", SecretName: emptyDirSecret}}
@@ -1350,7 +1453,7 @@ var _ = Describe("MarkLogicGroup controller", func() {
 			host0 := dynamicHostFQDN(dynamicName, dynamicNamespace, dynamicName+"-0")
 			removeHostCalls := []string{}
 			callsMu := &sync.Mutex{}
-			behavior := &fakeDynamicManagementBehavior{hosts: []mlmanage.HostStatus{{Name: "bootstrap-0", Online: true, Version: "12.0-1"}}, groupInfo: mlmanage.GroupInfo{Exists: false}, autoRegisterOnJoin: true, hostIDsByHost: map[string]string{host0: "host-id-0"}}
+			behavior := &fakeDynamicManagementBehavior{hosts: []mlmanage.HostStatus{{Name: "bootstrap-0", Online: true, Version: "12.0-1"}}, groupInfo: mlmanage.GroupInfo{Exists: false}, autoRegisterOnJoin: true, hostIDsByHost: map[string]string{host0: "host-id-0"}, groupHostsByGroup: map[string][]mlmanage.GroupHost{}}
 
 			originalFactory := k8sutil.NewDynamicManagementClient
 			k8sutil.NewDynamicManagementClient = func(opts mlmanage.ClientOptions) mlmanage.Client {
@@ -1362,6 +1465,7 @@ var _ = Describe("MarkLogicGroup controller", func() {
 			Expect(k8sClient.Create(ctx, &ns)).Should(Succeed())
 			adminSecret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: adminSecretName, Namespace: dynamicNamespace}, Data: map[string][]byte{"username": []byte("admin"), "password": []byte("admin-password")}}
 			Expect(k8sClient.Create(ctx, adminSecret)).Should(Succeed())
+			createOperatorCredentialSecret(ctx, dynamicNamespace, adminSecretName)
 
 			oneReplica := int32(1)
 			dynamicGroup := &marklogicv1.MarklogicGroup{
@@ -1440,6 +1544,7 @@ var _ = Describe("MarkLogicGroup controller", func() {
 			Expect(k8sClient.Create(ctx, &ns)).Should(Succeed())
 			adminSecret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: adminSecretName, Namespace: dynamicNamespace}, Data: map[string][]byte{"username": []byte("admin"), "password": []byte("admin-password")}}
 			Expect(k8sClient.Create(ctx, adminSecret)).Should(Succeed())
+			createOperatorCredentialSecret(ctx, dynamicNamespace, adminSecretName)
 
 			oneReplica := int32(1)
 			dynamicGroup := &marklogicv1.MarklogicGroup{TypeMeta: metav1.TypeMeta{Kind: "MarklogicGroup", APIVersion: "marklogic.progress.com/v1"}, ObjectMeta: metav1.ObjectMeta{Name: dynamicName, Namespace: dynamicNamespace}, Spec: marklogicv1.MarklogicGroupSpec{Replicas: &oneReplica, Name: dynamicName, Image: imageName, ClusterDomain: "cluster.local", GroupConfig: &marklogicv1.GroupConfig{Name: "DynamicBootstrapUnavailable", EnableXdqpSsl: true}, IsDynamic: true, BootstrapHost: "bootstrap-0.bootstrap.svc.cluster.local", SecretName: adminSecretName}}
@@ -1502,6 +1607,7 @@ var _ = Describe("MarkLogicGroup controller", func() {
 			Expect(k8sClient.Create(ctx, &ns)).Should(Succeed())
 			adminSecret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: adminSecretName, Namespace: dynamicNamespace}, Data: map[string][]byte{"username": []byte("admin"), "password": []byte("admin-password")}}
 			Expect(k8sClient.Create(ctx, adminSecret)).Should(Succeed())
+			createOperatorCredentialSecret(ctx, dynamicNamespace, adminSecretName)
 
 			oneReplica := int32(1)
 			dynamicGroup := &marklogicv1.MarklogicGroup{TypeMeta: metav1.TypeMeta{Kind: "MarklogicGroup", APIVersion: "marklogic.progress.com/v1"}, ObjectMeta: metav1.ObjectMeta{Name: dynamicName, Namespace: dynamicNamespace}, Spec: marklogicv1.MarklogicGroupSpec{Replicas: &oneReplica, Name: dynamicName, Image: imageName, ClusterDomain: "cluster.local", GroupConfig: &marklogicv1.GroupConfig{Name: "DynamicRemoveRetry", EnableXdqpSsl: true}, IsDynamic: true, BootstrapHost: "bootstrap-0.bootstrap.svc.cluster.local", SecretName: adminSecretName}}
@@ -1571,6 +1677,7 @@ var _ = Describe("MarkLogicGroup controller", func() {
 			Expect(k8sClient.Create(ctx, &ns)).Should(Succeed())
 			adminSecret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: adminSecretName, Namespace: dynamicNamespace}, Data: map[string][]byte{"username": []byte("admin"), "password": []byte("admin-password")}}
 			Expect(k8sClient.Create(ctx, adminSecret)).Should(Succeed())
+			createOperatorCredentialSecret(ctx, dynamicNamespace, adminSecretName)
 
 			oneReplica := int32(1)
 			dynamicGroup := &marklogicv1.MarklogicGroup{TypeMeta: metav1.TypeMeta{Kind: "MarklogicGroup", APIVersion: "marklogic.progress.com/v1"}, ObjectMeta: metav1.ObjectMeta{Name: dynamicName, Namespace: dynamicNamespace}, Spec: marklogicv1.MarklogicGroupSpec{Replicas: &oneReplica, Name: dynamicName, Image: imageName, ClusterDomain: "cluster.local", GroupConfig: &marklogicv1.GroupConfig{Name: groupName, EnableXdqpSsl: true}, IsDynamic: true, BootstrapHost: "bootstrap-0.bootstrap.svc.cluster.local", SecretName: adminSecretName}}
@@ -1655,6 +1762,7 @@ var _ = Describe("MarkLogicGroup controller", func() {
 			Expect(k8sClient.Create(ctx, &ns)).Should(Succeed())
 			adminSecret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: adminSecretName, Namespace: dynamicNamespace}, Data: map[string][]byte{"username": []byte("admin"), "password": []byte("admin-password")}}
 			Expect(k8sClient.Create(ctx, adminSecret)).Should(Succeed())
+			createOperatorCredentialSecret(ctx, dynamicNamespace, adminSecretName)
 
 			oneReplica := int32(1)
 			dynamicGroup := &marklogicv1.MarklogicGroup{TypeMeta: metav1.TypeMeta{Kind: "MarklogicGroup", APIVersion: "marklogic.progress.com/v1"}, ObjectMeta: metav1.ObjectMeta{Name: dynamicName, Namespace: dynamicNamespace}, Spec: marklogicv1.MarklogicGroupSpec{Replicas: &oneReplica, Name: dynamicName, Image: imageName, ClusterDomain: "cluster.local", GroupConfig: &marklogicv1.GroupConfig{Name: groupName, EnableXdqpSsl: true}, IsDynamic: true, BootstrapHost: "bootstrap-0.bootstrap.svc.cluster.local", SecretName: adminSecretName}}
@@ -1748,6 +1856,7 @@ var _ = Describe("MarkLogicGroup controller", func() {
 			Expect(k8sClient.Create(ctx, &ns)).Should(Succeed())
 			adminSecret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: adminSecretName, Namespace: dynamicNamespace}, Data: map[string][]byte{"username": []byte("admin"), "password": []byte("admin-password")}}
 			Expect(k8sClient.Create(ctx, adminSecret)).Should(Succeed())
+			createOperatorCredentialSecret(ctx, dynamicNamespace, adminSecretName)
 
 			oneReplica := int32(1)
 			dynamicGroup := &marklogicv1.MarklogicGroup{TypeMeta: metav1.TypeMeta{Kind: "MarklogicGroup", APIVersion: "marklogic.progress.com/v1"}, ObjectMeta: metav1.ObjectMeta{Name: dynamicName, Namespace: dynamicNamespace}, Spec: marklogicv1.MarklogicGroupSpec{Replicas: &oneReplica, Name: dynamicName, Image: imageName, ClusterDomain: "cluster.local", GroupConfig: &marklogicv1.GroupConfig{Name: groupName, EnableXdqpSsl: true}, IsDynamic: true, BootstrapHost: "bootstrap-0.bootstrap.svc.cluster.local", SecretName: adminSecretName}}
@@ -1915,6 +2024,7 @@ var _ = Describe("MarkLogicGroup controller", func() {
 			Expect(k8sClient.Create(ctx, &ns)).Should(Succeed())
 			adminSecret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: adminSecretName, Namespace: dynamicNamespace}, Data: map[string][]byte{"username": []byte("admin"), "password": []byte("admin-password")}}
 			Expect(k8sClient.Create(ctx, adminSecret)).Should(Succeed())
+			createOperatorCredentialSecret(ctx, dynamicNamespace, adminSecretName)
 
 			oneReplica := int32(1)
 			dynamicGroup := &marklogicv1.MarklogicGroup{TypeMeta: metav1.TypeMeta{Kind: "MarklogicGroup", APIVersion: "marklogic.progress.com/v1"}, ObjectMeta: metav1.ObjectMeta{Name: dynamicName, Namespace: dynamicNamespace}, Spec: marklogicv1.MarklogicGroupSpec{Replicas: &oneReplica, Name: dynamicName, Image: imageName, ClusterDomain: "cluster.local", GroupConfig: &marklogicv1.GroupConfig{Name: groupName, EnableXdqpSsl: true}, IsDynamic: true, BootstrapHost: "bootstrap-0.bootstrap.svc.cluster.local", SecretName: adminSecretName, Persistence: &marklogicv1.Persistence{Enabled: true, Size: "10Gi"}}}
@@ -2041,6 +2151,7 @@ var _ = Describe("MarkLogicGroup controller", func() {
 			Expect(k8sClient.Create(ctx, &ns)).Should(Succeed())
 			adminSecret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: adminSecretName, Namespace: dynamicNamespace}, Data: map[string][]byte{"username": []byte("admin"), "password": []byte("admin-password")}}
 			Expect(k8sClient.Create(ctx, adminSecret)).Should(Succeed())
+			createOperatorCredentialSecret(ctx, dynamicNamespace, adminSecretName)
 
 			twoReplicas := int32(2)
 			dynamicGroup := &marklogicv1.MarklogicGroup{TypeMeta: metav1.TypeMeta{Kind: "MarklogicGroup", APIVersion: "marklogic.progress.com/v1"}, ObjectMeta: metav1.ObjectMeta{Name: dynamicName, Namespace: dynamicNamespace}, Spec: marklogicv1.MarklogicGroupSpec{Replicas: &twoReplicas, Name: dynamicName, Image: imageName, ClusterDomain: "cluster.local", GroupConfig: &marklogicv1.GroupConfig{Name: groupName, EnableXdqpSsl: true}, IsDynamic: true, BootstrapHost: "bootstrap-0.bootstrap.svc.cluster.local", SecretName: adminSecretName}}
@@ -2124,6 +2235,7 @@ var _ = Describe("MarkLogicGroup controller", func() {
 			Expect(k8sClient.Create(ctx, &ns)).Should(Succeed())
 			adminSecret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: adminSecretName, Namespace: dynamicNamespace}, Data: map[string][]byte{"username": []byte("admin"), "password": []byte("admin-password")}}
 			Expect(k8sClient.Create(ctx, adminSecret)).Should(Succeed())
+			createOperatorCredentialSecret(ctx, dynamicNamespace, adminSecretName)
 
 			oneReplica := int32(1)
 			dynamicGroup := &marklogicv1.MarklogicGroup{TypeMeta: metav1.TypeMeta{Kind: "MarklogicGroup", APIVersion: "marklogic.progress.com/v1"}, ObjectMeta: metav1.ObjectMeta{Name: dynamicName, Namespace: dynamicNamespace}, Spec: marklogicv1.MarklogicGroupSpec{Replicas: &oneReplica, Name: dynamicName, Image: imageName, ClusterDomain: "cluster.local", GroupConfig: &marklogicv1.GroupConfig{Name: groupName, EnableXdqpSsl: true}, IsDynamic: true, BootstrapHost: "bootstrap-0.bootstrap.svc.cluster.local", SecretName: adminSecretName}}
@@ -2197,6 +2309,10 @@ var _ = Describe("MarkLogicGroup controller", func() {
 		ctx := context.Background()
 		resizeTimeout := time.Second * 60
 
+		AfterEach(func() {
+			deleteMarklogicGroups(ctx, false)
+		})
+
 		It("Should initialize resize operation status for growth request", func() {
 			nsName := "resize-init-ns"
 			groupName := "resize-init"
@@ -2204,6 +2320,7 @@ var _ = Describe("MarkLogicGroup controller", func() {
 
 			ns := corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: nsName}}
 			Expect(k8sClient.Create(ctx, &ns)).Should(Succeed())
+			createGroupCredentialSecrets(ctx, nsName, groupName)
 
 			group := newPersistentGroup(nsName, groupName, "20Gi", appsv1.OnDeleteStatefulSetStrategyType)
 			Expect(k8sClient.Create(ctx, group)).Should(Succeed())
@@ -2247,6 +2364,7 @@ var _ = Describe("MarkLogicGroup controller", func() {
 
 			ns := corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: nsName}}
 			Expect(k8sClient.Create(ctx, &ns)).Should(Succeed())
+			createGroupCredentialSecrets(ctx, nsName, groupName)
 
 			group := newPersistentGroup(nsName, groupName, "20Gi", appsv1.OnDeleteStatefulSetStrategyType)
 			Expect(k8sClient.Create(ctx, group)).Should(Succeed())
@@ -2287,6 +2405,7 @@ var _ = Describe("MarkLogicGroup controller", func() {
 
 			ns := corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: nsName}}
 			Expect(k8sClient.Create(ctx, &ns)).Should(Succeed())
+			createGroupCredentialSecrets(ctx, nsName, groupName)
 
 			group := newPersistentGroup(nsName, groupName, "20Gi", appsv1.OnDeleteStatefulSetStrategyType)
 			Expect(k8sClient.Create(ctx, group)).Should(Succeed())
@@ -2322,6 +2441,34 @@ var _ = Describe("MarkLogicGroup controller", func() {
 		})
 	})
 })
+
+func deleteMarklogicGroups(ctx context.Context, dynamicOnly bool) {
+	groups := &marklogicv1.MarklogicGroupList{}
+	Expect(k8sClient.List(ctx, groups)).Should(Succeed())
+	for groupIndex := range groups.Items {
+		group := &groups.Items[groupIndex]
+		if dynamicOnly && !group.Spec.IsDynamic {
+			continue
+		}
+
+		groupKey := ctrlclient.ObjectKeyFromObject(group)
+		Eventually(func() error {
+			current := &marklogicv1.MarklogicGroup{}
+			if err := k8sClient.Get(ctx, groupKey, current); err != nil {
+				return ctrlclient.IgnoreNotFound(err)
+			}
+			current.Finalizers = nil
+			if err := k8sClient.Update(ctx, current); err != nil {
+				return err
+			}
+			return ctrlclient.IgnoreNotFound(k8sClient.Delete(ctx, current))
+		}, timeout, interval).Should(Succeed())
+		Eventually(func() bool {
+			err := k8sClient.Get(ctx, groupKey, &marklogicv1.MarklogicGroup{})
+			return apierrors.IsNotFound(err)
+		}, timeout, interval).Should(BeTrue())
+	}
+}
 
 func newPersistentGroup(namespace, name, size string, strategy appsv1.StatefulSetUpdateStrategyType) *marklogicv1.MarklogicGroup {
 	replicas := int32(1)
@@ -2376,11 +2523,34 @@ func findEnvVar(envVars []corev1.EnvVar, envName string) *corev1.EnvVar {
 	return nil
 }
 
+func createOperatorCredentialSecret(ctx context.Context, namespace, adminSecretName string) {
+	operatorSecretName := strings.TrimSuffix(adminSecretName, "-admin") + "-operator"
+	operatorSecret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: operatorSecretName, Namespace: namespace},
+		Data:       map[string][]byte{"username": []byte("operator"), "password": []byte("operator-password")},
+	}
+	Expect(k8sClient.Create(ctx, operatorSecret)).Should(Succeed())
+}
+
+func createGroupCredentialSecrets(ctx context.Context, namespace, groupName string) {
+	adminSecretName := groupName + "-admin"
+	adminSecret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: adminSecretName, Namespace: namespace},
+		Data:       map[string][]byte{"username": []byte("admin"), "password": []byte("admin-password")},
+	}
+	Expect(k8sClient.Create(ctx, adminSecret)).Should(Succeed())
+	createOperatorCredentialSecret(ctx, namespace, adminSecretName)
+}
+
 func createReadyDynamicPod(ctx context.Context, namespace, groupName, podName string) {
+	credentialRevision := activeDynamicCredentialRevision(ctx, namespace, groupName)
 	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      podName,
 			Namespace: namespace,
+			Annotations: map[string]string{
+				"marklogic.progress.com/credential-revision": credentialRevision,
+			},
 			Labels: map[string]string{
 				"app.kubernetes.io/name":       "marklogic",
 				"app.kubernetes.io/instance":   groupName,
@@ -2402,13 +2572,91 @@ func createReadyDynamicPod(ctx context.Context, namespace, groupName, podName st
 		created.Status.Conditions = []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionTrue, LastTransitionTime: metav1.Now()}}
 		return k8sClient.Status().Update(ctx, created) == nil
 	}, timeout, interval).Should(BeTrue())
+
+	updateDynamicStatefulSetStatus(ctx, namespace, groupName)
+}
+
+func activeDynamicCredentialRevision(ctx context.Context, namespace, groupName string) string {
+	credentialRevision := ""
+	Eventually(func() bool {
+		group := &marklogicv1.MarklogicGroup{}
+		if err := k8sClient.Get(ctx, types.NamespacedName{Name: groupName, Namespace: namespace}, group); err != nil || group.Status.CredentialSecretName == "" {
+			return false
+		}
+		operatorSecret := &corev1.Secret{}
+		if err := k8sClient.Get(ctx, types.NamespacedName{Name: group.Status.CredentialSecretName, Namespace: namespace}, operatorSecret); err != nil {
+			return false
+		}
+		expectedRevision := credentialRevisionForSecret(operatorSecret.Data)
+		statefulSet := &appsv1.StatefulSet{}
+		if err := k8sClient.Get(ctx, types.NamespacedName{Name: groupName, Namespace: namespace}, statefulSet); err != nil {
+			return false
+		}
+		credentialRevision = statefulSet.Spec.Template.Annotations["marklogic.progress.com/credential-revision"]
+		return credentialRevision == expectedRevision
+	}, timeout, interval).Should(BeTrue())
+	return credentialRevision
+}
+
+func credentialRevisionForSecret(data map[string][]byte) string {
+	keys := make([]string, 0, len(data))
+	for key := range data {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	serialized := []byte{}
+	for _, key := range keys {
+		serialized = append(serialized, key...)
+		serialized = append(serialized, 0)
+		serialized = append(serialized, data[key]...)
+		serialized = append(serialized, 0)
+	}
+	hash := sha256.Sum256(serialized)
+	return hex.EncodeToString(hash[:])
+}
+
+func updateDynamicStatefulSetStatus(ctx context.Context, namespace, groupName string) {
+	Eventually(func() bool {
+		statefulSet := &appsv1.StatefulSet{}
+		if err := k8sClient.Get(ctx, types.NamespacedName{Name: groupName, Namespace: namespace}, statefulSet); err != nil {
+			return false
+		}
+		pods := &corev1.PodList{}
+		if err := k8sClient.List(ctx, pods,
+			ctrlclient.InNamespace(namespace),
+			ctrlclient.MatchingLabels{
+				"app.kubernetes.io/instance":  groupName,
+				"app.kubernetes.io/component": "dynamic-host",
+			},
+		); err != nil {
+			return false
+		}
+		readyReplicas := int32(0)
+		for podIndex := range pods.Items {
+			for _, condition := range pods.Items[podIndex].Status.Conditions {
+				if condition.Type == corev1.PodReady && condition.Status == corev1.ConditionTrue {
+					readyReplicas++
+					break
+				}
+			}
+		}
+		statefulSet.Status.Replicas = *statefulSet.Spec.Replicas
+		statefulSet.Status.ReadyReplicas = readyReplicas
+		statefulSet.Status.CurrentReplicas = readyReplicas
+		statefulSet.Status.AvailableReplicas = readyReplicas
+		return k8sClient.Status().Update(ctx, statefulSet) == nil
+	}, timeout, interval).Should(BeTrue())
 }
 
 func createUnreadyDynamicPod(ctx context.Context, namespace, groupName, podName string) {
+	credentialRevision := activeDynamicCredentialRevision(ctx, namespace, groupName)
 	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      podName,
 			Namespace: namespace,
+			Annotations: map[string]string{
+				"marklogic.progress.com/credential-revision": credentialRevision,
+			},
 			Labels: map[string]string{
 				"app.kubernetes.io/name":       "marklogic",
 				"app.kubernetes.io/instance":   groupName,
@@ -2430,6 +2678,8 @@ func createUnreadyDynamicPod(ctx context.Context, namespace, groupName, podName 
 		created.Status.Conditions = []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionFalse, LastTransitionTime: metav1.Now()}}
 		return k8sClient.Status().Update(ctx, created) == nil
 	}, timeout, interval).Should(BeTrue())
+
+	updateDynamicStatefulSetStatus(ctx, namespace, groupName)
 }
 
 func createReadyStaticPod(ctx context.Context, namespace, groupName, podName string) {
@@ -2602,14 +2852,19 @@ func (f *fakeDynamicManagementClient) EnableAdminAPITokenAuthentication(ctx cont
 	return f.behavior.enableTokenErr
 }
 
-func (f *fakeDynamicManagementClient) EnsureManageAdminUser(ctx context.Context, username, password string) error {
-	f.record("EnsureManageAdminUser")
+func (f *fakeDynamicManagementClient) EnsureOperatorRole(ctx context.Context) error {
+	f.record("EnsureOperatorRole")
 	if f.behavior == nil {
 		return nil
 	}
 	f.behavior.mu.Lock()
 	defer f.behavior.mu.Unlock()
 	return f.behavior.ensureUserErr
+}
+
+func (f *fakeDynamicManagementClient) EnsureOperatorUser(ctx context.Context, username, password string) error {
+	f.record("EnsureOperatorUser")
+	return nil
 }
 
 func (f *fakeDynamicManagementClient) ResolveClusterName(ctx context.Context) (string, error) {

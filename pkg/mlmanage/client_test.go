@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -27,6 +28,157 @@ type closeErrorReadCloser struct {
 
 func (body closeErrorReadCloser) Close() error {
 	return body.err
+}
+
+func TestEnsureOperatorUserCreateExistingAndForbiddenLookup(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name           string
+		lookupStatus   int
+		wantWriteVerb  string
+		wantWritePath  string
+		wantLookupOnly bool
+	}{
+		{name: "create missing user", lookupStatus: http.StatusNotFound, wantWriteVerb: http.MethodPost, wantWritePath: "/manage/v2/users"},
+		{name: "update existing user", lookupStatus: http.StatusOK, wantWriteVerb: http.MethodPut, wantWritePath: "/manage/v2/users/marklogic-kubernetes-operator/properties"},
+		{name: "forbidden lookup", lookupStatus: http.StatusForbidden, wantLookupOnly: true},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var writeVerb string
+			var writePath string
+			var writePayload map[string]any
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method == http.MethodGet {
+					if r.URL.Path != "/manage/v2/users/marklogic-kubernetes-operator" || r.URL.Query().Get("format") != "json" {
+						t.Errorf("unexpected lookup request: %s %s", r.Method, r.URL.RequestURI())
+					}
+					w.WriteHeader(test.lookupStatus)
+					return
+				}
+
+				writeVerb = r.Method
+				writePath = r.URL.Path
+				if err := json.NewDecoder(r.Body).Decode(&writePayload); err != nil {
+					t.Errorf("decode user payload: %v", err)
+				}
+				if r.Method == http.MethodPost {
+					w.WriteHeader(http.StatusCreated)
+					return
+				}
+				w.WriteHeader(http.StatusAccepted)
+			}))
+
+			client := &managementClient{
+				baseURL:    server.URL,
+				username:   "bootstrap-admin",
+				password:   "bootstrap-password",
+				httpClient: server.Client(),
+			}
+			err := client.EnsureOperatorUser(context.Background(), "marklogic-kubernetes-operator", "generated-password")
+			server.Close()
+
+			if test.wantLookupOnly {
+				if err == nil {
+					t.Fatal("expected forbidden lookup to fail")
+				}
+				if writeVerb != "" {
+					t.Fatalf("unexpected write request after forbidden lookup: %s %s", writeVerb, writePath)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("EnsureOperatorUser returned error: %v", err)
+			}
+			if writeVerb != test.wantWriteVerb || writePath != test.wantWritePath {
+				t.Fatalf("write request = %s %s, want %s %s", writeVerb, writePath, test.wantWriteVerb, test.wantWritePath)
+			}
+			if writePayload["user-name"] != "marklogic-kubernetes-operator" || writePayload["password"] != "generated-password" {
+				t.Fatalf("unexpected user payload: %+v", writePayload)
+			}
+			if writePayload["description"] != operatorUserDescription {
+				t.Fatalf("user description = %v, want %q", writePayload["description"], operatorUserDescription)
+			}
+			roles, ok := writePayload["role"].([]any)
+			if !ok || len(roles) != 1 || roles[0] != "marklogic-operator" {
+				t.Fatalf("expected only the marklogic-operator role, got %+v", writePayload["role"])
+			}
+		})
+	}
+}
+
+func TestEnsureOperatorRoleCreateAndUpdate(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name          string
+		lookupStatus  int
+		wantWriteVerb string
+		wantWritePath string
+	}{
+		{name: "create missing role", lookupStatus: http.StatusNotFound, wantWriteVerb: http.MethodPost, wantWritePath: "/manage/v2/roles"},
+		{name: "update existing role", lookupStatus: http.StatusOK, wantWriteVerb: http.MethodPut, wantWritePath: "/manage/v2/roles/marklogic-operator/properties"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var writeVerb string
+			var writePath string
+			var writePayload map[string]any
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method == http.MethodGet {
+					if r.URL.Path != "/manage/v2/roles/marklogic-operator" || r.URL.Query().Get("format") != "json" {
+						t.Errorf("unexpected role lookup request: %s %s", r.Method, r.URL.RequestURI())
+					}
+					w.WriteHeader(test.lookupStatus)
+					return
+				}
+				writeVerb = r.Method
+				writePath = r.URL.Path
+				if err := json.NewDecoder(r.Body).Decode(&writePayload); err != nil {
+					t.Errorf("decode role payload: %v", err)
+				}
+				if r.Method == http.MethodPost {
+					w.WriteHeader(http.StatusCreated)
+					return
+				}
+				w.WriteHeader(http.StatusAccepted)
+			}))
+
+			client := &managementClient{baseURL: server.URL, httpClient: server.Client()}
+			err := client.EnsureOperatorRole(context.Background())
+			server.Close()
+			if err != nil {
+				t.Fatalf("EnsureOperatorRole returned error: %v", err)
+			}
+			if writeVerb != test.wantWriteVerb || writePath != test.wantWritePath {
+				t.Fatalf("write request = %s %s, want %s %s", writeVerb, writePath, test.wantWriteVerb, test.wantWritePath)
+			}
+			if writePayload["role-name"] != OperatorRoleName {
+				t.Fatalf("role name = %+v, want %q", writePayload["role-name"], OperatorRoleName)
+			}
+			if writePayload["description"] != operatorRoleDescription {
+				t.Fatalf("role description = %v, want %q", writePayload["description"], operatorRoleDescription)
+			}
+			roles, ok := writePayload["role"].([]any)
+			if !ok || !reflect.DeepEqual(roles, []any{"manage-admin", "pki", "admin-ui-user"}) {
+				t.Fatalf("unexpected inherited roles: %+v", writePayload["role"])
+			}
+			privileges, ok := writePayload["privilege"].([]any)
+			expectedPrivileges := []any{
+				map[string]any{"privilege-name": "create-user", "action": "http://marklogic.com/xdmp/privileges/create-user", "kind": "execute"},
+				map[string]any{"privilege-name": "xdmp:remove-dynamic-hosts", "action": "http://marklogic.com/xdmp/privileges/remove-dynamic-hosts", "kind": "execute"},
+				map[string]any{"privilege-name": "admin-issue-dynamic-host-token", "action": "http://marklogic.com/xdmp/privileges/admin/issue-dynamic-host-token", "kind": "execute"},
+				map[string]any{"privilege-name": "xdmp:eval", "action": "http://marklogic.com/xdmp/privileges/xdmp-eval", "kind": "execute"},
+				map[string]any{"privilege-name": "create-external-security", "action": "http://marklogic.com/xdmp/privileges/create-external-security", "kind": "execute"},
+			}
+			if !ok || !reflect.DeepEqual(privileges, expectedPrivileges) {
+				t.Fatalf("unexpected execute privileges: %+v", writePayload["privilege"])
+			}
+		})
+	}
 }
 
 func TestJoinDynamicHostPreservesHTTPAndCloseErrors(t *testing.T) {
@@ -862,7 +1014,11 @@ func TestListHostsStatusUsesSummaryWhenItemStatusMissing(t *testing.T) {
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(`{"host-status-list":{"status-list-summary":{"total-hosts-offline":{"units":"quantity","value":1}},"status-list-items":{"status-list-item":[{"nameref":"node-0.node.default.svc.cluster.local"}]}}}`))
+		if r.URL.Path == "/manage/v2/hosts" {
+			_, _ = w.Write([]byte(`{"host-status-list":{"status-list-summary":{"total-hosts-offline":{"units":"quantity","value":1}},"status-list-items":{"status-list-item":[{"nameref":"node-0.node.default.svc.cluster.local"}]}}}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"host-status":{"version":"12.0-1","status-properties":{"online":false}}}`))
 	}))
 	defer server.Close()
 
@@ -882,6 +1038,48 @@ func TestListHostsStatusUsesSummaryWhenItemStatusMissing(t *testing.T) {
 	}
 	if hosts[0].Online {
 		t.Fatalf("expected host to be inferred offline when total-hosts-offline > 0")
+	}
+}
+
+func TestListHostsStatusResolvesIndividualStatusWhenSomeHostsAreOffline(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		switch r.URL.Path {
+		case "/manage/v2/hosts":
+			_, _ = w.Write([]byte(`{"host-status-list":{"status-list-summary":{"total-hosts-offline":{"units":"quantity","value":1}},"status-list-items":{"status-list-item":[{"nameref":"bootstrap-0"},{"nameref":"joining-0"}]}}}`))
+		case "/manage/v2/hosts/bootstrap-0":
+			_, _ = w.Write([]byte(`{"host-status":{"name":"bootstrap-0","version":"12.0-1","status-properties":{"online":true}}}`))
+		case "/manage/v2/hosts/joining-0":
+			_, _ = w.Write([]byte(`{"host-status":{"name":"joining-0","version":"12.0-1","status-properties":{"online":false}}}`))
+		case "/manage/v2":
+			_, _ = w.Write([]byte(`{"version":"12.0-1"}`))
+		default:
+			t.Fatalf("unexpected request path %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	client := &managementClient{
+		baseURL:    server.URL,
+		username:   "user",
+		password:   "password",
+		httpClient: server.Client(),
+	}
+
+	hosts, err := client.ListHostsStatus(context.Background())
+	if err != nil {
+		t.Fatalf("ListHostsStatus returned error: %v", err)
+	}
+	if len(hosts) != 2 {
+		t.Fatalf("expected 2 hosts, got %d", len(hosts))
+	}
+	if !hosts[0].Online {
+		t.Fatalf("expected bootstrap host to remain online")
+	}
+	if hosts[1].Online {
+		t.Fatalf("expected joining host to be offline")
 	}
 }
 

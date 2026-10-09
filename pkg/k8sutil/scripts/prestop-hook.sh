@@ -1,8 +1,13 @@
 #!/bin/bash
 # Copyright (c) 2024-2026 Progress Software Corporation and/or its subsidiaries or affiliates. All Rights Reserved.
 
-MARKLOGIC_ADMIN_USERNAME="$(< /run/secrets/ml-secrets/username)"
-MARKLOGIC_ADMIN_PASSWORD="$(< /run/secrets/ml-secrets/password)"
+if [[ "${MARKLOGIC_OPERATOR_CREDENTIALS_ACTIVE:-false}" == "true" ]]; then
+    MARKLOGIC_SHUTDOWN_USERNAME="marklogic-kubernetes-operator"
+    MARKLOGIC_SHUTDOWN_PASSWORD="$(< /run/secrets/ml-operator-secrets/password)"
+else
+    MARKLOGIC_SHUTDOWN_USERNAME="$(< /run/secrets/ml-secrets/username)"
+    MARKLOGIC_SHUTDOWN_PASSWORD="$(< /run/secrets/ml-secrets/password)"
+fi
 
 log () {
     local TIMESTAMP=$(date +"%Y-%m-%d %T.%3N")
@@ -21,7 +26,7 @@ if [[ "$MARKLOGIC_JOIN_TLS_ENABLED" == "true" ]]; then
 fi
 log "Info: [prestop] MarkLogic Pod Hostname: "$my_host
 for ((i = 0; i < 5; i = i + 1)); do
-    res_code=$(curl --anyauth --user $MARKLOGIC_ADMIN_USERNAME:$MARKLOGIC_ADMIN_PASSWORD \
+    res_code=$(curl --anyauth --user "${MARKLOGIC_SHUTDOWN_USERNAME}:${MARKLOGIC_SHUTDOWN_PASSWORD}" \
         -o /dev/null -m 10 -s -w %{http_code} \
         -i -X POST ${HTTPS_OPTION} --data "state=shutdown&failover=true" \
         -H "Content-type: application/x-www-form-urlencoded" \

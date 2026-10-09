@@ -3,6 +3,11 @@
 package k8sutil
 
 import (
+	"github.com/marklogic/marklogic-operator-kubernetes/pkg/result"
+	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
 
@@ -40,9 +45,44 @@ func (oc *OperatorContext) ReconsileMarklogicGroupHandler() (reconcile.Result, e
 		return result.Output()
 	}
 
-	result, err := oc.ReconcileStatefulset()
+	credentialsActive := oc.MarklogicGroup.Status.CredentialSecretName != ""
+	statefulSetExists := false
+	if credentialsActive {
+		statefulSet := &appsv1.StatefulSet{}
+		err := oc.Client.Get(oc.Ctx, client.ObjectKey{Namespace: oc.MarklogicGroup.Namespace, Name: oc.MarklogicGroup.Spec.Name}, statefulSet)
+		if err == nil {
+			statefulSetExists = true
+		} else if !apierrors.IsNotFound(err) {
+			return reconcile.Result{}, err
+		}
+	}
+
+	var pendingOperatorUserResult result.ReconcileResult
+	if credentialsActive && statefulSetExists {
+		if operatorUserResult := oc.ReconcileOperatorUser(); operatorUserResult.Completed() {
+			if !oc.activeOperatorCredentialSecretMissing() {
+				return operatorUserResult.Output()
+			}
+			pendingOperatorUserResult = operatorUserResult
+		}
+	}
+
+	statefulSetResult, err := oc.ReconcileStatefulset()
 	if err != nil {
-		return result, err
+		return statefulSetResult, err
+	}
+	if pendingOperatorUserResult != nil {
+		return pendingOperatorUserResult.Output()
+	}
+	if !credentialsActive || !statefulSetExists {
+		if operatorUserResult := oc.ReconcileOperatorUser(); operatorUserResult.Completed() {
+			return operatorUserResult.Output()
+		}
+	}
+	if rotated, rotationErr := oc.rotateCredentialPodsIfNeeded(); rotationErr != nil {
+		return reconcile.Result{}, rotationErr
+	} else if rotated {
+		return result.RequeueSoon(5).Output()
 	}
 
 	if oc.MarklogicGroup.Spec.IsDynamic {
@@ -51,7 +91,16 @@ func (oc *OperatorContext) ReconsileMarklogicGroupHandler() (reconcile.Result, e
 		}
 	}
 
-	return result, err
+	return statefulSetResult, err
+}
+
+func (oc *OperatorContext) activeOperatorCredentialSecretMissing() bool {
+	secret := &corev1.Secret{}
+	err := oc.Client.Get(oc.Ctx, client.ObjectKey{
+		Namespace: oc.MarklogicGroup.Namespace,
+		Name:      operatorCredentialSecretNameForGroup(oc.MarklogicGroup),
+	}, secret)
+	return apierrors.IsNotFound(err)
 }
 
 func (cc *ClusterContext) ReconsileMarklogicClusterHandler() (reconcile.Result, error) {
