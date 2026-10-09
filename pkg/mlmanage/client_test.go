@@ -1014,7 +1014,11 @@ func TestListHostsStatusUsesSummaryWhenItemStatusMissing(t *testing.T) {
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(`{"host-status-list":{"status-list-summary":{"total-hosts-offline":{"units":"quantity","value":1}},"status-list-items":{"status-list-item":[{"nameref":"node-0.node.default.svc.cluster.local"}]}}}`))
+		if r.URL.Path == "/manage/v2/hosts" {
+			_, _ = w.Write([]byte(`{"host-status-list":{"status-list-summary":{"total-hosts-offline":{"units":"quantity","value":1}},"status-list-items":{"status-list-item":[{"nameref":"node-0.node.default.svc.cluster.local"}]}}}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"host-status":{"version":"12.0-1","status-properties":{"online":false}}}`))
 	}))
 	defer server.Close()
 
@@ -1034,6 +1038,48 @@ func TestListHostsStatusUsesSummaryWhenItemStatusMissing(t *testing.T) {
 	}
 	if hosts[0].Online {
 		t.Fatalf("expected host to be inferred offline when total-hosts-offline > 0")
+	}
+}
+
+func TestListHostsStatusResolvesIndividualStatusWhenSomeHostsAreOffline(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		switch r.URL.Path {
+		case "/manage/v2/hosts":
+			_, _ = w.Write([]byte(`{"host-status-list":{"status-list-summary":{"total-hosts-offline":{"units":"quantity","value":1}},"status-list-items":{"status-list-item":[{"nameref":"bootstrap-0"},{"nameref":"joining-0"}]}}}`))
+		case "/manage/v2/hosts/bootstrap-0":
+			_, _ = w.Write([]byte(`{"host-status":{"name":"bootstrap-0","version":"12.0-1","status-properties":{"online":true}}}`))
+		case "/manage/v2/hosts/joining-0":
+			_, _ = w.Write([]byte(`{"host-status":{"name":"joining-0","version":"12.0-1","status-properties":{"online":false}}}`))
+		case "/manage/v2":
+			_, _ = w.Write([]byte(`{"version":"12.0-1"}`))
+		default:
+			t.Fatalf("unexpected request path %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	client := &managementClient{
+		baseURL:    server.URL,
+		username:   "user",
+		password:   "password",
+		httpClient: server.Client(),
+	}
+
+	hosts, err := client.ListHostsStatus(context.Background())
+	if err != nil {
+		t.Fatalf("ListHostsStatus returned error: %v", err)
+	}
+	if len(hosts) != 2 {
+		t.Fatalf("expected 2 hosts, got %d", len(hosts))
+	}
+	if !hosts[0].Online {
+		t.Fatalf("expected bootstrap host to remain online")
+	}
+	if hosts[1].Online {
+		t.Fatalf("expected joining host to be offline")
 	}
 }
 

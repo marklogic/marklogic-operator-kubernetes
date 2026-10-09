@@ -160,24 +160,25 @@ function restart_check {
 }
 
 ################################################################
-# Wait until the bootstrap Management API reports every host online.
+# Wait until the bootstrap Management API reports the joining host online.
 ################################################################
 function join_check {
-    local retry_count response_code
-    info "Waiting for all MarkLogic hosts to be online."
+    local hostname=$1 retry_count response_code
+    info "Waiting for joining host ${hostname} to be online."
     for ((retry_count = 0; retry_count < N_RETRY; retry_count = retry_count + 1)); do
-        curl_retry_validate false "${HTTP_PROTOCOL}://localhost:8002/manage/v2/hosts?view=status&format=json" 200 \
-            "--anyauth" "--user" "${MARKLOGIC_MANAGEMENT_USERNAME}:${MARKLOGIC_MANAGEMENT_PASSWORD}" \
-            "-o" "/tmp/marklogic-host-status.json" $HTTPS_OPTION
-        response_code=${CURL_RESPONSE_CODE:-0}
+        response_code=$(curl -s -m 20 --anyauth \
+            --user "${MARKLOGIC_MANAGEMENT_USERNAME}:${MARKLOGIC_MANAGEMENT_PASSWORD}" \
+            -o /tmp/marklogic-joining-host-status.json -w '%{http_code}' $HTTPS_OPTION \
+            "${HTTP_PROTOCOL}://${MARKLOGIC_BOOTSTRAP_HOST}:8002/manage/v2/hosts/${hostname}?view=status&format=json")
         if [[ "${response_code}" == "200" ]] && \
-            grep -Eq '"total-hosts-offline"[^}]*"value"[[:space:]]*:[[:space:]]*0' /tmp/marklogic-host-status.json; then
-            info "All MarkLogic hosts are online."
+            grep -Eq '"online"[[:space:]]*:[[:space:]]*true' /tmp/marklogic-joining-host-status.json; then
+            info "Joining host ${hostname} is online."
             return 0
         fi
+        info "Joining host ${hostname} is not online yet (HTTP ${response_code}). Retry in ${RETRY_INTERVAL}s."
         sleep "${RETRY_INTERVAL}"
     done
-    error "MarkLogic hosts did not reach the online state after joining." exit
+    error "Joining host ${hostname} did not reach the online state after joining." exit
 }
 
 ################################################################
@@ -450,7 +451,7 @@ function join_cluster {
     # 202 causes restart
     info "restart triggered"
     restart_check "localhost" "${timestamp}"
-    join_check
+    join_check "${hostname}"
 
     info "joined group ${MARKLOGIC_GROUP}"
 }

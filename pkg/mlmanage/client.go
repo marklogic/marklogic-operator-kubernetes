@@ -182,7 +182,15 @@ func (c *managementClient) ListHostsStatus(ctx context.Context) ([]HostStatus, e
 		version := firstString(item, "version", "product-version")
 		online := status == "online"
 		if status == "" && hasTotalOffline {
-			online = totalOffline == 0
+			if totalOffline == 0 {
+				online = true
+			} else {
+				var detailErr error
+				online, version, detailErr = c.fetchHostStatus(ctx, name)
+				if detailErr != nil {
+					return nil, fmt.Errorf("get status for host %q: %w", name, detailErr)
+				}
+			}
 		}
 		hosts = append(hosts, HostStatus{
 			Name:    name,
@@ -217,6 +225,26 @@ func (c *managementClient) ListHostsStatus(ctx context.Context) ([]HostStatus, e
 	}
 
 	return hosts, nil
+}
+
+func (c *managementClient) fetchHostStatus(ctx context.Context, hostName string) (bool, string, error) {
+	query := url.Values{}
+	query.Set("view", "status")
+	query.Set("format", "json")
+	data, _, err := c.doJSON(ctx, http.MethodGet, "/manage/v2/hosts/"+url.PathEscape(hostName), query, nil, http.StatusOK)
+	if err != nil {
+		return false, "", err
+	}
+
+	var payload any
+	if err := json.Unmarshal(data, &payload); err != nil {
+		return false, "", err
+	}
+	onlineValue := strings.ToLower(findFirstStringByKeys(payload, "online"))
+	if onlineValue != "true" && onlineValue != "false" {
+		return false, "", errors.New("host status response does not contain an online value")
+	}
+	return onlineValue == "true", findFirstStringByKeys(payload, "version", "product-version"), nil
 }
 
 func (c *managementClient) GetGroup(ctx context.Context, groupName string) (GroupInfo, error) {
