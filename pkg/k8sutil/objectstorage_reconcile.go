@@ -183,7 +183,7 @@ func (cc *ClusterContext) newBootstrapCredentialClient(ctx context.Context, clus
 		// Follows the existing Management API transport behavior for operator-managed certificates.
 		InsecureSkipVerify: useTLS,
 	})
-	if err := credentialClient.CheckBootstrapReady(ctx); err != nil {
+	if err := credentialClient.CheckBootstrapReady(ctx, host); err != nil {
 		return nil, err
 	}
 	return credentialClient, nil

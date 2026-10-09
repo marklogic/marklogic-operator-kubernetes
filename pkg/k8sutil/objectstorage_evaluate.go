@@ -325,9 +325,15 @@ func bootstrapProbeMessage(err error) string {
 	if errors.As(err, &prerequisite) {
 		return "Waiting for bootstrap host: " + prerequisite.message
 	}
+	var notReady *mlmanage.BootstrapNotReadyError
+	if errors.As(err, &notReady) {
+		return "Waiting for bootstrap host: " + notReady.Reason + "."
+	}
 	var credErr *mlmanage.CredentialError
 	if errors.As(err, &credErr) {
 		switch {
+		case credErr.ResponseIncomplete:
+			return "Waiting for bootstrap host: the Management API response could not be read completely."
 		case credErr.IsTransport():
 			return "Waiting for bootstrap host: the Management API is unreachable."
 		case credErr.StatusCode == 401:
@@ -375,6 +381,13 @@ func putOutcome(binding providerBinding, put *pendingPut, applyErr error, now me
 	}
 
 	result.message = fmt.Sprintf("%s returned HTTP %d.", operation, credErr.StatusCode)
+	if credErr.ResponseIncomplete {
+		// The expected status arrived but the response was not fully read; success is not established.
+		result.message = fmt.Sprintf("%s returned HTTP %d but the response could not be read completely; the result is unconfirmed.", operation, credErr.StatusCode)
+		result.reason = marklogicv1.ObjectStorageReasonManagementAPIError
+		result.retryAfter = objectStorageDefaultRetry
+		return result
+	}
 	switch {
 	case credErr.StatusCode == 400:
 		result.reason = marklogicv1.ObjectStorageReasonInvalidPayload

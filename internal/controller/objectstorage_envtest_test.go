@@ -49,7 +49,7 @@ func newEnvtestCredentialClient() *envtestCredentialClient {
 	return &envtestCredentialClient{puts: map[string]int{}}
 }
 
-func (c *envtestCredentialClient) CheckBootstrapReady(context.Context) error {
+func (c *envtestCredentialClient) CheckBootstrapReady(context.Context, string) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.readyErr

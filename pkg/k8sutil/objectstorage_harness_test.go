@@ -42,13 +42,15 @@ type fakeCredentialClient struct {
 	putErr   map[objectStorageProvider]error
 	onPut    func(provider objectStorageProvider)
 
-	probes int
-	aws    []mlmanage.AWSCredentials
-	azure  []mlmanage.AzureCredentials
+	probes      int
+	probedHosts []string
+	aws         []mlmanage.AWSCredentials
+	azure       []mlmanage.AzureCredentials
 }
 
-func (f *fakeCredentialClient) CheckBootstrapReady(context.Context) error {
+func (f *fakeCredentialClient) CheckBootstrapReady(_ context.Context, bootstrapHost string) error {
 	f.probes++
+	f.probedHosts = append(f.probedHosts, bootstrapHost)
 	f.h.log("probe")
 	return f.readyErr
 }

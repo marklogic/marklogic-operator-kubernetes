@@ -194,9 +194,9 @@ func TestCheckBootstrapReady(t *testing.T) {
 
 	t.Run("ready", func(t *testing.T) {
 		t.Parallel()
-		client, requests, closeServer := newCredentialTestServer(t, http.StatusOK, `{"hosts":"ignored"}`)
+		client, requests, closeServer := newCredentialTestServer(t, http.StatusOK, hostStatusBody("dnode-0.dnode.ns.svc.cluster.local", "online"))
 		defer closeServer()
-		if err := client.CheckBootstrapReady(context.Background()); err != nil {
+		if err := client.CheckBootstrapReady(context.Background(), "dnode-0.dnode.ns.svc.cluster.local"); err != nil {
 			t.Fatalf("expected ready, got %v", err)
 		}
 		if got := (*requests)[0]; got.method != http.MethodGet || !strings.HasPrefix(got.requestURI, "/manage/v2/hosts") {
@@ -208,7 +208,7 @@ func TestCheckBootstrapReady(t *testing.T) {
 		t.Parallel()
 		client, _, closeServer := newCredentialTestServer(t, http.StatusUnauthorized, "bad credentials for user")
 		defer closeServer()
-		err := client.CheckBootstrapReady(context.Background())
+		err := client.CheckBootstrapReady(context.Background(), "dnode-0.dnode.ns.svc.cluster.local")
 		var credErr *CredentialError
 		if !errors.As(err, &credErr) || credErr.StatusCode != http.StatusUnauthorized {
 			t.Fatalf("expected 401 CredentialError, got %v", err)
@@ -235,4 +235,148 @@ func TestCredentialStringersRedact(t *testing.T) {
 			t.Fatalf("formatted credentials expose material")
 		}
 	}
+}
+
+const testBootstrapHost = "dnode-0.dnode.ns.svc.cluster.local"
+
+func hostStatusBody(host, status string) string {
+	return `{"host-status-list":{"status-list-summary":{"total-hosts-offline":{"units":"quantity","value":1}},"status-list-items":{"status-list-item":[` +
+		`{"nameref":"` + host + `","status":"` + status + `"}]}}}`
+}
+
+func TestBootstrapHostReady(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		body   string
+		reason string
+	}{
+		{"online", hostStatusBody(testBootstrapHost, "online"), ""},
+		{"online, case-insensitive", hostStatusBody("DNODE-0.dnode.ns.svc.cluster.local", "Online"), ""},
+		{"online, matched by pod name", hostStatusBody("dnode-0.other-domain", "online"), ""},
+		{"offline", hostStatusBody(testBootstrapHost, "offline"), bootstrapReasonOffline},
+		{"unknown status text", hostStatusBody(testBootstrapHost, "starting"), bootstrapReasonOffline},
+		{"other host online, bootstrap host absent", hostStatusBody("dnode-1.dnode.ns.svc.cluster.local", "online"), bootstrapReasonNotListed},
+		{"empty list", `{"host-status-list":{"status-list-items":{"status-list-item":[]}}}`, bootstrapReasonNotListed},
+		{"no host collection", `{"hosts":"ignored"}`, bootstrapReasonNotListed},
+		{"not json", `<html>login</html>`, bootstrapReasonUnparseable},
+		{"empty body", ``, bootstrapReasonUnparseable},
+		{"no per-host status, all hosts online", `{"host-status-list":{"summary":{"total-hosts-offline":{"units":"quantity","value":0}},"status-list-items":{"status-list-item":[{"nameref":"` + testBootstrapHost + `"}]}}}`, ""},
+		{"no per-host status, a host offline", `{"host-status-list":{"summary":{"total-hosts-offline":{"units":"quantity","value":1}},"status-list-items":{"status-list-item":[{"nameref":"` + testBootstrapHost + `"}]}}}`, bootstrapReasonOffline},
+		{"no per-host status and no summary", `{"host-status-list":{"status-list-items":{"status-list-item":[{"nameref":"` + testBootstrapHost + `"}]}}}`, bootstrapReasonOffline},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			err := bootstrapHostReady([]byte(test.body), testBootstrapHost)
+			if test.reason == "" {
+				if err != nil {
+					t.Fatalf("expected ready, got %v", err)
+				}
+				return
+			}
+			var notReady *BootstrapNotReadyError
+			if !errors.As(err, &notReady) || notReady.Reason != test.reason {
+				t.Fatalf("expected not-ready reason %q, got %v", test.reason, err)
+			}
+		})
+	}
+}
+
+func TestCheckBootstrapReadyRejectsOfflineHostAndLeaksNothing(t *testing.T) {
+	t.Parallel()
+	client, _, closeServer := newCredentialTestServer(t, http.StatusOK, hostStatusBody(testBootstrapHost, "offline"))
+	defer closeServer()
+
+	err := client.CheckBootstrapReady(context.Background(), testBootstrapHost)
+	var notReady *BootstrapNotReadyError
+	if !errors.As(err, &notReady) {
+		t.Fatalf("an offline bootstrap host must not be ready, got %v", err)
+	}
+	if strings.Contains(err.Error(), "nameref") || strings.Contains(err.Error(), testBootstrapHost) {
+		t.Fatalf("not-ready error must not echo response content")
+	}
+}
+
+type failingBody struct {
+	reader   io.Reader
+	readErr  error
+	closeErr error
+}
+
+func (b *failingBody) Read(p []byte) (int, error) {
+	if b.readErr != nil {
+		return 0, b.readErr
+	}
+	return b.reader.Read(p)
+}
+
+func (b *failingBody) Close() error { return b.closeErr }
+
+func clientWithBody(status int, body *failingBody) *managementClient {
+	return &managementClient{
+		baseURL: "http://management.example.test",
+		httpClient: &http.Client{Transport: roundTripperFunc(func(*http.Request) (*http.Response, error) {
+			return &http.Response{StatusCode: status, Body: body, Header: make(http.Header)}, nil
+		})},
+	}
+}
+
+func TestResponseHandlingFailureIsNotSuccess(t *testing.T) {
+	t.Parallel()
+	secretBearing := errors.New("read failed for SECRET-VALUE")
+
+	tests := []struct {
+		name string
+		body *failingBody
+	}{
+		{"body read error", &failingBody{reader: strings.NewReader(""), readErr: secretBearing}},
+		{"body close error", &failingBody{reader: strings.NewReader(""), closeErr: secretBearing}},
+	}
+	for _, test := range tests {
+		t.Run("204 with "+test.name, func(t *testing.T) {
+			t.Parallel()
+			err := clientWithBody(http.StatusNoContent, test.body).ApplyAzureCredentials(context.Background(), AzureCredentials{StorageAccount: "a", StorageKey: "k"})
+			var credErr *CredentialError
+			if !errors.As(err, &credErr) || !credErr.ResponseIncomplete || credErr.StatusCode != http.StatusNoContent || credErr.IsTransport() {
+				t.Fatalf("an unreadable 204 must be an unconfirmed failure carrying the status code, got %v", err)
+			}
+			if strings.Contains(err.Error(), "SECRET-VALUE") {
+				t.Fatalf("error must not include the underlying error text")
+			}
+			if !strings.Contains(err.Error(), "204") || !strings.Contains(err.Error(), CredentialsPropertiesPath) {
+				t.Fatalf("error must name the status code and endpoint: %v", err)
+			}
+		})
+		t.Run("probe 200 with "+test.name, func(t *testing.T) {
+			t.Parallel()
+			test.body.reader = strings.NewReader(hostStatusBody(testBootstrapHost, "online"))
+			err := clientWithBody(http.StatusOK, test.body).CheckBootstrapReady(context.Background(), testBootstrapHost)
+			var credErr *CredentialError
+			if !errors.As(err, &credErr) || !credErr.ResponseIncomplete {
+				t.Fatalf("an unreadable probe response must not be ready, got %v", err)
+			}
+		})
+	}
+
+	t.Run("unexpected status keeps its own classification", func(t *testing.T) {
+		t.Parallel()
+		body := &failingBody{reader: strings.NewReader(""), readErr: secretBearing}
+		err := clientWithBody(http.StatusForbidden, body).ApplyAWSCredentials(context.Background(), AWSCredentials{AccessKey: "a", SecretKey: "s"})
+		var credErr *CredentialError
+		if !errors.As(err, &credErr) || credErr.StatusCode != http.StatusForbidden || credErr.ResponseIncomplete {
+			t.Fatalf("a 403 stays a plain 403 failure, got %v", err)
+		}
+	})
+
+	t.Run("oversized probe response is not ready", func(t *testing.T) {
+		t.Parallel()
+		body := &failingBody{reader: strings.NewReader(strings.Repeat("x", maxProbeResponseBytes+10))}
+		err := clientWithBody(http.StatusOK, body).CheckBootstrapReady(context.Background(), testBootstrapHost)
+		var credErr *CredentialError
+		if !errors.As(err, &credErr) || !credErr.ResponseIncomplete {
+			t.Fatalf("an oversized response must fail closed, got %v", err)
+		}
+	})
 }

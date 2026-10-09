@@ -492,6 +492,64 @@ func TestObjectStorageBootstrapNotReadyIsPendingAndIndependent(t *testing.T) {
 	assertPhase(t, h.entry(providerAWS), marklogicv1.ObjectStoragePhaseApplied, "")
 }
 
+func TestObjectStorageProbesTheBootstrapHost(t *testing.T) {
+	t.Parallel()
+	h := newOSHarness(t, nil)
+	h.seedBothSecrets()
+	h.mustReconcile()
+	if len(h.creds.probedHosts) != 1 || h.creds.probedHosts[0] != "dnode-0.dnode.ml-ns.svc.cluster.local" {
+		t.Fatalf("the readiness probe must name the bootstrap host, got %v", h.creds.probedHosts)
+	}
+}
+
+func TestObjectStorageOfflineBootstrapHostIsPendingNotApplied(t *testing.T) {
+	t.Parallel()
+	h := newOSHarness(t, nil)
+	h.seedBothSecrets()
+	h.creds.readyErr = &mlmanage.BootstrapNotReadyError{Reason: "the bootstrap host is not online"}
+
+	res := h.mustReconcile()
+	for _, provider := range objectStorageProviders {
+		entry := h.entry(provider)
+		assertPhase(t, entry, marklogicv1.ObjectStoragePhasePending, marklogicv1.ObjectStorageReasonBootstrapNotReady)
+		assertEligible(t, entry, false)
+		if !strings.Contains(entry.Message, "not online") {
+			t.Fatalf("message should identify the failed prerequisite: %q", entry.Message)
+		}
+	}
+	if len(h.creds.aws)+len(h.creds.azure) != 0 {
+		t.Fatalf("no PUT while the bootstrap host is not online")
+	}
+	if res.RequeueAfter != 10*time.Second {
+		t.Fatalf("retry = %v, want 10s", res.RequeueAfter)
+	}
+}
+
+func TestObjectStorageUnconfirmedPutResponseIsNotApplied(t *testing.T) {
+	t.Parallel()
+	h := appliedBothProviders(t)
+	before := h.entry(providerAWS)
+	h.setSecret("aws-creds", "aws-uid-1", awsMaterial("2"))
+	h.creds.putErr[providerAWS] = &mlmanage.CredentialError{Operation: "PUT /manage/v2/credentials/properties", StatusCode: 204, ResponseIncomplete: true}
+
+	res := h.mustReconcile()
+	entry := h.entry(providerAWS)
+	assertPhase(t, entry, marklogicv1.ObjectStoragePhaseFailed, marklogicv1.ObjectStorageReasonManagementAPIError)
+	assertEligible(t, entry, false)
+	if entry.AppliedFingerprint != before.AppliedFingerprint {
+		t.Fatalf("an unconfirmed PUT must not replace the success record")
+	}
+	if !strings.Contains(entry.Message, "204") || !strings.Contains(entry.Message, "unconfirmed") {
+		t.Fatalf("message should carry the status code and say the result is unconfirmed: %q", entry.Message)
+	}
+	if res.RequeueAfter != 30*time.Second {
+		t.Fatalf("retry = %v, want 30s", res.RequeueAfter)
+	}
+	if got := strings.Join(h.eventReasons(), ","); got != "ObjectStorageApplyFailed" {
+		t.Fatalf("expected a failure event and no Applied event, got %s", got)
+	}
+}
+
 func TestObjectStorageBootstrapFailureMessagesAreSafe(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
@@ -501,6 +559,8 @@ func TestObjectStorageBootstrapFailureMessagesAreSafe(t *testing.T) {
 	}{
 		{"transport", &mlmanage.CredentialError{Operation: "GET /manage/v2/hosts"}, "unreachable"},
 		{"not ready", &mlmanage.CredentialError{Operation: "GET /manage/v2/hosts", StatusCode: 503}, "HTTP 503"},
+		{"offline host", &mlmanage.BootstrapNotReadyError{Reason: "the bootstrap host is not online"}, "not online"},
+		{"unreadable response", &mlmanage.CredentialError{Operation: "GET /manage/v2/hosts", StatusCode: 200, ResponseIncomplete: true}, "could not be read completely"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

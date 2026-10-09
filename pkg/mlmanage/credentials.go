@@ -5,9 +5,11 @@ package mlmanage
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 )
 
 const (
@@ -17,13 +19,15 @@ const (
 	bootstrapProbePath = "/manage/v2/hosts"
 
 	maxDiscardedResponseBytes = 64 * 1024
+	maxProbeResponseBytes     = 1024 * 1024
 )
 
 // CredentialClient applies object storage credentials through the Management API.
 // It deliberately has no read or delete operations.
 type CredentialClient interface {
-	// CheckBootstrapReady confirms the authenticated Management API is serving requests.
-	CheckBootstrapReady(ctx context.Context) error
+	// CheckBootstrapReady confirms the authenticated Management API is serving and the named
+	// bootstrap host is listed and online. It fails closed on any response it cannot interpret.
+	CheckBootstrapReady(ctx context.Context, bootstrapHost string) error
 	ApplyAWSCredentials(ctx context.Context, creds AWSCredentials) error
 	ApplyAzureCredentials(ctx context.Context, creds AzureCredentials) error
 }
@@ -73,14 +77,35 @@ type CredentialError struct {
 	Operation string
 	// StatusCode is zero when no HTTP response was received.
 	StatusCode int
+	// ResponseIncomplete means the expected status arrived but reading or closing the body failed,
+	// so the outcome is unconfirmed.
+	ResponseIncomplete bool
 }
 
 func (e *CredentialError) Error() string {
-	if e.StatusCode == 0 {
+	switch {
+	case e.StatusCode == 0:
 		return fmt.Sprintf("management api %s failed without an HTTP response", e.Operation)
+	case e.ResponseIncomplete:
+		return fmt.Sprintf("management api %s returned status %d but the response could not be read completely", e.Operation, e.StatusCode)
+	default:
+		return fmt.Sprintf("management api %s returned status %d", e.Operation, e.StatusCode)
 	}
-	return fmt.Sprintf("management api %s returned status %d", e.Operation, e.StatusCode)
 }
+
+// BootstrapNotReadyError reports why the bootstrap host cannot accept credentials yet; it carries no response content.
+type BootstrapNotReadyError struct {
+	// Reason is a fixed, secret-safe description.
+	Reason string
+}
+
+func (e *BootstrapNotReadyError) Error() string { return "bootstrap host is not ready: " + e.Reason }
+
+const (
+	bootstrapReasonUnparseable = "the host status response could not be interpreted"
+	bootstrapReasonNotListed   = "the bootstrap host is not listed in the host status"
+	bootstrapReasonOffline     = "the bootstrap host is not online"
+)
 
 // IsTransport reports whether no HTTP response was received.
 func (e *CredentialError) IsTransport() bool { return e.StatusCode == 0 }
@@ -95,8 +120,54 @@ func NewCredentialClient(opts ClientOptions) CredentialClient {
 	}
 }
 
-func (c *managementClient) CheckBootstrapReady(ctx context.Context) error {
-	return c.doSafe(ctx, http.MethodGet, bootstrapProbePath+"?view=status&format=json", nil, http.StatusOK)
+func (c *managementClient) CheckBootstrapReady(ctx context.Context, bootstrapHost string) error {
+	data, err := c.doSafe(ctx, http.MethodGet, bootstrapProbePath+"?view=status&format=json", nil, http.StatusOK, true)
+	if err != nil {
+		return err
+	}
+	return bootstrapHostReady(data, bootstrapHost)
+}
+
+// bootstrapHostReady requires the bootstrap host to be listed and online; unknown states are not ready.
+func bootstrapHostReady(data []byte, bootstrapHost string) error {
+	var payload any
+	if err := json.Unmarshal(data, &payload); err != nil {
+		return &BootstrapNotReadyError{Reason: bootstrapReasonUnparseable}
+	}
+	items := extractHostItems(payload)
+	if len(items) == 0 {
+		return &BootstrapNotReadyError{Reason: bootstrapReasonNotListed}
+	}
+	for _, item := range items {
+		if !sameManagedHost(firstString(item, "nameref", "host-name", "name"), bootstrapHost) {
+			continue
+		}
+		switch status := strings.ToLower(firstString(item, "status", "host-status")); {
+		case status == "online":
+			return nil
+		case status != "":
+			return &BootstrapNotReadyError{Reason: bootstrapReasonOffline}
+		}
+		// Without a per-host status, only an all-hosts-online summary proves the bootstrap host is online.
+		if offline, ok := extractTotalHostsOffline(payload); ok && offline == 0 {
+			return nil
+		}
+		return &BootstrapNotReadyError{Reason: bootstrapReasonOffline}
+	}
+	return &BootstrapNotReadyError{Reason: bootstrapReasonNotListed}
+}
+
+// sameManagedHost matches by full name or by the pod name before the first dot.
+func sameManagedHost(reported, bootstrapHost string) bool {
+	reported = strings.ToLower(strings.TrimSpace(reported))
+	bootstrapHost = strings.ToLower(strings.TrimSpace(bootstrapHost))
+	if reported == "" || bootstrapHost == "" {
+		return false
+	}
+	if reported == bootstrapHost {
+		return true
+	}
+	return strings.SplitN(reported, ".", 2)[0] == strings.SplitN(bootstrapHost, ".", 2)[0]
 }
 
 func (c *managementClient) ApplyAWSCredentials(ctx context.Context, creds AWSCredentials) error {
@@ -112,19 +183,15 @@ func (c *managementClient) putCredentials(ctx context.Context, payload map[strin
 	if err != nil {
 		return &CredentialError{Operation: http.MethodPut + " " + CredentialsPropertiesPath}
 	}
-	return c.doSafe(ctx, http.MethodPut, CredentialsPropertiesPath, body, http.StatusNoContent)
+	_, err = c.doSafe(ctx, http.MethodPut, CredentialsPropertiesPath, body, http.StatusNoContent, false)
+	return err
 }
 
-// doSafe performs an authenticated request and discards the response body. Failures never include
-// request or response content.
-func (c *managementClient) doSafe(ctx context.Context, method, pathAndQuery string, body []byte, expected int) error {
-	path := pathAndQuery
-	for i, r := range pathAndQuery {
-		if r == '?' {
-			path = pathAndQuery[:i]
-			break
-		}
-	}
+// doSafe performs an authenticated request. The body is returned only when keepBody is set (bounded),
+// otherwise it is drained and discarded. Failures never include request or response content, and an
+// expected status whose body cannot be read or closed is reported as unconfirmed rather than successful.
+func (c *managementClient) doSafe(ctx context.Context, method, pathAndQuery string, body []byte, expected int, keepBody bool) ([]byte, error) {
+	path, _, _ := strings.Cut(pathAndQuery, "?")
 	operation := method + " " + path
 
 	headers := map[string]string{"Accept": "application/json"}
@@ -133,12 +200,26 @@ func (c *managementClient) doSafe(ctx context.Context, method, pathAndQuery stri
 	}
 	resp, err := c.doRequestWithAuth(ctx, method, c.baseURL+pathAndQuery, headers, body)
 	if err != nil {
-		return &CredentialError{Operation: operation}
+		return nil, &CredentialError{Operation: operation}
 	}
-	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, maxDiscardedResponseBytes))
-	_ = resp.Body.Close()
+
+	var data []byte
+	var readErr error
+	if keepBody {
+		data, readErr = io.ReadAll(io.LimitReader(resp.Body, maxProbeResponseBytes+1))
+		if readErr == nil && len(data) > maxProbeResponseBytes {
+			readErr = errors.New("response too large")
+		}
+	} else {
+		_, readErr = io.Copy(io.Discard, io.LimitReader(resp.Body, maxDiscardedResponseBytes))
+	}
+	closeErr := resp.Body.Close()
+
 	if resp.StatusCode != expected {
-		return &CredentialError{Operation: operation, StatusCode: resp.StatusCode}
+		return nil, &CredentialError{Operation: operation, StatusCode: resp.StatusCode}
 	}
-	return nil
+	if readErr != nil || closeErr != nil {
+		return nil, &CredentialError{Operation: operation, StatusCode: resp.StatusCode, ResponseIncomplete: true}
+	}
+	return data, nil
 }
