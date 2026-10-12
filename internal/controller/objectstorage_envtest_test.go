@@ -248,6 +248,57 @@ var _ = Describe("MarklogicCluster object storage schema", func() {
 		Expect(create("long-secret-name", func(o *marklogicv1.ObjectStorageConfig) {
 			o.AWS = &marklogicv1.AWSObjectStorage{SecretName: strings.Repeat("a", 254)}
 		})).To(HaveOccurred())
+
+		invalidNames := []struct {
+			name       string
+			secretName string
+		}{
+			{"empty", ""},
+			{"whitespace-only", " "},
+			{"tab", "\t"},
+			{"leading-space", " credentials"},
+			{"trailing-space", "credentials "},
+			{"embedded-space", "cloud credentials"},
+			{"newline", "credentials\n"},
+			{"uppercase", "Credentials"},
+			{"underscore", "cloud_credentials"},
+			{"slash", "cloud/credentials"},
+			{"leading-hyphen", "-credentials"},
+			{"trailing-hyphen", "credentials-"},
+			{"leading-dot", ".credentials"},
+			{"trailing-dot", "credentials."},
+			{"empty-label", "cloud..credentials"},
+			{"overlength", strings.Repeat("a", 254)},
+		}
+		validNames := []struct {
+			name       string
+			secretName string
+		}{
+			{"single-character", "a"},
+			{"numeric", "1"},
+			{"hyphenated", "cloud-credentials-1"},
+			{"dotted", "cloud.credentials-1"},
+			{"maximum-length", strings.Repeat("a", 253)},
+		}
+		for _, provider := range []string{"aws", "azure"} {
+			binding := func(secretName string) func(*marklogicv1.ObjectStorageConfig) {
+				return func(config *marklogicv1.ObjectStorageConfig) {
+					if provider == "aws" {
+						config.AWS = &marklogicv1.AWSObjectStorage{SecretName: secretName}
+					} else {
+						config.Azure = &marklogicv1.AzureObjectStorage{SecretName: secretName}
+					}
+				}
+			}
+			for _, test := range invalidNames {
+				err := create(provider+"-invalid-"+test.name, binding(test.secretName))
+				Expect(err).To(HaveOccurred(), "%s must reject %q", provider, test.secretName)
+				Expect(err.Error()).To(ContainSubstring("secretName"), "%s rejection of %q must come from the secretName field", provider, test.secretName)
+			}
+			for _, test := range validNames {
+				Expect(create(provider+"-valid-"+test.name, binding(test.secretName))).To(Succeed(), "%s must accept %q", provider, test.secretName)
+			}
+		}
 	})
 
 	It("does not accept unknown inline credential fields", func() {

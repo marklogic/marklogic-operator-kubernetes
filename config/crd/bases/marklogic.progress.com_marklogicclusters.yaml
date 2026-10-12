@@ -10501,6 +10501,7 @@ spec:
                           namespace with keys accessKey, secretKey and optional sessionToken.
                         maxLength: 253
                         minLength: 1
+                        pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?([.][a-z0-9]([-a-z0-9]*[a-z0-9])?)*$
                         type: string
                     required:
                     - secretName
@@ -10526,6 +10527,7 @@ spec:
                           namespace with keys storageAccount and storageKey.
                         maxLength: 253
                         minLength: 1
+                        pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?([.][a-z0-9]([-a-z0-9]*[a-z0-9])?)*$
                         type: string
                     required:
                     - secretName

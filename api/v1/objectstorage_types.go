@@ -49,6 +49,7 @@ type AWSObjectStorage struct {
 	// SecretName is a Secret in the MarklogicCluster namespace with keys accessKey, secretKey and optional sessionToken.
 	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=253
+	// +kubebuilder:validation:Pattern="^[a-z0-9]([-a-z0-9]*[a-z0-9])?([.][a-z0-9]([-a-z0-9]*[a-z0-9])?)*$"
 	SecretName string `json:"secretName"`
 	// Region is informational only and is not applied to MarkLogic.
 	// +optional
@@ -63,6 +64,7 @@ type AzureObjectStorage struct {
 	// SecretName is a Secret in the MarklogicCluster namespace with keys storageAccount and storageKey.
 	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=253
+	// +kubebuilder:validation:Pattern="^[a-z0-9]([-a-z0-9]*[a-z0-9])?([.][a-z0-9]([-a-z0-9]*[a-z0-9])?)*$"
 	SecretName string `json:"secretName"`
 }
 
