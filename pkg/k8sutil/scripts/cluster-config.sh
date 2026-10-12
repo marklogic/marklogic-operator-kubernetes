@@ -430,7 +430,9 @@ function join_cluster {
         "-o" "/tmp/cluster.zip" $HTTPS_OPTION
 
     response_code=${CURL_RESPONSE_CODE:-0}
-    if [[ "${response_code}" != "200" ]] || ! unzip -tq /tmp/cluster.zip >/dev/null 2>&1; then
+    cluster_signature=""
+    IFS= read -r -N 2 cluster_signature < /tmp/cluster.zip
+    if [[ "${response_code}" != "200" ]] || [[ "${cluster_signature}" != "PK" ]]; then
         rm -f /tmp/cluster.zip
         error "Bootstrap host returned an invalid cluster configuration (HTTP ${response_code})." exit
     fi

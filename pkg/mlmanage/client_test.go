@@ -1050,9 +1050,9 @@ func TestListHostsStatusResolvesIndividualStatusWhenSomeHostsAreOffline(t *testi
 		case "/manage/v2/hosts":
 			_, _ = w.Write([]byte(`{"host-status-list":{"status-list-summary":{"total-hosts-offline":{"units":"quantity","value":1}},"status-list-items":{"status-list-item":[{"nameref":"bootstrap-0"},{"nameref":"joining-0"}]}}}`))
 		case "/manage/v2/hosts/bootstrap-0":
-			_, _ = w.Write([]byte(`{"host-status":{"name":"bootstrap-0","version":"12.0-1","status-properties":{"online":true}}}`))
+			_, _ = w.Write([]byte(`{"host-status":{"name":"bootstrap-0","version":"12.0-1","status-properties":{"online":{"units":"bool","value":true}}}}`))
 		case "/manage/v2/hosts/joining-0":
-			_, _ = w.Write([]byte(`{"host-status":{"name":"joining-0","version":"12.0-1","status-properties":{"online":false}}}`))
+			_, _ = w.Write([]byte(`{"host-status":{"name":"joining-0","version":"12.0-1","status-properties":{"online":{"units":"bool","value":false}}}}`))
 		case "/manage/v2":
 			_, _ = w.Write([]byte(`{"version":"12.0-1"}`))
 		default:

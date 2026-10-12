@@ -1431,6 +1431,11 @@ func findFirstStringByKeys(payload any, keys ...string) string {
 				if str := toString(value); str != "" {
 					return str
 				}
+				if wrapped, ok := value.(map[string]any); ok {
+					if str := toString(wrapped["value"]); str != "" {
+						return str
+					}
+				}
 			}
 		}
 		for _, value := range current {
