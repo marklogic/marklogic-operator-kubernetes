@@ -171,7 +171,7 @@ function join_check {
             -o /tmp/marklogic-joining-host-status.json -w '%{http_code}' $HTTPS_OPTION \
             "${HTTP_PROTOCOL}://${MARKLOGIC_BOOTSTRAP_HOST}:8002/manage/v2/hosts/${hostname}?view=status&format=json")
         if [[ "${response_code}" == "200" ]] && \
-            grep -Eq '"online"[[:space:]]*:[[:space:]]*true' /tmp/marklogic-joining-host-status.json; then
+            grep -Eq '"online"[[:space:]]*:[[:space:]]*(true|\{[^}]*"value"[[:space:]]*:[[:space:]]*true)' /tmp/marklogic-joining-host-status.json; then
             info "Joining host ${hostname} is online."
             return 0
         fi
