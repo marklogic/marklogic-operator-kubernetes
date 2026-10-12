@@ -672,10 +672,14 @@ EOF
         
         log "Info:  inserting following certificates for $cert_path for $MARKLOGIC_CLUSTER_TYPE"
 
-        if [[ "$IS_BOOTSTRAP_HOST" == "true" ]]; then
-        res=$("${AUTH_CURL[@]}" -X POST --header "Content-Type:application/json" -d @insert_cert_payload.json http://localhost:8002/manage/v2/certificate-templates/defaultTemplate 2>&1)
-        else 
-        res=$("${AUTH_CURL[@]}" -k  -X POST --header "Content-Type:application/json" -d @insert_cert_payload.json https://localhost:8002/manage/v2/certificate-templates/defaultTemplate 2>&1)
+        if [[ "$IS_BOOTSTRAP_HOST" == "true" ]] && [[ "$MARKLOGIC_CLUSTER_TYPE" == "bootstrap" ]]; then
+            if ! res=$("${AUTH_CURL[@]}" --fail -X POST --header "Content-Type:application/json" -d @insert_cert_payload.json http://localhost:8002/manage/v2/certificate-templates/defaultTemplate 2>&1); then
+                error "Failed to insert named certificate: $res" exit
+            fi
+        else
+            if ! res=$("${AUTH_CURL[@]}" --fail -k -X POST --header "Content-Type:application/json" -d @insert_cert_payload.json https://localhost:8002/manage/v2/certificate-templates/defaultTemplate 2>&1); then
+                error "Failed to insert named certificate: $res" exit
+            fi
         fi
         log "Info:  $res"
         sleep 5s

@@ -617,7 +617,7 @@ func TestTlsWithMultiNode(t *testing.T) {
 		}
 		if !converged {
 			t.Logf("Last certs payload: %s", certs)
-			t.Fatalf("Timed out waiting for both node TLS certificates: %v", err)
+			t.Fatal("Timed out waiting for both node TLS certificates")
 		}
 		certURIs := gjson.Get(certs, `certificate-default-list.list-items.list-item.#.uriref`).Array()
 		if len(certURIs) < 2 {
