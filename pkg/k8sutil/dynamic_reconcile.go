@@ -132,24 +132,13 @@ func (oc *OperatorContext) ReconcileDynamicGroupConfig() result.ReconcileResult 
 		return result.Done()
 	}
 
-	adminSecretName := strings.TrimSpace(oc.MarklogicGroup.Spec.SecretName)
-	if adminSecretName == "" {
-		if clusterOwnerTearingDown {
-			return oc.releaseDynamicFinalizersWithoutBootstrap()
-		}
-		if err := oc.setDynamicStatus(dynamicPhaseFailed, dynamicReasonInvalidConfig, "admin credential secret is missing", false, false, false); err != nil {
-			return result.Error(err)
-		}
-		return result.Done()
+	operatorPass, err := oc.readOperatorCredentialSecret(clusterName)
+	if clusterOwnerTearingDown {
+		return oc.releaseDynamicFinalizersWithoutBootstrap()
 	}
-
-	adminUser, adminPass, err := oc.readCredentialSecret(adminSecretName)
 	if err != nil {
-		if clusterOwnerTearingDown {
-			return oc.releaseDynamicFinalizersWithoutBootstrap()
-		}
-		if err := oc.setDynamicStatus(dynamicPhaseDegraded, dynamicReasonBootstrapNotReady, fmt.Sprintf("failed to read admin credentials: %v", err), false, false, false); err != nil {
-			return result.Error(err)
+		if statusErr := oc.setDynamicStatus(dynamicPhaseDegraded, dynamicReasonBootstrapNotReady, "operator credentials are not available", false, false, false); statusErr != nil {
+			return result.Error(statusErr)
 		}
 		return result.RequeueSoon(5)
 	}
@@ -160,15 +149,15 @@ func (oc *OperatorContext) ReconcileDynamicGroupConfig() result.ReconcileResult 
 	// bundle is explicitly loaded into the client, keep TLS behavior consistent
 	// with that deployment model by skipping verification when TLS is enabled.
 	insecureSkipVerify := useTLS
-	adminClient := NewDynamicManagementClient(mlmanage.ClientOptions{
+	operatorClient := NewDynamicManagementClient(mlmanage.ClientOptions{
 		Host:               bootstrapHost,
-		Username:           adminUser,
-		Password:           adminPass,
+		Username:           operatorUsername,
+		Password:           operatorPass,
 		UseTLS:             useTLS,
 		InsecureSkipVerify: insecureSkipVerify,
 	})
 
-	hosts, err := adminClient.ListHostsStatus(oc.Ctx)
+	hosts, err := operatorClient.ListHostsStatus(oc.Ctx)
 	if err != nil {
 		if oc.shouldSuppressBootstrapTransientDegrade(err) {
 			return result.RequeueSoon(5)
@@ -216,39 +205,7 @@ func (oc *OperatorContext) ReconcileDynamicGroupConfig() result.ReconcileResult 
 		return result.Done()
 	}
 
-	manageSecret, err := oc.ensureDynamicCredentialSecret(clusterName)
-	if err != nil {
-		if err := oc.setDynamicStatus(dynamicPhaseDegraded, dynamicReasonGroupConfigFailed, fmt.Sprintf("failed to reconcile dynamic credential secret: %v", err), true, false, false); err != nil {
-			return result.Error(err)
-		}
-		return result.RequeueSoon(5)
-	}
-	manageUser := string(manageSecret.Data["username"])
-	managePass := string(manageSecret.Data["password"])
-
-	if err := adminClient.EnsureManageAdminUser(oc.Ctx, manageUser, managePass); err != nil {
-		if isTransientManagementError(err) {
-			if err := oc.setDynamicStatus(dynamicPhaseDegraded, dynamicReasonGroupConfigFailed, fmt.Sprintf("manage-admin user reconcile is pending: %v", err), true, false, false); err != nil {
-				return result.Error(err)
-			}
-			return result.RequeueSoon(5)
-		}
-		if err := oc.setDynamicStatus(dynamicPhaseFailed, dynamicReasonGroupConfigFailed, fmt.Sprintf("manage-admin user reconcile failed: %v", err), true, false, false); err != nil {
-			return result.Error(err)
-		}
-		return result.Done()
-	}
-
-	groupClient := NewDynamicManagementClient(mlmanage.ClientOptions{
-		Host: bootstrapHost,
-		// Use bootstrap admin credentials for dynamic-host management APIs.
-		// Some MarkLogic versions reject manage-admin for dynamic-host-token
-		// issuance/removal even when group-level configuration calls succeed.
-		Username:           adminUser,
-		Password:           adminPass,
-		UseTLS:             useTLS,
-		InsecureSkipVerify: insecureSkipVerify,
-	})
+	groupClient := operatorClient
 
 	groupName := resolvedMarkLogicGroupName(oc.MarklogicGroup)
 	if oc.MarklogicGroup.DeletionTimestamp != nil {
@@ -1181,81 +1138,6 @@ func (oc *OperatorContext) getOwningClusterName() (string, error) {
 		return strings.TrimSuffix(oc.MarklogicGroup.Spec.SecretName, "-admin"), nil
 	}
 	return "", fmt.Errorf("unable to resolve owning MarklogicCluster for dynamic group")
-}
-
-func (oc *OperatorContext) ensureDynamicCredentialSecret(clusterName string) (*corev1.Secret, error) {
-	secretName := dynamicCredentialSecretName(clusterName)
-	nsName := types.NamespacedName{Name: secretName, Namespace: oc.MarklogicGroup.Namespace}
-	desiredOwnerRef, hasDesiredOwnerRef := oc.dynamicCredentialSecretClusterOwnerRef()
-	secret := &corev1.Secret{}
-	if err := oc.Client.Get(oc.Ctx, nsName, secret); err == nil {
-		reconciledOwnerRefs := reconcileDynamicCredentialSecretOwnerRefs(secret.GetOwnerReferences(), desiredOwnerRef, hasDesiredOwnerRef)
-		if !reflect.DeepEqual(secret.GetOwnerReferences(), reconciledOwnerRefs) {
-			secret.SetOwnerReferences(reconciledOwnerRefs)
-			if err := oc.Client.Update(oc.Ctx, secret); err != nil {
-				return nil, err
-			}
-		}
-		return secret, nil
-	} else if !apierrors.IsNotFound(err) {
-		return nil, err
-	}
-
-	labels := getSelectorLabels(clusterName)
-	annotations := oc.GetOperatorAnnotations()
-	secretMeta := generateObjectMeta(secretName, oc.MarklogicGroup.Namespace, labels, annotations)
-	secretData := generateDynamicSecretData(clusterName)
-	secretDef := &corev1.Secret{
-		TypeMeta: metav1.TypeMeta{
-			Kind:       "Secret",
-			APIVersion: "v1",
-		},
-		ObjectMeta: secretMeta,
-		Type:       corev1.SecretTypeOpaque,
-		Data:       secretData,
-	}
-	if hasDesiredOwnerRef {
-		secretDef.SetOwnerReferences([]metav1.OwnerReference{desiredOwnerRef})
-	}
-
-	if err := oc.Client.Create(oc.Ctx, secretDef); err != nil && !apierrors.IsAlreadyExists(err) {
-		return nil, err
-	}
-
-	if err := oc.Client.Get(oc.Ctx, nsName, secret); err != nil {
-		return nil, err
-	}
-	return secret, nil
-}
-
-func (oc *OperatorContext) dynamicCredentialSecretClusterOwnerRef() (metav1.OwnerReference, bool) {
-	for _, ownerRef := range oc.MarklogicGroup.OwnerReferences {
-		if ownerRef.Kind != "MarklogicCluster" {
-			continue
-		}
-		clusterOwnerRef := ownerRef
-		controller := true
-		clusterOwnerRef.Controller = &controller
-		return clusterOwnerRef, true
-	}
-	return metav1.OwnerReference{}, false
-}
-
-func reconcileDynamicCredentialSecretOwnerRefs(currentOwnerRefs []metav1.OwnerReference, desiredClusterOwnerRef metav1.OwnerReference, hasDesiredClusterOwnerRef bool) []metav1.OwnerReference {
-	reconciled := make([]metav1.OwnerReference, 0, len(currentOwnerRefs)+1)
-	for _, ownerRef := range currentOwnerRefs {
-		if ownerRef.Kind == "MarklogicGroup" {
-			continue
-		}
-		if hasDesiredClusterOwnerRef && ownerRef.Kind == "MarklogicCluster" {
-			continue
-		}
-		reconciled = append(reconciled, ownerRef)
-	}
-	if hasDesiredClusterOwnerRef {
-		reconciled = append(reconciled, desiredClusterOwnerRef)
-	}
-	return reconciled
 }
 
 func (oc *OperatorContext) readCredentialSecret(secretName string) (string, string, error) {

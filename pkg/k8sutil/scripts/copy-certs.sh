@@ -1,7 +1,7 @@
 #!/bin/bash
 # Copyright (c) 2024-2026 Progress Software Corporation and/or its subsidiaries or affiliates. All Rights Reserved.
 
-MARKLOGIC_ADMIN_USERNAME="$(< /run/secrets/ml-secrets/username)"            
+MARKLOGIC_ADMIN_USERNAME="$(< /run/secrets/ml-secrets/username)"
 MARKLOGIC_ADMIN_PASSWORD="$(< /run/secrets/ml-secrets/password)"
 log () {
     local TIMESTAMP=$(date +"%Y-%m-%d %T.%3N")

@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 
 	"k8s.io/apimachinery/pkg/runtime"
@@ -49,6 +50,7 @@ type MarklogicClusterReconciler struct {
 //+kubebuilder:rbac:groups=marklogic.progress.com,resources=marklogicclusters/status,verbs=get;update;patch
 //+kubebuilder:rbac:groups=marklogic.progress.com,resources=marklogicclusters/finalizers,verbs=update
 //+kubebuilder:rbac:groups=core,resources=serviceaccounts,verbs=get;list;watch;create;update;patch;delete
+//+kubebuilder:rbac:groups=core,resources=secrets,verbs=get;list;watch;create;update;patch;delete
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
@@ -114,6 +116,10 @@ func markLogicClusterCreateUpdateDeletePredicate() predicate.Predicate {
 				if !reflect.DeepEqual(oldObj.Spec, newObj.Spec) {
 					return true // Reconcile if spec has changed
 				}
+			case *corev1.Secret:
+				oldObj := e.ObjectOld.(*corev1.Secret)
+				newObj := e.ObjectNew.(*corev1.Secret)
+				return !reflect.DeepEqual(oldObj.Data, newObj.Data) || !reflect.DeepEqual(oldObj.OwnerReferences, newObj.OwnerReferences)
 			default:
 				return false // Ignore updates for other types
 			}
@@ -135,5 +141,6 @@ func (r *MarklogicClusterReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		For(&marklogicv1.MarklogicCluster{}).
 		WithEventFilter(markLogicClusterCreateUpdateDeletePredicate()).
 		Owns(&marklogicv1.MarklogicGroup{}).
+		Owns(&corev1.Secret{}).
 		Complete(r)
 }

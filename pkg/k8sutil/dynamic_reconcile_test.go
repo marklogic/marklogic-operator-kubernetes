@@ -14,19 +14,28 @@ import (
 	"github.com/marklogic/marklogic-operator-kubernetes/pkg/mlmanage"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
 
 type stubDynamicManagementClient struct {
-	requestTokenFn      func(clusterName, groupName, hostFQDN, duration string) (string, error)
-	joinFn              func(hostFQDN, token string) error
-	listGroupFn         func(groupName string) ([]mlmanage.GroupHost, error)
-	resolveNameFn       func() (string, error)
-	resolveCandidatesFn func() ([]string, error)
-	removeFn            func(clusterName, hostID string) error
+	requestTokenFn       func(clusterName, groupName, hostFQDN, duration string) (string, error)
+	joinFn               func(hostFQDN, token string) error
+	hostStatuses         []mlmanage.HostStatus
+	listHostStatusesFn   func() ([]mlmanage.HostStatus, error)
+	ensureOperatorRoleFn func() error
+	ensureOperatorUser   func(username, password string) error
+	listGroupFn          func(groupName string) ([]mlmanage.GroupHost, error)
+	resolveNameFn        func() (string, error)
+	resolveCandidatesFn  func() ([]string, error)
+	removeFn             func(clusterName, hostID string) error
 }
 
 func (s *stubDynamicManagementClient) ListHostsStatus(ctx context.Context) ([]mlmanage.HostStatus, error) {
-	return nil, nil
+	if s.listHostStatusesFn != nil {
+		return s.listHostStatusesFn()
+	}
+	return s.hostStatuses, nil
 }
 
 func (s *stubDynamicManagementClient) GetHostGroupName(ctx context.Context, hostName string) (string, error) {
@@ -49,7 +58,17 @@ func (s *stubDynamicManagementClient) EnableAdminAPITokenAuthentication(ctx cont
 	return nil
 }
 
-func (s *stubDynamicManagementClient) EnsureManageAdminUser(ctx context.Context, username, password string) error {
+func (s *stubDynamicManagementClient) EnsureOperatorRole(ctx context.Context) error {
+	if s.ensureOperatorRoleFn != nil {
+		return s.ensureOperatorRoleFn()
+	}
+	return nil
+}
+
+func (s *stubDynamicManagementClient) EnsureOperatorUser(ctx context.Context, username, password string) error {
+	if s.ensureOperatorUser != nil {
+		return s.ensureOperatorUser(username, password)
+	}
 	return nil
 }
 
@@ -155,6 +174,65 @@ func (s *stubDynamicManagementClient) EnsureOAuthExternalSecurity(ctx context.Co
 
 func (s *stubDynamicManagementClient) EnsureOAuthAppServer(ctx context.Context, config mlmanage.OAuthAppServerConfig) error {
 	return nil
+}
+
+func TestReconcileDynamicGroupConfigRequeuesWhenOperatorSecretIsMissing(t *testing.T) {
+	scheme := runtime.NewScheme()
+	if err := marklogicv1.AddToScheme(scheme); err != nil {
+		t.Fatalf("add Marklogic scheme: %v", err)
+	}
+	if err := corev1.AddToScheme(scheme); err != nil {
+		t.Fatalf("add core scheme: %v", err)
+	}
+
+	group := &marklogicv1.MarklogicGroup{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       "dynamic",
+			Namespace:  "database",
+			Finalizers: []string{dynamicGroupCleanupFinalizer},
+			OwnerReferences: []metav1.OwnerReference{{
+				Kind: "MarklogicCluster",
+				Name: "search",
+			}},
+		},
+		Spec: marklogicv1.MarklogicGroupSpec{
+			Name:          "dynamic",
+			IsDynamic:     true,
+			BootstrapHost: "bootstrap-0.bootstrap.database.svc.cluster.local",
+		},
+	}
+	fakeClient := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithStatusSubresource(&marklogicv1.MarklogicGroup{}).
+		WithObjects(group).
+		Build()
+
+	originalFactory := NewDynamicManagementClient
+	factoryCalls := 0
+	NewDynamicManagementClient = func(mlmanage.ClientOptions) mlmanage.Client {
+		factoryCalls++
+		return &stubDynamicManagementClient{}
+	}
+	defer func() { NewDynamicManagementClient = originalFactory }()
+
+	oc := &OperatorContext{Ctx: context.Background(), Client: fakeClient, MarklogicGroup: group}
+	reconcileResult := oc.ReconcileDynamicGroupConfig()
+	if !reconcileResult.Completed() {
+		t.Fatal("expected missing operator Secret to requeue reconciliation")
+	}
+	output, err := reconcileResult.Output()
+	if err != nil {
+		t.Fatalf("reconcile result returned error: %v", err)
+	}
+	if !output.Requeue || output.RequeueAfter <= 0 {
+		t.Fatalf("expected a timed requeue, got %+v", output)
+	}
+	if factoryCalls != 0 {
+		t.Fatalf("Management API client created %d times without operator credentials", factoryCalls)
+	}
+	if group.Status.Dynamic == nil || group.Status.Dynamic.Message != "operator credentials are not available" {
+		t.Fatalf("unexpected dynamic status: %+v", group.Status.Dynamic)
+	}
 }
 
 func TestJoinDynamicPodSuccess(t *testing.T) {

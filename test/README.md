@@ -172,7 +172,7 @@ make e2e-cleanup-minikube
 Or run directly (requires a running cluster with `helm` in PATH):
 
 ```
-go test -v -count=1 -timeout 45m ./test/e2e-helm
+go test -v -count=1 -timeout 60m ./test/e2e-helm
 ```
 
 ### Environment variables
