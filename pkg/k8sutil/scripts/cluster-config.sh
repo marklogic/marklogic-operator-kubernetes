@@ -563,7 +563,8 @@ function configure_group {
 }
 
 function configure_tls {
-    local protocol
+    local protocol local_manage_protocol
+    local -a local_manage_https_option=()
     if [[ "$IS_BOOTSTRAP_HOST" == "true" ]] && [[ $MARKLOGIC_CLUSTER_TYPE == "bootstrap" ]]; then
         protocol=$(get_current_host_protocol)
         log "Info:  Current host protocol: $protocol"
@@ -673,14 +674,15 @@ EOF
         
         log "Info:  inserting following certificates for $cert_path for $MARKLOGIC_CLUSTER_TYPE"
 
-        if [[ "$IS_BOOTSTRAP_HOST" == "true" ]] && [[ "$MARKLOGIC_CLUSTER_TYPE" == "bootstrap" ]]; then
-            if ! res=$("${AUTH_CURL[@]}" --fail -w ' HTTP %{http_code}' -X POST --header "Content-Type:application/json" -d @insert_cert_payload.json http://localhost:8002/manage/v2/certificate-templates/defaultTemplate 2>&1); then
-                error "Failed to insert named certificate: $res" exit
-            fi
-        else
-            if ! res=$("${AUTH_CURL[@]}" --fail -w ' HTTP %{http_code}' -k -X POST --header "Content-Type:application/json" -d @insert_cert_payload.json https://localhost:8002/manage/v2/certificate-templates/defaultTemplate 2>&1); then
-                error "Failed to insert named certificate: $res" exit
-            fi
+        local_manage_protocol=$(get_current_host_protocol localhost 8002)
+        if [[ "$local_manage_protocol" == "https" ]]; then
+            local_manage_https_option=(-k)
+        fi
+        log "Info:  Local Manage protocol for certificate insertion: $local_manage_protocol"
+        if ! res=$("${AUTH_CURL[@]}" --fail -w ' HTTP %{http_code}' "${local_manage_https_option[@]}" \
+            -X POST --header "Content-Type:application/json" -d @insert_cert_payload.json \
+            "${local_manage_protocol}://localhost:8002/manage/v2/certificate-templates/defaultTemplate" 2>&1); then
+            error "Failed to insert named certificate: $res" exit
         fi
         log "Info:  $res"
         sleep 5s
