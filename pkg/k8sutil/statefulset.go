@@ -426,6 +426,10 @@ func generateStatefulSetsParams(cr *marklogicv1.MarklogicGroup) statefulSetParam
 	}
 	if cr.Spec.Persistence != nil && cr.Spec.Persistence.Enabled {
 		params.PersistentVolumeClaim = generatePVCTemplate(cr.Spec.Persistence)
+		if cr.Spec.Storage != nil && cr.Spec.Storage.VolumeAttributesClassName != nil && *cr.Spec.Storage.VolumeAttributesClassName != "" {
+			className := *cr.Spec.Storage.VolumeAttributesClassName
+			params.PersistentVolumeClaim.Spec.VolumeAttributesClassName = &className
+		}
 	}
 	return params
 }

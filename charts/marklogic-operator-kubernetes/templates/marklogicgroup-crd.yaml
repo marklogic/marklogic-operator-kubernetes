@@ -4424,6 +4424,13 @@ spec:
                 required:
                 - size
                 type: object
+              storage:
+                properties:
+                  volumeAttributesClassName:
+                    maxLength: 253
+                    pattern: ^$|^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$
+                    type: string
+                type: object
               podSecurityContext:
                 default:
                   fsGroup: 2

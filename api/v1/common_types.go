@@ -37,6 +37,12 @@ type DynamicGroupConfig struct {
 	TokenDuration string `json:"tokenDuration,omitempty"`
 }
 
+type Storage struct {
+	// +kubebuilder:validation:MaxLength=253
+	// +kubebuilder:validation:Pattern="^$|^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$"
+	VolumeAttributesClassName *string `json:"volumeAttributesClassName,omitempty"`
+}
+
 // Storage is the inteface to add pvc and pv support in marklogic
 type Persistence struct {
 	Enabled bool `json:"enabled,omitempty"`

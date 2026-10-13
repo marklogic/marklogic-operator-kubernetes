@@ -1,0 +1,41 @@
+apiVersion: marklogic.progress.com/v1
+kind: MarklogicCluster
+metadata:
+  name: ml-vac-poc
+  namespace: vac-poc
+spec:
+  image: "progressofficial/marklogic-db:12.0.3-ubi9-rootless-2.2.6"
+  persistence:
+    enabled: true
+    size: 20Gi
+    storageClassName: csi-storage
+  storage:
+    volumeAttributesClassName: ml-standard
+  markLogicGroups:
+  - name: vac-dnode
+    replicas: 2
+    isBootstrap: true
+    groupConfig:
+      name: dnode
+      enableXdqpSsl: true
+  - name: vac-enode
+    replicas: 1
+    groupConfig:
+      name: enode
+      enableXdqpSsl: true
+---
+apiVersion: marklogic.progress.com/v1
+kind: MarklogicCluster
+metadata:
+  name: ml-default-storage-poc
+  namespace: vac-poc
+spec:
+  image: "progressofficial/marklogic-db:12.0.3-ubi9-rootless-2.2.6"
+  persistence:
+    enabled: true
+    size: 20Gi
+    storageClassName: csi-storage
+  markLogicGroups:
+  - name: vac-default-node
+    replicas: 1
+    isBootstrap: true

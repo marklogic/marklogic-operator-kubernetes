@@ -31,6 +31,7 @@ type MarkLogicGroupParameters struct {
 	License                        *marklogicv1.License
 	Service                        marklogicv1.Service
 	Persistence                    *marklogicv1.Persistence
+	Storage                        *marklogicv1.Storage
 	Auth                           *marklogicv1.AdminAuth
 	TerminationGracePeriodSeconds  *int64
 	Resources                      *corev1.ResourceRequirements
@@ -69,6 +70,7 @@ type MarkLogicClusterParameters struct {
 	ImagePullSecrets               []corev1.LocalObjectReference
 	ClusterDomain                  string
 	Persistence                    *marklogicv1.Persistence
+	Storage                        *marklogicv1.Storage
 	License                        *marklogicv1.License
 	Affinity                       *corev1.Affinity
 	NodeSelector                   map[string]string
@@ -153,6 +155,7 @@ func (cc *ClusterContext) GenerateMarkLogicGroupDef(cr *marklogicv1.MarklogicClu
 			Affinity:                       params.Affinity,
 			NodeSelector:                   params.NodeSelector,
 			Persistence:                    params.Persistence,
+			Storage:                        params.Storage.DeepCopy(),
 			Service:                        params.Service,
 			LivenessProbe:                  params.LivenessProbe,
 			ReadinessProbe:                 params.ReadinessProbe,
@@ -267,6 +270,7 @@ func generateMarkLogicClusterParams(cr *marklogicv1.MarklogicCluster) *MarkLogic
 		ServiceAccountName:             cr.Spec.ServiceAccountName,
 		ClusterDomain:                  cr.Spec.ClusterDomain,
 		Persistence:                    cr.Spec.Persistence,
+		Storage:                        cr.Spec.Storage.DeepCopy(),
 		Affinity:                       cr.Spec.Affinity,
 		NodeSelector:                   cr.Spec.NodeSelector,
 		TopologySpreadConstraints:      cr.Spec.TopologySpreadConstraints,
@@ -297,6 +301,13 @@ func generateMarkLogicClusterParams(cr *marklogicv1.MarklogicCluster) *MarkLogic
 	return markLogicClusterParameters
 }
 
+func resolveGroupStorage(cluster, group *marklogicv1.Storage) *marklogicv1.Storage {
+	if group != nil && group.VolumeAttributesClassName != nil {
+		return group.DeepCopy()
+	}
+	return cluster.DeepCopy()
+}
+
 func generateMarkLogicGroupParams(cr *marklogicv1.MarklogicCluster, index int, clusterParams *MarkLogicClusterParameters) *MarkLogicGroupParameters {
 	// Always enforce automountServiceAccountToken to false for security
 	falseValue := false
@@ -316,6 +327,7 @@ func generateMarkLogicGroupParams(cr *marklogicv1.MarklogicCluster, index int, c
 		AutomountServiceAccountToken:   &falseValue, // Always false for security
 		License:                        clusterParams.License,
 		Persistence:                    clusterParams.Persistence,
+		Storage:                        resolveGroupStorage(clusterParams.Storage, cr.Spec.MarkLogicGroups[index].Storage),
 		TerminationGracePeriodSeconds:  clusterParams.TerminationGracePeriodSeconds,
 		Resources:                      clusterParams.Resources,
 		EnableConverters:               clusterParams.EnableConverters,
