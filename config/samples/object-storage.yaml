@@ -1,0 +1,29 @@
+# Copyright (c) 2024-2026 Progress Software Corporation and/or its subsidiaries or affiliates. All Rights Reserved.
+
+## Cluster-wide AWS S3 and Azure Blob credentials, sourced from Kubernetes Secrets.
+## The values below are placeholders. Create the Secrets in the same namespace as the cluster, for example:
+##   kubectl create secret generic ml-s3-credentials --from-file=accessKey=./access-key --from-file=secretKey=./secret-key
+## Do not put credential values in this manifest or in CR annotations.
+apiVersion: marklogic.progress.com/v1
+kind: MarklogicCluster
+metadata:
+  name: ml-cluster
+  namespace: default
+spec:
+  image: "progressofficial/marklogic-db:12.0.3-ubi9-rootless-2.2.6"
+  objectStorage:
+    ## Required Secret keys: accessKey, secretKey. Optional: sessionToken (temporary credentials).
+    aws:
+      authType: secret
+      secretName: ml-s3-credentials
+      region: us-east-1 # informational only, not applied to MarkLogic
+    ## Required Secret keys: storageAccount, storageKey.
+    azure:
+      authType: secret
+      secretName: ml-azure-credentials
+  markLogicGroups:
+    - name: dnode
+      replicas: 1
+      isBootstrap: true
+      groupConfig:
+        name: Default
