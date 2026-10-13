@@ -10,6 +10,7 @@ RETRY_INTERVAL=5
 HOSTNAME=$(cat /etc/hostname)
 HOST_FQDN="${HOSTNAME}.${MARKLOGIC_FQDN_SUFFIX}"
 ML_KUBERNETES_FILE_PATH="/var/opt/MarkLogic/Kubernetes"
+TLS_CONFIGURATION_CURRENT=false
 
 if [[ "${MARKLOGIC_DYNAMIC_HOST}" == "true" ]]; then
     echo "$(date +"%Y-%m-%d %T.%3N") [cluster-config] Info: Dynamic host mode enabled. Skipping static bootstrap/join path."
@@ -574,7 +575,7 @@ function configure_tls {
 
     info "Configuring TLS for App Servers"
 
-    AUTH_CURL=(curl --anyauth --user "${MARKLOGIC_MANAGEMENT_USERNAME}:${MARKLOGIC_MANAGEMENT_PASSWORD}" -m 20 -s)
+    AUTH_CURL=(curl --anyauth --user "${MARKLOGIC_ADMIN_USERNAME}:${MARKLOGIC_ADMIN_PASSWORD}" -m 20 -sS)
 
     cd /tmp/
     if [[ -e "/run/secrets/marklogic-certs/tls.crt" ]]; then
@@ -673,11 +674,11 @@ EOF
         log "Info:  inserting following certificates for $cert_path for $MARKLOGIC_CLUSTER_TYPE"
 
         if [[ "$IS_BOOTSTRAP_HOST" == "true" ]] && [[ "$MARKLOGIC_CLUSTER_TYPE" == "bootstrap" ]]; then
-            if ! res=$("${AUTH_CURL[@]}" --fail -X POST --header "Content-Type:application/json" -d @insert_cert_payload.json http://localhost:8002/manage/v2/certificate-templates/defaultTemplate 2>&1); then
+            if ! res=$("${AUTH_CURL[@]}" --fail -w ' HTTP %{http_code}' -X POST --header "Content-Type:application/json" -d @insert_cert_payload.json http://localhost:8002/manage/v2/certificate-templates/defaultTemplate 2>&1); then
                 error "Failed to insert named certificate: $res" exit
             fi
         else
-            if ! res=$("${AUTH_CURL[@]}" --fail -k -X POST --header "Content-Type:application/json" -d @insert_cert_payload.json https://localhost:8002/manage/v2/certificate-templates/defaultTemplate 2>&1); then
+            if ! res=$("${AUTH_CURL[@]}" --fail -w ' HTTP %{http_code}' -k -X POST --header "Content-Type:application/json" -d @insert_cert_payload.json https://localhost:8002/manage/v2/certificate-templates/defaultTemplate 2>&1); then
                 error "Failed to insert named certificate: $res" exit
             fi
         fi
@@ -702,7 +703,7 @@ EOF
             appServers=("App-Services" "Admin" "Manage")
             for appServer in ${appServers[@]}; do
             log "configuring SSL for App Server $appServer"
-            curl --anyauth --user "${MARKLOGIC_MANAGEMENT_USERNAME}:${MARKLOGIC_MANAGEMENT_PASSWORD}" \
+            curl --anyauth --user "${MARKLOGIC_ADMIN_USERNAME}:${MARKLOGIC_ADMIN_PASSWORD}" \
                 -X PUT -H "Content-type: application/json" -d '{"ssl-certificate-template":"defaultTemplate"}' \
             http://localhost:8002/manage/v2/servers/${appServer}/properties?group-id=${MARKLOGIC_GROUP}
             sleep 5s
@@ -748,15 +749,29 @@ function set_status_file {
     group_name="${MARKLOGIC_GROUP}"
     group_xdqp_ssl_enabled="${XDQP_SSL_ENABLED}"
     https_enabled="${MARKLOGIC_JOIN_TLS_ENABLED}"
+    cert_fingerprint=""
+    if [[ -f "/run/secrets/marklogic-certs/tls.crt" ]]; then
+        cert_fingerprint=$(openssl x509 -in /run/secrets/marklogic-certs/tls.crt -noout -fingerprint -sha256 | cut -d= -f2 | tr -d ':')
+    fi
     echo "fqdn=${fqdn}" > $status_file
     echo "group_name=${group_name}" >> $status_file
     echo "group_xdqp_ssl_enabled=${group_xdqp_ssl_enabled}" >> $status_file
     echo "https_enabled=${https_enabled}" >> $status_file
+    echo "cert_fingerprint=${cert_fingerprint}" >> $status_file
 }
 
 function check_status_file_for_nonbootstrap {
     if [[ -f "$ML_KUBERNETES_FILE_PATH/status.txt" ]]; then
         log "Info: status file exists. Configuration functions will verify state."
+        cert_fingerprint=""
+        source "$ML_KUBERNETES_FILE_PATH/status.txt"
+        current_cert_fingerprint=""
+        if [[ -f "/run/secrets/marklogic-certs/tls.crt" ]]; then
+            current_cert_fingerprint=$(openssl x509 -in /run/secrets/marklogic-certs/tls.crt -noout -fingerprint -sha256 | cut -d= -f2 | tr -d ':')
+        fi
+        if [[ "$https_enabled" == "$MARKLOGIC_JOIN_TLS_ENABLED" ]] && [[ "$cert_fingerprint" == "$current_cert_fingerprint" ]]; then
+            TLS_CONFIGURATION_CURRENT=true
+        fi
         # Don't exit early - let the configuration functions handle state verification
         # They already check if the host is in the cluster and skip if needed
     else
@@ -769,6 +784,11 @@ function check_status_file_for_boostrap {
         new_group_name="${MARKLOGIC_GROUP}"
         new_group_xdqp_ssl_enabled="${XDQP_SSL_ENABLED}"
         new_https_enabled="${MARKLOGIC_JOIN_TLS_ENABLED}"
+        current_cert_fingerprint=""
+        if [[ -f "/run/secrets/marklogic-certs/tls.crt" ]]; then
+            current_cert_fingerprint=$(openssl x509 -in /run/secrets/marklogic-certs/tls.crt -noout -fingerprint -sha256 | cut -d= -f2 | tr -d ':')
+        fi
+        cert_fingerprint=""
         source "$ML_KUBERNETES_FILE_PATH/status.txt"
         
         # Check if configuration values have changed
@@ -780,6 +800,9 @@ function check_status_file_for_boostrap {
         
         # Values match - let configuration functions verify and skip if already done
         log "Info: Configuration values match. Configuration functions will verify current state."
+        if [[ "$cert_fingerprint" == "$current_cert_fingerprint" ]]; then
+            TLS_CONFIGURATION_CURRENT=true
+        fi
         # Don't exit early - the init functions already check and skip if configured
     else
         log "Info: status file does not exist. Continue"
@@ -813,8 +836,12 @@ else
 fi
 
 if [[ $MARKLOGIC_JOIN_TLS_ENABLED == "true" ]]; then
-    log "configuring tls"
-    configure_tls
+    if [[ "$TLS_CONFIGURATION_CURRENT" == "true" ]]; then
+        log "Info: TLS configuration matches the persisted certificate. Skipping configuration."
+    else
+        log "configuring tls"
+        configure_tls
+    fi
 fi
 
 set_status_file
