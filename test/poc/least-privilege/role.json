@@ -1,0 +1,36 @@
+{
+  "role-name": "marklogic-operator",
+  "description": "Least-privilege role for the MarkLogic Kubernetes Operator",
+  "role": [
+    "manage-admin",
+    "pki",
+    "admin-ui-user"
+  ],
+  "privilege": [
+    {
+      "privilege-name": "create-user",
+      "action": "http://marklogic.com/xdmp/privileges/create-user",
+      "kind": "execute"
+    },
+    {
+      "privilege-name": "xdmp:remove-dynamic-hosts",
+      "action": "http://marklogic.com/xdmp/privileges/remove-dynamic-hosts",
+      "kind": "execute"
+    },
+    {
+      "privilege-name": "admin-issue-dynamic-host-token",
+      "action": "http://marklogic.com/xdmp/privileges/admin/issue-dynamic-host-token",
+      "kind": "execute"
+    },
+    {
+      "privilege-name": "xdmp:eval",
+      "action": "http://marklogic.com/xdmp/privileges/xdmp-eval",
+      "kind": "execute"
+    },
+    {
+      "privilege-name": "create-external-security",
+      "action": "http://marklogic.com/xdmp/privileges/create-external-security",
+      "kind": "execute"
+    }
+  ]
+}

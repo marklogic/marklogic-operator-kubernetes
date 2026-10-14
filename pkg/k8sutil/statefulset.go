@@ -824,9 +824,8 @@ func getReadinessProbe(probe marklogicv1.ContainerProbe) *corev1.Probe {
 				Command: []string{
 					"/bin/bash",
 					"-c",
-					// Only pass if MarkLogic is healthy AND the Wrapper finished successfully
-					// curl -f
-					"test -f /tmp/marklogic_ready && curl -s -f http://localhost:7997/",
+					// An authenticated endpoint can return 401 after cluster security is enabled.
+					"test -f /tmp/marklogic_ready && curl -s -o /dev/null http://localhost:7997/",
 				},
 			},
 		},

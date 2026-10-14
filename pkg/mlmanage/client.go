@@ -151,6 +151,7 @@ func (c *managementClient) ListHostsStatus(ctx context.Context) ([]HostStatus, e
 
 	items := extractHostItems(payload)
 	totalOffline, hasTotalOffline := extractTotalHostsOffline(payload)
+	mixedAggregateStatus := hasTotalOffline && totalOffline > 0 && totalOffline < len(items)
 	hosts := make([]HostStatus, 0, len(items))
 	for i, item := range items {
 		name := firstString(item, "nameref", "host-name", "name")
@@ -161,7 +162,18 @@ func (c *managementClient) ListHostsStatus(ctx context.Context) ([]HostStatus, e
 		version := firstString(item, "version", "product-version")
 		online := status == "online"
 		if status == "" && hasTotalOffline {
-			online = totalOffline == 0
+			if mixedAggregateStatus {
+				hostStatus, fetchErr := c.fetchHostStatus(ctx, name)
+				if fetchErr != nil {
+					return nil, fetchErr
+				}
+				online = hostStatus.Online
+				if version == "" {
+					version = hostStatus.Version
+				}
+			} else {
+				online = totalOffline == 0
+			}
 		}
 		hosts = append(hosts, HostStatus{
 			Name:    name,
@@ -196,6 +208,39 @@ func (c *managementClient) ListHostsStatus(ctx context.Context) ([]HostStatus, e
 	}
 
 	return hosts, nil
+}
+
+func (c *managementClient) fetchHostStatus(ctx context.Context, hostName string) (HostStatus, error) {
+	query := url.Values{}
+	query.Set("view", "status")
+	query.Set("format", "json")
+	data, _, err := c.doJSON(ctx, http.MethodGet, "/manage/v2/hosts/"+url.PathEscape(hostName), query, nil, http.StatusOK)
+	if err != nil {
+		return HostStatus{}, err
+	}
+
+	var payload struct {
+		HostStatus struct {
+			Name             string `json:"name"`
+			Version          string `json:"version"`
+			StatusProperties struct {
+				Online struct {
+					Value *bool `json:"value"`
+				} `json:"online"`
+			} `json:"status-properties"`
+		} `json:"host-status"`
+	}
+	if err := json.Unmarshal(data, &payload); err != nil {
+		return HostStatus{}, err
+	}
+	if payload.HostStatus.StatusProperties.Online.Value == nil {
+		return HostStatus{}, fmt.Errorf("host %s status did not include an online value", hostName)
+	}
+	return HostStatus{
+		Name:    payload.HostStatus.Name,
+		Online:  *payload.HostStatus.StatusProperties.Online.Value,
+		Version: payload.HostStatus.Version,
+	}, nil
 }
 
 func (c *managementClient) GetGroup(ctx context.Context, groupName string) (GroupInfo, error) {
@@ -268,7 +313,7 @@ func (c *managementClient) EnableAdminAPITokenAuthentication(ctx context.Context
 func (c *managementClient) EnsureManageAdminUser(ctx context.Context, username, password string) error {
 	query := url.Values{}
 	query.Set("format", "json")
-	_, statusCode, err := c.doJSON(ctx, http.MethodGet, "/manage/v2/users/"+url.PathEscape(username), query, nil, http.StatusOK, http.StatusNotFound)
+	_, statusCode, err := c.doJSON(ctx, http.MethodGet, "/manage/v2/users/"+url.PathEscape(username), query, nil, http.StatusOK, http.StatusNotFound, http.StatusForbidden)
 	if err != nil {
 		return err
 	}
@@ -277,6 +322,16 @@ func (c *managementClient) EnsureManageAdminUser(ctx context.Context, username, 
 		"user-name": username,
 		"password":  password,
 		"role":      []string{"manage-admin"},
+	}
+	if statusCode == http.StatusForbidden {
+		credentialClient := *c
+		credentialClient.username = username
+		credentialClient.password = password
+		if _, _, credentialErr := credentialClient.doJSON(ctx, http.MethodGet, "/manage/v2", query, nil, http.StatusOK); credentialErr == nil {
+			return nil
+		}
+		_, _, err = c.doJSON(ctx, http.MethodPost, "/manage/v2/users", nil, payload, http.StatusCreated, http.StatusAccepted, http.StatusNoContent)
+		return err
 	}
 	if statusCode == http.StatusNotFound {
 		_, _, err = c.doJSON(ctx, http.MethodPost, "/manage/v2/users", nil, payload, http.StatusCreated, http.StatusAccepted, http.StatusNoContent)
@@ -405,15 +460,13 @@ func (c *managementClient) RequestDynamicHostToken(ctx context.Context, clusterN
 }
 
 func (c *managementClient) JoinDynamicHost(ctx context.Context, hostFQDN, token string) error {
-	scheme := "http"
-	if strings.HasPrefix(c.baseURL, "https://") {
-		scheme = "https"
-	}
 	host := hostFQDN
 	if parsedHost, _, err := net.SplitHostPort(hostFQDN); err == nil {
 		host = parsedHost
 	}
-	joinURL := fmt.Sprintf("%s://%s:8001/admin/v1/init", scheme, host)
+	// A new dynamic host has not joined the cluster or inherited its TLS
+	// configuration yet, so its local Admin init endpoint starts on HTTP.
+	joinURL := fmt.Sprintf("http://%s:8001/admin/v1/init", host)
 	body := fmt.Sprintf("<init xmlns=\"http://marklogic.com/manage\"><dynamic-host-token>%s</dynamic-host-token></init>", token)
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, joinURL, strings.NewReader(body))

@@ -1,0 +1,12 @@
+controllerManager:
+  manager:
+    image:
+      repository: marklogic-operator-kubernetes
+      tag: ml-lp-arm64
+
+scope:
+  type: namespace
+  watchNamespaces: ml-lp-test
+
+metrics:
+  secure: false
