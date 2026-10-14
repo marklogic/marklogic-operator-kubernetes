@@ -210,3 +210,19 @@ go test -v ./test/e2e-helm -count=1 -args --labels="type=tls-self-signed"
 # Metrics endpoint (insecure HTTP, no auth)
 go test -v ./test/e2e-helm -count=1 -args --labels="type=metrics"
 ```
+
+## Object storage credentials (unit and envtest)
+
+These cover `spec.objectStorage` without a live MarkLogic or cloud account. End-to-end and live Management API tests are not wired up yet.
+
+```sh
+# Unit: credential client, provider lifecycle/checkpoints, handler isolation, predicates, freshness helper
+env -u ML_MANAGE_ENDPOINT go test ./api/... ./pkg/... ./test/utils/... -run 'ObjectStorage|Credential|ReconcileOutcome|ClusterHandler|ClusterAnnotations|BootstrapManagement' -count=1
+env -u ML_MANAGE_ENDPOINT go test ./internal/controller -run 'TestClusterPredicate|TestSecretRevision|TestObjectStorageSecretNames|TestSecretToClusters' -count=1
+
+# envtest (schema/CEL, status round trip, real Secret and cluster watches); needs an absolute KUBEBUILDER_ASSETS
+export KUBEBUILDER_ASSETS="$PWD/$(bin/setup-envtest use 1.31.0 --bin-dir bin -p path)"
+go test ./internal/controller -run TestAPIs -ginkgo.focus "object storage" -count=1
+```
+
+Use `test/utils.ObjectStorageReady` for any readiness wait: it checks all four status-freshness conditions (a phase-only `Applied` check is not enough) from the current cluster and Secret metadata. Never print Secret data or raw credential responses from tests.

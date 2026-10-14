@@ -106,7 +106,6 @@ func TestTlsWithSelfSigned(t *testing.T) {
 				Labels: namespaceLabels(),
 			},
 		})
-		ensureMarklogicSchemeRegistered(t, c)
 
 		if err := client.Resources(namespace).Create(ctx, cr); err != nil {
 			t.Fatalf("Failed to create MarklogicCluster: %s", err)
@@ -260,7 +259,6 @@ func TestTlsWithNamedCert(t *testing.T) {
 				Labels: namespaceLabels(),
 			},
 		})
-		ensureMarklogicSchemeRegistered(t, c)
 		prepareTLSCertDir(t, caCertDir, "")
 		prepareTLSCertDir(t, podZeroCertDir, filepath.Join("test", "test_data", "pod_zero_certs", "server.cnf"))
 		prepareTLSCertDir(t, podOneCertDir, filepath.Join("test", "test_data", "pod_one_certs", "server.cnf"))
@@ -448,7 +446,6 @@ func TestTlsWithMultiNode(t *testing.T) {
 
 	feature.Setup(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 		client := c.Client()
-		ensureMarklogicSchemeRegistered(t, c)
 
 		// Check if namespace exists and wait if it's terminating
 		ns := &corev1.Namespace{}
@@ -606,15 +603,14 @@ func TestTlsWithMultiNode(t *testing.T) {
 			t.Fatal("HTTPS endpoint never became ready")
 		}
 
-		// Poll until both node certificates are visible via the management API.
-		// The hosts status endpoint can return XML even when format=json is requested,
-		// so it is not a reliable JSON convergence signal on minikube.
+		// Poll until the expected non-temporary node certificates are visible via the
+		// management API. Certificate list order is not stable during TLS convergence.
 		certsURL := "https://localhost:8002/manage/v2/certificates?format=json"
 		certsCommand := fmt.Sprintf("curl -k --anyauth -u %s:%s %s", adminUsername, adminPassword, certsURL)
 
 		var certs string
 		var err error
-		converged := false
+		certificatesByHostname := make(map[string]string, len(hostnamesSlice))
 		for i := 0; i < 90; i++ {
 			certs, err = utils.ExecCmdInPod(podName, namespace, mlContainerName, certsCommand)
 			if err != nil {
@@ -623,53 +619,33 @@ func TestTlsWithMultiNode(t *testing.T) {
 				continue
 			}
 
-			certCount := gjson.Get(certs, "certificate-default-list.list-items.list-count.value").Int()
-			if certCount == 0 {
-				certCount = int64(len(gjson.Get(certs, "certificate-default-list.list-items.list-item.#.uriref").Array()))
+			certURIs := gjson.Get(certs, `certificate-default-list.list-items.list-item.#.uriref`).Array()
+			certificatesByHostname = make(map[string]string, len(hostnamesSlice))
+			for _, certURI := range certURIs {
+				certURL := fmt.Sprintf("https://localhost:8002%s?format=json", certURI.String())
+				certDetailCommand := fmt.Sprintf("curl -k --anyauth -u %s:%s %s", adminUsername, adminPassword, certURL)
+				certDetail, detailErr := utils.ExecCmdInPod(podName, namespace, mlContainerName, certDetailCommand)
+				if detailErr != nil {
+					t.Logf("Failed to get certificate %s (attempt %d/90): %v", certURI.String(), i+1, detailErr)
+					continue
+				}
+
+				hostname := gjson.Get(certDetail, `certificate-default.host-name`).String()
+				if !gjson.Get(certDetail, `certificate-default.temporary`).Bool() && slices.Contains(hostnamesSlice, hostname) {
+					certificatesByHostname[hostname] = certURI.String()
+				}
 			}
 
-			t.Logf("TLS certificate convergence check (attempt %d/90): certs=%d", i+1, certCount)
-			if certCount >= 2 {
-				converged = true
+			t.Logf("TLS certificate convergence check (attempt %d/90): expected-certificates=%d/%d", i+1, len(certificatesByHostname), len(hostnamesSlice))
+			if len(certificatesByHostname) == len(hostnamesSlice) {
 				break
 			}
 
 			time.Sleep(2 * time.Second)
 		}
-		if !converged {
+		if len(certificatesByHostname) != len(hostnamesSlice) {
 			t.Logf("Last certs payload: %s", certs)
-			t.Fatalf("Timed out waiting for both node TLS certificates")
-		}
-		t.Log("Certificates list", certs)
-		certURIs := gjson.Get(certs, `certificate-default-list.list-items.list-item.#.uriref`).Array()
-		t.Log("Dnode Cert Url", certURIs)
-		if len(certURIs) < 2 {
-			t.Fatalf("Expected at least 2 certificates, found %d", len(certURIs))
-		}
-		cert0Url := fmt.Sprintf("https://localhost:8002%s?format=json", certURIs[0])
-		cert1Url := fmt.Sprintf("https://localhost:8002%s?format=json", certURIs[1])
-		certDetailCommand := fmt.Sprintf("curl -k --anyauth -u %s:%s %s", adminUsername, adminPassword, cert0Url)
-		cert0Detail, err := utils.ExecCmdInPod(podName, namespace, mlContainerName, certDetailCommand)
-		if err != nil {
-			t.Fatalf("Failed to execute and get first certificate: %v", err)
-		}
-		cert0Temporary := gjson.Get(cert0Detail, `certificate-default.temporary`).Bool()
-		cert0HostName := gjson.Get(cert0Detail, `certificate-default.host-name`).String()
-
-		certDetailCommand = fmt.Sprintf("curl -k --anyauth -u %s:%s %s", adminUsername, adminPassword, cert1Url)
-		cert1Detail, err := utils.ExecCmdInPod(podName, namespace, mlContainerName, certDetailCommand)
-		if err != nil {
-			t.Fatalf("Failed to execute and get second certificate: %v", err)
-		}
-		cert1Temporary := gjson.Get(cert1Detail, `certificate-default.temporary`).Bool()
-		cert1HostName := gjson.Get(cert1Detail, `certificate-default.host-name`).String()
-		if cert0Temporary || cert1Temporary {
-			t.Logf("Certificate 0: %v, Certificate 1: %v", cert0Temporary, cert1Temporary)
-			t.Fatalf("Certificate is temporary")
-		}
-		if !slices.Contains(hostnamesSlice, cert0HostName) || !slices.Contains(hostnamesSlice, cert1HostName) {
-			t.Logf("Certificate 0: %v, Certificate 1: %v", cert0HostName, cert1HostName)
-			t.Fatalf("Certificate host name is not in the list of hostnames")
+			t.Fatalf("Timed out waiting for non-temporary TLS certificates for hosts %v; found %v", hostnamesSlice, certificatesByHostname)
 		}
 		return ctx
 	})

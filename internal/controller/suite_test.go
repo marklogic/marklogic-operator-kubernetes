@@ -34,6 +34,7 @@ import (
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
 	marklogicv1 "github.com/marklogic/marklogic-operator-kubernetes/api/v1"
+	"github.com/marklogic/marklogic-operator-kubernetes/pkg/mlmanage"
 	//+kubebuilder:scaffold:imports
 )
 
@@ -96,6 +97,11 @@ var _ = BeforeSuite(func() {
 		Scheme:   mgr.GetScheme(),
 		Log:      ctrl.Log.WithName("controllers").WithName("MarklogicCluster"),
 		Recorder: mgr.GetEventRecorderFor("marklogiccluster-controller"),
+
+		APIReader: mgr.GetAPIReader(),
+		CredentialClientFactory: func(mlmanage.ClientOptions) mlmanage.CredentialClient {
+			return objectStorageStub
+		},
 	}).SetupWithManager(mgr)
 	Expect(err).ToNot(HaveOccurred())
 
