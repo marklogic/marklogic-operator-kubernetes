@@ -27,6 +27,7 @@ rules:
   resources:
   - persistentvolumeclaims
   verbs:
+  - create
   - get
   - list
   - patch
@@ -184,6 +185,7 @@ rules:
   resources:
   - persistentvolumeclaims
   verbs:
+  - create
   - get
   - list
   - patch

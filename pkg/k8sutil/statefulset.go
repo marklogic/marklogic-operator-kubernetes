@@ -97,6 +97,23 @@ func (oc *OperatorContext) ReconcileStatefulset() (reconcile.Result, error) {
 		return result.Error(err).Output()
 	}
 
+	if err := oc.ensureScaleUpDataPVCs(cr, currentSts, statefulSetDef.Spec.VolumeClaimTemplates); err != nil {
+		logger.Error(err, "Cannot prepare data PVCs for scale-up")
+		return result.Error(err).Output()
+	}
+	statefulSetDef.Spec.Ordinals = currentSts.Spec.Ordinals.DeepCopy()
+	statefulSetDef.Spec.PersistentVolumeClaimRetentionPolicy = currentSts.Spec.PersistentVolumeClaimRetentionPolicy.DeepCopy()
+
+	for index := range statefulSetDef.Spec.VolumeClaimTemplates {
+		desiredClaim := &statefulSetDef.Spec.VolumeClaimTemplates[index]
+		for _, liveClaim := range currentSts.Spec.VolumeClaimTemplates {
+			if liveClaim.Name == desiredClaim.Name {
+				desiredClaim.Spec.VolumeAttributesClassName = liveClaim.Spec.DeepCopy().VolumeAttributesClassName
+				break
+			}
+		}
+	}
+
 	patchDiff, err := patch.DefaultPatchMaker.Calculate(currentSts, statefulSetDef,
 		patch.IgnoreStatusFields(),
 		patch.IgnoreVolumeClaimTemplateTypeMetaAndStatus(),
@@ -174,6 +191,78 @@ func (oc *OperatorContext) ReconcileStatefulset() (reconcile.Result, error) {
 	}
 
 	return result.Done().Output()
+}
+
+const dataPVCGroupUIDAnnotation = "marklogic.progress.com/storage-group-uid"
+
+func (oc *OperatorContext) ensureScaleUpDataPVCs(cr *marklogicv1.MarklogicGroup, currentSts *appsv1.StatefulSet, templates []corev1.PersistentVolumeClaim) error {
+	if cr.Spec.Replicas == nil || currentSts.Spec.Replicas == nil || *cr.Spec.Replicas <= *currentSts.Spec.Replicas {
+		return nil
+	}
+	for _, template := range templates {
+		for _, liveTemplate := range currentSts.Spec.VolumeClaimTemplates {
+			if liveTemplate.Name != template.Name {
+				continue
+			}
+			liveClass, desiredClass := liveTemplate.Spec.VolumeAttributesClassName, template.Spec.VolumeAttributesClassName
+			if liveClass == nil && desiredClass == nil || liveClass != nil && desiredClass != nil && *liveClass == *desiredClass {
+				break
+			}
+			if cr.UID == "" || currentSts.DeletionTimestamp != nil {
+				return fmt.Errorf("cannot precreate PVCs without a group UID or for a terminating StatefulSet")
+			}
+			if !metav1.IsControlledBy(currentSts, cr) {
+				return fmt.Errorf("cannot precreate PVCs for a StatefulSet not controlled by this group")
+			}
+			start := int64(0)
+			if currentSts.Spec.Ordinals != nil {
+				start = int64(currentSts.Spec.Ordinals.Start)
+			}
+			for ordinal := start + int64(*currentSts.Spec.Replicas); ordinal < start+int64(*cr.Spec.Replicas); ordinal++ {
+				claim := template.DeepCopy()
+				claim.Name = fmt.Sprintf("%s-%s-%d", template.Name, currentSts.Name, ordinal)
+				claim.Namespace = currentSts.Namespace
+				if claim.Labels == nil {
+					claim.Labels = map[string]string{}
+				}
+				for key, value := range currentSts.Spec.Selector.MatchLabels {
+					claim.Labels[key] = value
+				}
+				if claim.Annotations == nil {
+					claim.Annotations = map[string]string{}
+				}
+				claim.Annotations[dataPVCGroupUIDAnnotation] = string(cr.UID)
+				if err := oc.Client.Create(oc.Ctx, claim); err != nil {
+					if !apierrors.IsAlreadyExists(err) {
+						return fmt.Errorf("create scale-up PVC %s: %w", claim.Name, err)
+					}
+					existing := &corev1.PersistentVolumeClaim{}
+					if err := oc.Client.Get(oc.Ctx, client.ObjectKeyFromObject(claim), existing); err != nil {
+						return fmt.Errorf("read existing scale-up PVC %s: %w", claim.Name, err)
+					}
+					verified := existing.Annotations[dataPVCGroupUIDAnnotation] == string(cr.UID)
+					for _, owner := range existing.OwnerReferences {
+						if owner.Kind == "MarklogicGroup" && owner.UID == cr.UID || owner.Kind == "StatefulSet" && currentSts.UID != "" && owner.UID == currentSts.UID {
+							verified = true
+						} else {
+							return fmt.Errorf("scale-up PVC %s has an unverified owner", claim.Name)
+						}
+					}
+					if !verified {
+						return fmt.Errorf("scale-up PVC %s has no verified group identity", claim.Name)
+					}
+					if existing.DeletionTimestamp != nil {
+						return fmt.Errorf("scale-up PVC %s is terminating", claim.Name)
+					}
+					if template.Spec.StorageClassName != nil && (existing.Spec.StorageClassName == nil || *existing.Spec.StorageClassName != *template.Spec.StorageClassName) {
+						return fmt.Errorf("scale-up PVC %s has a different StorageClass", claim.Name)
+					}
+				}
+			}
+			break
+		}
+	}
+	return nil
 }
 
 func shouldDelayDynamicEmptyDirScaleDown(cr *marklogicv1.MarklogicGroup, currentSts *appsv1.StatefulSet) bool {
@@ -427,6 +516,16 @@ func generateStatefulSetsParams(cr *marklogicv1.MarklogicGroup) statefulSetParam
 	if cr.Spec.Persistence != nil && cr.Spec.Persistence.Enabled {
 		params.PersistentVolumeClaim = generatePVCTemplate(cr.Spec.Persistence)
 	}
+	if cr.Spec.AdditionalVolumeClaimTemplates != nil {
+		claims := make([]corev1.PersistentVolumeClaim, len(*cr.Spec.AdditionalVolumeClaimTemplates))
+		for index := range *cr.Spec.AdditionalVolumeClaimTemplates {
+			(*cr.Spec.AdditionalVolumeClaimTemplates)[index].DeepCopyInto(&claims[index])
+			if className := claims[index].Spec.VolumeAttributesClassName; className != nil && *className == "" {
+				claims[index].Spec.VolumeAttributesClassName = nil
+			}
+		}
+		params.AdditionalVolumeClaimTemplates = &claims
+	}
 	return params
 }
 
@@ -608,6 +707,10 @@ func generatePVCTemplate(persistence *marklogicv1.Persistence) corev1.Persistent
 
 	if persistence.StorageClassName != "" {
 		pvcTemplate.Spec.StorageClassName = &persistence.StorageClassName
+	}
+	if persistence.VolumeAttributesClassName != nil && *persistence.VolumeAttributesClassName != "" {
+		className := *persistence.VolumeAttributesClassName
+		pvcTemplate.Spec.VolumeAttributesClassName = &className
 	}
 	pvcTemplate.Spec.AccessModes = persistence.AccessModes
 	pvcTemplate.ObjectMeta.Annotations = persistence.Annotations

@@ -4421,6 +4421,10 @@ spec:
                     type: string
                   storageClassName:
                     type: string
+                  volumeAttributesClassName:
+                    maxLength: 253
+                    pattern: ^$|^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$
+                    type: string
                 required:
                 - size
                 type: object
