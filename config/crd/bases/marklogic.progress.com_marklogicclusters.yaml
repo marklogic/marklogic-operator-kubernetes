@@ -9621,6 +9621,10 @@ spec:
                           type: string
                         storageClassName:
                           type: string
+                        volumeAttributesClassName:
+                          maxLength: 253
+                          pattern: ^$|^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$
+                          type: string
                       required:
                       - size
                       type: object
@@ -9805,13 +9809,6 @@ spec:
                           default: ClusterIP
                           description: Service Type string describes ingress methods
                             for a service
-                          type: string
-                      type: object
-                    storage:
-                      properties:
-                        volumeAttributesClassName:
-                          maxLength: 253
-                          pattern: ^$|^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$
                           type: string
                       type: object
                     tls:
@@ -10514,6 +10511,10 @@ spec:
                     type: string
                   storageClassName:
                     type: string
+                  volumeAttributesClassName:
+                    maxLength: 253
+                    pattern: ^$|^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$
+                    type: string
                 required:
                 - size
                 type: object
@@ -11014,13 +11015,6 @@ spec:
                 x-kubernetes-validations:
                 - message: ServiceAccountName can not be changed
                   rule: self == oldSelf
-              storage:
-                properties:
-                  volumeAttributesClassName:
-                    maxLength: 253
-                    pattern: ^$|^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$
-                    type: string
-                type: object
               terminationGracePeriodSeconds:
                 format: int64
                 type: integer

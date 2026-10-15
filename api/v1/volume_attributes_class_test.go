@@ -2,12 +2,14 @@ package v1
 
 import (
 	"bytes"
+	"encoding/json"
 	"os"
 	"reflect"
 	"strings"
 	"testing"
 	"text/template"
 
+	corev1 "k8s.io/api/core/v1"
 	apiextensions "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	"k8s.io/apiextensions-apiserver/pkg/apiserver/schema"
@@ -17,32 +19,67 @@ import (
 	k8syaml "k8s.io/apimachinery/pkg/util/yaml"
 )
 
+func TestPersistenceVolumeAttributesClassJSON(t *testing.T) {
+	for _, className := range []*string{nil, pointerToClass(""), pointerToClass("ml-standard")} {
+		group := MarklogicGroup{Spec: MarklogicGroupSpec{
+			Persistence: &Persistence{Enabled: true, Size: "10Gi", VolumeAttributesClassName: className},
+			AdditionalVolumeClaimTemplates: &[]corev1.PersistentVolumeClaim{{
+				Spec: corev1.PersistentVolumeClaimSpec{VolumeAttributesClassName: pointerToClass("ml-premium")},
+			}},
+		}}
+		encoded, err := json.Marshal(group)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var decoded MarklogicGroup
+		if err := json.Unmarshal(encoded, &decoded); err != nil {
+			t.Fatal(err)
+		}
+		if !reflect.DeepEqual(decoded.Spec.Persistence.VolumeAttributesClassName, className) || *(*decoded.Spec.AdditionalVolumeClaimTemplates)[0].Spec.VolumeAttributesClassName != "ml-premium" {
+			t.Fatal("primary and additional volume selections must round-trip independently")
+		}
+		var fields map[string]json.RawMessage
+		persistence, err := json.Marshal(group.Spec.Persistence)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := json.Unmarshal(persistence, &fields); err != nil {
+			t.Fatal(err)
+		}
+		if _, present := fields["volumeAttributesClassName"]; present != (className != nil) {
+			t.Fatal("nil must be omitted while explicit empty selections remain distinguishable")
+		}
+	}
+}
+
+func pointerToClass(value string) *string { return &value }
+
 func TestStorageDeepCopy(t *testing.T) {
 	tests := []struct {
 		name string
-		copy func(*Storage) *Storage
+		copy func(*Persistence) *Persistence
 	}{
 		{
 			name: "cluster",
-			copy: func(storage *Storage) *Storage {
-				cluster := &MarklogicCluster{Spec: MarklogicClusterSpec{Storage: storage}}
-				return cluster.DeepCopy().Spec.Storage
+			copy: func(storage *Persistence) *Persistence {
+				cluster := &MarklogicCluster{Spec: MarklogicClusterSpec{Persistence: storage}}
+				return cluster.DeepCopy().Spec.Persistence
 			},
 		},
 		{
 			name: "embedded group",
-			copy: func(storage *Storage) *Storage {
+			copy: func(storage *Persistence) *Persistence {
 				cluster := &MarklogicCluster{Spec: MarklogicClusterSpec{
-					MarkLogicGroups: []*MarklogicGroups{{Storage: storage}},
+					MarkLogicGroups: []*MarklogicGroups{{Persistence: storage}},
 				}}
-				return cluster.DeepCopy().Spec.MarkLogicGroups[0].Storage
+				return cluster.DeepCopy().Spec.MarkLogicGroups[0].Persistence
 			},
 		},
 		{
 			name: "standalone group",
-			copy: func(storage *Storage) *Storage {
-				group := &MarklogicGroup{Spec: MarklogicGroupSpec{Storage: storage}}
-				return group.DeepCopy().Spec.Storage
+			copy: func(storage *Persistence) *Persistence {
+				group := &MarklogicGroup{Spec: MarklogicGroupSpec{Persistence: storage}}
+				return group.DeepCopy().Spec.Persistence
 			},
 		},
 	}
@@ -51,12 +88,12 @@ func TestStorageDeepCopy(t *testing.T) {
 			if test.copy(nil) != nil {
 				t.Fatal("expected omitted storage to stay nil")
 			}
-			empty := test.copy(&Storage{})
+			empty := test.copy(&Persistence{})
 			if empty == nil || empty.VolumeAttributesClassName != nil {
 				t.Fatal("expected an omitted class to stay nil")
 			}
 			className := "ml-standard"
-			original := &Storage{VolumeAttributesClassName: &className}
+			original := &Persistence{VolumeAttributesClassName: &className}
 			copied := test.copy(original)
 			if copied == original || copied.VolumeAttributesClassName == original.VolumeAttributesClassName {
 				t.Fatal("storage and class pointers must be copied independently")
@@ -102,17 +139,20 @@ func TestStorageSchemas(t *testing.T) {
 				if test.embedded {
 					parent = *parent.Properties["markLogicGroups"].Items.Schema
 				}
-				storage, exists := parent.Properties["storage"]
+				if _, exists := parent.Properties["storage"]; exists {
+					t.Fatalf("obsolete separate storage schema in %s", path)
+				}
+				storage, exists := parent.Properties["persistence"]
 				if !exists {
 					t.Fatalf("missing storage schema in %s", path)
 				}
 				for _, required := range parent.Required {
-					if required == "storage" {
+					if required == "persistence" {
 						t.Fatalf("storage must be optional in %s", path)
 					}
 				}
 				class := storage.Properties["volumeAttributesClassName"]
-				if class.Type != "string" || class.MaxLength == nil || *class.MaxLength != 253 || class.Nullable || class.Default != nil || len(storage.Required) != 0 {
+				if class.Type != "string" || class.MaxLength == nil || *class.MaxLength != 253 || class.Nullable || class.Default != nil || !reflect.DeepEqual(storage.Required, []string{"size"}) {
 					t.Fatalf("unexpected optional class schema in %s: %+v", path, class)
 				}
 				if path == test.nativePath {
@@ -120,7 +160,11 @@ func TestStorageSchemas(t *testing.T) {
 				} else if !reflect.DeepEqual(nativeStorage, storage) {
 					t.Fatalf("native and Helm storage schemas differ at %s", test.name)
 				}
-				validateStorageSchema(t, storage)
+				validateStorageSchema(t, apiextensionsv1.JSONSchemaProps{Type: "object", Properties: map[string]apiextensionsv1.JSONSchemaProps{"volumeAttributesClassName": class}})
+				additional := parent.Properties["additionalVolumeClaimTemplates"].Items.Schema.Properties["spec"].Properties["volumeAttributesClassName"]
+				if additional.Type != "string" || additional.Default != nil {
+					t.Fatalf("missing optional additional-volume class in %s", path)
+				}
 			}
 		})
 	}

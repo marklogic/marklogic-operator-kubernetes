@@ -52,7 +52,6 @@ type MarklogicClusterSpec struct {
 	AutomountServiceAccountToken *bool `json:"automountServiceAccountToken,omitempty"`
 	// +kubebuilder:default:={enabled: true, size: "10Gi"}
 	Persistence                   *Persistence                 `json:"persistence,omitempty"`
-	Storage                       *Storage                     `json:"storage,omitempty"`
 	Resources                     *corev1.ResourceRequirements `json:"resources,omitempty"`
 	TerminationGracePeriodSeconds *int64                       `json:"terminationGracePeriodSeconds,omitempty"`
 	// +kubebuilder:validation:Enum=OnDelete;RollingUpdate
@@ -109,7 +108,6 @@ type MarklogicGroups struct {
 	ImagePullPolicy           string                            `json:"imagePullPolicy,omitempty"`
 	ImagePullSecrets          []corev1.LocalObjectReference     `json:"imagePullSecrets,omitempty"`
 	Persistence               *Persistence                      `json:"persistence,omitempty"`
-	Storage                   *Storage                          `json:"storage,omitempty"`
 	Service                   Service                           `json:"service,omitempty"`
 	Resources                 *corev1.ResourceRequirements      `json:"resources,omitempty"`
 	Affinity                  *corev1.Affinity                  `json:"affinity,omitempty"`

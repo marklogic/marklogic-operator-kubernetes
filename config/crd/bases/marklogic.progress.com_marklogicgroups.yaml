@@ -4436,6 +4436,10 @@ spec:
                     type: string
                   storageClassName:
                     type: string
+                  volumeAttributesClassName:
+                    maxLength: 253
+                    pattern: ^$|^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$
+                    type: string
                 required:
                 - size
                 type: object
@@ -5058,13 +5062,6 @@ spec:
                 type: object
               serviceAccountName:
                 type: string
-              storage:
-                properties:
-                  volumeAttributesClassName:
-                    maxLength: 253
-                    pattern: ^$|^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$
-                    type: string
-                type: object
               terminationGracePeriodSeconds:
                 format: int64
                 type: integer

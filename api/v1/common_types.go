@@ -37,12 +37,6 @@ type DynamicGroupConfig struct {
 	TokenDuration string `json:"tokenDuration,omitempty"`
 }
 
-type Storage struct {
-	// +kubebuilder:validation:MaxLength=253
-	// +kubebuilder:validation:Pattern="^$|^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$"
-	VolumeAttributesClassName *string `json:"volumeAttributesClassName,omitempty"`
-}
-
 // Storage is the inteface to add pvc and pv support in marklogic
 type Persistence struct {
 	Enabled bool `json:"enabled,omitempty"`
@@ -52,6 +46,9 @@ type Persistence struct {
 	// +kubebuilder:default:=parallel
 	ResizeStrategy   VolumeResizeStrategy `json:"resizeStrategy,omitempty"`
 	StorageClassName string               `json:"storageClassName,omitempty"`
+	// +kubebuilder:validation:MaxLength=253
+	// +kubebuilder:validation:Pattern="^$|^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$"
+	VolumeAttributesClassName *string `json:"volumeAttributesClassName,omitempty"`
 	// +kubebuilder:default:={ReadWriteOnce}
 	AccessModes []corev1.PersistentVolumeAccessMode `json:"accessModes,omitempty"`
 	Annotations map[string]string                   `json:"annotations,omitempty"`

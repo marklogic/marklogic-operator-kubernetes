@@ -9593,15 +9593,12 @@ spec:
                           type: string
                         storageClassName:
                           type: string
-                      required:
-                      - size
-                      type: object
-                    storage:
-                      properties:
                         volumeAttributesClassName:
                           maxLength: 253
                           pattern: ^$|^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$
                           type: string
+                      required:
+                      - size
                       type: object
                     priorityClassName:
                       type: string
@@ -10479,15 +10476,12 @@ spec:
                     type: string
                   storageClassName:
                     type: string
-                required:
-                - size
-                type: object
-              storage:
-                properties:
                   volumeAttributesClassName:
                     maxLength: 253
                     pattern: ^$|^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$
                     type: string
+                required:
+                - size
                 type: object
               podSecurityContext:
                 description: |-

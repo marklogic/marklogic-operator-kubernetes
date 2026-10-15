@@ -47,7 +47,6 @@ type MarklogicGroupSpec struct {
 	// +kubebuilder:default:=false
 	AutomountServiceAccountToken  *bool                        `json:"automountServiceAccountToken,omitempty"`
 	Persistence                   *Persistence                 `json:"persistence,omitempty"`
-	Storage                       *Storage                     `json:"storage,omitempty"`
 	Resources                     *corev1.ResourceRequirements `json:"resources,omitempty"`
 	TerminationGracePeriodSeconds *int64                       `json:"terminationGracePeriodSeconds,omitempty"`
 	// +kubebuilder:validation:Enum=OnDelete;RollingUpdate

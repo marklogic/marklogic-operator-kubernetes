@@ -10,8 +10,8 @@ The API, provisioning, in-place updates, compatibility handling, and observabili
 
 ### Goal
 
-1. Select storage performance profiles through cluster defaults and group overrides.
-2. Create new primary data PVCs, including scale-up claims, with the effective class observed at claim creation; reconcile later changes after binding.
+1. Select storage performance profiles for primary and additional persistent volumes through cluster defaults and group overrides, independently per claim template.
+2. Create new primary and additional PVCs, including scale-up claims, with each template's effective class observed at claim creation; reconcile later changes after binding.
 3. Apply supported class changes to existing PVCs without recreating StatefulSets, PVCs, or Pods.
 4. Report desired/current class, per-PVC progress, aggregate conditions, and actionable errors.
 5. Preserve existing behavior when unconfigured and continue unrelated reconciliation when unsupported.
@@ -54,16 +54,17 @@ Prefer `v1`, falling back to `v1beta1`. Kubernetes version alone does not establ
 
 #### Declarative Storage Selection
 
-1. Expose optional `volumeAttributesClassName` as `*string` under `spec.storage` on clusters, standalone groups, and embedded per-group overrides.
-2. Resolve inheritance per field, independently of persistence overrides.
-3. Validate RFC 1123 subdomain names of at most 253 characters; allow nil and empty.
-4. Regenerate deepcopy, native CRDs, and Helm CRDs, and publish API documentation.
+1. Expose optional `volumeAttributesClassName` as `*string` under the existing `spec.persistence` on clusters, standalone groups, and embedded per-group overrides.
+2. Preserve existing whole-object persistence overrides: a group without `persistence` inherits cluster persistence, including VAC; a supplied group object replaces it without field merging.
+3. Allow an independent `spec.volumeAttributesClassName` in each existing `additionalVolumeClaimTemplates` entry. Preserve existing whole-list group override semantics; primary persistence does not supply a default to additional templates.
+4. Validate primary class references as RFC 1123 subdomain names of at most 253 characters; allow nil and empty. Additional references use the existing native PVC schema and Kubernetes PVC admission validation. Normalize nil/empty selections to an omitted field in generated PVCs.
+5. Regenerate deepcopy, native CRDs, and Helm CRDs, and publish API documentation.
 
 #### Provisioning and Live Reconciliation
 
-1. Populate only primary `datadir` claim templates when creating a StatefulSet; leave the field unset when unconfigured.
-2. Create new scale-up PVCs with the effective provisioning class observed at creation, including a non-empty class after live changes or an unset field after opt-out/unsupported fallback.
-3. Select managed data claims through namespace/owner labels and verified workload association. Never patch auxiliary, Fluent Bit-specific, or unrelated claims.
+1. Populate the primary `datadir` template from `persistence.volumeAttributesClassName` and each additional template from its own `spec.volumeAttributesClassName`; leave the field unset for unconfigured templates.
+2. Create new scale-up PVCs with each template's validated provisioning class observed at creation, including a non-empty class after live changes or an unset field after opt-out. Block the affected provisioning action when an explicitly requested class cannot be honored; do not substitute driver defaults.
+3. Select primary and explicitly declared additional claims through template identity, active ordinals, and verified workload association. Never patch unrelated claims or externally supplied PVCs merely referenced through `additionalVolumes`.
 4. Patch mismatched bound PVC fields directly, idempotently, with bounded conflict retries and fresh reads. Observe unbound claims without attempting immutable reference changes.
 5. Suppress VAC-only immutable claim-template drift without concealing unrelated persistence changes.
 
@@ -71,9 +72,9 @@ Prefer `v1`, falling back to `v1beta1`. Kubernetes version alone does not establ
 
 1. Use cached API discovery; check class existence and StorageClass provisioner/CSI driver compatibility where possible.
 2. Report absent APIs, disabled features, missing classes, unsupported drivers, and modification errors through conditions, warnings, and Events.
-3. Omit VAC during provisioning when the API is unavailable; unrelated reconciliation must continue.
+3. When an explicit non-empty VAC is unsupported, missing, incompatible, or cannot be validated, block affected new provisioning and report a non-success condition. Continue unconfigured provisioning, existing workloads, required consumer scheduling, and unrelated reconciliation; never silently drop an explicit request.
 4. Watch managed PVCs and expose desired/current class and normalized progress under `status.storage`.
-5. Set `StorageAttributesSynced=True` only when every targeted data PVC has applied the current desired class. Emit dispatch/completion/failure Events only on transitions.
+5. Set `StorageAttributesSynced=True` only when every targeted primary or additional PVC has applied its own current desired class. Emit dispatch/completion/failure Events only on transitions.
 
 ### Non-Functional Requirements
 
@@ -87,9 +88,9 @@ Reconstruct progress from the latest CR and PVC state after restart. Preserve pa
 
 ### Scope and Non-Goals
 
-In scope: active operator-managed primary data claims, initial provisioning, scale-up, live changes, compatibility checks, and group/cluster observability.
+In scope: active operator-managed primary claims and declared additional claim templates, independent per-template profiles, initial provisioning, scale-up, live VAC changes, compatibility checks, and group/cluster observability.
 
-Out of scope: auxiliary claim-template changes, Fluent Bit-specific storage, StorageClass migration, capacity resizing, automatic provider rollback, VAC resource administration, and new user-configurable scheduling/strategy fields. Fluent Bit logs sharing datadir naturally share that volume's performance profile.
+Out of scope: adding/removing/renaming claim templates on existing StatefulSets, modification of externally supplied PVCs, non-PVC volumes, StorageClass migration, capacity resizing, automatic provider rollback, VAC resource administration, and new user-configurable scheduling/strategy fields. A Fluent Bit-specific claim is eligible only when explicitly declared as an additional template; logs sharing datadir naturally share that volume's performance profile.
 
 Retained claims outside the active ordinal range are not modified; reactivated claims become targets again. Reactivation reuses existing storage, not new provisioning: bound claims converge to the latest managed class, while unbound claims follow the binding recovery rules. Opt-out leaves reused claims unchanged. The controller must report missing active claims rather than silently excluding them from completion.
 
@@ -97,29 +98,39 @@ Retained claims outside the active ordinal range are not modified; reactivated c
 
 ### Trigger Model and Spec Fields
 
-The administrator updates the CR's class reference. Cluster reconciliation resolves the effective field into each child `MarklogicGroup`; group reconciliation owns PVC changes and detailed status. A standalone group uses its own field directly.
+The administrator updates the CR's per-template class references. Cluster reconciliation resolves persistence and additional templates into each child `MarklogicGroup`; group reconciliation owns PVC changes and detailed status. A standalone group uses its own configuration directly.
 
 | Field | Type | Meaning |
 | --- | --- | --- |
-| `MarklogicCluster.spec.storage.volumeAttributesClassName` | Optional `*string` | Cluster default. |
-| `MarklogicCluster.spec.markLogicGroups[i].storage.volumeAttributesClassName` | Optional `*string` | Per-group override. |
-| `MarklogicGroup.spec.storage.volumeAttributesClassName` | Optional `*string` | Standalone selection or resolved child value. |
+| `MarklogicCluster.spec.persistence.volumeAttributesClassName` | Optional `*string` | Primary volume selection within cluster persistence. |
+| `MarklogicCluster.spec.markLogicGroups[i].persistence.volumeAttributesClassName` | Optional `*string` | Primary selection within a complete per-group persistence override. |
+| `MarklogicGroup.spec.persistence.volumeAttributesClassName` | Optional `*string` | Standalone primary selection or resolved child value. |
+| `spec.additionalVolumeClaimTemplates[i].spec.volumeAttributesClassName` | Optional `*string` | Independent selection for this additional template on clusters or standalone groups. |
+| `MarklogicCluster.spec.markLogicGroups[i].additionalVolumeClaimTemplates[j].spec.volumeAttributesClassName` | Optional `*string` | Selection within the replacement per-group additional-template list. |
 
-`storage` is separate from `persistence`: size, StorageClass, access modes, annotations, and existing persistence override semantics remain unchanged.
+VAC configuration belongs to the existing persistence/PVC definitions. `status.storage` is the selected observation location for the full implementation, not a second configuration API or an already implemented POC field.
 
 #### API Placement Decision
 
-Keep the new field at `spec.storage.volumeAttributesClassName`, not under `persistence`. The existing [Persistence type](../../api/v1/common_types.go#L41) requires `size` and includes provisioning settings and resize strategy. The [group parameter resolver](../../pkg/k8sutil/marklogicServer.go#L373) replaces the complete persistence object when a group supplies an override; it does not merge individual fields.
+Keep the primary field at `spec.persistence.volumeAttributesClassName`. The existing [Persistence type](../../api/v1/common_types.go#L40) requires `size` and includes provisioning settings and resize strategy. The [group parameter resolver](../../pkg/k8sutil/marklogicServer.go#L310) replaces the complete persistence object when a group supplies an override; it does not merge individual fields.
 
-A separate optional storage object lets a group select only a performance profile while inheriting persistence unchanged. Putting VAC under persistence would require users to repeat provisioning settings for a profile-only override or require new partial-merge semantics and changes to existing validation. Neither is part of this feature. A separate object does not imply that all persistence settings are immutable: capacity remains managed by the resize feature. Keep only one supported spec location; do not add a second alias under persistence. Status remains under `status.storage`.
+This placement keeps the existing override contract: users repeat enabled/size/StorageClass and any other required settings in a profile-only group override. Group overrides replace complete objects or lists. Additional volumes use native PVC fields. Capacity remains managed by the resize feature.
 
 | Embedded group value | Effective class |
 | --- | --- |
-| Omitted storage, `storage: {}`, or nil class | Inherit cluster value, even if persistence is overridden. |
-| Non-empty class | Override cluster value. |
-| Explicit empty string | Opt out; do not inherit. |
+| Omitted `persistence` | Inherit the complete cluster persistence object, including its class. |
+| Complete `persistence` with non-empty class | Use this group's persistence settings and primary class. |
+| Complete `persistence` with omitted/nil/empty class | No primary VAC selection; do not inherit the cluster class. |
 
-Nil/empty at cluster or standalone-group scope means no live VAC management; newly created claims omit the field, with a provisioning safeguard when the historical template differs. Removing a group override resumes inheritance, not necessarily opt-out. There is no default class. Optional non-nullable schema fields prune explicit null to absence and decode to nil.
+Removing the entire group persistence override resumes cluster inheritance. Removing only its class leaves the override in place and stops primary VAC management. `persistence: {}` remains invalid because `size` is required. Existing manifests without VAC remain valid; there is no class default.
+
+Here, a **PVC template (PersistentVolumeClaim template)** is a blueprint for a separate persistent volume claim per Pod replica, defining settings such as size, StorageClass, access modes, and VAC. The operator generates the primary `datadir` PVC template from `persistence` and takes additional PVC templates from entries in `additionalVolumeClaimTemplates`. These definitions populate the StatefulSet's `spec.volumeClaimTemplates`. They are not Helm templates, Pod templates, or VolumeAttributesClass resources.
+
+For example, an additional PVC template named `logsdir` for StatefulSet `dnode` with replicas at ordinals 0 and 1 defines claims named `logsdir-dnode-0` and `logsdir-dnode-1`. The template is the reusable definition; those PVCs are the individual storage requests created from it.
+
+The `additionalVolumeClaimTemplates` list is inherited in full from the cluster when the group omits that field. If the group supplies `additionalVolumeClaimTemplates`, its entire PVC-template list replaces the cluster's list, including each PVC template's class; entries are not merged by name. An omitted/nil/empty additional class means no management for that PVC template, never inheritance from the primary or another PVC template. Removing an entry is not an opt-out operation: existing StatefulSet PVC-template add/remove/rename restrictions still apply.
+
+For each PVC template, nil/empty class means no live VAC management; newly created claims omit the field, with a provisioning safeguard when the historical StatefulSet PVC template differs. Optional non-nullable schema fields prune explicit null to absence and decode to nil.
 
 Kubebuilder markers must enforce the RFC 1123 pattern and `MaxLength=253` at all three scopes. Native and Helm schemas must remain identical; existing manifests remain valid.
 
@@ -129,23 +140,38 @@ spec:
     enabled: true
     size: 20Gi
     storageClassName: gp3
-  storage:
     volumeAttributesClassName: ml-gp3-standard
+  additionalVolumeClaimTemplates:
+  - metadata:
+      name: logsdir
+    spec:
+      accessModes: [ReadWriteOnce]
+      storageClassName: gp3
+      volumeAttributesClassName: ml-gp3-logs
+      resources:
+        requests:
+          storage: 10Gi
+  additionalVolumeMounts:
+  - name: logsdir
+    mountPath: /var/opt/MarkLogic-logs
   markLogicGroups:
   - name: dnode
     replicas: 2
     isBootstrap: true
-    # Inherits ml-gp3-standard.
+    # Inherits primary ml-gp3-standard and additional logsdir ml-gp3-logs.
   - name: query
-    storage:
+    persistence:
+      enabled: true
+      size: 20Gi
+      storageClassName: gp3
       volumeAttributesClassName: ml-gp3-premium
 ```
 
-The referenced classes and their driver-specific parameters are managed externally. Persistence-disabled groups create no primary claim and take no VAC action.
+The query group still inherits the additional logs template independently of its primary persistence override. The referenced classes and their driver-specific parameters are managed externally. Persistence-disabled groups create no primary claim but still provision and manage declared additional claim templates. `additionalVolumes` entries using external PVC references are not additional claim templates and are not VAC targets.
 
 ### Status Contract
 
-Expose the group observation under `MarklogicGroup.status.storage.volumeAttributesClass`. This is a proposed public schema for implementation, not resize bookkeeping reused under another name.
+Expose the group observation under `MarklogicGroup.status.storage.volumeAttributesClass`. This is the selected public schema for the full implementation, not an already implemented POC field or resize bookkeeping reused under another name.
 
 | Field | Type | Meaning |
 | --- | --- | --- |
@@ -154,7 +180,8 @@ Expose the group observation under `MarklogicGroup.status.storage.volumeAttribut
 | `reason`, `message` | String | Aggregate diagnostic summary. |
 | `pvcs` | Array | Stable name-ordered records for active target PVCs, including missing claims. |
 | `pvcs[].name` | String | PVC identity within the group namespace. |
-| `pvcs[].desiredClassName` | String | Latest effective CR value. |
+| `pvcs[].templateName` | String | Primary `datadir` or declared additional template identity. |
+| `pvcs[].desiredClassName` | String | Latest effective class for this PVC's template; different templates may have different targets. |
 | `pvcs[].currentClassName` | Optional string | Kubernetes-reported applied value, absent when unavailable. |
 | `pvcs[].state`, `reason`, `message` | String | Per-PVC state and actionable diagnostics. |
 
@@ -179,178 +206,82 @@ Correlate native target with the latest desired class; old-target completion or 
 
 Set `StorageAttributesSynced` in `MarklogicGroup.status.conditions`, with `observedGeneration`, reason, message, and transition time. Aggregate True only when all active targets meet the completion predicate. Failure takes precedence, followed by unsupported/unknown, stalled, in-progress, and pending; preserve every per-PVC detail.
 
-The parent cluster aggregates configured, persistence-enabled, managed groups. Missing or stale child status is Unknown, not success. Unconfigured/opted-out groups are excluded. With zero active targets, use a non-success `NoActivePVCs` observation rather than claiming a provider operation completed.
+The parent cluster aggregates managed groups with at least one configured eligible template, including groups whose primary persistence is disabled but whose additional templates are configured. Missing or stale child status is Unknown, not success. Unconfigured/opted-out templates are excluded independently. With zero active targets, use a non-success `NoActivePVCs` observation rather than claiming a provider operation completed.
 
 ### Removal and Manual Intervention
 
-When the effective class becomes nil/empty, stop live VAC management and leave all existing PVC class fields untouched. Once a class has been applied, Kubernetes forbids clearing the reference to nil/empty; opt-out is not provider rollback or cancellation. A removed embedded-group override still inherits a configured cluster value.
+When a template's effective class becomes nil/empty, stop live VAC management for that template and leave its existing PVC class fields untouched. Once a class has been applied, Kubernetes forbids clearing the reference to nil/empty; opt-out is not provider rollback or cancellation. Removing an entire group persistence or additional-template list override resumes cluster inheritance for that object/list, not field-level merging.
 
-New claims created after opt-out must omit the field even if the immutable historical StatefulSet template still contains a class. Continue the provisioning safeguard described below for that template mismatch. Remove the active modification observation/condition when no provisioning safeguard error remains; otherwise retain a non-success diagnostic/Event without attempting live modification. Opted-out groups remain excluded from provider-completion aggregation. Already-created or retained claims keep their previous reference, including when binding is still pending.
+New claims created after opt-out must omit the field even if the immutable historical StatefulSet template still contains a class. Continue the provisioning safeguard described below for that template mismatch. Remove that template's active modification observation when no provisioning safeguard error remains; otherwise retain a non-success diagnostic/Event without attempting live modification. Other configured templates continue to participate in aggregation. Already-created or retained claims keep their previous reference, including when binding is still pending.
 
 Administrators observe group/cluster status, describe the CR and PVCs, and fix missing classes, permissions, driver configuration, or infeasible requests. Retry recoverable errors after remediation. A new class selection supersedes the desired target immediately, but an unbound claim cannot receive it until binding completes. No separate imperative operation or automatic PVC migration is required.
 
 ## Architectural Decisions
 
-**Terms used below**
+This section describes the full implementation approach. Current implementation scope is recorded separately in the Day-1 POC section.
 
-- **VAC:** A named storage performance profile, such as a particular IOPS or throughput setting.
-- **PVC:** A Kubernetes request for storage. `datadir` is the primary MarkLogic data claim.
-- **Bound PVC:** A storage request assigned to a volume. Binding alone does not prove a later performance change finished.
-- **StatefulSet:** The workload that manages MarkLogic Pods and provides a template for creating their PVCs.
-- **CSI driver:** The storage driver that provisions or modifies the actual volume.
-- **CR:** The MarkLogic cluster or group configuration submitted by the administrator.
+### Configuration and Inheritance
 
-### Change Existing Volumes Safely
+The primary volume will use `spec.persistence.volumeAttributesClassName`; additional volumes will independently use `additionalVolumeClaimTemplates[].spec.volumeAttributesClassName`. A PVC template defines one claim per Pod replica. Groups inherit the cluster's persistence object and template list unless they supply a complete replacement. An omitted or empty class within that override leaves the template unmanaged. Opting out stops future changes but leaves existing PVC references and settings intact. Additional volumes remain eligible when primary persistence is disabled.
 
-- Update the class reference on each eligible bound data PVC.
-- Let the external-resizer and CSI driver perform the storage change.
-- Observe their status; report success only when the requested class has been applied.
-- Do not recreate the StatefulSet, PVCs, or Pods for a VAC-only change.
-- Do not run filesystem-expansion checks, remount recovery, or Pod-restart steps from the resize feature.
+### Existing Volume Changes
 
-**Keep the existing StatefulSet template unchanged**
+The operator will patch only `spec.volumeAttributesClassName` on verified bound PVCs, leaving Kubernetes and the CSI driver to apply the change. Capacity and unrelated settings remain unchanged. Existing StatefulSet templates retain their historical class because those templates are immutable. VAC-only changes will not replace workloads or claims, or restart Pods. Conflicts will trigger fresh reads before retrying.
 
-- Kubernetes does not allow changing the VAC field in an existing StatefulSet's claim template.
-- When generating an update, copy that template's existing VAC value into the proposed StatefulSet object.
-- Do this before comparing or updating the object, including updates for unrelated settings.
-- Ignoring the difference during comparison is not enough: `ReconcileStatefulset()` writes the full desired specification.
-- Preserve only the existing template's VAC value. Do not hide other persistence changes.
-- Let the resize controller handle capacity changes separately.
+### Initial Provisioning and Scale-Up
 
-### Create New Volumes and Scale Up
+New StatefulSets will use the validated class for each volume. During scale-up, matching desired and historical classes allow normal StatefulSet provisioning. For a mismatch, the operator will create missing new-replica claims with current settings before increasing replicas, omitting the class after opt-out. Required claims must be created or verified for reuse; failures block only that scale action. Retries preserve partial progress, starting ordinals, and retention. The operator will not wait for binding because `WaitForFirstConsumer` may require the new Pod to schedule first.
 
-**When creating a new StatefulSet**
+### Changes Before Binding
 
-- Put the selected, supported VAC in the primary `datadir` claim template.
-- Leave auxiliary claim templates and the Pod specification unchanged.
-- Omit the VAC field when no class is selected or support checks fail.
-- Report failed support checks; do not silently claim the requested profile was applied.
+A claim records the class selected at creation. If A changes to B before binding, the operator will preserve the claim, report `PendingClassMismatch`, and allow its Pod to schedule. Once bound, it will converge to the latest valid target. An original request that cannot provision will produce `ProvisioningBlocked` and require prerequisite repair or administrator recovery, not automatic claim replacement. Scheduling delays alone are not VAC failures.
 
-**Why scale-up needs special handling**
+### Claim Ownership and Reuse
 
-- Example: existing PVCs have changed from class A to B, but the StatefulSet template still contains A.
-- Increasing replicas normally would create the next PVC using A.
-- Changing that PVC to B after binding would not meet the new-claim selection requirement.
+The operator will verify the group-controlled StatefulSet, template/ordinal association, claim identity, owner references, and compatible storage settings before mutation or reuse. Names and metadata alone are insufficient. Legacy ownerless claims also require a verified managed Pod reference and fresh identity check. Verified retained claims will be reused without changing retention, then converge when active and bound. Ambiguous claims block the affected action; inactive, external, undeclared, and terminating claims remain untouched.
 
-**Proposed solution: create missing PVCs before increasing replicas**
+### Coordination With Other Storage Operations
 
-1. Read the latest selected class and requested replica count.
-2. If the old template has a different class, create the missing primary claims with the current supported selection.
-3. Omit the field on those new claims after opt-out or unsupported fallback, even if the old template contains A.
-4. Increase replicas only after the required claims exist safely. The StatefulSet then uses those claims.
+Conflicting VAC, resize, scale-up preparation, and workload-replacement actions will be serialized per group using a shared operation record in status. It will retain the operation, target generation, PVC identities, and dispatch phase for restart recovery, protected by resource-version checks. Resize and VAC keep separate targets and progress. Observation, necessary scheduling, and unrelated work continue; binding waits do not hold the dispatch guard. Initial limits are one in-flight PVC per group and four operator-wide.
 
-**Safety rules for creating claims**
+### Platform Validation
 
-- Use the exact claim names and Pod numbers expected by the StatefulSet, including a non-zero starting number.
-- Use the effective persistence settings: size, StorageClass, access modes, annotations, and ownership metadata.
-- Coordinate size changes with resize validation; do not bypass it.
-- If a claim already exists, re-read it and verify ownership and configuration.
-- Never adopt or overwrite an unrelated claim just because its name matches.
-- Reuse verified existing claims; they are not newly provisioned volumes.
-- With `WaitForFirstConsumer`, create the claim and permit Pod scheduling without waiting for binding.
-- This avoids a deadlock: storage provisioning may need the Pod's placement before it can bind the claim.
-- Preserve retention rules and claims kept after scale-down. Do not introduce claim deletion.
-- Re-read the CR before advancing. Resume safely after crashes or concurrent updates without creating duplicates.
-- If claim creation or verification fails, stop that scale action, report why, and continue unrelated work.
+The operator will validate the requested class, StorageClass/CSI driver association, and qualified platform capability. GA is preferred; qualified beta is used only when GA is absent. Provisioning and live modification require separate qualification. Invalid, unsupported, or unverifiable explicit requests will block affected new provisioning or scale-up rather than silently use driver defaults. Existing workloads, required scheduling, unconfigured volumes, and unrelated groups continue. Transient validation failures remain retryable. Administrators maintain the profiles; the operator references them.
 
-**What happens if the selection changes during provisioning?**
+### Progress and Completion
 
-- A PVC records the class selected when its creation request is prepared.
-- The CSI driver may provision the actual volume later.
-- If the PVC was created with A and the CR changes to B before binding, keep the PVC.
-- Permit any required Pod scheduling and report `PendingClassMismatch` while waiting.
-- After binding, request B and observe completion. The existence of the old claim is not success for B.
-- This design cannot guarantee B at the actual provisioning instant despite concurrent CR changes.
-- The team must agree to creation-time selection followed by post-binding updates before implementation.
+PVC watches will drive `status.storage.volumeAttributesClass` and group/cluster conditions. Completion requires native Kubernetes status confirming that every active managed PVC has applied its latest target for the observed generation. API writes, Pod readiness, stale observations, or zero targets cannot establish success. Events will reflect meaningful transitions; Kubernetes/CSI owns provider retries.
 
-**Decision still needed**
-
-- PVC precreation requires approval and integration testing; it is not existing resize functionality.
-- Do not recreate the StatefulSet before or after this process.
-- If precreation is rejected, validate another non-disruptive way to create new claims with the selected class.
-- Creating them from the old template and changing them after binding is not an equivalent solution.
-
-### Handle PVCs Waiting for Storage
-
-- Do not change the VAC reference on an existing unbound PVC; Kubernetes rejects that change under the qualified API rules.
-- Observe binding and report any difference from the latest selected class.
-- A missing original class, driver problem, or disabled feature can prevent binding.
-- Selecting a different class in the CR does not repair the existing unbound request.
-- For a known binding failure, report `ProvisioningBlocked`, the original class, and the required corrective action.
-- For unexplained delays, report Pending or Stalled; do not invent a permanent provider failure.
-- Ask administrators to repair the original provisioning prerequisites where possible.
-- Once bound, apply the latest non-empty managed class.
-- Do not repeatedly submit rejected patches or delete/recreate the claim as a workaround.
-- Opt-out leaves existing class references untouched; it does not cancel or roll back provider work.
-- If the original request cannot be repaired, report that administrator intervention is required.
-- Continue unrelated reconciliation. Do not block consumer scheduling solely because the target class changed.
-
-### Select Only the Correct Data PVCs
-
-- Find candidate claims in the group's namespace using workload and group labels.
-- Verify association with the managed StatefulSet/Pod and the primary `datadir` template.
-- Include only claims for the active Pod-number range.
-- Do not modify auxiliary, unrelated, or inactive retained claims.
-- Add consistent data-role and owner-identity labels to new primary claims.
-- Labels and expected names help discovery but are not sufficient proof of ownership.
-- Support older claims without the new labels using verified workload associations and existing labels.
-- Do not require every claim to have a direct MarklogicGroup owner reference; retention rules may omit it.
-- If ownership is unclear, emit a warning and make no change.
-- Verify retained claims when they become active again; neither ignore them nor blindly adopt them.
-
-### Coordinate Performance Changes and Resizing
-
-- Keep VAC reconciliation and status separate from the resize workflow.
-- Resize manages capacity; VAC manages the performance profile.
-- Patch only the PVC's VAC field. Do not overwrite capacity or unrelated settings.
-- Detect concurrent updates rather than overwriting them.
-- On a conflict, re-read the PVC and CR, revalidate the action, and retry within a bounded limit.
-- A newer class selection becomes the desired target; do not finish an old target before recognizing the new one.
-- Do not copy resize's rule of retaining an earlier capacity target and deferring newer requests.
-- Coordinate VAC updates and claim creation with resize, scaling, and workload replacement for the same group.
-- Delay conflicting VAC actions, but continue safe observation and ordinary reconciliation.
-- A failed or slow VAC operation must not stop unrelated Services, ConfigMaps, or safe workload updates.
-- The existing `claimResizeStatusCAS()` guard protects resize initialization only; it is not a shared resize/VAC lock.
-- Design an explicit shared coordination mechanism before implementation.
+Initial internal defaults are 30-second fallback observation, five-minute discovery refresh, and jittered API backoff from one to 60 seconds. After 30 minutes without progress, `Stalled` is diagnostic, not terminal or destructive. These limits require provider qualification.
 
 ## Detailed Workflow
 
-### Resolve and Validate
+### Resolve Configuration
 
-1. Resolve the effective storage field into the group and establish current generation/replicas.
-2. For a persistence-disabled group, take no VAC action. For an unconfigured group, perform no live VAC writes, but retain any historical-template provisioning safeguard and its failure diagnostics.
-3. Discover a served VAC API (`v1` preferred, beta fallback), with cached results, periodic refresh, and invalidation after API errors/upgrades.
-4. Read the requested class and verify `driverName` against StorageClass provisioner where available. A bound PV's CSI driver may provide an additional check only when existing read permissions permit it; do not introduce broad PV access solely for optional validation.
-5. Distinguish discovery failure, permission denial, absent class, disabled/dropped field, and driver mismatch. API existence does not prove CSI support; use separately qualified provisioning/modification configurations and native observations, not driver-name matching as a capability guarantee.
+Read the latest group configuration and resolve the desired class for each primary and additional PVC template. Exclude the primary template when persistence is disabled. Validate non-empty selections against the class, driver, and platform requirements. Record validation failures and skip affected actions while continuing unrelated work; unconfigured templates do not require VAC validation.
 
-### Provision or Apply
+### Prepare New Claims
 
-1. Generate a new StatefulSet's primary template with the eligible resolved class, or without the field when unconfigured/unsupported.
-2. Before scale-up, ensure required missing primary claims are created safely with the effective provisioning class, including an unset field after opt-out/fallback. A claim creation/ownership error may block that scale action, not unrelated resources.
-3. List/verify active managed primary claims. Track missing claims and pending binding explicitly.
-4. For an existing mismatched bound PVC and a managed non-empty target, issue a field-scoped optimistic patch to `spec.volumeAttributesClassName`. For unbound claims, follow binding recovery instead; never patch the reference. On conflict, re-read the PVC and CR, recheck ownership/phase/target, and retry within a bound.
-5. If the spec already equals desired, do not patch again; observe provider progress. Never treat a successful patch as completion.
-6. Verify the write response/fresh read retains the class. Cache/report a dropped field instead of entering an endless patch loop.
-7. Preserve the live VAC field in existing StatefulSet templates during all ordinary diff/update paths.
+For a new StatefulSet, generate templates with their validated classes. For scale-up, preserve existing templates and create missing new-replica claims only where the desired class differs from the historical template. Omit the class after opt-out. Use the shared operation guard for conflicting actions and verify claim ownership before reuse. Increase replicas after all required claims are prepared, without waiting for binding or holding the guard across that wait. Preparation failures block the affected scale action.
 
-### Observe and Aggregate
+### Update Bound Claims
 
-1. Read current/target class, native modification state, and conditions from all active claims.
-2. Normalize each record using the completion and target-correlation rules.
-3. Aggregate group status/condition, then parent condition, without losing unrelated conditions or resize status.
-4. Emit transition-only Events and structured logs; skip no-op status patches.
-5. Watch managed PVC changes and requeue after a bounded interval as fallback. Resume from observed state after controller restart.
+Find active claims and verify their workload association. Under the shared operation guard, patch only the VAC field on bound PVCs whose reference differs from a valid non-empty target. Leave unbound claims unchanged and observe their binding. Re-read and revalidate after conflicts. Confirm that the saved field retains the requested class; report a dropped field instead of repeatedly patching it. When the reference already matches, observe progress without another write.
+
+### Observe and Report
+
+Read native PVC modification status and correlate it with each template's latest target. Update per-PVC progress, the group condition, and the parent cluster condition using the Status Contract, preserving unrelated status. Publish Events only for meaningful transitions and skip unchanged status writes. Continue through PVC watches and fallback requeues; after a restart, resume from current resources and the stored operation record.
 
 ## Failure Handling and Recovery
 
 | Failure | Required behavior |
 | --- | --- |
-| API absent or feature disabled | Omit field when creating new claims, including safeguarded scale-up against historical templates; retain existing claims, report unsupported, continue unrelated work. |
-| Class missing or known driver mismatch | Skip VAC application and create missing claims without VAC where safely possible. Existing unbound claims cannot be retroactively changed; report their original provisioning failure and re-evaluate after remediation. |
+| API absent, feature disabled, or capability unqualified for an explicit request | Block affected new workload/claim creation or scale-up, retain existing claims/workloads, and report unsupported/unknown. Continue unconfigured provisioning, required consumer scheduling, and unrelated work; do not silently omit the requested field. |
+| Class missing or known driver mismatch | Block the affected explicit request and report the specific validation failure; do not provision a default-profile substitute. Existing unbound claims retain their original references; diagnose their original provisioning prerequisites and re-evaluate after remediation. |
 | Superseded target on an unbound claim | Report `PendingClassMismatch`, permit required consumer scheduling, and apply the latest managed target only after binding; no immutable reference patch or claim replacement. |
 | Original unbound request cannot provision | Report `ProvisioningBlocked` with original-class diagnostics; repair original prerequisites where possible, otherwise require administrator intervention without destructive automatic recovery. |
-| Opt-out/fallback with conflicting historical template | Precreate missing claims with no VAC; if the safeguard fails, block only the affected scale action and retain its diagnostic/Event. Do not clear existing PVC references. |
-| Permission denied | Report authorization error, not class-not-found; retry after permission repair. |
+| Opt-out with conflicting historical template | Precreate missing claims with no VAC; if the safeguard fails, block only the affected scale action and retain its diagnostic/Event. Do not clear existing PVC references. |
+| Permission denied or discovery timeout | Report authorization/validation-unknown, not class-not-found/API-absent. Retry with bounded backoff and block affected explicit new provisioning rather than substituting defaults; continue unrelated reconciliation and required scheduling. |
 | Conflict/throttling/transient API failure | Fresh-read conflict handling and capped jittered backoff; preserve partial progress. |
 | Native `Infeasible` | Failed for that target; require a feasible class/environment change, no destructive fallback. |
 | Provider modification error/cooldown | Preserve native reason/message and keep retryable progress observable; no automatic rollback or Pod restart. |
@@ -362,7 +293,7 @@ The operator retries its own transient API operations, not CSI RPCs. Once a boun
 
 Discovery and early compatibility checks cannot guarantee that every driver will bind a requested claim. If unsupported behavior emerges during binding/modification, report the real failure; never delete/recreate the claim to hide it.
 
-Retry timing, concurrency bounds, discovery refresh, and stall thresholds must be chosen against provider constraints during implementation. Reuse capped backoff mechanics, not resize's terminal retry budget for potentially long CSI modifications. Observation must not terminate permanently just because a provider is slow.
+Use the initial internal timing and concurrency limits selected in Architectural Decisions, then qualify them against provider constraints. Reuse capped backoff mechanics, not resize's terminal retry budget for potentially long CSI modifications. Observation must not terminate permanently just because a provider is slow.
 
 ## Required Infrastructure Permissions
 
@@ -370,7 +301,7 @@ Retry timing, concurrency bounds, discovery refresh, and stall thresholds must b
 | --- | --- | --- |
 | `persistentvolumeclaims` | `get`, `list`, `watch`, `patch` | Watched namespaces; ClusterRole for cluster-scoped installation. |
 | `volumeattributesclasses` | `get`, `list`, `watch` | Cluster-scoped in both installation modes. |
-| `persistentvolumeclaims` precreation | `create` only if precreation is approved | Watched namespaces; explicit addition to the minimum mutation design. |
+| `persistentvolumeclaims` precreation | `create` | Watched namespaces; required by the selected conditional-precreation design. |
 
 Preserve existing StorageClass, Event, and CR-status permissions. No VAC mutation verbs and no PVC delete permission are needed for this feature. Update Kubebuilder markers, generated RBAC, cluster- and namespace-scoped Helm templates, and generation/post-processing. A namespace Role cannot grant access to cluster-scoped VAC objects; use the existing cluster-reader role/binding pattern.
 
@@ -392,13 +323,13 @@ The resize implementation provides useful primitives and design patterns, but it
 | --- | --- | --- |
 | `processResizeSubmission()` in [volume_resize_validation.go](../../pkg/k8sutil/volume_resize_validation.go#L311-L415) | Reuse read/compare/field-scoped `MergeFrom` patch pattern. | Replace quantity mutation with VAC reference; add optimistic locking, fresh-read conflict retries, target/ownership revalidation. Current code marks a patch error and retries through resize phases, not a conflict-specific loop. |
 | `patchResizeStatus()` and `transitionResizePhase()` in [volume_resize_validation.go](../../pkg/k8sutil/volume_resize_validation.go#L881-L911) | Reuse fresh-read status-subresource patch and transition timestamp patterns. | New storage types, no-op detection, condition merging, and status conflict handling; do not write `VolumeResizeStatus`. |
-| `claimResizeStatusCAS()` in [volume_resize_validation.go](../../pkg/k8sutil/volume_resize_validation.go#L913-L938) | Reuse resource-version compare-and-set concept if cross-feature fencing needs persistence. | Existing guard checks only active resize status; it is not a reusable VAC/resize lock without extension. |
+| `claimResizeStatusCAS()` in [volume_resize_validation.go](../../pkg/k8sutil/volume_resize_validation.go#L913-L938) | Reuse resource-version compare-and-set concept for the shared durable operation guard. | Existing guard checks only active resize status; it is not a reusable VAC/resize lock without extension. |
 | `computeResizeRetryBaseDelaySeconds()` and `jitteredResizeRetryDelaySeconds()` in [volume_resize_validation.go](../../pkg/k8sutil/volume_resize_validation.go#L1157-L1219) | Extract/reuse capped exponential backoff and jitter mathematics. | Keep separate VAC policy/timing. Do not import `scheduleRetryOrFail()`'s resize terminal budget or stop CSI observation. |
 | `emitResizeEvent()` in [volume_resize_validation.go](../../pkg/k8sutil/volume_resize_validation.go#L940-L945) and `result.RequeueSoon()` in [result_helper.go](../../pkg/result/result_helper.go#L67) | Reuse recorder/context infrastructure and requeue utility. | VAC-specific reasons and transition deduplication; the recorder wrapper itself does not deduplicate. |
-| `discoverPrimaryPVCs()` in [volume_resize_validation.go](../../pkg/k8sutil/volume_resize_validation.go#L1532-L1604) | Adapt deterministic naming, stable ordering, missing/binding observations. | Current implementation uses individual `Get`s, quantity targets, zero-based ordinals, and can include auxiliary templates. It is not ownership-label validation or the required data-only list/watch selector. |
+| `discoverPrimaryPVCs()` in [volume_resize_validation.go](../../pkg/k8sutil/volume_resize_validation.go#L1532-L1604) | Adapt deterministic naming, stable ordering, missing/binding observations, and declared additional-template enumeration. | Current implementation uses individual `Get`s, quantity targets, and zero-based ordinals. Add per-template class targets, starting ordinals, ownership checks, and watch mapping. |
 | `validateStorageClassExpansionAllowed()` in [volume_resize_validation.go](../../pkg/k8sutil/volume_resize_validation.go#L1741-L1771) | Reuse deduplicated StorageClass lookup and authorization-error reporting pattern. | Validate provisioner/class driver instead of `allowVolumeExpansion`; VAC discovery/reads and CSI diagnostics are new. Expansion permission is not a VAC prerequisite. |
 | `recalculatePVCProgress()` in [volume_resize_validation.go](../../pkg/k8sutil/volume_resize_validation.go#L1122-L1140) | Reuse per-PVC aggregation approach. | Replace filesystem checkpoint counts with native class/target/state completion; implement new group/cluster conditions. |
-| `generatePVCTemplate()` / `generateStatefulSetsParams()` in [statefulset.go](../../pkg/k8sutil/statefulset.go#L408-L435) | Reuse primary claim construction and persistence gating. | Add eligible resolved VAC and primary ownership metadata; keep additional templates untouched. Separate generated-object creation from existing-template normalization. |
+| `generatePVCTemplate()` / `generateStatefulSetsParams()` in [statefulset.go](../../pkg/k8sutil/statefulset.go#L408-L435) | Reuse primary claim construction and persistence gating; deep-copy additional templates. | Resolve primary VAC from persistence and additional VACs from their own native fields; normalize empty references without mutating the CR. Preserve existing template VACs by name. |
 | Resize tests in [volume_resize_validation_test.go](../../pkg/k8sutil/volume_resize_validation_test.go) | Reuse fake-client, recorder, partial-progress/retry test patterns. | Add discovery, native modification state, field isolation, and UID/non-disruption assertions. Existing resize tests do not prove VAC support. |
 
 ### Logic That Must Not Be Reused
@@ -410,15 +341,15 @@ The resize implementation provides useful primitives and design patterns, but it
 
 The existing [group handler](../../pkg/k8sutil/handler.go#L39-L46) returns immediately when a resize result reports `Completed()`. `result.RequeueSoon()` also reports `Completed()=true` in [result_helper.go](../../pkg/result/result_helper.go#L36-L45): this means the reconcile step returned a result, not that the storage operation succeeded. VAC waiting must accumulate a requeue deadline and continue safe ordinary reconciliation rather than copying that early-return pattern.
 
-New logic is required for VAC discovery/version handling, ownership-safe data selection and watches, driver validation, native modification-status interpretation, immutable VAC template preservation, approved scale-up precreation, and parent condition aggregation.
+New logic is required for VAC discovery/version handling, ownership-safe data selection and watches, driver validation, native modification-status interpretation, immutable VAC template preservation, selected scale-up precreation, the shared operation guard, and parent condition aggregation.
 
 ## Testing Strategy
 
 ### Unit and Schema Tests
 
-1. Cluster/standalone/embedded-group API scopes; nil, empty storage, explicit empty, inheritance and override independent of persistence.
+1. Cluster/standalone/embedded-group API scopes; omitted persistence, whole-object overrides, explicit empty classes, whole-list additional inheritance/override, and no primary-to-additional VAC inheritance.
 2. RFC 1123 boundary/invalid names; generated deepcopy independence; matching native/Helm schemas and optional-field behavior.
-3. New StatefulSet data template with/without VAC, disabled persistence, unchanged auxiliaries/Fluent Bit claims, unchanged Pod template.
+3. Independent primary/additional classes on new StatefulSets, omitted/empty additional classes, additional provisioning with disabled primary persistence, template deep-copy isolation, and unchanged Pod templates.
 4. Fake discovery for GA, beta, API absence, permission failure, cache refresh and dropped-field handling.
 5. Class existence/provisioner checks, ownership collision/legacy claim selection, idempotency, optimistic conflicts and bounded retries.
 6. Native `Pending`, `InProgress`, `Infeasible`, condition errors, mixed states, stale targets, missing claims, no-active-target behavior and transition-only Events.
@@ -426,41 +357,49 @@ New logic is required for VAC discovery/version handling, ownership-safe data se
 
 ### Controller and Integration Tests
 
-1. Initial provisioning and scale-up with the currently effective class, including after live modification.
+1. Initial provisioning and scale-up with different effective classes across primary and multiple additional templates, including after live modification and with primary persistence disabled.
 2. Precreation races, non-zero ordinals, `WaitForFirstConsumer`, retained/reactivated claims, and crash recovery before replica increase.
 3. Direct PVC mutation with unchanged StatefulSet/PVC/Pod UIDs, Pod template hash and restart counts; repeated reconciliation without immutable-field errors.
-4. Unsupported deployment continues without VAC; failed/stalled modification does not block unrelated resources or existing resize.
+4. Unsupported/unverifiable explicit VAC requests block affected new provisioning without default-profile substitution; unconfigured resources, existing workloads, required scheduling, and unrelated reconciliation continue. Failed/stalled modification remains observable and conflicting resize actions wait on the shared guard.
 5. Both Helm scope modes with least-privilege PVC/VAC permissions; safe group watch mapping and parent aggregation.
 6. Concurrent resize/VAC requests preserve capacity validation, field isolation, status and workload lifecycle semantics.
 7. Real API-server rejection of unbound VAC reference changes on qualified beta/GA lanes; A-to-B supersession before binding, missing original class remediation, and consumer scheduling without immutable patch loops or claim deletion.
-8. Scale-up after opt-out/unsupported fallback with a non-empty historical template creates new claims with the field absent; retained/precreated claims remain unchanged when unmanaged. Safeguard failures block only the affected scale action and remain observable.
+8. Scale-up after opt-out with a non-empty historical template creates new claims with the field absent; unsupported explicit selections block affected scale-up instead. Retained/precreated claims remain unchanged when unmanaged. Safeguard failures block only the affected scale action and remain observable.
 9. VAC-aware external-provisioner creates the intended initial profile; external-resizer/CSI modifies a bound volume independently. Verify complete and omitted-parameter profiles against documented driver defaults.
 
 Use envtest to prove API-server schema rejection and reconciliation, not CSI completion. Use a VAC-capable integration/E2E lane to verify provider-visible profile changes and non-disruption; retain an unsupported-cluster lane. Review existing Kubernetes test pins rather than assuming they expose VAC.
 
 ### Acceptance
 
-The requirement is complete only when the same declarative field governs creation-time selection for new initial/scale-up claims, post-binding convergence of superseded or reused claims, in-place live changes, unsupported-environment behavior, and correctly correlated observable completion without VAC-driven workload replacement. Opt-out/fallback must not leak a historical template class into newly created scale-up claims. Approval of the creation-time semantics and evidence for both CSI paths are acceptance gates. Partial implementation must not be advertised as fulfilling the whole design.
+The requirement is complete only when the primary persistence field and independent additional-template fields govern creation-time selection for new initial/scale-up claims, post-binding convergence of superseded or reused claims, in-place live changes, explicit-request validation, and correctly correlated observable completion without VAC-driven workload replacement. Opt-out must not leak a historical template class into newly created scale-up claims, and an unsupported explicit request must not produce a default-profile substitute. One template's configuration must never become another template's target. Evidence for the selected creation-time semantics, shared coordination, ownership safeguards, non-disruption, and both CSI paths is required. Partial implementation must not be advertised as fulfilling the whole design.
 
-## Open Design and Qualification Items
+## Implementation and Qualification Gates
 
-1. Verify the 1.32 beta minimum and exact EKS/AKS/GKE/OpenShift configurations, including separate external-provisioner/external-resizer/CSI versions, feature settings, and parameter defaults; do not replace the baseline with 1.34 without approval.
-2. Approve and validate precreation or another non-disruptive creation-time class-selection mechanism, including transitions to unset, claim retention/ownership, unbound supersession/recovery, and the additional PVC `create` permission. Confirm the creation-time versus actual provisioning-instant requirement before implementation.
-3. Finalize legacy ownership migration, cross-feature fencing, status schema, refresh/retry/concurrency/stall thresholds, and parent update predicates before implementation.
+1. Implement live PVC modification, strict explicit-request validation, ownership verification, the shared durable operation guard, native-status watches, and group/cluster aggregation according to the selected decisions. Initial provisioning and scale-up POC behavior alone do not complete the feature.
+2. Qualify conditional precreation against a real API server and CSI driver: least-privilege PVC `create`, retention, partial failures, concurrent updates, restart recovery, non-zero ordinals, and `WaitForFirstConsumer` without a binding barrier.
+3. Prove creation-time selection followed by post-binding convergence and verify that unrepairable unbound requests remain nondestructive and actionable. Publish the administrator prerequisite-repair/data-recovery procedure; do not introduce automatic replacement.
+4. Qualify the Kubernetes 1.32 beta target and exact EKS/AKS/GKE/OpenShift configurations before advertising support. Verify provisioning and live modification separately, parameter defaults, strict handling of explicit invalid requests, and the initial concurrency/timing limits.
+5. Test legacy association, simultaneous resize/VAC/scaling requests, conflicts/restarts, non-disruption, per-template target correlation, and parent aggregation. Publish the selected API semantics and controlled migration guidance with the release evidence.
 
-The sections above describe the full feature design. The Day-1 POC below implements only initial class selection; it does not implement the remaining workflows or change volume-resize behavior.
+The sections above describe the full feature design. The POC below implements initial class selection and creation-time selection for new scale-up claims; it does not implement the remaining workflows or change volume-resize behavior.
 
 ## Day-1 POC
 
 ### Implemented Behavior
 
-- Use `spec.storage.volumeAttributesClassName` on a cluster or standalone group.
-- Cluster-owned groups inherit the cluster class unless they select another class or explicitly opt out with `""`.
-- Inheritance is independent of group persistence overrides.
+- Use `spec.persistence.volumeAttributesClassName` for the primary claim on a cluster or standalone group.
+- Cluster-owned groups inherit the entire cluster persistence object unless they supply a complete replacement. A replacement's omitted/empty class does not inherit the cluster class.
+- Use each `additionalVolumeClaimTemplates[].spec.volumeAttributesClassName` for an independent additional-volume class. Group lists inherit or replace as a whole, independently of primary persistence.
 - A selected non-empty class is copied into the primary `datadir` PVC template.
-- Kubernetes uses that template when creating the group's new data PVCs.
+- Kubernetes uses that template when initially creating the group's data PVCs.
+- Existing StatefulSets retain the live template's class; changing the selection does not update an immutable claim template.
+- On scale-up, compare desired and historical classes by template name. For every mismatch, precreate that template's missing new-ordinal claims with its current class before increasing replicas. An empty selection omits the VAC field.
+- Precreated claims use the current persistence settings and template annotations, workload selector labels, and a `marklogic.progress.com/storage-group-uid` identity annotation. They do not gain a deletion-causing owner reference.
+- Existing active claims remain unchanged. Verified retained or previously precreated claims are reused without changing their VAC, including while Pending.
+- Claim creation or verification errors prevent replica increase. Precreated claims do not have to bind first, so `WaitForFirstConsumer` can schedule the new Pods.
 - Without an effective class, the operator leaves the PVC field unset; ordinary StorageClass/driver defaults apply.
-- Auxiliary templates and Pod templates remain unchanged. Persistence-disabled groups receive no primary claim.
+- Additional templates preserve their own fields and profiles, never the primary class; empty references are omitted on generated copies. Existing StatefulSets retain historical VAC values for all templates. Pod templates remain unchanged by VAC-only updates.
+- Persistence-disabled groups receive no primary claim, but declared additional templates still participate in provisioning and scale-up.
 - Native and Helm CRDs accept the field at cluster, embedded-group, and standalone-group scopes.
 
 ### Prerequisites and Limits
@@ -470,9 +409,13 @@ The sections above describe the full feature design. The Day-1 POC below impleme
 - Use an existing VAC and a compatible CSI StorageClass, driver, and external-provisioner.
 - Beta support on Kubernetes 1.32 and specific provider configurations still require qualification.
 - This POC does not discover support, validate VAC existence/driver compatibility, or fall back automatically on unsupported clusters.
-- Do not change the class on an already deployed workload in this POC. Its claim template is immutable.
-- Live PVC modification, post-change scale-up precreation, progress status, and parent aggregation remain unimplemented.
+- Install the updated native or Helm RBAC, which grants PVC `create` permission for scale-up precreation.
+- A changed class affects only newly created scale-up claims; it does not modify existing volumes.
+- Preexisting claims without a matching group UID annotation or verified group/StatefulSet owner reference block precreation-based scale-up. Legacy ownerless retained-claim migration still requires a separate verified association mechanism.
+- Live PVC modification, progress status, and parent aggregation remain unimplemented.
 - Unit tests verify generated objects and schemas, not successful disk provisioning by a real CSI driver.
+- Adding/removing/renaming additional templates on an existing StatefulSet is not supported by this POC; declare them before initial creation. Only their VAC selections gain the existing-template preservation/scale-up behavior.
+- Existing POC CRs must move their selection into `persistence` and retain provisioning settings before applying the new schemas. Updating CRDs does not migrate stored objects automatically. Roll out the matching operator and schemas together through a controlled upgrade; do not assume the old operator understands the new field location.
 
 ### Manual Verification
 
