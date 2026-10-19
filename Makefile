@@ -24,7 +24,7 @@ export E2E_DOCKER_IMAGE ?= $(IMG)
 export E2E_KUSTOMIZE_VERSION ?= $(KUSTOMIZE_VERSION)
 export E2E_CONTROLLER_TOOLS_VERSION ?= $(CONTROLLER_TOOLS_VERSION)
 export E2E_MARKLOGIC_IMAGE_VERSION ?= progressofficial/marklogic-db:12.0.3-ubi9-rootless-2.2.6
-export FLUENT_BIT_IMAGE ?= fluent/fluent-bit:5.1.0
+export FLUENT_BIT_IMAGE ?= fluent/fluent-bit:5.1.3
 export E2E_KUBERNETES_VERSION ?= v1.31.13
 export E2E_ISTIO_AMBIENT ?= false
 export E2E_TEST_TIMEOUT ?= 60m
@@ -32,8 +32,9 @@ export E2E_HELM_TEST_TIMEOUT ?= 60m
 export E2E_SETUP_ISTIO ?= true
 # Enables t.Parallel() for top-level tests in ./test/e2e. Set false to force sequential execution.
 export E2E_TOP_LEVEL_PARALLEL ?= true
-# Caps concurrent top-level tests when E2E_TOP_LEVEL_PARALLEL=true.
-export E2E_TOP_LEVEL_PARALLELISM ?= 4
+# Caps concurrent top-level tests when E2E_TOP_LEVEL_PARALLEL=true. Minikube
+# runs independent profile shards in parallel, so each shard defaults to one worker.
+export E2E_TOP_LEVEL_PARALLELISM ?= 1
 
 # MINIKUBE_PROFILE names the minikube cluster/profile targeted by the e2e-* targets below.
 # Override it to run independent e2e suites in parallel against separate minikube instances,
@@ -102,6 +103,7 @@ E2E_UPGRADE_CLEANUP_TIMEOUT ?= 15m
 EKS_CLUSTER_NAME ?= jenkins-kube-ninjas
 EKS_NODEGROUP_NAME ?= ml-worker
 EKS_NODE_COUNT ?= 4
+EKS_NODE_READY_TIMEOUT ?= 600
 EKS_WAIT_FOR_SCALE_DOWN ?= true
 EKS_REGION ?= us-west-1
 AWS_ACCOUNT_ID ?= $(shell aws sts get-caller-identity --query Account --output text 2>/dev/null)
@@ -492,7 +494,7 @@ else
 endif
 	minikube -p $(MINIKUBE_PROFILE) image load $(IMG)
 	minikube -p $(MINIKUBE_PROFILE) image load $(E2E_MARKLOGIC_IMAGE_VERSION)
-	minikube -p $(MINIKUBE_PROFILE) image load "docker.io/haproxytech/haproxy-alpine:3.4.3"
+	minikube -p $(MINIKUBE_PROFILE) image load "docker.io/haproxytech/haproxy:alpine-3.4.6"
 	minikube -p $(MINIKUBE_PROFILE) image load $(FLUENT_BIT_IMAGE)
 	minikube -p $(MINIKUBE_PROFILE) image ls
 
@@ -529,12 +531,18 @@ eks-scale-up: ## Scale EKS worker nodes to EKS_NODE_COUNT.
 	  --nodes-min 0 \
 	  --nodes-max 6 \
 	  --region $(EKS_REGION)
-	@echo "=====Waiting for nodes to register====="
-	@until kubectl get nodes 2>/dev/null | grep -q Ready; do echo "Waiting for nodes to join..."; sleep 10; done
-	@echo "=====Waiting for terminating nodes to deregister====="
-	@until [ "$$(kubectl get nodes --no-headers 2>/dev/null | grep -c NotReady)" = "0" ]; do echo "Waiting for NotReady nodes to drain..."; sleep 10; done
-	@echo "=====Waiting for nodes to be Ready====="
-	kubectl wait --for=condition=Ready nodes --all --timeout=300s
+	@echo "=====Waiting up to $(EKS_NODE_READY_TIMEOUT)s for $(EKS_NODE_COUNT) Ready $(EKS_NODEGROUP_NAME) nodes====="
+	@ready_nodes=0; timeout_seconds=$(EKS_NODE_READY_TIMEOUT); attempts=$$(( (timeout_seconds + 9) / 10 )); \
+	for attempt in $$(seq 1 $$attempts); do \
+		ready_nodes=$$(kubectl get nodes -l eks.amazonaws.com/nodegroup=$(EKS_NODEGROUP_NAME) --no-headers 2>/dev/null | awk '$$2 ~ /^Ready/ { count++ } END { print count + 0 }'); \
+		if [ "$$ready_nodes" -ge "$(EKS_NODE_COUNT)" ]; then break; fi; \
+		echo "Waiting for Ready nodes ($$ready_nodes/$(EKS_NODE_COUNT), attempt $$attempt/$$attempts)..."; \
+		sleep 10; \
+	done; \
+	if [ "$$ready_nodes" -lt "$(EKS_NODE_COUNT)" ]; then \
+		echo "Timed out waiting for $(EKS_NODE_COUNT) Ready $(EKS_NODEGROUP_NAME) nodes; found $$ready_nodes." >&2; \
+		exit 1; \
+	fi
 
 # Scale EKS worker nodes to 0 to minimise cost when the cluster is idle.
 .PHONY: eks-scale-down

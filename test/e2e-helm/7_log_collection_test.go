@@ -192,7 +192,7 @@ func TestLogCollectionPartialLogs(t *testing.T) {
 			},
 			LogCollection: &marklogicv1.LogCollection{
 				Enabled: true,
-				Image:   "fluent/fluent-bit:5.1.0",
+				Image:   "fluent/fluent-bit:5.1.3",
 				Files: marklogicv1.LogFilesConfig{
 					ErrorLogs:   true,
 					AccessLogs:  false,

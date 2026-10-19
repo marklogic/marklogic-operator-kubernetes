@@ -68,13 +68,16 @@ type MarklogicClusterSpec struct {
 	EnableConverters          bool                                 `json:"enableConverters,omitempty"`
 	// +kubebuilder:default:={enabled: false, mountPath: "/dev/hugepages"}
 	HugePages *HugePages `json:"hugePages,omitempty"`
-	// +kubebuilder:default:={enabled: false, image: "fluent/fluent-bit:5.1.0", resources: {requests: {cpu: "100m", memory: "200Mi"}, limits: {cpu: "200m", memory: "500Mi"}}, files: {errorLogs: true, accessLogs: true, requestLogs: true}, outputs: "stdout"}
+	// +kubebuilder:default:={enabled: false, image: "fluent/fluent-bit:5.1.3", resources: {requests: {cpu: "100m", memory: "200Mi"}, limits: {cpu: "200m", memory: "500Mi"}}, files: {errorLogs: true, accessLogs: true, requestLogs: true}, outputs: "stdout"}
 	LogCollection                  *LogCollection                  `json:"logCollection,omitempty"`
 	HAProxy                        *HAProxy                        `json:"haproxy,omitempty"`
 	Tls                            *Tls                            `json:"tls,omitempty"`
 	AdditionalVolumes              *[]corev1.Volume                `json:"additionalVolumes,omitempty"`
 	AdditionalVolumeMounts         *[]corev1.VolumeMount           `json:"additionalVolumeMounts,omitempty"`
 	AdditionalVolumeClaimTemplates *[]corev1.PersistentVolumeClaim `json:"additionalVolumeClaimTemplates,omitempty"`
+
+	// ObjectStorage configures cluster-wide AWS S3 and Azure Blob credentials from Secrets.
+	ObjectStorage *ObjectStorageConfig `json:"objectStorage,omitempty"`
 
 	// +kubebuilder:validation:MaxItems=100
 	// +kubebuilder:validation:MinItems=1
@@ -147,6 +150,8 @@ type MarklogicClusterStatus struct {
 	// INSERT ADDITIONAL STATUS FIELD - define observed state of cluster
 	// Important: Run "make" to regenerate code after modifying this file
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
+	// ObjectStorage reports the per-provider object storage credential results.
+	ObjectStorage *ObjectStorageStatus `json:"objectStorage,omitempty"`
 }
 
 //+kubebuilder:object:root=true

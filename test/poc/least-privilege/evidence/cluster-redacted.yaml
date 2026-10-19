@@ -1,0 +1,100 @@
+apiVersion: marklogic.progress.com/v1
+kind: MarklogicCluster
+metadata:
+  annotations:
+    kubectl.kubernetes.io/last-applied-configuration: |
+      {"apiVersion":"marklogic.progress.com/v1","kind":"MarklogicCluster","metadata":{"annotations":{},"name":"least-privilege","namespace":"ml-lp-test"},"spec":{"auth":{"secretName":"least-privilege-admin"},"image":"progressofficial/marklogic-db:12.1.0-ubi9-rootless-2.3.0","markLogicGroups":[{"isBootstrap":true,"name":"node","replicas":3},{"dynamic":{"tokenDuration":"PT15M"},"groupConfig":{"name":"Dynamic"},"isDynamic":true,"name":"dynamic","persistence":{"enabled":false,"size":"1Gi"},"replicas":1}],"persistence":{"enabled":true,"size":"10Gi"},"tls":{"enableOnDefaultAppServers":true}}}
+    least-privilege-poc/reconciled-at: "2026-09-30T16:17:26Z"
+    tls-dynamic-reconcile: "2026-09-29T07:51:50Z"
+  creationTimestamp: "2026-09-28T15:00:01Z"
+  generation: 15
+  name: least-privilege
+  namespace: ml-lp-test
+  resourceVersion: "2956728"
+  uid: 7339a0f1-9cb7-4fe6-ab3e-523f6bc99811
+spec:
+  auth:
+    secretName: least-privilege-operator
+  automountServiceAccountToken: false
+  clusterDomain: cluster.local
+  hugePages:
+    enabled: false
+    mountPath: /dev/hugepages
+  image: progressofficial/marklogic-db:12.1.0-ubi9-rootless-2.3.0
+  imagePullPolicy: IfNotPresent
+  logCollection:
+    enabled: false
+    files:
+      accessLogs: true
+      errorLogs: true
+      requestLogs: true
+    image: fluent/fluent-bit:5.1.0
+    outputs: stdout
+    resources:
+      limits:
+        cpu: 200m
+        memory: 500Mi
+      requests:
+        cpu: 100m
+        memory: 200Mi
+  markLogicGroups:
+  - groupConfig:
+      enableXdqpSsl: true
+      name: Default
+    isBootstrap: true
+    isDynamic: false
+    livenessProbe:
+      enabled: true
+      failureThreshold: 3
+      initialDelaySeconds: 30
+      periodSeconds: 30
+      successThreshold: 1
+      timeoutSeconds: 5
+    name: node
+    readinessProbe:
+      enabled: true
+      failureThreshold: 3
+      initialDelaySeconds: 10
+      periodSeconds: 30
+      successThreshold: 1
+      timeoutSeconds: 5
+    replicas: 3
+  - dynamic:
+      tokenDuration: PT15M
+    groupConfig:
+      enableXdqpSsl: true
+      name: Dynamic
+    isBootstrap: false
+    isDynamic: true
+    livenessProbe:
+      enabled: true
+      failureThreshold: 3
+      initialDelaySeconds: 30
+      periodSeconds: 30
+      successThreshold: 1
+      timeoutSeconds: 5
+    name: dynamic
+    persistence:
+      accessModes:
+      - ReadWriteOnce
+      enabled: false
+      resizeStrategy: parallel
+      size: 1Gi
+    readinessProbe:
+      enabled: true
+      failureThreshold: 3
+      initialDelaySeconds: 10
+      periodSeconds: 30
+      successThreshold: 1
+      timeoutSeconds: 5
+    replicas: 1
+  persistence:
+    accessModes:
+    - ReadWriteOnce
+    enabled: true
+    resizeStrategy: parallel
+    size: 10Gi
+  serviceAccountName: marklogic-workload
+  tls:
+    enableOnDefaultAppServers: true
+  updateStrategy: OnDelete

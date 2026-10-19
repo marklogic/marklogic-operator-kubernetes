@@ -87,8 +87,6 @@ func TestLogCollectionDisabled(t *testing.T) {
 			t.Fatalf("Failed to create namespace: %s", err)
 		}
 
-		ensureMarklogicSchemeRegistered(t, c)
-
 		if err := client.Resources(testNamespace).Create(ctx, mlclusterDisabled); err != nil {
 			t.Fatalf("Failed to create MarklogicCluster: %s", err)
 		}
@@ -196,7 +194,7 @@ func TestLogCollectionPartialLogs(t *testing.T) {
 			},
 			LogCollection: &marklogicv1.LogCollection{
 				Enabled: true,
-				Image:   "fluent/fluent-bit:5.1.0",
+				Image:   "fluent/fluent-bit:5.1.3",
 				Files: marklogicv1.LogFilesConfig{
 					ErrorLogs:   true,  // Only error logs
 					AccessLogs:  false, // Disabled
@@ -226,8 +224,6 @@ func TestLogCollectionPartialLogs(t *testing.T) {
 		if err := client.Resources().Create(ctx, namespace); err != nil {
 			t.Fatalf("Failed to create namespace: %s", err)
 		}
-
-		ensureMarklogicSchemeRegistered(t, c)
 
 		if err := client.Resources(testNamespace).Create(ctx, mlclusterPartial); err != nil {
 			t.Fatalf("Failed to create MarklogicCluster: %s", err)
@@ -397,7 +393,6 @@ func TestLogCollectionSecretBackedEnvironment(t *testing.T) {
 			t.Fatalf("Failed to create OpenTelemetry authentication secret: %s", err)
 		}
 
-		ensureMarklogicSchemeRegistered(t, c)
 		if err := client.Resources(testNamespace).Create(ctx, mlclusterSecretEnv); err != nil {
 			t.Fatalf("Failed to create MarklogicCluster: %s", err)
 		}
@@ -534,8 +529,6 @@ func TestLogCollectionCustomResources(t *testing.T) {
 		if err := client.Resources().Create(ctx, namespace); err != nil {
 			t.Fatalf("Failed to create namespace: %s", err)
 		}
-
-		ensureMarklogicSchemeRegistered(t, c)
 
 		if err := client.Resources(testNamespace).Create(ctx, mlclusterCustom); err != nil {
 			t.Fatalf("Failed to create MarklogicCluster: %s", err)
@@ -704,8 +697,6 @@ func TestLogCollectionCustomFilters(t *testing.T) {
 		if err := client.Resources().Create(ctx, namespace); err != nil {
 			t.Fatalf("Failed to create namespace: %s", err)
 		}
-
-		ensureMarklogicSchemeRegistered(t, c)
 
 		if err := client.Resources(testNamespace).Create(ctx, mlclusterFilters); err != nil {
 			t.Fatalf("Failed to create MarklogicCluster: %s", err)

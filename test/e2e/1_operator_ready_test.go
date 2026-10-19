@@ -42,7 +42,6 @@ func TestOperatorReady(t *testing.T) {
 		p := utils.RunCommand(`kubectl get ns`)
 		t.Logf("Kubernetes namespace: %s", p.Result())
 		client := c.Client()
-		ensureAPIEExtensionsSchemeRegistered(t, c)
 		name := "marklogicclusters.marklogic.progress.com"
 		var crd apiextensionsV1.CustomResourceDefinition
 		if err := client.Resources().Get(ctx, name, "", &crd); err != nil {

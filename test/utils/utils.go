@@ -222,8 +222,6 @@ func WaitForPod(ctx context.Context, t *testing.T, client klient.Client, namespa
 	}
 
 	start := time.Now()
-	var terminatingSince time.Time
-	var terminalSince time.Time
 	pod := &corev1.Pod{}
 	p := utils.RunCommand(`kubectl get ns`)
 	t.Logf("Kubernetes namespace: %s", p.Result())
@@ -251,45 +249,15 @@ func WaitForPod(ctx context.Context, t *testing.T, client klient.Client, namespa
 
 		if err == nil {
 			if pod.DeletionTimestamp != nil {
-				if terminatingSince.IsZero() {
-					terminatingSince = time.Now()
-				}
-				terminatingDuration := time.Since(terminatingSince)
-				deletionAge := time.Since(pod.DeletionTimestamp.Time)
 				t.Logf("Pod %s is terminating (deletionTimestamp=%s), waiting for replacement", pod.Name, pod.DeletionTimestamp.Time.Format(time.RFC3339))
-				if deletionAge > 45*time.Second || terminatingDuration > 45*time.Second {
-					t.Logf("Pod %s has been terminating for %s; attempting force cleanup", pod.Name, deletionAge.Round(time.Second))
-					if cleanupErr := forceDeleteTerminatingPod(ctx, client, namespace, podName); cleanupErr != nil {
-						t.Logf("Warning: failed to force cleanup terminating pod %s/%s: %v", namespace, podName, cleanupErr)
-					} else {
-						t.Logf("Triggered force cleanup for terminating pod %s/%s", namespace, podName)
-					}
-					terminatingSince = time.Now()
-				}
 				time.Sleep(5 * time.Second)
 				continue
 			}
-			terminatingSince = time.Time{}
 			t.Logf("Pod %s is in phase %s", pod.Name, pod.Status.Phase)
 			if pod.Status.Phase == corev1.PodSucceeded || pod.Status.Phase == corev1.PodFailed {
-				if terminalSince.IsZero() {
-					terminalSince = time.Now()
-				}
-				terminalDuration := time.Since(terminalSince)
-				t.Logf("Pod %s is in terminal phase %s, waiting for replacement", pod.Name, pod.Status.Phase)
-				if terminalDuration > 15*time.Second {
-					t.Logf("Pod %s has remained in terminal phase %s for %s; deleting stale pod", pod.Name, pod.Status.Phase, terminalDuration.Round(time.Second))
-					if cleanupErr := forceDeleteTerminatingPod(ctx, client, namespace, podName); cleanupErr != nil {
-						t.Logf("Warning: failed to delete terminal pod %s/%s: %v", namespace, podName, cleanupErr)
-					} else {
-						t.Logf("Triggered cleanup for terminal pod %s/%s", namespace, podName)
-					}
-					terminalSince = time.Now()
-				}
-				time.Sleep(5 * time.Second)
-				continue
+				return fmt.Errorf("pod %s/%s reached %s while waiting for %s: %s: %s",
+					namespace, podName, pod.Status.Phase, statusMsg, pod.Status.Reason, pod.Status.Message)
 			}
-			terminalSince = time.Time{}
 
 			// Check for Running state
 			if pod.Status.Phase == corev1.PodRunning {
