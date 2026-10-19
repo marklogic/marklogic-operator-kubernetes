@@ -13,6 +13,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
 
@@ -81,5 +82,67 @@ func TestReconsileMarklogicGroupHandlerSkipsServiceCreateWhenDynamicGroupDeletin
 	err = fakeClient.Get(context.Background(), types.NamespacedName{Name: "dynamic", Namespace: "ml-dynamic-host"}, svc)
 	if !apierrors.IsNotFound(err) {
 		t.Fatalf("expected no service to be created for deleting dynamic group, got err=%v", err)
+	}
+}
+
+func TestDynamicCredentialRotationCleanupReleasesTerminatingPodFinalizer(t *testing.T) {
+	t.Parallel()
+
+	scheme := runtime.NewScheme()
+	if err := corev1.AddToScheme(scheme); err != nil {
+		t.Fatalf("failed to add core scheme: %v", err)
+	}
+
+	replicas := int32(2)
+	group := &marklogicv1.MarklogicGroup{
+		ObjectMeta: metav1.ObjectMeta{Name: "dynamic", Namespace: "database"},
+		Spec: marklogicv1.MarklogicGroupSpec{
+			Name:      "dynamic",
+			Replicas:  &replicas,
+			IsDynamic: true,
+		},
+	}
+	labels := getSelectorLabelsByComponent("dynamic", true)
+	terminating := credentialRevisionPod("dynamic-0", labels, "old")
+	terminating.Namespace = group.Namespace
+	terminating.Finalizers = []string{dynamicHostCleanupFinalizer}
+	deletionTimestamp := metav1.Now()
+	terminating.DeletionTimestamp = &deletionTimestamp
+	stable := credentialRevisionPod("dynamic-1", labels, "old")
+	stable.Namespace = group.Namespace
+	stable.Finalizers = []string{dynamicHostCleanupFinalizer}
+
+	fakeClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(terminating, stable).Build()
+	oc := &OperatorContext{Ctx: context.Background(), Client: fakeClient, MarklogicGroup: group}
+
+	for reconcileCount := 0; reconcileCount < 5; reconcileCount++ {
+		cleanupResult := oc.reconcileDynamicCredentialRotationCleanup()
+		if cleanupResult.Completed() {
+			_, err := cleanupResult.Output()
+			if err != nil {
+				t.Fatalf("cleanup reconcile %d returned error: %v", reconcileCount+1, err)
+			}
+		}
+	}
+
+	current := &corev1.Pod{}
+	err := fakeClient.Get(context.Background(), client.ObjectKeyFromObject(terminating), current)
+	if err != nil && !apierrors.IsNotFound(err) {
+		t.Fatalf("get terminating pod: %v", err)
+	}
+	if err == nil {
+		for _, finalizer := range current.Finalizers {
+			if finalizer == dynamicHostCleanupFinalizer {
+				t.Fatal("expected rotation cleanup to release the terminating pod finalizer")
+			}
+		}
+	}
+
+	currentStable := &corev1.Pod{}
+	if err := fakeClient.Get(context.Background(), client.ObjectKeyFromObject(stable), currentStable); err != nil {
+		t.Fatalf("get stable pod: %v", err)
+	}
+	if !containsString(currentStable.Finalizers, dynamicHostCleanupFinalizer) {
+		t.Fatal("expected cleanup finalizer to remain on the non-terminating pod")
 	}
 }

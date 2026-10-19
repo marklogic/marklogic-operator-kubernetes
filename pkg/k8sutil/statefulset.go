@@ -234,6 +234,11 @@ func (oc *OperatorContext) rotateCredentialPods(desired *appsv1.StatefulSet, par
 	if err := oc.Client.List(oc.Ctx, pods, selector, client.InNamespace(oc.MarklogicGroup.Namespace)); err != nil {
 		return false, err
 	}
+	for i := range pods.Items {
+		if pods.Items[i].DeletionTimestamp != nil {
+			return true, nil
+		}
+	}
 	revision := desired.Spec.Template.Annotations["marklogic.progress.com/credential-revision"]
 	for i := range pods.Items {
 		pod := &pods.Items[i]

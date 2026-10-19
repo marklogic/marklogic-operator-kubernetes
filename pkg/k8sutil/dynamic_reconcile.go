@@ -479,6 +479,17 @@ func (oc *OperatorContext) reconcileDynamicLifecycle(groupClient mlmanage.Client
 	return result.RequeueSoon(dynamicJoinRequeueSeconds)
 }
 
+func (oc *OperatorContext) reconcileDynamicCredentialRotationCleanup() result.ReconcileResult {
+	pods, err := oc.listDynamicPods()
+	if err != nil {
+		return result.Error(err)
+	}
+	if err := oc.releaseUnexpectedDeletionFinalizers(pods, desiredDynamicReplicas(oc.MarklogicGroup)); err != nil {
+		return result.Error(err)
+	}
+	return result.Continue()
+}
+
 func (oc *OperatorContext) reconcileDynamicDeletionLifecycle(groupClient mlmanage.Client, clusterName, groupName string, desiredReplicas int32, pods []corev1.Pod) result.ReconcileResult {
 	members, err := groupClient.ListGroupHosts(oc.Ctx, groupName)
 	if err != nil {

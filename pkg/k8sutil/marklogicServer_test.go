@@ -239,6 +239,39 @@ func TestRotateCredentialPodsDeletesOnlyOneStalePod(t *testing.T) {
 	}
 }
 
+func TestRotateCredentialPodsWaitsForTerminatingPod(t *testing.T) {
+	scheme := runtime.NewScheme()
+	if err := corev1.AddToScheme(scheme); err != nil {
+		t.Fatalf("add core scheme: %v", err)
+	}
+	labels := getSelectorLabelsByComponent("group", true)
+	terminating := credentialRevisionPod("group-0", labels, "old")
+	terminating.Finalizers = []string{dynamicHostCleanupFinalizer}
+	deletionTimestamp := metav1.Now()
+	terminating.DeletionTimestamp = &deletionTimestamp
+	stalePeer := credentialRevisionPod("group-1", labels, "old")
+	fakeClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(terminating, stalePeer).Build()
+	oc := &OperatorContext{
+		Ctx: context.Background(), Client: fakeClient,
+		MarklogicGroup: &marklogicv1.MarklogicGroup{ObjectMeta: metav1.ObjectMeta{Namespace: "default"}},
+	}
+	desired := &appsv1.StatefulSet{Spec: appsv1.StatefulSetSpec{Template: corev1.PodTemplateSpec{
+		ObjectMeta: metav1.ObjectMeta{Annotations: map[string]string{"marklogic.progress.com/credential-revision": "new"}},
+	}}}
+
+	rotated, err := oc.rotateCredentialPods(desired, statefulSetParameters{Name: "group", IsDynamic: true})
+	if err != nil || !rotated {
+		t.Fatalf("rotateCredentialPods() = (%v, %v), want rotation in progress", rotated, err)
+	}
+	currentPeer := &corev1.Pod{}
+	if err := fakeClient.Get(context.Background(), client.ObjectKeyFromObject(stalePeer), currentPeer); err != nil {
+		t.Fatalf("get stale peer: %v", err)
+	}
+	if currentPeer.DeletionTimestamp != nil {
+		t.Fatal("expected stale peer to remain untouched while another pod is terminating")
+	}
+}
+
 func credentialRevisionPod(name string, labels map[string]string, revision string) *corev1.Pod {
 	return &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
