@@ -86,7 +86,6 @@ func (cc *ClusterContext) reconcileOperatorCredentialSecret() result.ReconcileRe
 		annotations := cc.GetClusterAnnotations()
 		objectMeta := generateObjectMeta(secretName, mlc.Namespace, labels, annotations)
 		secret = generateSecretDef(objectMeta, marklogicClusterAsOwner(mlc), map[string][]byte{
-			"username": []byte(operatorUsername),
 			"password": []byte(password),
 		})
 		if err := cc.Client.Create(cc.Ctx, secret); err != nil && !errors.IsAlreadyExists(err) {
@@ -102,11 +101,12 @@ func (cc *ClusterContext) reconcileOperatorCredentialSecret() result.ReconcileRe
 	}
 
 	changed := false
-	if string(secret.Data["username"]) != operatorUsername {
-		if secret.Data == nil {
-			secret.Data = map[string][]byte{}
-		}
-		secret.Data["username"] = []byte(operatorUsername)
+	if secret.Data == nil {
+		secret.Data = map[string][]byte{}
+		changed = true
+	}
+	if _, exists := secret.Data["username"]; exists {
+		delete(secret.Data, "username")
 		changed = true
 	}
 	if len(secret.Data["password"]) == 0 {

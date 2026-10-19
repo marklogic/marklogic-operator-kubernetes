@@ -25,6 +25,7 @@ type stubDynamicManagementClient struct {
 	listHostStatusesFn   func() ([]mlmanage.HostStatus, error)
 	ensureOperatorRoleFn func() error
 	ensureOperatorUser   func(username, password string) error
+	updateOperatorPass   func(username, password string) error
 	listGroupFn          func(groupName string) ([]mlmanage.GroupHost, error)
 	resolveNameFn        func() (string, error)
 	resolveCandidatesFn  func() ([]string, error)
@@ -68,6 +69,13 @@ func (s *stubDynamicManagementClient) EnsureOperatorRole(ctx context.Context) er
 func (s *stubDynamicManagementClient) EnsureOperatorUser(ctx context.Context, username, password string) error {
 	if s.ensureOperatorUser != nil {
 		return s.ensureOperatorUser(username, password)
+	}
+	return nil
+}
+
+func (s *stubDynamicManagementClient) UpdateOperatorPassword(ctx context.Context, username, password string) error {
+	if s.updateOperatorPass != nil {
+		return s.updateOperatorPass(username, password)
 	}
 	return nil
 }

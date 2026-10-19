@@ -6,7 +6,7 @@ This guide explains how the Operator creates and uses the MarkLogic identity `ma
 
 The Operator maintains two separate MarkLogic identities:
 
-- **Bootstrap admin**: used to initialize MarkLogic, call Admin API endpoints, create or repair the operator role and user, and recover the operator identity. Keep this Secret available after handoff.
+- **Bootstrap admin**: used to initialize MarkLogic, call Admin API endpoints, create the operator role and user, and explicitly recover a changed operator password. Healthy reconciliation does not require this Secret.
 - **Operator user**: used for Management API operations after the Operator verifies the credentials. Its fixed username is `marklogic-kubernetes-operator`.
 
 The Operator first creates or uses the configured admin Secret. Unless `spec.auth.operatorSecretName` is set, it also creates `<MarklogicCluster-name>-operator` with `username` and `password` keys. The generated password is 32 characters. A user-provided operator Secret must contain a non-empty `password`; the Operator still uses the fixed username.
@@ -30,9 +30,9 @@ The role inherits `manage-admin`, `pki`, and `admin-ui-user`. It also has these 
 1. The MarklogicCluster reconciliation creates or adopts the bootstrap admin Secret and creates the generated operator Secret unless a user-provided operator Secret is configured.
 2. The MarkLogic pods start with the bootstrap admin identity. It is required for initial setup and `/admin/v1` operations, including initialization and joining a cluster. The operator user cannot replace admin for these bootstrap endpoints because it is provisioned only after MarkLogic security is initialized.
 3. The MarklogicGroup controller reads the operator Secret and checks Management API access to the bootstrap host using `marklogic-kubernetes-operator`.
-4. If operator authentication is rejected, the controller tries the retained bootstrap admin credentials. When the bootstrap host is online, admin credentials create or repair the `marklogic-operator` role and operator user. The controller requeues and verifies the operator login on a later reconciliation.
+4. If initial operator authentication is rejected, the controller tries the retained bootstrap admin credentials. When the bootstrap host is online, admin credentials create the `marklogic-operator` role and operator user. If credentials were already active, this recovery updates only the operator password from the configured Secret. Network and TLS failures do not trigger admin fallback.
 5. Once operator authentication succeeds and the bootstrap host is online, the controller records the active Secret in `.status.credentialSecretName` and sets the `OperatorCredentialsReady` condition to True.
-6. After handoff, the operator Secret is used for intended `/manage/v2` operations, including dynamic group reconciliation. The admin Secret remains mounted and continues to be used for `/admin/v1`, identity repair, and recovery.
+6. After handoff, the operator Secret is used for intended `/manage/v2` operations, including dynamic group reconciliation. Healthy reconciliation does not require the admin Secret. The admin Secret remains mounted for `/admin/v1`, initial setup, and explicit password recovery.
 
 The `OperatorCredentialsReady` condition describes the credential handoff, not overall MarklogicGroup or StatefulSet readiness. A group without a MarklogicCluster owner is skipped by this credential reconciliation and will not receive this handoff condition.
 
@@ -48,8 +48,10 @@ The condition is stored in `.status.conditions` with type `OperatorCredentialsRe
 | False | `OperatorManagementAPIFailed` | Warning | Operator credentials could not be validated due to a non-authentication Management API error. Check bootstrap-host availability, network access, TLS configuration, and the condition message. |
 | False | `BootstrapAdminSecretUnavailable` | Warning | Operator authentication failed and the bootstrap admin Secret could not be read. Check the configured admin Secret and its `username` and `password` keys. |
 | False | `BootstrapAdminAccessFailed` | Warning | Operator authentication failed and bootstrap admin could not access the Management API. Check admin credentials, host availability, and Management API access. |
-| False | `OperatorIdentityReconciliationFailed` | Warning | Admin credentials could not create or repair the role/user. Check the admin Secret and MarkLogic Management API response in the condition message. |
-| False | `OperatorIdentityReconciled` | Normal | Admin credentials repaired the identity. This is progress; the controller is waiting for the next reconciliation to verify operator authentication. If it persists, inspect the operator Secret, user password, and role assignment. |
+| False | `OperatorIdentityReconciliationFailed` | Warning | Admin credentials could not create the initial role/user. Check the admin Secret and MarkLogic Management API response in the condition message. |
+| False | `OperatorIdentityReconciled` | Normal | Admin credentials created the initial identity. This is progress; the controller is waiting for the next reconciliation to verify operator authentication. |
+| False | `OperatorPasswordRotationFailed` | Warning | Admin recovery could not update the active operator user's password. Check the admin Secret and Management API response. |
+| False | `OperatorPasswordRotated` | Normal | Admin recovery updated only the operator password from the configured Secret and is waiting to verify operator authentication. |
 | True | `OperatorCredentialsActive` | Normal | The operator user authenticated successfully and `.status.credentialSecretName` identifies the active Secret. |
 
 Warning events are emitted for failure reasons. `OperatorIdentityReconciled` is a Normal progress event even though the condition remains False until authentication is verified. `OperatorCredentialsActive` is a Normal event. Events are emitted when the condition status or reason changes, not on every retry; the condition message may still be updated with newer details for the same reason.

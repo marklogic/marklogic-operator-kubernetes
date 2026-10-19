@@ -32,6 +32,7 @@ type Client interface {
 	EnableAdminAPITokenAuthentication(ctx context.Context, groupName string) error
 	EnsureOperatorRole(ctx context.Context) error
 	EnsureOperatorUser(ctx context.Context, username, password string) error
+	UpdateOperatorPassword(ctx context.Context, username, password string) error
 	ResolveClusterName(ctx context.Context) (string, error)
 	RequestDynamicHostToken(ctx context.Context, clusterName, groupName, hostFQDN, duration string) (string, error)
 	JoinDynamicHost(ctx context.Context, hostFQDN, token string) error
@@ -357,6 +358,12 @@ func (c *managementClient) EnsureOperatorUser(ctx context.Context, username, pas
 	}
 
 	_, _, err = c.doJSON(ctx, http.MethodPut, "/manage/v2/users/"+url.PathEscape(username)+"/properties", nil, payload, http.StatusAccepted, http.StatusNoContent)
+	return err
+}
+
+func (c *managementClient) UpdateOperatorPassword(ctx context.Context, username, password string) error {
+	payload := map[string]any{"password": password}
+	_, _, err := c.doJSON(ctx, http.MethodPut, "/manage/v2/users/"+url.PathEscape(username)+"/properties", nil, payload, http.StatusAccepted, http.StatusNoContent)
 	return err
 }
 

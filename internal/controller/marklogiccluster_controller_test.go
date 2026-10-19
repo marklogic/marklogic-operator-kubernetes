@@ -319,7 +319,7 @@ var _ = Describe("MarklogicCluster Controller", func() {
 			Eventually(func() error {
 				return k8sClient.Get(ctx, secretKey, recreatedSecret)
 			}, timeout, interval).Should(Succeed())
-			Expect(string(recreatedSecret.Data["username"])).Should(Equal("marklogic-kubernetes-operator"))
+			Expect(recreatedSecret.Data).ShouldNot(HaveKey("username"))
 			Expect(recreatedSecret.Data["password"]).Should(HaveLen(32))
 
 			controllerOwnedByCluster := false
@@ -425,7 +425,7 @@ var _ = Describe("MarklogicCluster Controller", func() {
 				err := k8sClient.Get(ctx, types.NamespacedName{Name: dynamicClusterName + "-operator", Namespace: dynamicClusterNS}, operatorSecret)
 				return err == nil
 			}, timeout, interval).Should(BeTrue())
-			Expect(string(operatorSecret.Data["username"])).Should(Equal("marklogic-kubernetes-operator"))
+			Expect(operatorSecret.Data).ShouldNot(HaveKey("username"))
 			Expect(len(operatorSecret.Data["password"])).Should(BeNumerically(">", 0))
 
 			bootstrapStatic := &marklogicv1.MarklogicGroup{}

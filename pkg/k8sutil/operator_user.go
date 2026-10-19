@@ -62,11 +62,6 @@ func (oc *OperatorContext) ReconcileOperatorUser() result.ReconcileResult {
 						"Bootstrap host %q is not online yet; check the MarkLogic pod and server startup status.", bootstrapHost,
 					))
 				}
-				if err := oc.ensureOperatorIdentity(operatorPassword, bootstrapHost, useTLS); err != nil {
-					return oc.operatorUserPending("OperatorIdentityReconciliationFailed", fmt.Sprintf(
-						"Could not reconcile the operator role and user through the bootstrap admin credentials: %v. Verify the admin Secret and MarkLogic Management API access.", err,
-					))
-				}
 				return oc.markOperatorCredentialActive(clusterName)
 			}
 		}
@@ -115,24 +110,21 @@ func (oc *OperatorContext) ReconcileOperatorUser() result.ReconcileResult {
 		))
 	}
 
+	if oc.MarklogicGroup.Status.CredentialSecretName != "" {
+		if err := adminClient.UpdateOperatorPassword(oc.Ctx, operatorUsername, operatorPassword); err != nil {
+			return oc.operatorUserPending("OperatorPasswordRotationFailed", fmt.Sprintf(
+				"Could not rotate the operator password using bootstrap admin credentials: %v. Verify the admin Secret and MarkLogic Management API access.", err,
+			))
+		}
+		return oc.operatorUserPending("OperatorPasswordRotated", "The operator password was updated from the configured Secret; waiting for the next reconciliation to verify operator authentication.")
+	}
+
 	if err := oc.ensureOperatorIdentityWithClient(adminClient, operatorPassword); err != nil {
 		return oc.operatorUserPending("OperatorIdentityReconciliationFailed", fmt.Sprintf(
-			"Could not create or repair the operator role and user using bootstrap admin credentials: %v. Verify the admin Secret and MarkLogic Management API access.", err,
+			"Could not create the operator role and user using bootstrap admin credentials: %v. Verify the admin Secret and MarkLogic Management API access.", err,
 		))
 	}
-	return oc.operatorUserPending("OperatorIdentityReconciled", "The bootstrap admin credentials repaired the operator role and user; waiting for the next reconciliation to verify operator authentication.")
-}
-
-func (oc *OperatorContext) ensureOperatorIdentity(operatorPassword, bootstrapHost string, useTLS bool) error {
-	adminUsername, adminPassword, err := oc.readCredentialSecret(adminCredentialSecretNameForGroup(oc.MarklogicGroup))
-	if err != nil {
-		return err
-	}
-	adminClient := NewDynamicManagementClient(mlmanage.ClientOptions{
-		Host: bootstrapHost, Username: adminUsername, Password: adminPassword,
-		UseTLS: useTLS, InsecureSkipVerify: useTLS,
-	})
-	return oc.ensureOperatorIdentityWithClient(adminClient, operatorPassword)
+	return oc.operatorUserPending("OperatorIdentityReconciled", "The bootstrap admin credentials created the operator role and user; waiting for the next reconciliation to verify operator authentication.")
 }
 
 func (oc *OperatorContext) ensureOperatorIdentityWithClient(adminClient mlmanage.Client, operatorPassword string) error {
@@ -243,7 +235,7 @@ func (oc *OperatorContext) recordOperatorCredentialsEvent(status metav1.Conditio
 		return
 	}
 	eventType := corev1.EventTypeWarning
-	if status == metav1.ConditionTrue || reason == "OperatorIdentityReconciled" {
+	if status == metav1.ConditionTrue || reason == "OperatorIdentityReconciled" || reason == "OperatorPasswordRotated" {
 		eventType = corev1.EventTypeNormal
 	}
 	oc.Recorder.Event(oc.MarklogicGroup, eventType, reason, message)

@@ -2867,6 +2867,11 @@ func (f *fakeDynamicManagementClient) EnsureOperatorUser(ctx context.Context, us
 	return nil
 }
 
+func (f *fakeDynamicManagementClient) UpdateOperatorPassword(ctx context.Context, username, password string) error {
+	f.record("UpdateOperatorPassword")
+	return nil
+}
+
 func (f *fakeDynamicManagementClient) ResolveClusterName(ctx context.Context) (string, error) {
 	f.record("ResolveClusterName")
 	if f.behavior == nil {

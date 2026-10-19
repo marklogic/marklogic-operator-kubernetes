@@ -109,6 +109,30 @@ func TestEnsureOperatorUserCreateExistingAndForbiddenLookup(t *testing.T) {
 	}
 }
 
+func TestUpdateOperatorPasswordOmitsRoleAndIdentityFields(t *testing.T) {
+	t.Parallel()
+
+	var payload map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPut || r.URL.Path != "/manage/v2/users/marklogic-kubernetes-operator/properties" {
+			t.Fatalf("unexpected password update request: %s %s", r.Method, r.URL.Path)
+		}
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode password payload: %v", err)
+		}
+		w.WriteHeader(http.StatusAccepted)
+	}))
+	defer server.Close()
+
+	client := &managementClient{baseURL: server.URL, httpClient: server.Client()}
+	if err := client.UpdateOperatorPassword(context.Background(), "marklogic-kubernetes-operator", "rotated-password"); err != nil {
+		t.Fatalf("UpdateOperatorPassword returned error: %v", err)
+	}
+	if !reflect.DeepEqual(payload, map[string]any{"password": "rotated-password"}) {
+		t.Fatalf("password update payload = %+v, want password only", payload)
+	}
+}
+
 func TestEnsureOperatorRoleCreateAndUpdate(t *testing.T) {
 	t.Parallel()
 

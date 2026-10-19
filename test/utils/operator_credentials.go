@@ -13,7 +13,6 @@ import (
 )
 
 const (
-	operatorCredentialUsername   = "marklogic-kubernetes-operator"
 	credentialRevisionAnnotation = "marklogic.progress.com/credential-revision"
 )
 
@@ -61,8 +60,8 @@ func checkOperatorCredentialHandoff(ctx context.Context, client klient.Client, n
 		}
 		return false, fmt.Errorf("get operator credential Secret %s/%s: %w", namespace, operatorSecretName, err)
 	}
-	if string(operatorSecret.Data["username"]) != operatorCredentialUsername || len(operatorSecret.Data["password"]) != 32 {
-		return false, fmt.Errorf("operator credential Secret %s/%s has unexpected username or password length", namespace, operatorSecretName)
+	if _, exists := operatorSecret.Data["username"]; exists || len(operatorSecret.Data["password"]) != 32 {
+		return false, fmt.Errorf("operator credential Secret %s/%s must contain only the expected password credential", namespace, operatorSecretName)
 	}
 
 	adminSecretName := group.Spec.SecretName
