@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"maps"
 	"sort"
 	"strconv"
 
@@ -21,6 +22,12 @@ import (
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+)
+
+const (
+	credentialRevisionAnnotation    = "marklogic.progress.com/credential-revision"
+	credentialRotationPodAnnotation = "marklogic.progress.com/credential-rotation-pod"
+	credentialRotationUIDAnnotation = "marklogic.progress.com/credential-rotation-uid"
 )
 
 type statefulSetParameters struct {
@@ -110,6 +117,7 @@ func (oc *OperatorContext) ReconcileStatefulset() (reconcile.Result, error) {
 		logger.Error(err, "Cannot get statefulSet for MarkLogic")
 		return result.Error(err).Output()
 	}
+	preserveCredentialRotationState(currentSts, statefulSetDef)
 
 	patchDiff, err := patch.DefaultPatchMaker.Calculate(currentSts, statefulSetDef,
 		patch.IgnoreStatusFields(),
@@ -234,36 +242,115 @@ func (oc *OperatorContext) rotateCredentialPods(desired *appsv1.StatefulSet, par
 	if err := oc.Client.List(oc.Ctx, pods, selector, client.InNamespace(oc.MarklogicGroup.Namespace)); err != nil {
 		return false, err
 	}
+	replicas := int32(0)
+	if desired.Spec.Replicas != nil {
+		replicas = *desired.Spec.Replicas
+	} else if params.Replicas != nil {
+		replicas = *params.Replicas
+	}
+	revision := desired.Spec.Template.Annotations[credentialRevisionAnnotation]
+	if revision == "" {
+		return false, nil
+	}
+
+	expectedPods := make(map[string]*corev1.Pod, replicas)
 	for i := range pods.Items {
-		if pods.Items[i].DeletionTimestamp != nil {
+		pod := &pods.Items[i]
+		if !isPodControlledByStatefulSet(pod, desired) {
+			continue
+		}
+		ordinal := podOrdinal(pod.Name)
+		if ordinal < 0 || int32(ordinal) >= replicas || pod.Name != fmt.Sprintf("%s-%d", desired.Name, ordinal) {
+			return true, nil
+		}
+		expectedPods[pod.Name] = pod
+	}
+	for ordinal := int32(0); ordinal < replicas; ordinal++ {
+		name := fmt.Sprintf("%s-%d", desired.Name, ordinal)
+		pod, found := expectedPods[name]
+		if !found || pod.DeletionTimestamp != nil || !hasPodReadyCondition(pod) {
 			return true, nil
 		}
 	}
-	revision := desired.Spec.Template.Annotations["marklogic.progress.com/credential-revision"]
-	for i := range pods.Items {
-		pod := &pods.Items[i]
-		if pod.Annotations["marklogic.progress.com/credential-revision"] == revision {
-			continue
+
+	trackedPodName := desired.Annotations[credentialRotationPodAnnotation]
+	trackedPodUID := desired.Annotations[credentialRotationUIDAnnotation]
+	if trackedPodName != "" || trackedPodUID != "" {
+		replacement, found := expectedPods[trackedPodName]
+		if !found || trackedPodName == "" || trackedPodUID == "" || string(replacement.UID) == trackedPodUID || replacement.Annotations[credentialRevisionAnnotation] != revision {
+			return true, nil
 		}
-		allPeersReady := true
-		for peerIndex := range pods.Items {
-			if peerIndex == i {
-				continue
-			}
-			if !hasPodReadyCondition(&pods.Items[peerIndex]) {
-				allPeersReady = false
-				break
-			}
-		}
-		if !allPeersReady {
-			return false, nil
-		}
-		if err := oc.Client.Delete(oc.Ctx, pod); err != nil && !apierrors.IsNotFound(err) {
+		if err := oc.updateCredentialRotationState(desired, "", ""); err != nil {
 			return false, err
 		}
 		return true, nil
 	}
-	return false, nil
+
+	stalePods := make([]*corev1.Pod, 0, len(expectedPods))
+	for _, pod := range expectedPods {
+		if pod.Annotations[credentialRevisionAnnotation] != revision {
+			stalePods = append(stalePods, pod)
+		}
+	}
+	if len(stalePods) == 0 {
+		return false, nil
+	}
+	sort.Slice(stalePods, func(i, j int) bool {
+		return podOrdinal(stalePods[i].Name) > podOrdinal(stalePods[j].Name)
+	})
+	candidate := stalePods[0]
+	for ordinal := int32(podOrdinal(candidate.Name) + 1); ordinal < replicas; ordinal++ {
+		peer := expectedPods[fmt.Sprintf("%s-%d", desired.Name, ordinal)]
+		if peer.Annotations[credentialRevisionAnnotation] != revision {
+			return true, nil
+		}
+	}
+	if candidate.UID == "" {
+		return false, fmt.Errorf("cannot rotate pod %s without a UID", candidate.Name)
+	}
+	if err := oc.updateCredentialRotationState(desired, candidate.Name, string(candidate.UID)); err != nil {
+		return false, err
+	}
+	if err := oc.Client.Delete(oc.Ctx, candidate); err != nil && !apierrors.IsNotFound(err) {
+		if clearErr := oc.updateCredentialRotationState(desired, "", ""); clearErr != nil {
+			return false, fmt.Errorf("delete pod %s: %w; clear rotation state: %v", candidate.Name, err, clearErr)
+		}
+		return false, err
+	}
+	return true, nil
+}
+
+func preserveCredentialRotationState(current, desired *appsv1.StatefulSet) {
+	if desired.Annotations == nil {
+		desired.Annotations = map[string]string{}
+	}
+	for _, key := range []string{credentialRotationPodAnnotation, credentialRotationUIDAnnotation} {
+		if value := current.Annotations[key]; value != "" {
+			desired.Annotations[key] = value
+		} else {
+			delete(desired.Annotations, key)
+		}
+	}
+}
+
+func (oc *OperatorContext) updateCredentialRotationState(statefulSet *appsv1.StatefulSet, podName, podUID string) error {
+	patchBase := statefulSet.DeepCopy()
+	if statefulSet.Annotations == nil {
+		statefulSet.Annotations = map[string]string{}
+	}
+	if podName == "" || podUID == "" {
+		delete(statefulSet.Annotations, credentialRotationPodAnnotation)
+		delete(statefulSet.Annotations, credentialRotationUIDAnnotation)
+	} else {
+		statefulSet.Annotations[credentialRotationPodAnnotation] = podName
+		statefulSet.Annotations[credentialRotationUIDAnnotation] = podUID
+	}
+	return oc.Client.Patch(oc.Ctx, statefulSet, client.MergeFrom(patchBase))
+}
+
+func isPodControlledByStatefulSet(pod *corev1.Pod, statefulSet *appsv1.StatefulSet) bool {
+	controller := metav1.GetControllerOf(pod)
+	return controller != nil && controller.APIVersion == appsv1.SchemeGroupVersion.String() && controller.Kind == "StatefulSet" && controller.Name == statefulSet.Name && controller.UID == statefulSet.UID
 }
 
 func shouldDelayDynamicEmptyDirScaleDown(cr *marklogicv1.MarklogicGroup, currentSts *appsv1.StatefulSet) bool {
@@ -327,7 +414,7 @@ func generateStatefulSetsDef(stsMeta metav1.ObjectMeta, params statefulSetParame
 	if templateAnnotations == nil {
 		templateAnnotations = make(map[string]string)
 	}
-	templateAnnotations["marklogic.progress.com/credential-revision"] = containerParams.CredentialRevision
+	templateAnnotations[credentialRevisionAnnotation] = containerParams.CredentialRevision
 	statefulSet := &appsv1.StatefulSet{
 		TypeMeta:   generateTypeMeta("StatefulSet", "apps/v1"),
 		ObjectMeta: stsMeta,
@@ -356,6 +443,7 @@ func generateStatefulSetsDef(stsMeta metav1.ObjectMeta, params statefulSetParame
 			},
 		},
 	}
+	statefulSet.Spec.Template.Annotations = maps.Clone(statefulSet.Spec.Template.Annotations)
 	// add EmptyDir volume if persistence is not provided
 	if containerParams.Persistence == nil || !containerParams.Persistence.Enabled {
 		emptyDir := corev1.Volume{

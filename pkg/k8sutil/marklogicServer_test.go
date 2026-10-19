@@ -8,8 +8,10 @@ import (
 	marklogicv1 "github.com/marklogic/marklogic-operator-kubernetes/api/v1"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
@@ -173,14 +175,10 @@ func TestManualCredentialRotationOnlyRunsForOnDelete(t *testing.T) {
 				Status:     marklogicv1.MarklogicGroupStatus{CredentialSecretName: "node-operator"},
 			}
 			labels := getSelectorLabelsByComponent("node", false)
-			statefulSet := &appsv1.StatefulSet{
-				ObjectMeta: metav1.ObjectMeta{Name: "node", Namespace: "database"},
-				Spec: appsv1.StatefulSetSpec{Template: corev1.PodTemplateSpec{
-					ObjectMeta: metav1.ObjectMeta{Annotations: map[string]string{"marklogic.progress.com/credential-revision": "new"}},
-				}},
-			}
+			statefulSet := credentialRotationStatefulSet("node", "database", "new", replicas)
 			pod := credentialRevisionPod("node-0", labels, "old")
 			pod.Namespace = "database"
+			setCredentialRevisionPodOwner(pod, statefulSet)
 			fakeClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(statefulSet, pod).Build()
 			oc := &OperatorContext{Ctx: context.Background(), Client: fakeClient, MarklogicGroup: group}
 
@@ -212,19 +210,22 @@ func TestRotateCredentialPodsDeletesOnlyOneStalePod(t *testing.T) {
 	if err := corev1.AddToScheme(scheme); err != nil {
 		t.Fatalf("add core scheme: %v", err)
 	}
+	if err := appsv1.AddToScheme(scheme); err != nil {
+		t.Fatalf("add apps scheme: %v", err)
+	}
 	labels := getSelectorLabelsByComponent("group", false)
+	desired := credentialRotationStatefulSet("group", "default", "new", 2)
 	pods := []*corev1.Pod{
 		credentialRevisionPod("group-0", labels, "old"),
 		credentialRevisionPod("group-1", labels, "old"),
 	}
-	fakeClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(pods[0], pods[1]).Build()
+	setCredentialRevisionPodOwner(pods[0], desired)
+	setCredentialRevisionPodOwner(pods[1], desired)
+	fakeClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(desired, pods[0], pods[1]).Build()
 	oc := &OperatorContext{
 		Ctx: context.Background(), Client: fakeClient,
 		MarklogicGroup: &marklogicv1.MarklogicGroup{ObjectMeta: metav1.ObjectMeta{Namespace: "default"}},
 	}
-	desired := &appsv1.StatefulSet{Spec: appsv1.StatefulSetSpec{Template: corev1.PodTemplateSpec{
-		ObjectMeta: metav1.ObjectMeta{Annotations: map[string]string{"marklogic.progress.com/credential-revision": "new"}},
-	}}}
 
 	rotated, err := oc.rotateCredentialPods(desired, statefulSetParameters{Name: "group"})
 	if err != nil || !rotated {
@@ -237,6 +238,9 @@ func TestRotateCredentialPodsDeletesOnlyOneStalePod(t *testing.T) {
 	if len(remaining.Items) != 1 {
 		t.Fatalf("remaining pods = %d, want exactly one stale pod left for the next rotation", len(remaining.Items))
 	}
+	if remaining.Items[0].Name != "group-0" {
+		t.Fatalf("remaining pod = %q, want deterministic highest-ordinal deletion", remaining.Items[0].Name)
+	}
 }
 
 func TestRotateCredentialPodsWaitsForTerminatingPod(t *testing.T) {
@@ -244,21 +248,23 @@ func TestRotateCredentialPodsWaitsForTerminatingPod(t *testing.T) {
 	if err := corev1.AddToScheme(scheme); err != nil {
 		t.Fatalf("add core scheme: %v", err)
 	}
+	if err := appsv1.AddToScheme(scheme); err != nil {
+		t.Fatalf("add apps scheme: %v", err)
+	}
 	labels := getSelectorLabelsByComponent("group", true)
+	desired := credentialRotationStatefulSet("group", "default", "new", 2)
 	terminating := credentialRevisionPod("group-0", labels, "old")
+	setCredentialRevisionPodOwner(terminating, desired)
 	terminating.Finalizers = []string{dynamicHostCleanupFinalizer}
 	deletionTimestamp := metav1.Now()
 	terminating.DeletionTimestamp = &deletionTimestamp
 	stalePeer := credentialRevisionPod("group-1", labels, "old")
-	fakeClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(terminating, stalePeer).Build()
+	setCredentialRevisionPodOwner(stalePeer, desired)
+	fakeClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(desired, terminating, stalePeer).Build()
 	oc := &OperatorContext{
 		Ctx: context.Background(), Client: fakeClient,
 		MarklogicGroup: &marklogicv1.MarklogicGroup{ObjectMeta: metav1.ObjectMeta{Namespace: "default"}},
 	}
-	desired := &appsv1.StatefulSet{Spec: appsv1.StatefulSetSpec{Template: corev1.PodTemplateSpec{
-		ObjectMeta: metav1.ObjectMeta{Annotations: map[string]string{"marklogic.progress.com/credential-revision": "new"}},
-	}}}
-
 	rotated, err := oc.rotateCredentialPods(desired, statefulSetParameters{Name: "group", IsDynamic: true})
 	if err != nil || !rotated {
 		t.Fatalf("rotateCredentialPods() = (%v, %v), want rotation in progress", rotated, err)
@@ -272,11 +278,106 @@ func TestRotateCredentialPodsWaitsForTerminatingPod(t *testing.T) {
 	}
 }
 
+func TestRotateCredentialPodsWaitsForVerifiedReplacement(t *testing.T) {
+	scheme := runtime.NewScheme()
+	if err := corev1.AddToScheme(scheme); err != nil {
+		t.Fatalf("add core scheme: %v", err)
+	}
+	if err := appsv1.AddToScheme(scheme); err != nil {
+		t.Fatalf("add apps scheme: %v", err)
+	}
+	labels := getSelectorLabelsByComponent("group", false)
+	desired := credentialRotationStatefulSet("group", "default", "new", 2)
+	first := credentialRevisionPod("group-0", labels, "old")
+	second := credentialRevisionPod("group-1", labels, "old")
+	setCredentialRevisionPodOwner(first, desired)
+	setCredentialRevisionPodOwner(second, desired)
+	deletedUID := second.UID
+	fakeClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(desired, first, second).Build()
+	oc := &OperatorContext{
+		Ctx: context.Background(), Client: fakeClient,
+		MarklogicGroup: &marklogicv1.MarklogicGroup{ObjectMeta: metav1.ObjectMeta{Namespace: "default"}},
+	}
+
+	rotated, err := oc.rotateCredentialPods(desired, statefulSetParameters{Name: "group"})
+	if err != nil || !rotated {
+		t.Fatalf("initial rotation = (%v, %v), want deletion in progress", rotated, err)
+	}
+	for reconcileCount := 0; reconcileCount < 2; reconcileCount++ {
+		rotated, err = oc.rotateCredentialPods(desired, statefulSetParameters{Name: "group"})
+		if err != nil || !rotated {
+			t.Fatalf("missing replacement reconcile %d = (%v, %v), want rotation in progress", reconcileCount+1, rotated, err)
+		}
+	}
+	if err := fakeClient.Get(context.Background(), client.ObjectKeyFromObject(first), &corev1.Pod{}); err != nil {
+		t.Fatalf("expected lower ordinal pod to remain while replacement is missing: %v", err)
+	}
+
+	replacement := credentialRevisionPod("group-1", labels, "new")
+	setCredentialRevisionPodOwner(replacement, desired)
+	replacement.UID = deletedUID
+	if err := fakeClient.Create(context.Background(), replacement); err != nil {
+		t.Fatalf("create same-UID replacement: %v", err)
+	}
+	if rotated, err = oc.rotateCredentialPods(desired, statefulSetParameters{Name: "group"}); err != nil || !rotated {
+		t.Fatalf("same-UID replacement reconcile = (%v, %v), want rotation paused", rotated, err)
+	}
+	if err := fakeClient.Delete(context.Background(), replacement); err != nil {
+		t.Fatalf("delete same-UID replacement: %v", err)
+	}
+
+	replacement = credentialRevisionPod("group-1", labels, "old")
+	setCredentialRevisionPodOwner(replacement, desired)
+	replacement.UID = types.UID("group-1-replacement")
+	if err := fakeClient.Create(context.Background(), replacement); err != nil {
+		t.Fatalf("create stale-revision replacement: %v", err)
+	}
+	if rotated, err = oc.rotateCredentialPods(desired, statefulSetParameters{Name: "group"}); err != nil || !rotated {
+		t.Fatalf("stale-revision replacement reconcile = (%v, %v), want rotation paused", rotated, err)
+	}
+	if err := fakeClient.Delete(context.Background(), replacement); err != nil {
+		t.Fatalf("delete stale-revision replacement: %v", err)
+	}
+
+	replacement = credentialRevisionPod("group-1", labels, "new")
+	setCredentialRevisionPodOwner(replacement, desired)
+	replacement.UID = types.UID("group-1-replacement")
+	if err := fakeClient.Create(context.Background(), replacement); err != nil {
+		t.Fatalf("create verified replacement: %v", err)
+	}
+	if rotated, err = oc.rotateCredentialPods(desired, statefulSetParameters{Name: "group"}); err != nil || !rotated {
+		t.Fatalf("verified replacement reconcile = (%v, %v), want tracker completion", rotated, err)
+	}
+	if rotated, err = oc.rotateCredentialPods(desired, statefulSetParameters{Name: "group"}); err != nil || !rotated {
+		t.Fatalf("next ordinal rotation = (%v, %v), want deletion in progress", rotated, err)
+	}
+	if err := fakeClient.Get(context.Background(), client.ObjectKeyFromObject(first), &corev1.Pod{}); !apierrors.IsNotFound(err) {
+		t.Fatalf("expected lower ordinal pod deletion after verified replacement, got err=%v", err)
+	}
+}
+
+func credentialRotationStatefulSet(name, namespace, revision string, replicas int32) *appsv1.StatefulSet {
+	return &appsv1.StatefulSet{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace, UID: types.UID(name + "-statefulset")},
+		Spec: appsv1.StatefulSetSpec{
+			Replicas: &replicas,
+			Template: corev1.PodTemplateSpec{ObjectMeta: metav1.ObjectMeta{Annotations: map[string]string{
+				credentialRevisionAnnotation: revision,
+			}}},
+		},
+	}
+}
+
+func setCredentialRevisionPodOwner(pod *corev1.Pod, statefulSet *appsv1.StatefulSet) {
+	pod.UID = types.UID(pod.Name + "-original")
+	pod.OwnerReferences = []metav1.OwnerReference{*metav1.NewControllerRef(statefulSet, appsv1.SchemeGroupVersion.WithKind("StatefulSet"))}
+}
+
 func credentialRevisionPod(name string, labels map[string]string, revision string) *corev1.Pod {
 	return &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: name, Namespace: "default", Labels: labels,
-			Annotations: map[string]string{"marklogic.progress.com/credential-revision": revision},
+			Annotations: map[string]string{credentialRevisionAnnotation: revision},
 		},
 		Status: corev1.PodStatus{Conditions: []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionTrue}}},
 	}
