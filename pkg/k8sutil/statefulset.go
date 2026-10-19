@@ -618,6 +618,10 @@ func generateStatefulSetsParams(cr *marklogicv1.MarklogicGroup) statefulSetParam
 }
 
 func generateContainerParams(cr *marklogicv1.MarklogicGroup) containerParameters {
+	operatorSecretName := operatorCredentialSecretNameForGroup(cr)
+	if cr.Status.CredentialSecretName != "" {
+		operatorSecretName = cr.Status.CredentialSecretName
+	}
 	containerParams := containerParameters{
 		Image:                     cr.Spec.Image,
 		Resources:                 cr.Spec.Resources,
@@ -638,7 +642,7 @@ func generateContainerParams(cr *marklogicv1.MarklogicGroup) containerParameters
 		AdditionalVolumeMounts:    cr.Spec.AdditionalVolumeMounts,
 		Persistence:               cr.Spec.Persistence,
 		IsDynamic:                 cr.Spec.IsDynamic,
-		OperatorSecretName:        operatorCredentialSecretNameForGroup(cr),
+		OperatorSecretName:        operatorSecretName,
 		OperatorCredentialsActive: cr.Status.CredentialSecretName != "",
 	}
 

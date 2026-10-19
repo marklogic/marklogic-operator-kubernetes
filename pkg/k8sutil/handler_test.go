@@ -4,9 +4,13 @@ package k8sutil
 
 import (
 	"context"
+	"errors"
+	"reflect"
 	"testing"
 
 	marklogicv1 "github.com/marklogic/marklogic-operator-kubernetes/api/v1"
+	"github.com/marklogic/marklogic-operator-kubernetes/pkg/mlmanage"
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -144,5 +148,151 @@ func TestDynamicCredentialRotationCleanupReleasesTerminatingPodFinalizer(t *test
 	}
 	if !containsString(currentStable.Finalizers, dynamicHostCleanupFinalizer) {
 		t.Fatal("expected cleanup finalizer to remain on the non-terminating pod")
+	}
+}
+
+func TestHandlerRestoresBootstrapPodWhileCredentialValidationIsPending(t *testing.T) {
+	scheme := runtime.NewScheme()
+	if err := marklogicv1.AddToScheme(scheme); err != nil {
+		t.Fatalf("add Marklogic scheme: %v", err)
+	}
+	if err := corev1.AddToScheme(scheme); err != nil {
+		t.Fatalf("add core scheme: %v", err)
+	}
+	if err := appsv1.AddToScheme(scheme); err != nil {
+		t.Fatalf("add apps scheme: %v", err)
+	}
+
+	desiredReplicas := int32(1)
+	currentReplicas := int32(0)
+	desiredOperatorSecret := "search-operator-next"
+	group := &marklogicv1.MarklogicGroup{
+		TypeMeta: metav1.TypeMeta{APIVersion: "marklogic.progress.com/v1", Kind: "MarklogicGroup"},
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "bootstrap", Namespace: "database", UID: types.UID("bootstrap-group"),
+			OwnerReferences: []metav1.OwnerReference{{Kind: "MarklogicCluster", Name: "search"}},
+		},
+		Spec: marklogicv1.MarklogicGroupSpec{
+			Name:          "bootstrap",
+			Replicas:      &desiredReplicas,
+			SecretName:    "search-admin",
+			Auth:          &marklogicv1.AdminAuth{OperatorSecretName: &desiredOperatorSecret},
+			HugePages:     &marklogicv1.HugePages{},
+			LogCollection: &marklogicv1.LogCollection{},
+		},
+		Status: marklogicv1.MarklogicGroupStatus{CredentialSecretName: "search-operator-active"},
+	}
+	statefulSet := &appsv1.StatefulSet{
+		ObjectMeta: metav1.ObjectMeta{Name: "bootstrap", Namespace: "database"},
+		Spec: appsv1.StatefulSetSpec{
+			Replicas: &currentReplicas,
+			Template: corev1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{Annotations: map[string]string{credentialRevisionAnnotation: "last-validated-revision"}},
+				Spec: corev1.PodSpec{Volumes: []corev1.Volume{{
+					Name: "mloperator-secrets",
+					VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{
+						SecretName: "search-operator-active",
+					}},
+				}}},
+			},
+		},
+	}
+	originalTemplate := statefulSet.Spec.Template.DeepCopy()
+	activeOperatorSecret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "search-operator-active", Namespace: "database"},
+		Data:       map[string][]byte{"password": []byte("last-validated-password")},
+	}
+	desiredOperatorSecretObject := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: desiredOperatorSecret, Namespace: "database"},
+		Data:       map[string][]byte{"password": []byte("unverified-password")},
+	}
+
+	fakeClient := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithStatusSubresource(&marklogicv1.MarklogicGroup{}).
+		WithObjects(group, statefulSet, activeOperatorSecret, desiredOperatorSecretObject).
+		Build()
+	originalFactory := NewDynamicManagementClient
+	NewDynamicManagementClient = func(options mlmanage.ClientOptions) mlmanage.Client {
+		if options.Password != "unverified-password" {
+			t.Fatalf("validation password = %q, want desired unverified credential", options.Password)
+		}
+		return &stubDynamicManagementClient{listHostStatusesFn: func() ([]mlmanage.HostStatus, error) {
+			return nil, errors.New("bootstrap API unavailable")
+		}}
+	}
+	defer func() { NewDynamicManagementClient = originalFactory }()
+
+	oc := &OperatorContext{
+		Ctx: context.Background(), Client: fakeClient, Scheme: scheme,
+		MarklogicGroup: group, Recorder: record.NewFakeRecorder(10),
+	}
+	reconcileResult, err := oc.ReconsileMarklogicGroupHandler()
+	if err != nil {
+		t.Fatalf("handler returned error: %v", err)
+	}
+	if !reconcileResult.Requeue || reconcileResult.RequeueAfter <= 0 {
+		t.Fatalf("handler result = %+v, want pending credential validation requeue", reconcileResult)
+	}
+
+	currentStatefulSet := &appsv1.StatefulSet{}
+	if err := fakeClient.Get(context.Background(), client.ObjectKeyFromObject(statefulSet), currentStatefulSet); err != nil {
+		t.Fatalf("get recovered StatefulSet: %v", err)
+	}
+	if currentStatefulSet.Spec.Replicas == nil || *currentStatefulSet.Spec.Replicas != 1 {
+		t.Fatalf("recovered replicas = %v, want 1", currentStatefulSet.Spec.Replicas)
+	}
+	if !reflect.DeepEqual(&currentStatefulSet.Spec.Template, originalTemplate) {
+		t.Fatal("bootstrap recovery changed the last validated Pod template")
+	}
+	params := generateContainerParams(group)
+	if params.OperatorSecretName != "search-operator-active" {
+		t.Fatalf("selected operator Secret = %q, want last validated Secret", params.OperatorSecretName)
+	}
+}
+
+func TestCredentialValidationRecoveryOnlyRestoresBootstrapFromZero(t *testing.T) {
+	tests := []struct {
+		name          string
+		bootstrapHost string
+		current       int32
+		desired       int32
+		want          int32
+	}{
+		{name: "non-bootstrap group", bootstrapHost: "bootstrap-0.bootstrap.database.svc.cluster.local", current: 0, desired: 1, want: 0},
+		{name: "scale down", current: 1, desired: 0, want: 1},
+		{name: "additional scale up", current: 1, desired: 3, want: 1},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			scheme := runtime.NewScheme()
+			if err := appsv1.AddToScheme(scheme); err != nil {
+				t.Fatalf("add apps scheme: %v", err)
+			}
+			group := &marklogicv1.MarklogicGroup{
+				ObjectMeta: metav1.ObjectMeta{Name: "bootstrap", Namespace: "database"},
+				Spec: marklogicv1.MarklogicGroupSpec{
+					Name: "bootstrap", BootstrapHost: test.bootstrapHost, Replicas: &test.desired,
+				},
+			}
+			statefulSet := &appsv1.StatefulSet{
+				ObjectMeta: metav1.ObjectMeta{Name: "bootstrap", Namespace: "database"},
+				Spec:       appsv1.StatefulSetSpec{Replicas: &test.current},
+			}
+			fakeClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(statefulSet).Build()
+			oc := &OperatorContext{Ctx: context.Background(), Client: fakeClient, MarklogicGroup: group}
+
+			if err := oc.reconcileBootstrapStatefulSetRecovery(statefulSet); err != nil {
+				t.Fatalf("reconcile recovery: %v", err)
+			}
+			currentStatefulSet := &appsv1.StatefulSet{}
+			if err := fakeClient.Get(context.Background(), client.ObjectKeyFromObject(statefulSet), currentStatefulSet); err != nil {
+				t.Fatalf("get StatefulSet: %v", err)
+			}
+			if currentStatefulSet.Spec.Replicas == nil || *currentStatefulSet.Spec.Replicas != test.want {
+				t.Fatalf("replicas = %v, want %d", currentStatefulSet.Spec.Replicas, test.want)
+			}
+		})
 	}
 }

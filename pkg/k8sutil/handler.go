@@ -3,6 +3,8 @@
 package k8sutil
 
 import (
+	"strings"
+
 	"github.com/marklogic/marklogic-operator-kubernetes/pkg/result"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -47,8 +49,9 @@ func (oc *OperatorContext) ReconsileMarklogicGroupHandler() (reconcile.Result, e
 
 	credentialsActive := oc.MarklogicGroup.Status.CredentialSecretName != ""
 	statefulSetExists := false
+	var statefulSet *appsv1.StatefulSet
 	if credentialsActive {
-		statefulSet := &appsv1.StatefulSet{}
+		statefulSet = &appsv1.StatefulSet{}
 		err := oc.Client.Get(oc.Ctx, client.ObjectKey{Namespace: oc.MarklogicGroup.Namespace, Name: oc.MarklogicGroup.Spec.Name}, statefulSet)
 		if err == nil {
 			statefulSetExists = true
@@ -61,6 +64,9 @@ func (oc *OperatorContext) ReconsileMarklogicGroupHandler() (reconcile.Result, e
 	if credentialsActive && statefulSetExists {
 		if operatorUserResult := oc.ReconcileOperatorUser(); operatorUserResult.Completed() {
 			if !oc.activeOperatorCredentialSecretMissing() {
+				if err := oc.reconcileBootstrapStatefulSetRecovery(statefulSet); err != nil {
+					return reconcile.Result{}, err
+				}
 				return operatorUserResult.Output()
 			}
 			pendingOperatorUserResult = operatorUserResult
@@ -102,12 +108,26 @@ func (oc *OperatorContext) ReconsileMarklogicGroupHandler() (reconcile.Result, e
 }
 
 func (oc *OperatorContext) activeOperatorCredentialSecretMissing() bool {
+	secretName := oc.MarklogicGroup.Status.CredentialSecretName
+	if secretName == "" {
+		secretName = operatorCredentialSecretNameForGroup(oc.MarklogicGroup)
+	}
 	secret := &corev1.Secret{}
 	err := oc.Client.Get(oc.Ctx, client.ObjectKey{
 		Namespace: oc.MarklogicGroup.Namespace,
-		Name:      operatorCredentialSecretNameForGroup(oc.MarklogicGroup),
+		Name:      secretName,
 	}, secret)
 	return apierrors.IsNotFound(err)
+}
+
+func (oc *OperatorContext) reconcileBootstrapStatefulSetRecovery(statefulSet *appsv1.StatefulSet) error {
+	if statefulSet == nil || strings.TrimSpace(oc.MarklogicGroup.Spec.BootstrapHost) != "" || oc.MarklogicGroup.Spec.Replicas == nil || *oc.MarklogicGroup.Spec.Replicas < 1 || statefulSet.Spec.Replicas == nil || *statefulSet.Spec.Replicas != 0 {
+		return nil
+	}
+	patch := client.MergeFrom(statefulSet.DeepCopy())
+	recoveryReplicas := int32(1)
+	statefulSet.Spec.Replicas = &recoveryReplicas
+	return oc.Client.Patch(oc.Ctx, statefulSet, patch)
 }
 
 func (cc *ClusterContext) ReconsileMarklogicClusterHandler() (reconcile.Result, error) {
