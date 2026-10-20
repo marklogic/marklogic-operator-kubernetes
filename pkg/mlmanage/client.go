@@ -30,6 +30,7 @@ type Client interface {
 	GetGroup(ctx context.Context, groupName string) (GroupInfo, error)
 	CreateGroup(ctx context.Context, groupName string) error
 	EnableDynamicHosts(ctx context.Context, groupName string) error
+	EnsurePathBasedAppServers(ctx context.Context, groupName string) error
 	EnableAdminAPITokenAuthentication(ctx context.Context, groupName string) error
 	EnsureOperatorRole(ctx context.Context) error
 	EnsureOperatorUser(ctx context.Context, username, password string) error
@@ -317,6 +318,44 @@ func (c *managementClient) EnableDynamicHosts(ctx context.Context, groupName str
 	payload := map[string]any{"allow-dynamic-hosts": true}
 	_, _, err := c.doJSON(ctx, http.MethodPut, "/manage/v2/groups/"+url.PathEscape(groupName)+"/properties", nil, payload, http.StatusAccepted, http.StatusNoContent)
 	return err
+}
+
+func (c *managementClient) EnsurePathBasedAppServers(ctx context.Context, groupName string) error {
+	query := url.Values{}
+	query.Set("group-id", groupName)
+	query.Set("format", "json")
+	_, statusCode, err := c.doJSON(ctx, http.MethodGet, "/manage/v2/servers/App-Services/properties", query, nil, http.StatusOK, http.StatusNotFound)
+	if err != nil {
+		return err
+	}
+	if statusCode == http.StatusNotFound {
+		createQuery := url.Values{}
+		createQuery.Set("group-id", groupName)
+		createQuery.Set("server-type", "http")
+		payload := map[string]any{
+			"server-name":      "App-Services",
+			"authentication":   "basic",
+			"root":             "/",
+			"port":             8000,
+			"modules-database": "Modules",
+			"content-database": "Documents",
+			"error-handler":    "/MarkLogic/rest-api/8000-error-handler.xqy",
+			"url-rewriter":     "/MarkLogic/rest-api/8000-rewriter.xml",
+		}
+		if _, _, err := c.doJSON(ctx, http.MethodPost, "/manage/v2/servers", createQuery, payload, http.StatusCreated, http.StatusAccepted, http.StatusNoContent); err != nil {
+			return err
+		}
+	}
+
+	propertiesQuery := url.Values{}
+	propertiesQuery.Set("group-id", groupName)
+	for _, appServer := range []string{"Admin", "App-Services", "Manage"} {
+		path := "/manage/v2/servers/" + url.PathEscape(appServer) + "/properties"
+		if _, _, err := c.doJSON(ctx, http.MethodPut, path, propertiesQuery, map[string]any{"authentication": "basic"}, http.StatusOK, http.StatusAccepted, http.StatusNoContent); err != nil {
+			return fmt.Errorf("configure App Server %s for path-based routing: %w", appServer, err)
+		}
+	}
+	return nil
 }
 
 func (c *managementClient) EnableAdminAPITokenAuthentication(ctx context.Context, groupName string) error {

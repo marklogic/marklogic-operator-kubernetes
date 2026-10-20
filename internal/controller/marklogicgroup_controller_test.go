@@ -559,6 +559,7 @@ var _ = Describe("MarkLogicGroup controller", func() {
 			operatorSecretName := clusterName + "-operator"
 			dynamicNsName := types.NamespacedName{Name: dynamicName, Namespace: dynamicNamespace}
 			zeroReplicas := int32(0)
+			pathBasedRouting := true
 
 			calls := []string{}
 			callsMu := &sync.Mutex{}
@@ -601,14 +602,15 @@ var _ = Describe("MarkLogicGroup controller", func() {
 				TypeMeta:   metav1.TypeMeta{Kind: "MarklogicGroup", APIVersion: "marklogic.progress.com/v1"},
 				ObjectMeta: metav1.ObjectMeta{Name: dynamicName, Namespace: dynamicNamespace},
 				Spec: marklogicv1.MarklogicGroupSpec{
-					Replicas:      &zeroReplicas,
-					Name:          dynamicName,
-					Image:         imageName,
-					ClusterDomain: "cluster.local",
-					GroupConfig:   &marklogicv1.GroupConfig{Name: "DynamicEval", EnableXdqpSsl: true},
-					IsDynamic:     true,
-					BootstrapHost: "bootstrap-0.bootstrap.svc.cluster.local",
-					SecretName:    adminSecretName,
+					Replicas:         &zeroReplicas,
+					Name:             dynamicName,
+					Image:            imageName,
+					ClusterDomain:    "cluster.local",
+					GroupConfig:      &marklogicv1.GroupConfig{Name: "DynamicEval", EnableXdqpSsl: true},
+					IsDynamic:        true,
+					PathBasedRouting: pathBasedRouting,
+					BootstrapHost:    "bootstrap-0.bootstrap.svc.cluster.local",
+					SecretName:       adminSecretName,
 					Tls: &marklogicv1.Tls{
 						EnableOnDefaultAppServers: true,
 						CaSecretName:              "ca-secret",
@@ -645,7 +647,7 @@ var _ = Describe("MarkLogicGroup controller", func() {
 			Eventually(func() bool {
 				callsMu.Lock()
 				defer callsMu.Unlock()
-				expected := []string{"ListHostsStatus", "GetGroup", "CreateGroup", "EnableDynamicHosts", "EnableAdminAPITokenAuthentication", "ListGroupHosts"}
+				expected := []string{"ListHostsStatus", "GetGroup", "CreateGroup", "EnableDynamicHosts", "EnsurePathBasedAppServers", "EnableAdminAPITokenAuthentication", "ListGroupHosts"}
 				return hasOrderedSubsequence(calls, expected)
 			}, timeout, interval).Should(BeTrue())
 		})
@@ -2868,6 +2870,11 @@ func (f *fakeDynamicManagementClient) EnableDynamicHosts(ctx context.Context, gr
 	f.behavior.mu.Lock()
 	defer f.behavior.mu.Unlock()
 	return f.behavior.enableDynamicErr
+}
+
+func (f *fakeDynamicManagementClient) EnsurePathBasedAppServers(ctx context.Context, groupName string) error {
+	f.record("EnsurePathBasedAppServers")
+	return nil
 }
 
 func (f *fakeDynamicManagementClient) EnableAdminAPITokenAuthentication(ctx context.Context, groupName string) error {

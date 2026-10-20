@@ -316,6 +316,41 @@ function wait_bootstrap_ready {
 }
 
 ################################################################
+# Return success only when this local host authenticates against
+# the shared cluster Security database with active management credentials.
+################################################################
+function local_host_uses_shared_security {
+    local manage_protocol manage_host response_code
+    local -a manage_tls_options=()
+
+    manage_protocol=$(get_current_host_protocol "$HOST_FQDN" 8002)
+    manage_host="localhost"
+    if [[ "$manage_protocol" == "https" ]]; then
+        manage_host="$HOST_FQDN"
+        if [[ -s "/run/secrets/marklogic-certs/cacert.pem" ]]; then
+            manage_tls_options=(--cacert /run/secrets/marklogic-certs/cacert.pem)
+        else
+            manage_tls_options=(-k)
+        fi
+    fi
+
+    response_code=$(curl -s -m 20 --anyauth -o /dev/null -w '%{http_code}' \
+        --user "${MARKLOGIC_MANAGEMENT_USERNAME}:${MARKLOGIC_MANAGEMENT_PASSWORD}" \
+        "${manage_tls_options[@]}" \
+        "${manage_protocol}://${manage_host}:8002/manage/v2/hosts/${HOST_FQDN}/properties?format=xml")
+
+    [[ "$response_code" == "200" ]]
+}
+
+function bootstrap_host_registration_status {
+    local hostname=$1
+
+    curl -s --anyauth -o /dev/null -w '%{http_code}' \
+        --user "${MARKLOGIC_MANAGEMENT_USERNAME}:${MARKLOGIC_MANAGEMENT_PASSWORD}" $HTTPS_OPTION \
+        "$HTTP_PROTOCOL://${MARKLOGIC_BOOTSTRAP_HOST}:8002/manage/v2/hosts/${hostname}/properties?format=xml"
+}
+
+################################################################
 # Function to initialize admin user and security DB
 # 
 # return values: 0 - admin user successfully initialized
@@ -373,14 +408,14 @@ function join_cluster {
         # if bootstrap host not init, return 403
         # if Security DB not set or credential not correct return 401
         # if host is already in cluster, return 200
-        response_code=$(curl -s --anyauth -o /dev/null -w '%{http_code}' \
-            --user "${MARKLOGIC_MANAGEMENT_USERNAME}:${MARKLOGIC_MANAGEMENT_PASSWORD}" $HTTPS_OPTION \
-            $HTTP_PROTOCOL://${MARKLOGIC_BOOTSTRAP_HOST}:8002/manage/v2/hosts/${hostname}/properties?format=xml \
-        )
+        response_code=$(bootstrap_host_registration_status "$hostname")
 
         if [ "${response_code}" = "200" ]; then
-            info "host has already joined the cluster"
-            return 0
+            if local_host_uses_shared_security; then
+                info "host registration and local shared Security authentication confirm the host has already joined the cluster"
+                return 0
+            fi
+            error "Bootstrap already contains ${hostname}, but the local host does not use shared Security. Refusing to create a duplicate static host registration; remove or recover the stale host registration before retrying." exit
         elif [ "${response_code}" = "401" ]; then
             error "Failed to join the cluster: Security DB not set or credential not correct. Exit."
             exit 1
@@ -886,8 +921,26 @@ if [[ "$IS_BOOTSTRAP_HOST" == "true" ]]; then
     configure_path_based_routing
 else 
     check_status_file_for_nonbootstrap
-    init_marklogic $HOST_FQDN
     wait_bootstrap_ready
+    if local_host_uses_shared_security; then
+        info "Local shared Security authentication succeeded. Skipping host initialization."
+    else
+        response_code=$(bootstrap_host_registration_status "$HOST_FQDN")
+        case "$response_code" in
+            404)
+                init_marklogic "$HOST_FQDN"
+                ;;
+            200)
+                error "Bootstrap already contains ${HOST_FQDN}, but the local host does not use shared Security. Refusing to reinitialize the static host and change its identity; recover or remove the stale host registration before retrying." exit
+                ;;
+            401)
+                error "Failed to inspect the bootstrap host registration: credential rejected. Exit." exit
+                ;;
+            *)
+                error "Failed to inspect the bootstrap host registration: HTTP ${response_code}. Exit." exit
+                ;;
+        esac
+    fi
     join_cluster $HOST_FQDN
 fi
 

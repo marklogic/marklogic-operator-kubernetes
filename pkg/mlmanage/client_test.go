@@ -55,6 +55,78 @@ func TestBuildHTTPClientUsesConfiguredCA(t *testing.T) {
 	}
 }
 
+func TestEnsurePathBasedAppServersCreatesOrUpdatesBasicAuthentication(t *testing.T) {
+	t.Parallel()
+
+	for _, test := range []struct {
+		name         string
+		lookupStatus int
+		wantCreate   bool
+	}{
+		{name: "create missing App-Services", lookupStatus: http.StatusNotFound, wantCreate: true},
+		{name: "update existing App-Services", lookupStatus: http.StatusOK, wantCreate: false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var created bool
+			var createPayload map[string]any
+			updatedServers := make([]string, 0, 3)
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Query().Get("group-id") != "enode" {
+					t.Errorf("group-id = %q, want enode", r.URL.Query().Get("group-id"))
+				}
+				switch r.Method {
+				case http.MethodGet:
+					if r.URL.Path != "/manage/v2/servers/App-Services/properties" || r.URL.Query().Get("format") != "json" {
+						t.Errorf("unexpected lookup request: %s", r.URL.RequestURI())
+					}
+					w.WriteHeader(test.lookupStatus)
+				case http.MethodPost:
+					created = true
+					if r.URL.Path != "/manage/v2/servers" || r.URL.Query().Get("server-type") != "http" {
+						t.Errorf("unexpected create request: %s", r.URL.RequestURI())
+					}
+					if err := json.NewDecoder(r.Body).Decode(&createPayload); err != nil {
+						t.Errorf("decode create payload: %v", err)
+					}
+					w.WriteHeader(http.StatusCreated)
+				case http.MethodPut:
+					appServer := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/manage/v2/servers/"), "/properties")
+					updatedServers = append(updatedServers, appServer)
+					payload := map[string]any{}
+					if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+						t.Errorf("decode update payload: %v", err)
+					}
+					if payload["authentication"] != "basic" {
+						t.Errorf("authentication = %#v, want basic", payload["authentication"])
+					}
+					w.WriteHeader(http.StatusNoContent)
+				default:
+					t.Errorf("unexpected request: %s %s", r.Method, r.URL.RequestURI())
+					w.WriteHeader(http.StatusMethodNotAllowed)
+				}
+			}))
+			defer server.Close()
+
+			client := &managementClient{baseURL: server.URL, httpClient: server.Client()}
+			if err := client.EnsurePathBasedAppServers(context.Background(), "enode"); err != nil {
+				t.Fatalf("EnsurePathBasedAppServers returned error: %v", err)
+			}
+			if created != test.wantCreate {
+				t.Fatalf("created=%t, want %t", created, test.wantCreate)
+			}
+			if test.wantCreate {
+				if createPayload["server-name"] != "App-Services" || createPayload["authentication"] != "basic" || createPayload["port"] != float64(8000) {
+					t.Fatalf("create payload = %#v", createPayload)
+				}
+			}
+			wantServers := []string{"Admin", "App-Services", "Manage"}
+			if !reflect.DeepEqual(updatedServers, wantServers) {
+				t.Fatalf("updated servers = %v, want %v", updatedServers, wantServers)
+			}
+		})
+	}
+}
+
 func TestEnsureOperatorUserCreateExistingAndForbiddenLookup(t *testing.T) {
 	t.Parallel()
 

@@ -56,6 +56,10 @@ func (s *stubDynamicManagementClient) EnableDynamicHosts(ctx context.Context, gr
 	return nil
 }
 
+func (s *stubDynamicManagementClient) EnsurePathBasedAppServers(ctx context.Context, groupName string) error {
+	return nil
+}
+
 func (s *stubDynamicManagementClient) EnableAdminAPITokenAuthentication(ctx context.Context, groupName string) error {
 	return nil
 }

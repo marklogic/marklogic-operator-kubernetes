@@ -265,6 +265,21 @@ func (oc *OperatorContext) ReconcileDynamicGroupConfig() result.ReconcileResult 
 		return result.Done()
 	}
 
+	if oc.MarklogicGroup.Spec.PathBasedRouting {
+		if err := groupClient.EnsurePathBasedAppServers(oc.Ctx, groupName); err != nil {
+			if isTransientManagementError(err) {
+				if err := oc.setDynamicStatus(dynamicPhaseDegraded, dynamicReasonGroupConfigFailed, fmt.Sprintf("failed to configure path-based App Servers: %v", err), true, false, false); err != nil {
+					return result.Error(err)
+				}
+				return result.RequeueSoon(5)
+			}
+			if err := oc.setDynamicStatus(dynamicPhaseFailed, dynamicReasonGroupConfigFailed, fmt.Sprintf("failed to configure path-based App Servers: %v", err), true, false, false); err != nil {
+				return result.Error(err)
+			}
+			return result.Done()
+		}
+	}
+
 	bootstrapGroupName, err := groupClient.GetHostGroupName(oc.Ctx, bootstrapHost)
 	if err != nil {
 		if isTransientManagementError(err) {
