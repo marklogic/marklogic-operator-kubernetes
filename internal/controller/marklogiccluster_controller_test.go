@@ -52,7 +52,6 @@ func TestMarkLogicClusterSecretUpdatesPassPredicate(t *testing.T) {
 			}},
 		},
 		Data: map[string][]byte{
-			"username": []byte("marklogic-kubernetes-operator"),
 			"password": []byte("generated-password"),
 		},
 	}
@@ -70,7 +69,7 @@ func TestMarkLogicClusterSecretUpdatesPassPredicate(t *testing.T) {
 			want: true,
 		},
 		{
-			name: "drifted username",
+			name: "added username",
 			mutate: func(secret *corev1.Secret) {
 				secret.Data["username"] = []byte("unexpected-user")
 			},

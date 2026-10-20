@@ -40,19 +40,19 @@ helm repo update
 
 **For cluster-scoped deployment (default - watches all namespaces):**
 ```sh
-helm upgrade marklogic-operator marklogic-operator/marklogic-operator-kubernetes --version=1.3.1 --install --namespace marklogic-operator-system --create-namespace
+helm upgrade marklogic-operator marklogic-operator/marklogic-operator-kubernetes --version=1.4.0 --install --namespace marklogic-operator-system --create-namespace
 ```
 
 **For namespace-scoped deployment (watches only a specific namespace):**
 ```sh
 # Watch the same namespace where operator is deployed
-helm upgrade marklogic-operator marklogic-operator/marklogic-operator-kubernetes --version=1.3.1 --install --namespace marklogic-prod --create-namespace --set scope.type=namespace
+helm upgrade marklogic-operator marklogic-operator/marklogic-operator-kubernetes --version=1.4.0 --install --namespace marklogic-prod --create-namespace --set scope.type=namespace
 
 # Or watch a different namespace
-helm upgrade marklogic-operator marklogic-operator/marklogic-operator-kubernetes --version=1.3.1 --install --namespace marklogic-operator-system --create-namespace --set scope.type=namespace --set scope.watchNamespaces=marklogic-prod
+helm upgrade marklogic-operator marklogic-operator/marklogic-operator-kubernetes --version=1.4.0 --install --namespace marklogic-operator-system --create-namespace --set scope.type=namespace --set scope.watchNamespaces=marklogic-prod
 
 # Or watch multiple namespaces
-helm upgrade marklogic-operator marklogic-operator/marklogic-operator-kubernetes --version=1.3.1 --install --namespace marklogic-operator-system --create-namespace --set scope.type=namespace --set scope.watchNamespaces="prod,staging,dev"
+helm upgrade marklogic-operator marklogic-operator/marklogic-operator-kubernetes --version=1.4.0 --install --namespace marklogic-operator-system --create-namespace --set scope.type=namespace --set scope.watchNamespaces="prod,staging,dev"
 ```
 
 See [Operator Scope Configuration](./docs/operator-scope-configuration.md) for more deployment options and examples.
@@ -103,13 +103,13 @@ kubectl get secret single-node-admin --namespace=<namespace-name> -o jsonpath='{
 
 ### Operator User Credentials
 
-The Operator creates the MarkLogic user `marklogic-kubernetes-operator` and assigns it the `marklogic-operator` role. That role inherits `manage-admin`, `pki`, and `admin-ui-user`, and receives the execute privileges `create-user`, `xdmp:remove-dynamic-hosts`, `admin-issue-dynamic-host-token`, `xdmp:eval`, and `create-external-security` for the Operator's Management API tasks.
+The Operator creates the MarkLogic user `marklogic-kubernetes-operator` and assigns it the `marklogic-kubernetes-operator` role. That role inherits `manage-admin`, `pki`, and `admin-ui-user`, and receives the execute privileges `create-user`, `xdmp:remove-dynamic-hosts`, `admin-issue-dynamic-host-token`, `xdmp:eval`, `create-external-security`, `credentials-set-aws`, and `credentials-set-azure` for the Operator's Management API tasks.
 
 The generated credential is stored in the cluster-owned Secret `<marklogicCluster-name>-operator` with a `password` key. The username is fixed as `marklogic-kubernetes-operator` and is not stored in the Secret. The password is 32 alphanumeric characters generated from a cryptographically secure random source. Kubernetes garbage collection removes this Secret when its MarklogicCluster is deleted. After the Operator verifies that the user can authenticate and the bootstrap host is online, it records the active Secret in MarklogicGroup status at `.status.credentialSecretName`. Reapplying the MarklogicCluster manifest does not reset this handoff.
 
-The bootstrap admin Secret remains in Kubernetes and mounted into MarkLogic pods for Admin API startup operations, initial identity provisioning, and explicit recovery. Healthy reconciliation uses only the operator credentials and does not read the admin Secret. If initial operator authentication is rejected, admin credentials create the operator role and user. If credentials were already active and a changed password is rejected, admin recovery updates only the operator password; it does not rewrite the role or other user properties. Network and TLS failures do not trigger admin fallback. Credential changes update the pod template revision. With `OnDelete`, the controller replaces stale pods one at a time after the new identity is accepted; with `RollingUpdate`, Kubernetes performs the rollout according to the configured strategy. Persistent volume claims are retained. Keep the admin Secret available if password recovery is required.
+The bootstrap admin Secret remains in Kubernetes and mounted into MarkLogic pods for Admin API initialization and initial operator identity provisioning. Healthy reconciliation uses only the operator credentials and does not read the admin Secret. If initial operator authentication is rejected before credential handoff, admin credentials create the operator role and user. After credentials become active, authentication rejection does not trigger admin fallback and the Operator does not modify the MarkLogic user, role, or password. Credential changes update the pod template revision only after the new credentials authenticate successfully. With `OnDelete`, the controller replaces stale pods one at a time; with `RollingUpdate`, Kubernetes performs the rollout according to the configured strategy. Persistent volume claims are retained.
 
-To rotate the operator password, update the Secret's `password` value; the Operator reconciles the MarkLogic user and serially replaces pods using the old credential revision. The Operator does not rotate passwords automatically. To use a user-managed Secret instead, set `spec.auth.operatorSecretName` on the MarklogicCluster and provide a `password` key. The fixed MarkLogic username remains `marklogic-kubernetes-operator`; the supplied Secret is not owned or deleted by the Operator.
+To rotate the operator password, change the password in MarkLogic and update the Secret's `password` value to match. The Operator validates the Secret but does not write its password to MarkLogic. Once authentication succeeds, it activates the Secret revision and serially replaces pods using the old credential revision. Direct changes to the MarkLogic user or role are not reconciled after handoff. To use a user-managed Secret, set `spec.auth.operatorSecretName` on the MarklogicCluster and provide only a `password` key. The fixed MarkLogic username remains `marklogic-kubernetes-operator`; the supplied Secret is not owned or deleted by the Operator.
 
 To check which credential is active for a group, run:
 ```sh
@@ -130,7 +130,7 @@ For Fluent Bit log collection configuration, including secret-backed environment
 
 * Leading and trailing whitespace is trimmed; extra keys are ignored. Removing or emptying `sessionToken` applies the credentials without a token. Refreshing temporary credentials before they expire is up to you.
 * Only `authType: secret` is supported. `region` is informational.
-* The bootstrap admin identity needs the `manage-admin` and `security` roles (or `manage`/`manage-admin` plus the `credentials-set-aws`/`credentials-set-azure` privileges).
+* Object-storage Management API calls use the fixed operator identity, whose role has the explicit `credentials-set-aws` and `credentials-set-azure` privileges.
 * Updating a referenced Secret rotates the credentials; no change to the cluster spec is needed.
 
 Each provider reports an independent result in `status.objectStorage.<provider>`:

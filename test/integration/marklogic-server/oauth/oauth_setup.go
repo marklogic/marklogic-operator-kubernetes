@@ -24,6 +24,7 @@ import (
 )
 
 const (
+	marklogicOperatorUsername          = "marklogic-kubernetes-operator"
 	oauthCASecretName                  = "oauth-test-ca"
 	marklogicCertificate0              = "marklogic-0-tls"
 	marklogicCertificate1              = "marklogic-1-tls"

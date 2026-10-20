@@ -43,13 +43,17 @@ func (oc *OperatorContext) ReconcileOperatorUser() result.ReconcileResult {
 		))
 	}
 
-	useTLS := oc.MarklogicGroup.Spec.Tls != nil && oc.MarklogicGroup.Spec.Tls.EnableOnDefaultAppServers
+	useTLS, insecureSkipVerify, caCertificate, err := oc.managementTLSOptions()
+	if err != nil {
+		return oc.operatorUserPending("OperatorTLSConfigurationInvalid", err.Error())
+	}
 	operatorClient := NewDynamicManagementClient(mlmanage.ClientOptions{
 		Host:               bootstrapHost,
 		Username:           operatorUsername,
 		Password:           operatorPassword,
 		UseTLS:             useTLS,
-		InsecureSkipVerify: useTLS,
+		InsecureSkipVerify: insecureSkipVerify,
+		CACertificate:      caCertificate,
 	})
 	hosts, err := operatorClient.ListHostsStatus(oc.Ctx)
 	if err == nil {
@@ -76,6 +80,12 @@ func (oc *OperatorContext) ReconcileOperatorUser() result.ReconcileResult {
 			"Could not validate the operator user against bootstrap host %q: %v. Check host readiness and Management API connectivity.", bootstrapHost, err,
 		))
 	}
+	if oc.MarklogicGroup.Status.CredentialSecretName != "" {
+		return oc.operatorUserPending("OperatorAuthenticationRejected", fmt.Sprintf(
+			"MarkLogic rejected the active operator credentials from Secret %q. The Operator will not modify the MarkLogic user; update the Secret to match the password configured in MarkLogic.",
+			operatorCredentialSecretNameForGroup(oc.MarklogicGroup),
+		))
+	}
 
 	adminSecretName := adminCredentialSecretNameForGroup(oc.MarklogicGroup)
 	adminUsername, adminPassword, err := oc.readCredentialSecret(adminSecretName)
@@ -89,7 +99,8 @@ func (oc *OperatorContext) ReconcileOperatorUser() result.ReconcileResult {
 		Username:           adminUsername,
 		Password:           adminPassword,
 		UseTLS:             useTLS,
-		InsecureSkipVerify: useTLS,
+		InsecureSkipVerify: insecureSkipVerify,
+		CACertificate:      caCertificate,
 	})
 	hosts, err = adminClient.ListHostsStatus(oc.Ctx)
 	if err != nil {
@@ -108,15 +119,6 @@ func (oc *OperatorContext) ReconcileOperatorUser() result.ReconcileResult {
 		return oc.operatorUserPending("BootstrapHostNotReady", fmt.Sprintf(
 			"Bootstrap host %q is not online according to the bootstrap admin credentials; check the MarkLogic pod and server startup status.", bootstrapHost,
 		))
-	}
-
-	if oc.MarklogicGroup.Status.CredentialSecretName != "" {
-		if err := adminClient.UpdateOperatorPassword(oc.Ctx, operatorUsername, operatorPassword); err != nil {
-			return oc.operatorUserPending("OperatorPasswordRotationFailed", fmt.Sprintf(
-				"Could not rotate the operator password using bootstrap admin credentials: %v. Verify the admin Secret and MarkLogic Management API access.", err,
-			))
-		}
-		return oc.operatorUserPending("OperatorPasswordRotated", "The operator password was updated from the configured Secret; waiting for the next reconciliation to verify operator authentication.")
 	}
 
 	if err := oc.ensureOperatorIdentityWithClient(adminClient, operatorPassword); err != nil {

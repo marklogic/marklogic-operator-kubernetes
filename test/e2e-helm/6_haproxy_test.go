@@ -116,6 +116,7 @@ func TestHAProxyPathBasedEnabled(t *testing.T) {
 	feature := features.New("HAProxy with Path-Based Routing Enabled").WithLabel("type", "haproxy-pathbased-enabled")
 	haProxyPathNS := "ml-ns-haproxy-path" // must be in watchedNamespaces
 	releaseName := "ml"
+	additionalGroupName := "ml-new-group"
 	haReplicas := int32(1)
 	trueVal := true
 
@@ -139,6 +140,11 @@ func TestHAProxyPathBasedEnabled(t *testing.T) {
 					Name:        releaseName,
 					Replicas:    &haReplicas,
 					IsBootstrap: true,
+				},
+				{
+					Name:        additionalGroupName,
+					Replicas:    &haReplicas,
+					IsBootstrap: false,
 				},
 			},
 			HAProxy: &marklogicv1.HAProxy{
@@ -212,6 +218,15 @@ func TestHAProxyPathBasedEnabled(t *testing.T) {
 		return ctx
 	})
 
+	feature.Assess("new group pod is ready", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
+		podName := additionalGroupName + "-0"
+		if err := utils.WaitForPod(ctx, t, c.Client(), haProxyPathNS, podName, 300*time.Second, true); err != nil {
+			logDiagnostics(t, haProxyPathNS)
+			t.Fatalf("%s not ready: %v", podName, err)
+		}
+		return ctx
+	})
+
 	feature.Assess("HAProxy with path-based routing is working", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 		time.Sleep(5 * time.Second)
 		verifyPathBasedHAProxyRoutes(t, haProxyPathNS, "ml-0", mlContainerName, adminUsername, adminPassword, cr.Spec.HAProxy.FrontendPort, cr.Spec.HAProxy.AppServers)
@@ -219,15 +234,18 @@ func TestHAProxyPathBasedEnabled(t *testing.T) {
 	})
 
 	feature.Assess("HAProxy with path-based routing sets authentication to BASIC", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
-		fqdn := fmt.Sprintf("ml-0.ml.%s.svc.cluster.local", haProxyPathNS)
-		url := "http://" + fqdn + ":8001"
-		cmd := fmt.Sprintf("curl -I %s", url)
-		res, err := utils.ExecCmdInPod("ml-0", haProxyPathNS, mlContainerName, cmd)
-		if err != nil {
-			t.Fatalf("Failed to check authentication method: %v", err)
+		urls := []string{
+			fmt.Sprintf("http://ml-0.ml.%s.svc.cluster.local:8001", haProxyPathNS),
+			fmt.Sprintf("http://%s-0.%s.%s.svc.cluster.local:8000", additionalGroupName, additionalGroupName, haProxyPathNS),
 		}
-		if !strings.Contains(res, "WWW-Authenticate: Basic") {
-			t.Fatalf("Expected Basic auth header, got: %s", res)
+		for _, url := range urls {
+			res, err := utils.ExecCmdInPod("ml-0", haProxyPathNS, mlContainerName, fmt.Sprintf("curl -I %s", url))
+			if err != nil {
+				t.Fatalf("Failed to check authentication method at %s: %v", url, err)
+			}
+			if !strings.Contains(res, "WWW-Authenticate: Basic") {
+				t.Fatalf("Expected Basic auth header from %s, got: %s", url, res)
+			}
 		}
 		return ctx
 	})

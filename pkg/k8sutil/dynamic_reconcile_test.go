@@ -12,9 +12,11 @@ import (
 
 	marklogicv1 "github.com/marklogic/marklogic-operator-kubernetes/api/v1"
 	"github.com/marklogic/marklogic-operator-kubernetes/pkg/mlmanage"
+	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
 
@@ -25,7 +27,6 @@ type stubDynamicManagementClient struct {
 	listHostStatusesFn   func() ([]mlmanage.HostStatus, error)
 	ensureOperatorRoleFn func() error
 	ensureOperatorUser   func(username, password string) error
-	updateOperatorPass   func(username, password string) error
 	listGroupFn          func(groupName string) ([]mlmanage.GroupHost, error)
 	resolveNameFn        func() (string, error)
 	resolveCandidatesFn  func() ([]string, error)
@@ -55,6 +56,10 @@ func (s *stubDynamicManagementClient) EnableDynamicHosts(ctx context.Context, gr
 	return nil
 }
 
+func (s *stubDynamicManagementClient) EnsurePathBasedAppServers(ctx context.Context, groupName string) error {
+	return nil
+}
+
 func (s *stubDynamicManagementClient) EnableAdminAPITokenAuthentication(ctx context.Context, groupName string) error {
 	return nil
 }
@@ -69,13 +74,6 @@ func (s *stubDynamicManagementClient) EnsureOperatorRole(ctx context.Context) er
 func (s *stubDynamicManagementClient) EnsureOperatorUser(ctx context.Context, username, password string) error {
 	if s.ensureOperatorUser != nil {
 		return s.ensureOperatorUser(username, password)
-	}
-	return nil
-}
-
-func (s *stubDynamicManagementClient) UpdateOperatorPassword(ctx context.Context, username, password string) error {
-	if s.updateOperatorPass != nil {
-		return s.updateOperatorPass(username, password)
 	}
 	return nil
 }
@@ -570,6 +568,66 @@ func TestDynamicPVCRestartCleanupJobNameIsUniqueAcrossPodOrdinals(t *testing.T) 
 	}
 }
 
+func TestDynamicPVCRestartCleanupJobUsesWorkloadSecurityContext(t *testing.T) {
+	scheme := runtime.NewScheme()
+	if err := marklogicv1.AddToScheme(scheme); err != nil {
+		t.Fatalf("add Marklogic scheme: %v", err)
+	}
+	if err := batchv1.AddToScheme(scheme); err != nil {
+		t.Fatalf("add batch scheme: %v", err)
+	}
+
+	fsGroup := int64(2)
+	runAsUser := int64(1000)
+	group := &marklogicv1.MarklogicGroup{
+		ObjectMeta: metav1.ObjectMeta{Name: "enode", Namespace: "database", UID: types.UID("group-uid")},
+		Spec: marklogicv1.MarklogicGroupSpec{
+			Name:               "enode",
+			Image:              "marklogic:test",
+			PodSecurityContext: &corev1.PodSecurityContext{FSGroup: &fsGroup},
+			ContainerSecurityContext: &corev1.SecurityContext{
+				RunAsUser: &runAsUser,
+			},
+		},
+	}
+	fakeClient := fake.NewClientBuilder().WithScheme(scheme).Build()
+	oc := &OperatorContext{Ctx: context.Background(), Client: fakeClient, Scheme: scheme, MarklogicGroup: group}
+	deletionTime := metav1.NewTime(time.Now())
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              "enode-0",
+			Namespace:         "database",
+			DeletionTimestamp: &deletionTime,
+			Finalizers:        []string{dynamicRestartCleanupFinalizer},
+		},
+		Status: corev1.PodStatus{ContainerStatuses: []corev1.ContainerStatus{{
+			Name:  "marklogic-server",
+			State: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{ExitCode: 0}},
+		}}},
+	}
+
+	complete, err := defaultDynamicPVCRestartCleanup(oc, pod)
+	if err != nil {
+		t.Fatalf("create cleanup Job: %v", err)
+	}
+	if complete {
+		t.Fatal("expected newly created cleanup Job to be incomplete")
+	}
+
+	job := &batchv1.Job{}
+	jobName := dynamicPVCRestartCleanupJobName(group.Spec.Name, pod.Name)
+	if err := fakeClient.Get(context.Background(), types.NamespacedName{Name: jobName, Namespace: pod.Namespace}, job); err != nil {
+		t.Fatalf("get cleanup Job: %v", err)
+	}
+	if job.Spec.Template.Spec.SecurityContext == nil || job.Spec.Template.Spec.SecurityContext.FSGroup == nil || *job.Spec.Template.Spec.SecurityContext.FSGroup != fsGroup {
+		t.Fatalf("expected cleanup Job fsGroup %d, got %+v", fsGroup, job.Spec.Template.Spec.SecurityContext)
+	}
+	securityContext := job.Spec.Template.Spec.Containers[0].SecurityContext
+	if securityContext == nil || securityContext.RunAsUser == nil || *securityContext.RunAsUser != runAsUser {
+		t.Fatalf("expected cleanup container runAsUser %d, got %+v", runAsUser, securityContext)
+	}
+}
+
 func TestIsValidDynamicTokenDuration(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -644,6 +702,39 @@ func TestBuildDynamicHostStatusesClearsFailedStateForRecreatedPod(t *testing.T) 
 	}
 	if host.Message != "" {
 		t.Fatalf("expected message cleared on recovery, got %q", host.Message)
+	}
+}
+
+func TestBuildDynamicHostStatusesRetriesFailedHostWhenPodRecreatedWithoutMember(t *testing.T) {
+	recreatedAt := metav1.NewTime(time.Now())
+	lastUpdated := metav1.NewTime(recreatedAt.Add(-5 * time.Minute))
+	oc := &OperatorContext{
+		MarklogicGroup: &marklogicv1.MarklogicGroup{
+			ObjectMeta: metav1.ObjectMeta{Namespace: "default"},
+			Spec:       marklogicv1.MarklogicGroupSpec{Name: "dynamic", ClusterDomain: "cluster.local", IsDynamic: true},
+		},
+	}
+	pod := dynamicReadyPodForTest("dynamic-0", recreatedAt)
+	previous := []marklogicv1.DynamicHostStatus{{
+		PodName:     pod.Name,
+		Hostname:    "dynamic-0.dynamic.default.svc.cluster.local",
+		HostID:      "host-id-old",
+		State:       dynamicHostStateFailed,
+		Message:     "retry budget exhausted while cleaning retained pvc state",
+		Attempts:    dynamicJoinRetryBudget,
+		LastUpdated: &lastUpdated,
+	}}
+
+	hosts, localReady, ready, joinCandidates := oc.buildDynamicHostStatuses([]corev1.Pod{pod}, nil, previous)
+	if localReady != 1 || ready != 0 {
+		t.Fatalf("expected localReady=1 and ready=0, got %d and %d", localReady, ready)
+	}
+	if len(joinCandidates) != 1 || joinCandidates[0].Name != pod.Name {
+		t.Fatalf("expected recreated pod as the only join candidate, got %+v", joinCandidates)
+	}
+	host, found := findDynamicHostStatusByPod(hosts, pod.Name)
+	if !found || host.State != dynamicHostStatePending || host.Message != "" {
+		t.Fatalf("expected recreated pod to reset to pending, got %+v", host)
 	}
 }
 

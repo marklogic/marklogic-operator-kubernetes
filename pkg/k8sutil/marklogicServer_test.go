@@ -113,7 +113,7 @@ func TestCredentialVolumesKeepAdminAndOperatorSecretsSeparate(t *testing.T) {
 	}
 }
 
-func TestMissingActiveOperatorSecretFallsBackToAdminSecret(t *testing.T) {
+func TestMissingActiveOperatorSecretDoesNotFallBackToAdminSecret(t *testing.T) {
 	scheme := runtime.NewScheme()
 	if err := marklogicv1.AddToScheme(scheme); err != nil {
 		t.Fatalf("add Marklogic scheme: %v", err)
@@ -131,27 +131,20 @@ func TestMissingActiveOperatorSecretFallsBackToAdminSecret(t *testing.T) {
 		},
 		Status: marklogicv1.MarklogicGroupStatus{CredentialSecretName: "deleted-operator"},
 	}
-	adminSecret := &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{Name: "search-admin", Namespace: "database"},
-		Data:       map[string][]byte{"username": []byte("admin"), "password": []byte("admin-password")},
-	}
-	fakeClient := fake.NewClientBuilder().WithScheme(scheme).WithStatusSubresource(&marklogicv1.MarklogicGroup{}).WithObjects(group, adminSecret).Build()
+	fakeClient := fake.NewClientBuilder().WithScheme(scheme).WithStatusSubresource(&marklogicv1.MarklogicGroup{}).WithObjects(group).Build()
 	oc := &OperatorContext{Ctx: context.Background(), Client: fakeClient, MarklogicGroup: group}
 	params := generateContainerParams(group)
 
-	secret, err := oc.getStatefulSetCredentialSecret(&params)
-	if err != nil {
-		t.Fatalf("get StatefulSet credential Secret: %v", err)
-	}
-	if secret.Name != "search-admin" || params.OperatorCredentialsActive {
-		t.Fatalf("fallback Secret=%q, operator credentials active=%t; want admin Secret and inactive operator credentials", secret.Name, params.OperatorCredentialsActive)
+	_, err := oc.getStatefulSetCredentialSecret(&params)
+	if !apierrors.IsNotFound(err) {
+		t.Fatalf("get StatefulSet credential Secret error = %v, want NotFound", err)
 	}
 	updatedGroup := &marklogicv1.MarklogicGroup{}
 	if err := fakeClient.Get(context.Background(), client.ObjectKeyFromObject(group), updatedGroup); err != nil {
 		t.Fatalf("get updated MarklogicGroup: %v", err)
 	}
-	if updatedGroup.Status.CredentialSecretName != "" {
-		t.Fatalf("active credential Secret status = %q, want empty after admin fallback", updatedGroup.Status.CredentialSecretName)
+	if updatedGroup.Status.CredentialSecretName != "deleted-operator" {
+		t.Fatalf("active credential Secret status = %q, want unchanged", updatedGroup.Status.CredentialSecretName)
 	}
 }
 

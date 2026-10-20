@@ -148,6 +148,36 @@ func WaitForPodReady(t *testing.T, namespace, name string, timeout time.Duration
 	}
 }
 
+func WaitForMarklogicGroupCredentialActive(t *testing.T, namespace, name string, timeout time.Duration) string {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	var lastOutput string
+	var lastErr error
+	for time.Now().Before(deadline) {
+		lastOutput, lastErr = runKubectl("get", "marklogicgroup/"+name, "-n", namespace, "-o", "jsonpath={.status.credentialSecretName}")
+		secretName := strings.TrimSpace(lastOutput)
+		if lastErr == nil && secretName != "" {
+			return secretName
+		}
+		time.Sleep(time.Second)
+	}
+	t.Fatalf("Wait for MarklogicGroup %s/%s operator credentials: %v\n%s", namespace, name, lastErr, lastOutput)
+	return ""
+}
+
+func GetSecretValue(t *testing.T, namespace, name, key string) string {
+	t.Helper()
+	output, err := runKubectl("get", "secret/"+name, "-n", namespace, "-o", "go-template={{index .data \""+key+"\" | base64decode}}")
+	if err != nil {
+		t.Fatalf("Get Secret %s/%s key %q: %v", namespace, name, key, err)
+	}
+	value := strings.TrimSpace(output)
+	if value == "" {
+		t.Fatalf("Secret %s/%s key %q is empty", namespace, name, key)
+	}
+	return value
+}
+
 func waitForResourceCreation(t *testing.T, namespace, resource, name string, timeout time.Duration) {
 	t.Helper()
 	output, err := runKubectl("wait", "--for=create", resource+"/"+name, "-n", namespace, "--timeout="+timeout.String())
