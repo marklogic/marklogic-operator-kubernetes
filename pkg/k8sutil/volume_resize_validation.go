@@ -96,6 +96,20 @@ func (oc *OperatorContext) ReconcileVolumeResizeValidation() result.ReconcileRes
 	if comparison == 0 {
 		return result.Continue()
 	}
+	if active, err := oc.reconcileStorageOperation(); err != nil {
+		return result.Error(err)
+	} else if active {
+		return result.RequeueSoon(30)
+	}
+	for _, claim := range pvcState.foundPVCs {
+		live := &corev1.PersistentVolumeClaim{}
+		if err := oc.volumeAttributesClassReader().Get(oc.Ctx, client.ObjectKeyFromObject(claim), live); err != nil {
+			return result.Error(err)
+		}
+		if live.UID != claim.UID || volumeAttributesClassOperationPending(live) {
+			return result.RequeueSoon(30)
+		}
+	}
 
 	if shouldIgnoreTerminalResizeRestart(cr.Status.VolumeResizeStatus, primaryTarget.String(), cr.Generation) {
 		return result.Continue()
@@ -912,8 +926,11 @@ func (oc *OperatorContext) patchResizeStatus(status *marklogicv1.VolumeResizeSta
 
 func (oc *OperatorContext) claimResizeStatusCAS(status *marklogicv1.VolumeResizeStatus) (bool, error) {
 	latest := &marklogicv1.MarklogicGroup{}
-	if err := oc.Client.Get(oc.Ctx, client.ObjectKey{Name: oc.MarklogicGroup.Name, Namespace: oc.MarklogicGroup.Namespace}, latest); err != nil {
+	if err := oc.volumeAttributesClassReader().Get(oc.Ctx, client.ObjectKey{Name: oc.MarklogicGroup.Name, Namespace: oc.MarklogicGroup.Namespace}, latest); err != nil {
 		return false, err
+	}
+	if latest.UID != oc.MarklogicGroup.UID || latest.Generation != oc.MarklogicGroup.Generation || latest.DeletionTimestamp != nil || storageOperation(latest) != nil {
+		return false, nil
 	}
 	expectedResourceVersion := latest.ResourceVersion
 

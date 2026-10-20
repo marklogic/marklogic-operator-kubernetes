@@ -2,6 +2,14 @@
 
 The operator has two e2e test environments: **Minikube** (local, for development)
 and **EKS** (the Jenkins CI target).
+
+Start with the [VAC EKS quick test](../docs/volume-attributes-class-eks-quick-test.md)
+for main functionality first, then additional checks. For full qualification,
+evidence collection, PR gates, and the demo checklist, see the
+[VAC EKS runbook](../docs/volume-attributes-class-eks-testing.md). These isolated
+workflows avoid the existing e2e harness's CRD/namespace cleanup on shared or
+demo clusters.
+
 ## Test suites
 
 | Package | Description |
@@ -98,6 +106,93 @@ make e2e-cleanup-eks
 ```
 
 For full setup and operational details see [test/eks-config/README.md](eks-config/README.md).
+
+## VAC Core E2E
+
+The opt-in `type=volume-attributes-class` suite runs the same eleven scenarios
+in `test/e2e` and `test/e2e-helm`, using shared helpers in
+[utils/vac.go](utils/vac.go):
+
+| `case` label | Coverage |
+|---|---|
+| `without-vac` | Ordinary creation, service configuration, scaling and capacity-only resize without VAC |
+| `initial-provisioning` | Parent/child owner references, standalone group, primary/additional classes and admission metadata |
+| `primary-live-change` | Parent-driven primary modification without workload/storage replacement |
+| `additional-live-change` | Independent additional modification; primary unchanged |
+| `inheritance-and-isolation` | Inheritance, whole-object/list overrides, omitted class in a supplied persistence object, and multi-group isolation |
+| `scale-after-change` | New ordinal uses the latest class despite historical StatefulSet templates |
+| `retained-claim-reuse` | Scale down/up, stable retained claim UIDs and unused-precreated inventory lifecycle |
+| `missing-primary-recovery` | Primary-only provisioning/scale fallback and recovery without a CR edit |
+| `missing-additional-recovery` | Additional-only fallback and recovery; primary remains independently managed |
+| `wrong-driver-rejection` | Initial creation gated; live volumes and service reconciliation remain healthy |
+| `pending-binding` | Pending claim identity/reference preserved; latest target applies after scheduling/binding |
+
+**Use a disposable, exclusive cluster.** The existing `TestMain` still installs
+and cleans the operator/CRDs/namespaces, even when tests are filtered or VAC is
+disabled. Never run these commands against the demo or a shared cluster.
+Compile-only checks use `go test -c`, not `-run '^$'` or `-list`.
+
+Provide an existing expandable, `WaitForFirstConsumer` StorageClass and two
+valid, matching-driver VACs with different parameters. Do not use the ordinary
+Minikube provisioner as evidence of CSI VAC support. EBS cases require complete
+gp3 profiles (`type`, `iops`, `throughput`), AWS CLI, explicit region, and
+credentials permitting `ec2:DescribeVolumes`. The suite checks actual EBS
+parameters as well as native applied class and current-generation parent/child
+status. Other CSI drivers receive native-state checks, not provider-specific
+parameter qualification. Profiles and StorageClasses supplied by the caller
+are never changed. The test principal needs create/delete permissions for its
+uniquely named missing/wrong-driver VAC fixtures.
+
+After the normal isolated-cluster setup, supply the candidate operator image
+through the existing harness settings (`IMG` for cluster installation or
+`E2E_DOCKER_IMAGE` for Helm). The kubeconfig must select the same disposable
+context for the harness's external commands as the `--context` argument:
+
+```bash
+export KUBECONFIG='/path/to/disposable-cluster-kubeconfig'
+export KUBE_CONTEXT='<disposable-context>'
+export E2E_MARKLOGIC_IMAGE_VERSION='<approved-MarkLogic-image>'
+export E2E_VAC_ENABLED=true
+export E2E_VAC_STORAGE_CLASS='<expandable-wffc-storageclass>'
+export E2E_VAC_STANDARD_CLASS='<standard-vac>'
+export E2E_VAC_PERFORMANCE_CLASS='<performance-vac>'
+export AWS_REGION='<cluster-region>'
+
+# Run one installation scope at a time. These commands execute the e2e harness.
+go test -v -count=1 -timeout 6h ./test/e2e-helm \
+	-run '^TestVolumeAttributesClassNamespaceScoped$' \
+	-args --context="$KUBE_CONTEXT" --labels='type=volume-attributes-class'
+
+# Alternative: cluster-scoped installation, not a second overlapping operator.
+go test -v -count=1 -timeout 6h ./test/e2e \
+	-run '^TestVolumeAttributesClassClusterScoped$' \
+	-args --context="$KUBE_CONTEXT" --labels='type=volume-attributes-class'
+```
+
+Helm's default watch list includes `ml-ns-vac`. An explicit
+`E2E_WATCHED_NAMESPACES` override must include it before installation. Cluster
+mode uses `ml-vac`. To focus one scenario, add `,case=primary-live-change` to
+the label expression. `E2E_VAC_SIZE` defaults to `20Gi` (choose a size supporting
+the requested provider performance), and
+`E2E_VAC_TIMEOUT` defaults to `30m` per convergence wait. Cases run serially
+with fresh uniquely named claims to avoid EBS modification-quota coupling;
+reserve capacity for at least three MarkLogic Pods and six volumes at peak.
+
+VAC-only changes check unchanged Pod/StatefulSet/PVC/PV identities, templates,
+restart counts and capacity, plus authenticated document write/read and marker
+files on both mounts. The resize regression deliberately permits its existing
+restart/template-sync workflow. Pending-binding recovery restarts only its
+intentionally unscheduled consumer after removing the selector (`OnDelete`).
+The suite does not fake Kubernetes-owned PVC status or interrupt shared CSI.
+
+Each case deletes its own CRs, waits for workloads to stop, then deletes only
+recorded/uniquely marked PVCs with UID preconditions and its own VAC fixtures.
+`Retain` reclaim policies still leave billable PVs/EBS volumes requiring manual
+inventory and cleanup. `E2E_VAC_KEEP_RESOURCES=true` skips per-case cleanup,
+but does **not** disable the enclosing harness teardown. Failures dump status,
+Pods and Events without auth fields. Opt-out, restart-during-modification,
+resize/VAC overlap, provider rejection, API-absent/beta-only and permission-fault
+lanes remain separate qualification work, not passes inferred from this suite.
 
 ---
 

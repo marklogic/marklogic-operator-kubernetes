@@ -3,10 +3,22 @@
 package k8sutil
 
 import (
+	"errors"
+
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
 
-func (oc *OperatorContext) ReconsileMarklogicGroupHandler() (reconcile.Result, error) {
+func (oc *OperatorContext) ReconsileMarklogicGroupHandler() (outcome reconcile.Result, reconcileErr error) {
+	defer func() {
+		unusedResult, unusedErr := oc.observeUnusedPrecreatedPVCs()
+		progressResult, progressErr := oc.observeVolumeAttributesClasses(reconcileErr)
+		for _, observation := range []reconcile.Result{unusedResult, progressResult} {
+			if observation.RequeueAfter > 0 && (outcome.RequeueAfter == 0 || observation.RequeueAfter < outcome.RequeueAfter) {
+				outcome.RequeueAfter = observation.RequeueAfter
+			}
+		}
+		reconcileErr = errors.Join(reconcileErr, unusedErr, progressErr)
+	}()
 	oc.ReqLogger.Info("handler::ReconsileMarklogicGroupHandler")
 
 	if oc.MarklogicGroup.Spec.IsDynamic && oc.MarklogicGroup.DeletionTimestamp != nil {
@@ -45,16 +57,27 @@ func (oc *OperatorContext) ReconsileMarklogicGroupHandler() (reconcile.Result, e
 		return result, err
 	}
 
+	vacResult, vacErr := oc.ReconcileVolumeAttributesClasses()
 	if oc.MarklogicGroup.Spec.IsDynamic {
 		if dynamicResult := oc.ReconcileDynamicGroupConfig(); dynamicResult.Completed() {
-			return dynamicResult.Output()
+			result, err = dynamicResult.Output()
 		}
 	}
 
-	return result, err
+	if vacResult.RequeueAfter > 0 && (result.RequeueAfter == 0 || vacResult.RequeueAfter < result.RequeueAfter) {
+		result.RequeueAfter = vacResult.RequeueAfter
+	}
+	return result, errors.Join(err, vacErr)
 }
 
-func (cc *ClusterContext) ReconsileMarklogicClusterHandler() (reconcile.Result, error) {
+func (cc *ClusterContext) ReconsileMarklogicClusterHandler() (outcome reconcile.Result, reconcileErr error) {
+	defer func() {
+		progressResult, progressErr := cc.observeVolumeAttributesClasses()
+		if progressResult.RequeueAfter > 0 && (outcome.RequeueAfter == 0 || progressResult.RequeueAfter < outcome.RequeueAfter) {
+			outcome.RequeueAfter = progressResult.RequeueAfter
+		}
+		reconcileErr = errors.Join(reconcileErr, progressErr)
+	}()
 	if result := cc.ReconcileServiceAccount(); result.Completed() {
 		return result.Output()
 	}

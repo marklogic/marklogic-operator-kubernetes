@@ -18,7 +18,11 @@ package controller
 
 import (
 	"context"
+	"fmt"
 	"reflect"
+	"strconv"
+	"strings"
+	"time"
 
 	"github.com/go-logr/logr"
 	marklogicv1 "github.com/marklogic/marklogic-operator-kubernetes/api/v1"
@@ -26,8 +30,12 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/discovery"
+	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -41,9 +49,11 @@ import (
 // MarklogicGroupReconciler reconciles a MarklogicGroup object
 type MarklogicGroupReconciler struct {
 	client.Client
-	Scheme   *runtime.Scheme
-	Log      logr.Logger
-	Recorder record.EventRecorder
+	Scheme       *runtime.Scheme
+	Log          logr.Logger
+	Recorder     record.EventRecorder
+	VACValidator *k8sutil.VolumeAttributesClassValidator
+	APIReader    client.Reader
 }
 
 const (
@@ -59,7 +69,9 @@ const (
 //+kubebuilder:rbac:groups=core,resources=pods;services;secrets;configmaps,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups=core,resources=persistentvolumeclaims,verbs=get;list;watch;create;patch;update
 //+kubebuilder:rbac:groups=core,resources=persistentvolumeclaims/status,verbs=get
+//+kubebuilder:rbac:groups=core,resources=persistentvolumes,verbs=get
 //+kubebuilder:rbac:groups=storage.k8s.io,resources=storageclasses,verbs=get;list;watch
+//+kubebuilder:rbac:groups=storage.k8s.io,resources=volumeattributesclasses,verbs=get
 //+kubebuilder:rbac:groups=core;events.k8s.io,resources=events,verbs=create;patch;update
 //+kubebuilder:rbac:groups=networking.k8s.io,resources=ingresses,verbs=get;list;watch;create;update;patch;delete
 
@@ -94,12 +106,17 @@ func (r *MarklogicGroupReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		return ctrl.Result{}, err
 	}
 
+	oc.VACValidator = r.VACValidator
+	oc.APIReader = r.APIReader
 	result, err := oc.ReconsileMarklogicGroupHandler()
 	if err != nil {
 		logger.Error(err, "Error reconciling statefulset")
 		return ctrl.Result{}, err
 	}
 
+	if meta.FindStatusCondition(oc.MarklogicGroup.Status.Conditions, k8sutil.VolumeAttributesClassValidationCondition) != nil && (result.RequeueAfter == 0 || result.RequeueAfter > 30*time.Second) {
+		result.RequeueAfter = 30 * time.Second
+	}
 	return result, nil
 }
 
@@ -142,6 +159,8 @@ func markLogicGroupCreateUpdateDeletePredicate() predicate.Predicate {
 				return false // Reconcile on update of Service
 			case *corev1.Pod:
 				return true // Reconcile on pod updates for dynamic host finalizer lifecycle
+			case *corev1.PersistentVolumeClaim:
+				return true
 			default:
 				return false // Ignore updates for other types
 			}
@@ -157,6 +176,22 @@ func markLogicGroupCreateUpdateDeletePredicate() predicate.Predicate {
 
 // SetupWithManager sets up the controller with the Manager.
 func (r *MarklogicGroupReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	r.APIReader = mgr.GetAPIReader()
+	if err := mgr.GetFieldIndexer().IndexField(context.Background(), &corev1.PersistentVolumeClaim{}, k8sutil.PrecreatedPVCGroupUIDIndex, k8sutil.PrecreatedPVCGroupUIDs); err != nil {
+		return err
+	}
+	if err := mgr.GetFieldIndexer().IndexField(context.Background(), &corev1.Pod{}, k8sutil.PodPVCReferenceIndex, k8sutil.PodPVCReferences); err != nil {
+		return err
+	}
+	if r.VACValidator == nil {
+		config := rest.CopyConfig(mgr.GetConfig())
+		config.Timeout = 10 * time.Second
+		discoveryClient, err := discovery.NewDiscoveryClientForConfig(config)
+		if err != nil {
+			return err
+		}
+		r.VACValidator = k8sutil.NewVolumeAttributesClassValidator(mgr.GetAPIReader(), discoveryClient)
+	}
 
 	builder := ctrl.NewControllerManagedBy(mgr).
 		Named("marklogicgroup-controller").
@@ -164,9 +199,52 @@ func (r *MarklogicGroupReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		WithEventFilter(markLogicGroupCreateUpdateDeletePredicate()).
 		Owns(&appsv1.StatefulSet{}).
 		Owns(&corev1.Service{}).
+		Watches(&corev1.PersistentVolumeClaim{}, handler.EnqueueRequestsFromMapFunc(r.pvcToMarklogicGroup)).
 		Watches(&corev1.Pod{}, handler.EnqueueRequestsFromMapFunc(r.podToMarklogicGroup))
 
 	return builder.Complete(r)
+}
+
+func (r *MarklogicGroupReconciler) pvcToMarklogicGroup(ctx context.Context, object client.Object) []reconcile.Request {
+	claim, ok := object.(*corev1.PersistentVolumeClaim)
+	if !ok {
+		return nil
+	}
+	statefulSets := &appsv1.StatefulSetList{}
+	if err := r.List(ctx, statefulSets, client.InNamespace(claim.Namespace)); err != nil {
+		r.Log.Error(err, "Cannot map PVC event to a MarklogicGroup", "pvc", claim.Name)
+		return nil
+	}
+	requests := []reconcile.Request{}
+	seen := map[string]bool{}
+	for _, statefulSet := range statefulSets.Items {
+		owner := metav1.GetControllerOf(&statefulSet)
+		if owner == nil || owner.Kind != "MarklogicGroup" || owner.APIVersion != marklogicv1.GroupVersion.String() || owner.UID == "" {
+			continue
+		}
+		start, replicas := int64(0), int64(1)
+		if statefulSet.Spec.Ordinals != nil {
+			start = int64(statefulSet.Spec.Ordinals.Start)
+		}
+		if statefulSet.Spec.Replicas != nil {
+			replicas = int64(*statefulSet.Spec.Replicas)
+		}
+		for _, template := range statefulSet.Spec.VolumeClaimTemplates {
+			prefix := template.Name + "-" + statefulSet.Name + "-"
+			if !strings.HasPrefix(claim.Name, prefix) {
+				continue
+			}
+			ordinal, err := strconv.ParseInt(strings.TrimPrefix(claim.Name, prefix), 10, 64)
+			active := ordinal >= start && ordinal < start+replicas
+			precreated := claim.Annotations[k8sutil.PrecreatedPVCGroupUIDIndex] == string(owner.UID)
+			if err != nil || ordinal < 0 || !active && !precreated || claim.Name != fmt.Sprintf("%s%d", prefix, ordinal) || seen[owner.Name] {
+				continue
+			}
+			seen[owner.Name] = true
+			requests = append(requests, reconcile.Request{NamespacedName: client.ObjectKey{Namespace: claim.Namespace, Name: owner.Name}})
+		}
+	}
+	return requests
 }
 
 // podToMarklogicGroup maps a Pod to its owning MarklogicGroup by traversing
@@ -175,6 +253,14 @@ func (r *MarklogicGroupReconciler) podToMarklogicGroup(ctx context.Context, obj 
 	pod, ok := obj.(*corev1.Pod)
 	if !ok {
 		return nil
+	}
+	requests := []reconcile.Request{}
+	seen := map[client.ObjectKey]bool{}
+	appendRequest := func(key client.ObjectKey) {
+		if !seen[key] {
+			seen[key] = true
+			requests = append(requests, reconcile.Request{NamespacedName: key})
+		}
 	}
 
 	// Find the StatefulSet that owns this pod
@@ -186,21 +272,27 @@ func (r *MarklogicGroupReconciler) podToMarklogicGroup(ctx context.Context, obj 
 		// Get the StatefulSet
 		var sts appsv1.StatefulSet
 		if err := r.Get(ctx, types.NamespacedName{Name: ownerRef.Name, Namespace: pod.Namespace}, &sts); err != nil {
-			return nil
+			continue
 		}
 
 		// Find the MarklogicGroup that owns the StatefulSet
 		for _, stsOwnerRef := range sts.GetOwnerReferences() {
 			if stsOwnerRef.Kind == "MarklogicGroup" {
-				return []reconcile.Request{
-					{NamespacedName: types.NamespacedName{
-						Name:      stsOwnerRef.Name,
-						Namespace: pod.Namespace,
-					}},
-				}
+				appendRequest(client.ObjectKey{Name: stsOwnerRef.Name, Namespace: pod.Namespace})
 			}
 		}
 	}
-
-	return nil
+	for _, volume := range pod.Spec.Volumes {
+		if volume.PersistentVolumeClaim == nil {
+			continue
+		}
+		claim := &corev1.PersistentVolumeClaim{}
+		if err := r.Get(ctx, client.ObjectKey{Namespace: pod.Namespace, Name: volume.PersistentVolumeClaim.ClaimName}, claim); err != nil || claim.Annotations[k8sutil.PrecreatedPVCGroupUIDIndex] == "" {
+			continue
+		}
+		for _, request := range r.pvcToMarklogicGroup(ctx, claim) {
+			appendRequest(request.NamespacedName)
+		}
+	}
+	return requests
 }

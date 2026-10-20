@@ -30,6 +30,8 @@ import (
 
 	"reflect"
 
+	"k8s.io/apimachinery/pkg/api/meta"
+
 	"github.com/go-logr/logr"
 	marklogicv1 "github.com/marklogic/marklogic-operator-kubernetes/api/v1"
 	"github.com/marklogic/marklogic-operator-kubernetes/pkg/k8sutil"
@@ -40,9 +42,10 @@ import (
 // MarklogicClusterReconciler reconciles a MarklogicCluster object
 type MarklogicClusterReconciler struct {
 	client.Client
-	Scheme   *runtime.Scheme
-	Log      logr.Logger
-	Recorder record.EventRecorder
+	APIReader client.Reader
+	Scheme    *runtime.Scheme
+	Log       logr.Logger
+	Recorder  record.EventRecorder
 }
 
 //+kubebuilder:rbac:groups=marklogic.progress.com,resources=marklogicclusters,verbs=get;list;watch;create;update;patch;delete
@@ -75,6 +78,7 @@ func (r *MarklogicClusterReconciler) Reconcile(ctx context.Context, req ctrl.Req
 		return ctrl.Result{}, err
 	}
 
+	cc.APIReader = r.APIReader
 	result, err := cc.ReconsileMarklogicClusterHandler()
 
 	if err != nil {
@@ -92,6 +96,17 @@ func markLogicClusterCreateUpdateDeletePredicate() predicate.Predicate {
 		},
 		UpdateFunc: func(e event.UpdateEvent) bool {
 			switch e.ObjectNew.(type) {
+			case *marklogicv1.MarklogicGroup:
+				oldGroup, ok := e.ObjectOld.(*marklogicv1.MarklogicGroup)
+				if !ok {
+					return true
+				}
+				newGroup := e.ObjectNew.(*marklogicv1.MarklogicGroup)
+				return oldGroup.Generation != newGroup.Generation || !reflect.DeepEqual(oldGroup.Spec, newGroup.Spec) ||
+					!reflect.DeepEqual(oldGroup.OwnerReferences, newGroup.OwnerReferences) ||
+					!reflect.DeepEqual(oldGroup.DeletionTimestamp, newGroup.DeletionTimestamp) ||
+					!reflect.DeepEqual(oldGroup.Status.Storage, newGroup.Status.Storage) ||
+					!reflect.DeepEqual(meta.FindStatusCondition(oldGroup.Status.Conditions, k8sutil.VolumeAttributesClassSyncedCondition), meta.FindStatusCondition(newGroup.Status.Conditions, k8sutil.VolumeAttributesClassSyncedCondition))
 			case *marklogicv1.MarklogicCluster:
 				oldAnnotations := e.ObjectOld.GetAnnotations()
 				newAnnotations := e.ObjectNew.GetAnnotations()
@@ -131,6 +146,7 @@ func markLogicClusterCreateUpdateDeletePredicate() predicate.Predicate {
 
 // SetupWithManager sets up the controller with the Manager.
 func (r *MarklogicClusterReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	r.APIReader = mgr.GetAPIReader()
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&marklogicv1.MarklogicCluster{}).
 		WithEventFilter(markLogicClusterCreateUpdateDeletePredicate()).

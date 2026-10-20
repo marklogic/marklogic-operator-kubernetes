@@ -28,6 +28,8 @@ type OperatorContext struct {
 	Recorder       record.EventRecorder
 	Services       []*corev1.Service
 	StatefulSets   []*appsv1.StatefulSet
+	VACValidator   *VolumeAttributesClassValidator
+	APIReader      controllerClient.Reader
 }
 
 type ClusterContext struct {
@@ -38,6 +40,7 @@ type ClusterContext struct {
 	Client           controllerClient.Client
 	Scheme           *runtime.Scheme
 	MarklogicCluster *marklogicv1.MarklogicCluster
+	APIReader        controllerClient.Reader
 	ReqLogger        logr.Logger
 	Recorder         record.EventRecorder
 

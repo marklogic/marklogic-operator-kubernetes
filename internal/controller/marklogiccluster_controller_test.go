@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+	"testing"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -29,9 +30,37 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 
 	marklogicv1 "github.com/marklogic/marklogic-operator-kubernetes/api/v1"
+	"github.com/marklogic/marklogic-operator-kubernetes/pkg/k8sutil"
 )
+
+func TestVolumeAttributesClassClusterWatch(t *testing.T) {
+	group := &marklogicv1.MarklogicGroup{ObjectMeta: metav1.ObjectMeta{Name: "data", Generation: 1}}
+	filter := markLogicClusterCreateUpdateDeletePredicate()
+	changed := group.DeepCopy()
+	changed.Status.Storage = &marklogicv1.StorageStatus{VolumeAttributesClass: &marklogicv1.VolumeAttributesClassStatus{State: marklogicv1.VolumeAttributesClassInProgress}}
+	if !filter.Update(event.UpdateEvent{ObjectOld: group, ObjectNew: changed}) {
+		t.Fatal("child storage-only progress must trigger parent aggregation")
+	}
+	changed = group.DeepCopy()
+	changed.Status.Conditions = []metav1.Condition{{Type: k8sutil.VolumeAttributesClassSyncedCondition, Status: metav1.ConditionTrue}}
+	if !filter.Update(event.UpdateEvent{ObjectOld: group, ObjectNew: changed}) {
+		t.Fatal("child VAC condition updates must trigger parent aggregation")
+	}
+	changed = group.DeepCopy()
+	changed.Status.Stage = "Unrelated"
+	if filter.Update(event.UpdateEvent{ObjectOld: group, ObjectNew: changed}) {
+		t.Fatal("unrelated child status must not cause an aggregation loop")
+	}
+	cluster := &marklogicv1.MarklogicCluster{}
+	updated := cluster.DeepCopy()
+	updated.Status.Storage = &marklogicv1.StorageStatus{}
+	if filter.Update(event.UpdateEvent{ObjectOld: cluster, ObjectNew: updated}) {
+		t.Fatal("parent status writes must not trigger a self-reconcile loop")
+	}
+}
 
 var clusterName = "marklogic-cluster-test"
 var clusterNS = "cluster-test-ns"
