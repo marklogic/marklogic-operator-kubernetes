@@ -19,10 +19,16 @@ log "Info: [prestop] Prestop Hook Execution"
 my_host=$(hostname -f)
 
 HTTP_PROTOCOL="http"
+MANAGE_HOST="localhost"
 HTTPS_OPTION=""
 if [[ "$MARKLOGIC_JOIN_TLS_ENABLED" == "true" ]]; then
     HTTP_PROTOCOL="https"
-    HTTPS_OPTION="-k"
+    if [[ -s "/run/secrets/marklogic-certs/cacert.pem" ]]; then
+        HTTPS_OPTION="--cacert /run/secrets/marklogic-certs/cacert.pem"
+        MANAGE_HOST="$my_host"
+    else
+        HTTPS_OPTION="-k"
+    fi
 fi
 log "Info: [prestop] MarkLogic Pod Hostname: "$my_host
 for ((i = 0; i < 5; i = i + 1)); do
@@ -30,7 +36,7 @@ for ((i = 0; i < 5; i = i + 1)); do
         -o /dev/null -m 10 -s -w %{http_code} \
         -i -X POST ${HTTPS_OPTION} --data "state=shutdown&failover=true" \
         -H "Content-type: application/x-www-form-urlencoded" \
-        ${HTTP_PROTOCOL}://localhost:8002/manage/v2/hosts/$my_host?format=json)
+        ${HTTP_PROTOCOL}://${MANAGE_HOST}:8002/manage/v2/hosts/$my_host?format=json)
 
     if [[ ${res_code} -eq 202 ]]; then
         log "Info: [prestop] Host shut down response code: "$res_code

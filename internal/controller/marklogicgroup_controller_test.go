@@ -20,8 +20,10 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/pem"
 	"errors"
 	"fmt"
+	"net/http/httptest"
 	"sort"
 	"strings"
 	"sync"
@@ -468,7 +470,7 @@ var _ = Describe("MarkLogicGroup controller", func() {
 			Expect(k8sClient.Create(ctx, adminSecret)).Should(Succeed())
 			operatorSecret := &corev1.Secret{
 				ObjectMeta: metav1.ObjectMeta{Name: operatorSecretName, Namespace: dynamicNamespace},
-				Data:       map[string][]byte{"username": []byte("operator"), "password": []byte("operator-password")},
+				Data:       map[string][]byte{"password": []byte("operator-password")},
 			}
 			Expect(k8sClient.Create(ctx, operatorSecret)).Should(Succeed())
 
@@ -560,12 +562,16 @@ var _ = Describe("MarkLogicGroup controller", func() {
 
 			calls := []string{}
 			callsMu := &sync.Mutex{}
+			var capturedOptions mlmanage.ClientOptions
 			behavior := &fakeDynamicManagementBehavior{
 				hosts:     []mlmanage.HostStatus{{Name: "bootstrap-0", Online: true, Version: "12.0-1"}},
 				groupInfo: mlmanage.GroupInfo{Exists: false},
 			}
 			originalFactory := k8sutil.NewDynamicManagementClient
 			k8sutil.NewDynamicManagementClient = func(opts mlmanage.ClientOptions) mlmanage.Client {
+				callsMu.Lock()
+				capturedOptions = opts
+				callsMu.Unlock()
 				return &fakeDynamicManagementClient{behavior: behavior, calls: &calls, callsMu: callsMu}
 			}
 			defer func() { k8sutil.NewDynamicManagementClient = originalFactory }()
@@ -579,9 +585,17 @@ var _ = Describe("MarkLogicGroup controller", func() {
 			Expect(k8sClient.Create(ctx, adminSecret)).Should(Succeed())
 			operatorSecret := &corev1.Secret{
 				ObjectMeta: metav1.ObjectMeta{Name: operatorSecretName, Namespace: dynamicNamespace},
-				Data:       map[string][]byte{"username": []byte("marklogic-kubernetes-operator"), "password": []byte("operator-password")},
+				Data:       map[string][]byte{"password": []byte("operator-password")},
 			}
 			Expect(k8sClient.Create(ctx, operatorSecret)).Should(Succeed())
+			tlsServer := httptest.NewTLSServer(nil)
+			defer tlsServer.Close()
+			trustedCA := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: tlsServer.Certificate().Raw})
+			caSecret := &corev1.Secret{
+				ObjectMeta: metav1.ObjectMeta{Name: "ca-secret", Namespace: dynamicNamespace},
+				Data:       map[string][]byte{"cacert.pem": trustedCA},
+			}
+			Expect(k8sClient.Create(ctx, caSecret)).Should(Succeed())
 
 			mlGroup := &marklogicv1.MarklogicGroup{
 				TypeMeta:   metav1.TypeMeta{Kind: "MarklogicGroup", APIVersion: "marklogic.progress.com/v1"},
@@ -595,6 +609,10 @@ var _ = Describe("MarkLogicGroup controller", func() {
 					IsDynamic:     true,
 					BootstrapHost: "bootstrap-0.bootstrap.svc.cluster.local",
 					SecretName:    adminSecretName,
+					Tls: &marklogicv1.Tls{
+						EnableOnDefaultAppServers: true,
+						CaSecretName:              "ca-secret",
+					},
 				},
 			}
 			Expect(k8sClient.Create(ctx, mlGroup)).Should(Succeed())
@@ -606,6 +624,16 @@ var _ = Describe("MarkLogicGroup controller", func() {
 					return false
 				}
 				return createdCR.Status.Dynamic.Phase == "Idle" && createdCR.Status.Dynamic.DynamicHostsEnabled && createdCR.Status.Dynamic.Configured
+			}, timeout, interval).Should(BeTrue())
+
+			Eventually(func() bool {
+				callsMu.Lock()
+				defer callsMu.Unlock()
+				return capturedOptions.Username == "marklogic-kubernetes-operator" &&
+					capturedOptions.Password == "operator-password" &&
+					capturedOptions.UseTLS &&
+					!capturedOptions.InsecureSkipVerify &&
+					string(capturedOptions.CACertificate) == string(trustedCA)
 			}, timeout, interval).Should(BeTrue())
 
 			legacyManageAdminSecret := &corev1.Secret{}
@@ -659,7 +687,7 @@ var _ = Describe("MarkLogicGroup controller", func() {
 					OwnerReferences: []metav1.OwnerReference{clusterOwnerRef},
 				},
 				Type: corev1.SecretTypeOpaque,
-				Data: map[string][]byte{"username": []byte("marklogic-kubernetes-operator"), "password": []byte("operator-password")},
+				Data: map[string][]byte{"password": []byte("operator-password")},
 			}
 			Expect(k8sClient.Create(ctx, operatorSecret)).Should(Succeed())
 
@@ -2527,7 +2555,7 @@ func createOperatorCredentialSecret(ctx context.Context, namespace, adminSecretN
 	operatorSecretName := strings.TrimSuffix(adminSecretName, "-admin") + "-operator"
 	operatorSecret := &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{Name: operatorSecretName, Namespace: namespace},
-		Data:       map[string][]byte{"username": []byte("operator"), "password": []byte("operator-password")},
+		Data:       map[string][]byte{"password": []byte("operator-password")},
 	}
 	Expect(k8sClient.Create(ctx, operatorSecret)).Should(Succeed())
 }
@@ -2864,11 +2892,6 @@ func (f *fakeDynamicManagementClient) EnsureOperatorRole(ctx context.Context) er
 
 func (f *fakeDynamicManagementClient) EnsureOperatorUser(ctx context.Context, username, password string) error {
 	f.record("EnsureOperatorUser")
-	return nil
-}
-
-func (f *fakeDynamicManagementClient) UpdateOperatorPassword(ctx context.Context, username, password string) error {
-	f.record("UpdateOperatorPassword")
 	return nil
 }
 

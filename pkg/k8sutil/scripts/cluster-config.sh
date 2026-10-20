@@ -22,7 +22,11 @@ HTTP_PROTOCOL="http"
 HTTPS_OPTION=""
 if [[ "$MARKLOGIC_JOIN_TLS_ENABLED" == "true" ]]; then
     HTTP_PROTOCOL="https"
-    HTTPS_OPTION="-k"
+    if [[ -s "/run/secrets/marklogic-certs/cacert.pem" ]]; then
+        HTTPS_OPTION="--cacert /run/secrets/marklogic-certs/cacert.pem"
+    else
+        HTTPS_OPTION="-k"
+    fi
 fi
 
 IS_BOOTSTRAP_HOST=false
@@ -471,7 +475,11 @@ function configure_group {
     bootstrap_protocol=$(get_current_host_protocol $MARKLOGIC_BOOTSTRAP_HOST)
     if [[ $bootstrap_protocol == "https" ]]; then
         LOCAL_HTTP_PROTOCOL="https"
-        LOCAL_HTTPS_OPTION="-k"
+        if [[ -s "/run/secrets/marklogic-certs/cacert.pem" ]]; then
+            LOCAL_HTTPS_OPTION="--cacert /run/secrets/marklogic-certs/cacert.pem"
+        else
+            LOCAL_HTTPS_OPTION="-k"
+        fi
     fi  
     log "configuring group"
     if [[ "$IS_BOOTSTRAP_HOST" == "true" ]]; then
@@ -529,7 +537,11 @@ function configure_group {
             group_bootstrap_protocol=$(get_current_host_protocol $MARKLOGIC_BOOTSTRAP_HOST 8002)
             if [[ $group_bootstrap_protocol == "https" ]]; then
                 GROUP_HTTP_PROTOCOL="https"
-                GROUP_HTTPS_OPTION="-k"
+                if [[ -s "/run/secrets/marklogic-certs/cacert.pem" ]]; then
+                    GROUP_HTTPS_OPTION="--cacert /run/secrets/marklogic-certs/cacert.pem"
+                else
+                    GROUP_HTTPS_OPTION="-k"
+                fi
                 info "Bootstrap host is using HTTPS on port 8002"
             else
                 info "Bootstrap host is using HTTP on port 8002"
@@ -548,11 +560,17 @@ function configure_group {
                 fi
             fi
             log "Info: Group $MARKLOGIC_GROUP has been created, configuring App-server App-Services in group $MARKLOGIC_GROUP on the MarkLogic cluster."
-            res_code=`curl --retry 5 --retry-max-time 60 --anyauth --user "${MARKLOGIC_MANAGEMENT_USERNAME}:${MARKLOGIC_MANAGEMENT_PASSWORD}" -m 20 -s ${GROUP_HTTPS_OPTION} -w '%{http_code}' -X POST -d '{"server-name":"App-Services", "root":"/", "port":8000,"modules-database":"Modules", "content-database":"Documents", "error-handler":"/MarkLogic/rest-api/8000-error-handler.xqy", "url-rewriter":"/MarkLogic/rest-api/8000-rewriter.xml"}' -H "Content-type: application/json" "${GROUP_HTTP_PROTOCOL}://${MARKLOGIC_BOOTSTRAP_HOST}:8002/manage/v2/servers?group-id=${MARKLOGIC_GROUP}&server-type=http"`
+            app_services_authentication=""
+            if [[ "$PATH_BASED_ROUTING" == "true" ]]; then
+                app_services_authentication='"authentication":"basic", '
+            fi
+            app_services_payload="{\"server-name\":\"App-Services\", ${app_services_authentication}\"root\":\"/\", \"port\":8000,\"modules-database\":\"Modules\", \"content-database\":\"Documents\", \"error-handler\":\"/MarkLogic/rest-api/8000-error-handler.xqy\", \"url-rewriter\":\"/MarkLogic/rest-api/8000-rewriter.xml\"}"
+            res_code=`curl --retry 5 --retry-max-time 60 --anyauth --user "${MARKLOGIC_MANAGEMENT_USERNAME}:${MARKLOGIC_MANAGEMENT_PASSWORD}" -m 20 -s ${GROUP_HTTPS_OPTION} -o /tmp/create-app-services-response.json -w '%{http_code}' -X POST -d "${app_services_payload}" -H "Content-type: application/json" "${GROUP_HTTP_PROTOCOL}://${MARKLOGIC_BOOTSTRAP_HOST}:8002/manage/v2/servers?group-id=${MARKLOGIC_GROUP}&server-type=http"`
             if [[ ${res_code} -eq 201 ]]; then
               log "Info: Successfully configured App-server App-Services into group $MARKLOGIC_GROUP on the MarkLogic cluster."
             else
               log "Info: Expected response code 201, got $res_code for App-Services configuration"
+                            cat /tmp/create-app-services-response.json
               exit 1
             fi        
         fi
@@ -563,7 +581,7 @@ function configure_group {
 }
 
 function configure_tls {
-    local protocol local_manage_protocol
+    local protocol local_manage_protocol local_manage_host
     local -a local_manage_https_option=()
     if [[ "$IS_BOOTSTRAP_HOST" == "true" ]] && [[ $MARKLOGIC_CLUSTER_TYPE == "bootstrap" ]]; then
         protocol=$(get_current_host_protocol)
@@ -576,7 +594,7 @@ function configure_tls {
 
     info "Configuring TLS for App Servers"
 
-    AUTH_CURL=(curl --anyauth --user "${MARKLOGIC_ADMIN_USERNAME}:${MARKLOGIC_ADMIN_PASSWORD}" -m 20 -sS)
+    AUTH_CURL=(curl --anyauth --user "${MARKLOGIC_MANAGEMENT_USERNAME}:${MARKLOGIC_MANAGEMENT_PASSWORD}" -m 20 -sS)
 
     cd /tmp/
     if [[ -e "/run/secrets/marklogic-certs/tls.crt" ]]; then
@@ -675,13 +693,19 @@ EOF
         log "Info:  inserting following certificates for $cert_path for $MARKLOGIC_CLUSTER_TYPE"
 
         local_manage_protocol=$(get_current_host_protocol localhost 8002)
+        local_manage_host="localhost"
         if [[ "$local_manage_protocol" == "https" ]]; then
-            local_manage_https_option=(-k)
+            if [[ -s "/run/secrets/marklogic-certs/cacert.pem" ]]; then
+                local_manage_https_option=(--cacert /run/secrets/marklogic-certs/cacert.pem)
+                local_manage_host="$HOST_FQDN"
+            else
+                local_manage_https_option=(-k)
+            fi
         fi
         log "Info:  Local Manage protocol for certificate insertion: $local_manage_protocol"
         if ! res=$("${AUTH_CURL[@]}" --fail -w ' HTTP %{http_code}' "${local_manage_https_option[@]}" \
             -X POST --header "Content-Type:application/json" -d @insert_cert_payload.json \
-            "${local_manage_protocol}://localhost:8002/manage/v2/certificate-templates/defaultTemplate" 2>&1); then
+            "${local_manage_protocol}://${local_manage_host}:8002/manage/v2/certificate-templates/defaultTemplate" 2>&1); then
             error "Failed to insert named certificate: $res" exit
         fi
         log "Info:  $res"
@@ -705,7 +729,7 @@ EOF
             appServers=("App-Services" "Admin" "Manage")
             for appServer in ${appServers[@]}; do
             log "configuring SSL for App Server $appServer"
-            curl --anyauth --user "${MARKLOGIC_ADMIN_USERNAME}:${MARKLOGIC_ADMIN_PASSWORD}" \
+            "${AUTH_CURL[@]}" \
                 -X PUT -H "Content-type: application/json" -d '{"ssl-certificate-template":"defaultTemplate"}' \
             http://localhost:8002/manage/v2/servers/${appServer}/properties?group-id=${MARKLOGIC_GROUP}
             sleep 5s
@@ -714,7 +738,7 @@ EOF
 
             if [[ "$certType" == "self-signed" ]]; then
             log "Info:  Generate temporary certificate if necessary"
-            "${AUTH_CURL[@]}" -k -X POST -i -d @createTempCert.xqy -H "Content-type: application/x-www-form-urlencoded" \
+            "${AUTH_CURL[@]}" $HTTPS_OPTION -X POST -i -d @createTempCert.xqy -H "Content-type: application/x-www-form-urlencoded" \
             -H "Accept: multipart/mixed; boundary=BOUNDARY" https://localhost:8000/v1/eval
             resp_code=$?
             info "response code for Generate temporary certificate is $resp_code"
@@ -726,22 +750,52 @@ EOF
 }
 
 
+function configure_app_server_basic_auth {
+    local app_server=$1
+    local manage_protocol response_code response_file
+    local -a manage_tls_options=()
+
+    manage_protocol=$(get_current_host_protocol localhost 8002)
+    if [[ "$manage_protocol" == "https" ]]; then
+        if [[ -s "/run/secrets/marklogic-certs/cacert.pem" ]]; then
+            manage_tls_options=(--cacert /run/secrets/marklogic-certs/cacert.pem)
+        else
+            manage_tls_options=(-k)
+        fi
+    fi
+
+    response_file="/tmp/configure-${app_server}-basic-auth-response.json"
+    response_code=$(curl --anyauth --retry 5 --retry-max-time 60 \
+        --user "${MARKLOGIC_MANAGEMENT_USERNAME}:${MARKLOGIC_MANAGEMENT_PASSWORD}" \
+        -m 20 -s -o "$response_file" -w '%{http_code}' "${manage_tls_options[@]}" \
+        -X PUT -H "Content-type: application/json" -d '{"authentication":"basic"}' \
+        "${manage_protocol}://localhost:8002/manage/v2/servers/${app_server}/properties?group-id=${MARKLOGIC_GROUP}")
+
+    case "$response_code" in
+        200|202|204)
+            log "Info: App Server ${app_server} authentication set to basic (HTTP ${response_code})"
+            return 0
+            ;;
+        *)
+            log "Error: Failed to set App Server ${app_server} authentication to basic (HTTP ${response_code})"
+            [[ -s "$response_file" ]] && cat "$response_file"
+            return 1
+            ;;
+    esac
+}
+
 function configure_path_based_routing {
-    # Authentication configuration when path based is used
     info "Path based routing: $PATH_BASED_ROUTING"
-    if [[ $PATH_BASED_ROUTING == "true" ]]; then                    
+    if [[ $PATH_BASED_ROUTING == "true" ]]; then
         log "Info:  path based routing is set. Adapting authentication method"
-        resp=$(curl --anyauth -w "%{http_code}" --user "${MARKLOGIC_MANAGEMENT_USERNAME}:${MARKLOGIC_MANAGEMENT_PASSWORD}" -m 20 -s -X PUT -H "Content-type: application/json" -d '{"authentication":"basic"}' http://localhost:8002/manage/v2/servers/Admin/properties?group-id=${MARKLOGIC_GROUP})
-        log "Info:  Admin-Servers response code: $resp"
-        resp=$(curl --anyauth -w "%{http_code}" --user "${MARKLOGIC_MANAGEMENT_USERNAME}:${MARKLOGIC_MANAGEMENT_PASSWORD}" -m 20 -s -X PUT -H "Content-type: application/json" -d '{"authentication":"basic"}' http://localhost:8002/manage/v2/servers/App-Services/properties?group-id=${MARKLOGIC_GROUP})
-        log "Info:  App Service response code: $resp"
-        resp=$(curl --anyauth -w "%{http_code}" --user "${MARKLOGIC_MANAGEMENT_USERNAME}:${MARKLOGIC_MANAGEMENT_PASSWORD}" -m 20 -s -X PUT -H "Content-type: application/json" -d '{"authentication":"basic"}' http://localhost:8002/manage/v2/servers/Manage/properties?group-id=${MARKLOGIC_GROUP})
-        log "Info:  Manage response code: $resp"
+        for app_server in Admin App-Services Manage; do
+            retry 5 configure_app_server_basic_auth "$app_server" || \
+                error "Failed to configure basic authentication for App Server ${app_server}." exit
+        done
         log "Info:  Default App-Servers authentication set to basic auth"
     else
-        log "Info:  This is not the boostrap host or path based routing is not set. Skipping authentication configuration"
+        log "Info:  Path based routing is not set. Skipping authentication configuration"
     fi
-    #End of authentication configuration
 }
 
 function set_status_file {

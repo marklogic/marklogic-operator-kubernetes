@@ -204,22 +204,7 @@ func (oc *OperatorContext) getStatefulSetCredentialSecret(containerParams *conta
 		secretName = containerParams.OperatorSecretName
 	}
 	secret := &corev1.Secret{}
-	err := oc.Client.Get(oc.Ctx, client.ObjectKey{Namespace: oc.MarklogicGroup.Namespace, Name: secretName}, secret)
-	if err == nil || !apierrors.IsNotFound(err) || !containerParams.OperatorCredentialsActive {
-		return secret, err
-	}
-
-	containerParams.OperatorCredentialsActive = false
-	secret = &corev1.Secret{}
-	err = oc.Client.Get(oc.Ctx, client.ObjectKey{Namespace: oc.MarklogicGroup.Namespace, Name: containerParams.SecretName}, secret)
-	if err == nil && oc.MarklogicGroup.Status.CredentialSecretName != "" {
-		patch := client.MergeFrom(oc.MarklogicGroup.DeepCopy())
-		oc.MarklogicGroup.Status.CredentialSecretName = ""
-		if err := oc.Client.Status().Patch(oc.Ctx, oc.MarklogicGroup, patch); err != nil {
-			return nil, err
-		}
-	}
-	return secret, err
+	return secret, oc.Client.Get(oc.Ctx, client.ObjectKey{Namespace: oc.MarklogicGroup.Namespace, Name: secretName}, secret)
 }
 
 func (oc *OperatorContext) rotateCredentialPodsIfNeeded() (bool, error) {

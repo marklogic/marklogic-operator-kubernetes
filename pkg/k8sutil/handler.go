@@ -7,7 +7,6 @@ import (
 
 	"github.com/marklogic/marklogic-operator-kubernetes/pkg/result"
 	appsv1 "k8s.io/api/apps/v1"
-	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
@@ -60,25 +59,18 @@ func (oc *OperatorContext) ReconsileMarklogicGroupHandler() (reconcile.Result, e
 		}
 	}
 
-	var pendingOperatorUserResult result.ReconcileResult
 	if credentialsActive && statefulSetExists {
 		if operatorUserResult := oc.ReconcileOperatorUser(); operatorUserResult.Completed() {
-			if !oc.activeOperatorCredentialSecretMissing() {
-				if err := oc.reconcileBootstrapStatefulSetRecovery(statefulSet); err != nil {
-					return reconcile.Result{}, err
-				}
-				return operatorUserResult.Output()
+			if err := oc.reconcileBootstrapStatefulSetRecovery(statefulSet); err != nil {
+				return reconcile.Result{}, err
 			}
-			pendingOperatorUserResult = operatorUserResult
+			return operatorUserResult.Output()
 		}
 	}
 
 	statefulSetResult, err := oc.ReconcileStatefulset()
 	if err != nil {
 		return statefulSetResult, err
-	}
-	if pendingOperatorUserResult != nil {
-		return pendingOperatorUserResult.Output()
 	}
 	if !credentialsActive || !statefulSetExists {
 		if operatorUserResult := oc.ReconcileOperatorUser(); operatorUserResult.Completed() {
@@ -105,19 +97,6 @@ func (oc *OperatorContext) ReconsileMarklogicGroupHandler() (reconcile.Result, e
 	}
 
 	return statefulSetResult, err
-}
-
-func (oc *OperatorContext) activeOperatorCredentialSecretMissing() bool {
-	secretName := oc.MarklogicGroup.Status.CredentialSecretName
-	if secretName == "" {
-		secretName = operatorCredentialSecretNameForGroup(oc.MarklogicGroup)
-	}
-	secret := &corev1.Secret{}
-	err := oc.Client.Get(oc.Ctx, client.ObjectKey{
-		Namespace: oc.MarklogicGroup.Namespace,
-		Name:      secretName,
-	}, secret)
-	return apierrors.IsNotFound(err)
 }
 
 func (oc *OperatorContext) reconcileBootstrapStatefulSetRecovery(statefulSet *appsv1.StatefulSet) error {

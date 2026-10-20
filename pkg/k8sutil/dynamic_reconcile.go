@@ -62,8 +62,9 @@ const (
 	dynamicHostStateRemoved       = "removed"
 	dynamicHostStateFailed        = "failed"
 
-	dynamicHostCleanupFinalizer  = "marklogic.progress.com/dynamic-host-cleanup"
-	dynamicGroupCleanupFinalizer = "marklogic.progress.com/dynamic-group-cleanup"
+	dynamicHostCleanupFinalizer    = "marklogic.progress.com/dynamic-host-cleanup"
+	dynamicGroupCleanupFinalizer   = "marklogic.progress.com/dynamic-group-cleanup"
+	dynamicRestartCleanupFinalizer = "marklogic.progress.com/dynamic-restart-cleanup"
 
 	dynamicHostsReadyConditionType = "DynamicHostsReady"
 
@@ -143,18 +144,20 @@ func (oc *OperatorContext) ReconcileDynamicGroupConfig() result.ReconcileResult 
 		return result.RequeueSoon(5)
 	}
 
-	useTLS := oc.MarklogicGroup.Spec.Tls != nil && oc.MarklogicGroup.Spec.Tls.EnableOnDefaultAppServers
-	// Dynamic reconcile connects to MarkLogic management endpoints that may be
-	// secured with operator-managed or self-signed certificates. Until a CA
-	// bundle is explicitly loaded into the client, keep TLS behavior consistent
-	// with that deployment model by skipping verification when TLS is enabled.
-	insecureSkipVerify := useTLS
+	useTLS, insecureSkipVerify, caCertificate, err := oc.managementTLSOptions()
+	if err != nil {
+		if statusErr := oc.setDynamicStatus(dynamicPhaseFailed, dynamicReasonInvalidConfig, err.Error(), false, false, false); statusErr != nil {
+			return result.Error(statusErr)
+		}
+		return result.Done()
+	}
 	operatorClient := NewDynamicManagementClient(mlmanage.ClientOptions{
 		Host:               bootstrapHost,
 		Username:           operatorUsername,
 		Password:           operatorPass,
 		UseTLS:             useTLS,
 		InsecureSkipVerify: insecureSkipVerify,
+		CACertificate:      caCertificate,
 	})
 
 	hosts, err := operatorClient.ListHostsStatus(oc.Ctx)
@@ -730,7 +733,13 @@ func (oc *OperatorContext) dynamicRestartRecoveryCandidates(pods []corev1.Pod, m
 
 	candidates := make([]corev1.Pod, 0)
 	for _, pod := range pods {
-		if pod.DeletionTimestamp != nil || !isPodLocallyReady(&pod) {
+		if pod.DeletionTimestamp != nil {
+			if controllerutil.ContainsFinalizer(&pod, dynamicRestartCleanupFinalizer) {
+				candidates = append(candidates, pod)
+			}
+			continue
+		}
+		if !isPodLocallyReady(&pod) {
 			continue
 		}
 		hostFQDN := dynamicPodFQDN(oc.MarklogicGroup, pod.Name)
@@ -819,6 +828,15 @@ func (oc *OperatorContext) reconcileDynamicRestartRecovery(groupClient mlmanage.
 
 	hostStatuses, localReadyReplicas, readyReplicas, _ = oc.buildDynamicHostStatuses(pods, members, hostStatuses)
 	hostStatuses = setDynamicHostStatus(hostStatuses, pod.Name, hostFQDN, dynamicHostStateRejoined, "", member.HostID, 0)
+	if isDynamicPVCBacked(oc.MarklogicGroup) {
+		cleanupJob := &batchv1.Job{ObjectMeta: metav1.ObjectMeta{
+			Name:      dynamicPVCRestartCleanupJobName(oc.MarklogicGroup.Spec.Name, pod.Name),
+			Namespace: pod.Namespace,
+		}}
+		if err := oc.Client.Delete(oc.Ctx, cleanupJob); err != nil && !apierrors.IsNotFound(err) {
+			oc.ReqLogger.Error(err, "failed to delete completed dynamic pvc restart cleanup job", "job", cleanupJob.Name)
+		}
+	}
 
 	remainingRestartCandidates := oc.dynamicRestartRecoveryCandidates(pods, members, hostStatuses)
 	if len(remainingRestartCandidates) == 0 && desiredReplicas <= readyReplicas {
@@ -1738,7 +1756,7 @@ func (oc *OperatorContext) buildDynamicHostStatuses(pods []corev1.Pod, members [
 			hostStatus.State = dynamicHostStateRejoinPending
 			hostStatus.HostID = member.HostID
 			hostStatus.Message = "stale host membership detected for recreated EmptyDir pod; removing stale host before rejoin"
-		} else if hasPrevious && previousStatus.State == dynamicHostStateFailed && previousStatus.Attempts >= dynamicJoinRetryBudget && !isNoSuchClusterFailureMessage(previousStatus.Message) {
+		} else if hasPrevious && previousStatus.State == dynamicHostStateFailed && previousStatus.Attempts >= dynamicJoinRetryBudget && !isNoSuchClusterFailureMessage(previousStatus.Message) && !dynamicHostPodWasRecreated(previousStatus, pod) {
 			hostStatus.State = dynamicHostStateFailed
 			if hostStatus.Message == "" {
 				hostStatus.Message = "retry budget exhausted"
@@ -1802,7 +1820,7 @@ func shouldPreserveFailedDynamicHostState(previousStatus marklogicv1.DynamicHost
 		return false
 	}
 
-	if previousStatus.LastUpdated != nil && !pod.CreationTimestamp.IsZero() && pod.CreationTimestamp.Time.After(previousStatus.LastUpdated.Time) {
+	if dynamicHostPodWasRecreated(previousStatus, pod) {
 		return false
 	}
 
@@ -1813,6 +1831,10 @@ func shouldPreserveFailedDynamicHostState(previousStatus marklogicv1.DynamicHost
 	}
 
 	return true
+}
+
+func dynamicHostPodWasRecreated(previousStatus marklogicv1.DynamicHostStatus, pod corev1.Pod) bool {
+	return previousStatus.LastUpdated != nil && !pod.CreationTimestamp.IsZero() && pod.CreationTimestamp.Time.After(previousStatus.LastUpdated.Time)
 }
 
 func isNoSuchClusterFailureMessage(message string) bool {
@@ -2102,9 +2124,20 @@ func defaultDynamicPVCRestartCleanup(oc *OperatorContext, pod *corev1.Pod) (bool
 
 	cleanupJob := &batchv1.Job{}
 	err := oc.Client.Get(oc.Ctx, nsName, cleanupJob)
+	backoffLimit := int32(0)
+	ttlSeconds := int32(900)
+	cleanupCommand := "set -euo pipefail; find /var/opt/MarkLogic -mindepth 1 -maxdepth 1 ! -name Logs -exec rm -rf {} +"
 	if err == nil {
 		if cleanupJob.Status.Succeeded > 0 {
-			return true, nil
+			if pod.DeletionTimestamp == nil {
+				return true, nil
+			}
+			patch := client.MergeFrom(pod.DeepCopy())
+			controllerutil.RemoveFinalizer(pod, dynamicRestartCleanupFinalizer)
+			if err := oc.Client.Patch(oc.Ctx, pod, patch); err != nil && !apierrors.IsNotFound(err) {
+				return false, fmt.Errorf("release pod %s after pvc restart cleanup: %w", pod.Name, err)
+			}
+			return false, nil
 		}
 		if cleanupJob.Status.Failed > 0 {
 			return false, fmt.Errorf("pvc restart cleanup job %s failed", jobName)
@@ -2115,9 +2148,23 @@ func defaultDynamicPVCRestartCleanup(oc *OperatorContext, pod *corev1.Pod) (bool
 		return false, err
 	}
 
-	backoffLimit := int32(0)
-	ttlSeconds := int32(300)
-	cleanupCommand := "set -euo pipefail; find /var/opt/MarkLogic -mindepth 1 -maxdepth 1 ! -name Logs -exec rm -rf {} +"
+	if pod.DeletionTimestamp == nil {
+		if !controllerutil.ContainsFinalizer(pod, dynamicRestartCleanupFinalizer) {
+			patch := client.MergeFrom(pod.DeepCopy())
+			controllerutil.AddFinalizer(pod, dynamicRestartCleanupFinalizer)
+			if err := oc.Client.Patch(oc.Ctx, pod, patch); err != nil {
+				return false, fmt.Errorf("protect pod %s for pvc restart cleanup: %w", pod.Name, err)
+			}
+		}
+		if err := oc.Client.Delete(oc.Ctx, pod); err != nil && !apierrors.IsNotFound(err) {
+			return false, fmt.Errorf("stop pod %s for pvc restart cleanup: %w", pod.Name, err)
+		}
+		return false, nil
+	}
+	if !dynamicPodContainersTerminated(pod) {
+		return false, nil
+	}
+
 	cleanupJob = &batchv1.Job{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      jobName,
@@ -2141,11 +2188,14 @@ func defaultDynamicPVCRestartCleanup(oc *OperatorContext, pod *corev1.Pod) (bool
 					},
 				},
 				Spec: corev1.PodSpec{
-					RestartPolicy: corev1.RestartPolicyNever,
+					RestartPolicy:    corev1.RestartPolicyNever,
+					SecurityContext:  oc.MarklogicGroup.Spec.PodSecurityContext.DeepCopy(),
+					ImagePullSecrets: oc.MarklogicGroup.Spec.ImagePullSecrets,
 					Containers: []corev1.Container{{
-						Name:    "cleanup",
-						Image:   oc.MarklogicGroup.Spec.Image,
-						Command: []string{"/bin/bash", "-c", cleanupCommand},
+						Name:            "cleanup",
+						Image:           oc.MarklogicGroup.Spec.Image,
+						Command:         []string{"/bin/bash", "-c", cleanupCommand},
+						SecurityContext: getMarkLogicContainerSecurityContextOrDefault(oc.MarklogicGroup.Spec.ContainerSecurityContext).DeepCopy(),
 						VolumeMounts: []corev1.VolumeMount{{
 							Name:      "datadir",
 							MountPath: "/var/opt/MarkLogic",
@@ -2167,6 +2217,18 @@ func defaultDynamicPVCRestartCleanup(oc *OperatorContext, pod *corev1.Pod) (bool
 		return false, err
 	}
 	return false, nil
+}
+
+func dynamicPodContainersTerminated(pod *corev1.Pod) bool {
+	if pod == nil || len(pod.Status.ContainerStatuses) == 0 {
+		return false
+	}
+	for _, containerStatus := range pod.Status.ContainerStatuses {
+		if containerStatus.State.Terminated == nil {
+			return false
+		}
+	}
+	return true
 }
 
 func dynamicPVCRestartCleanupJobName(groupName, podName string) string {

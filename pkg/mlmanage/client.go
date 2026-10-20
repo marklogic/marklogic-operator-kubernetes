@@ -10,6 +10,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/tls"
+	"crypto/x509"
 	"encoding/hex"
 	"encoding/json"
 	"encoding/xml"
@@ -32,7 +33,6 @@ type Client interface {
 	EnableAdminAPITokenAuthentication(ctx context.Context, groupName string) error
 	EnsureOperatorRole(ctx context.Context) error
 	EnsureOperatorUser(ctx context.Context, username, password string) error
-	UpdateOperatorPassword(ctx context.Context, username, password string) error
 	ResolveClusterName(ctx context.Context) (string, error)
 	RequestDynamicHostToken(ctx context.Context, clusterName, groupName, hostFQDN, duration string) (string, error)
 	JoinDynamicHost(ctx context.Context, hostFQDN, token string) error
@@ -43,7 +43,7 @@ type Client interface {
 	EnsureOAuthAppServer(ctx context.Context, config OAuthAppServerConfig) error
 }
 
-const OperatorRoleName = "marklogic-operator"
+const OperatorRoleName = "marklogic-kubernetes-operator"
 
 const operatorRoleDescription = "Dedicated role for the MarkLogic Kubernetes Operator"
 const operatorUserDescription = "Dedicated service account for the MarkLogic Kubernetes Operator"
@@ -55,6 +55,8 @@ var operatorRoleExecutePrivileges = []operatorRolePrivilege{
 	{PrivilegeName: "admin-issue-dynamic-host-token", Action: "http://marklogic.com/xdmp/privileges/admin/issue-dynamic-host-token", Kind: "execute"},
 	{PrivilegeName: "xdmp:eval", Action: "http://marklogic.com/xdmp/privileges/xdmp-eval", Kind: "execute"},
 	{PrivilegeName: "create-external-security", Action: "http://marklogic.com/xdmp/privileges/create-external-security", Kind: "execute"},
+	{PrivilegeName: "credentials-set-aws", Action: "http://marklogic.com/xdmp/privileges/credentials-set-aws", Kind: "execute"},
+	{PrivilegeName: "credentials-set-azure", Action: "http://marklogic.com/xdmp/privileges/credentials-set-azure", Kind: "execute"},
 }
 
 type operatorRolePrivilege struct {
@@ -69,6 +71,7 @@ type ClientOptions struct {
 	Password           string
 	UseTLS             bool
 	InsecureSkipVerify bool
+	CACertificate      []byte
 	HTTPClient         *http.Client
 }
 
@@ -141,7 +144,16 @@ func buildHTTPClient(opts ClientOptions) *http.Client {
 	}
 	transport := &http.Transport{}
 	if opts.UseTLS {
-		transport.TLSClientConfig = &tls.Config{InsecureSkipVerify: opts.InsecureSkipVerify}
+		tlsConfig := &tls.Config{InsecureSkipVerify: opts.InsecureSkipVerify, MinVersion: tls.VersionTLS12}
+		if len(opts.CACertificate) > 0 {
+			rootCAs, err := x509.SystemCertPool()
+			if err != nil || rootCAs == nil {
+				rootCAs = x509.NewCertPool()
+			}
+			rootCAs.AppendCertsFromPEM(opts.CACertificate)
+			tlsConfig.RootCAs = rootCAs
+		}
+		transport.TLSClientConfig = tlsConfig
 	}
 	return &http.Client{Timeout: 15 * time.Second, Transport: transport}
 }
@@ -358,12 +370,6 @@ func (c *managementClient) EnsureOperatorUser(ctx context.Context, username, pas
 	}
 
 	_, _, err = c.doJSON(ctx, http.MethodPut, "/manage/v2/users/"+url.PathEscape(username)+"/properties", nil, payload, http.StatusAccepted, http.StatusNoContent)
-	return err
-}
-
-func (c *managementClient) UpdateOperatorPassword(ctx context.Context, username, password string) error {
-	payload := map[string]any{"password": password}
-	_, _, err := c.doJSON(ctx, http.MethodPut, "/manage/v2/users/"+url.PathEscape(username)+"/properties", nil, payload, http.StatusAccepted, http.StatusNoContent)
 	return err
 }
 
@@ -854,8 +860,10 @@ func (c *managementClient) doRequestWithAuth(ctx context.Context, method, endpoi
 		return resp, nil
 	}
 
-	digestHeader := buildDigestAuthorizationHeader(resp.Header.Get("WWW-Authenticate"), method, req.URL.RequestURI(), c.username, c.password)
-	if digestHeader == "" {
+	authChallenge := resp.Header.Get("WWW-Authenticate")
+	digestHeader := buildDigestAuthorizationHeader(authChallenge, method, req.URL.RequestURI(), c.username, c.password)
+	useBasicAuth := strings.HasPrefix(strings.ToLower(strings.TrimSpace(authChallenge)), "basic ")
+	if digestHeader == "" && !useBasicAuth {
 		return resp, nil
 	}
 	if closeErr := resp.Body.Close(); closeErr != nil {
@@ -866,7 +874,11 @@ func (c *managementClient) doRequestWithAuth(ctx context.Context, method, endpoi
 	if err != nil {
 		return nil, err
 	}
-	digestReq.Header.Set("Authorization", digestHeader)
+	if digestHeader != "" {
+		digestReq.Header.Set("Authorization", digestHeader)
+	} else {
+		digestReq.SetBasicAuth(c.username, c.password)
+	}
 	return c.httpClient.Do(digestReq)
 }
 

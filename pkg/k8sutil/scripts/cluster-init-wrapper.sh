@@ -8,13 +8,20 @@ rm -f /tmp/marklogic_ready
 
 # --- Port Liveness Helper ---
 # Checks if MarkLogic port 8001 is accepting connections.
-# Uses -k to ignore TLS cert errors and tries both http and https so this
-# works before AND after cluster-config.sh enables TLS on the Admin port.
+# Uses the configured CA when available and tries both HTTP and HTTPS so this
+# works before and after cluster-config.sh enables TLS on the Admin port.
 # Returns 0 for any HTTP response (including 401 Unauthorized), non-zero
 # only when the connection is refused (i.e. the process is truly down).
+TLS_CURL_OPTIONS=(-k)
+LOCAL_TLS_HOST="localhost"
+if [[ -s "/run/secrets/marklogic-certs/cacert.pem" ]]; then
+    TLS_CURL_OPTIONS=(--cacert /run/secrets/marklogic-certs/cacert.pem)
+    LOCAL_TLS_HOST="$(hostname).${MARKLOGIC_FQDN_SUFFIX}"
+fi
+
 ml_port_open() {
-    curl -s -k -m 3 -o /dev/null http://localhost:8001 2>/dev/null || \
-    curl -s -k -m 3 -o /dev/null https://localhost:8001 2>/dev/null
+    curl -s -m 3 -o /dev/null http://localhost:8001 2>/dev/null || \
+    curl -s "${TLS_CURL_OPTIONS[@]}" -m 3 -o /dev/null "https://${LOCAL_TLS_HOST}:8001" 2>/dev/null
 }
 
 # --- Define Graceful Shutdown Handler ---
@@ -121,9 +128,9 @@ if [[ "$MARKLOGIC_CLUSTER_TYPE" == "non-bootstrap" ]]; then
     echo "[Wrapper] Checking mesh connectivity to Bootstrap Host: $MARKLOGIC_BOOTSTRAP_HOST..."
     MAX_RETRIES=60
     count=0
-    until curl -s -k -o /dev/null -m 2 "http://${MARKLOGIC_BOOTSTRAP_HOST}:8001/" 2>/dev/null || \
-          curl -s -k -o /dev/null -m 2 "https://${MARKLOGIC_BOOTSTRAP_HOST}:8001/" 2>/dev/null; do
-        # Note: Both http and https are tried (-k ignores cert errors) so this works
+        until curl -s -o /dev/null -m 2 "http://${MARKLOGIC_BOOTSTRAP_HOST}:8001/" 2>/dev/null || \
+                    curl -s "${TLS_CURL_OPTIONS[@]}" -o /dev/null -m 2 "https://${MARKLOGIC_BOOTSTRAP_HOST}:8001/" 2>/dev/null; do
+                # Both HTTP and HTTPS are tried so this works
         # whether or not the Bootstrap node has already enabled TLS via cluster-config.sh.
         # kill -0 is not used here - EPERM is indistinguishable from ESRCH in
         # rootless containers (MarkLogic runs as different user). Rely on timeout instead.
@@ -289,14 +296,18 @@ until [ $health_retry -ge $MAX_HEALTH_RETRIES ]; do
     fi
 
     # Check healthcheck endpoint
-    HEALTH_CODE=$(curl -s -o /dev/null -w '%{http_code}' -m 5 ${HEALTHCHECK_PROTOCOL}://localhost:${HEALTHCHECK_PORT}${HEALTHCHECK_PATH} -k 2>/dev/null || echo "000")
+    HEALTHCHECK_HOST="localhost"
+    if [[ "$HEALTHCHECK_PROTOCOL" == "https" && -s "/run/secrets/marklogic-certs/cacert.pem" ]]; then
+        HEALTHCHECK_HOST="$LOCAL_TLS_HOST"
+    fi
+    HEALTH_CODE=$(curl -s -o /dev/null -w '%{http_code}' -m 5 "${TLS_CURL_OPTIONS[@]}" ${HEALTHCHECK_PROTOCOL}://${HEALTHCHECK_HOST}:${HEALTHCHECK_PORT}${HEALTHCHECK_PATH} 2>/dev/null || echo "000")
     
     if [ "$HEALTH_CODE" == "200" ]; then
         echo "[Wrapper] MarkLogic healthcheck returned 200. Server is fully ready."
         break
     elif [ "$HEALTH_CODE" == "404" ] && [ -n "$HEALTHCHECK_PATH" ]; then
         # Try old healthcheck endpoint for upgrades
-        HEALTH_CODE=$(curl -s -o /dev/null -w '%{http_code}' -m 5 ${HEALTHCHECK_PROTOCOL}://localhost:${HEALTHCHECK_PORT} -k 2>/dev/null || echo "000")
+        HEALTH_CODE=$(curl -s -o /dev/null -w '%{http_code}' -m 5 "${TLS_CURL_OPTIONS[@]}" ${HEALTHCHECK_PROTOCOL}://${HEALTHCHECK_HOST}:${HEALTHCHECK_PORT} 2>/dev/null || echo "000")
         if [ "$HEALTH_CODE" == "200" ]; then
             echo "[Wrapper] MarkLogic healthcheck (old endpoint) returned 200. Server is fully ready."
             break

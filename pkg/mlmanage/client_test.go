@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"io"
 	"net/http"
@@ -28,6 +29,30 @@ type closeErrorReadCloser struct {
 
 func (body closeErrorReadCloser) Close() error {
 	return body.err
+}
+
+func TestBuildHTTPClientUsesConfiguredCA(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+
+	caCertificate := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: server.Certificate().Raw})
+	httpClient := buildHTTPClient(ClientOptions{UseTLS: true, CACertificate: caCertificate})
+	response, err := httpClient.Get(server.URL)
+	if err != nil {
+		t.Fatalf("GET with configured CA: %v", err)
+	}
+	response.Body.Close()
+	if response.StatusCode != http.StatusNoContent {
+		t.Fatalf("status = %d, want %d", response.StatusCode, http.StatusNoContent)
+	}
+	transport := httpClient.Transport.(*http.Transport)
+	if transport.TLSClientConfig.InsecureSkipVerify {
+		t.Fatal("configured CA must not skip TLS verification")
+	}
 }
 
 func TestEnsureOperatorUserCreateExistingAndForbiddenLookup(t *testing.T) {
@@ -102,34 +127,10 @@ func TestEnsureOperatorUserCreateExistingAndForbiddenLookup(t *testing.T) {
 				t.Fatalf("user description = %v, want %q", writePayload["description"], operatorUserDescription)
 			}
 			roles, ok := writePayload["role"].([]any)
-			if !ok || len(roles) != 1 || roles[0] != "marklogic-operator" {
-				t.Fatalf("expected only the marklogic-operator role, got %+v", writePayload["role"])
+			if !ok || len(roles) != 1 || roles[0] != "marklogic-kubernetes-operator" {
+				t.Fatalf("expected only the marklogic-kubernetes-operator role, got %+v", writePayload["role"])
 			}
 		})
-	}
-}
-
-func TestUpdateOperatorPasswordOmitsRoleAndIdentityFields(t *testing.T) {
-	t.Parallel()
-
-	var payload map[string]any
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPut || r.URL.Path != "/manage/v2/users/marklogic-kubernetes-operator/properties" {
-			t.Fatalf("unexpected password update request: %s %s", r.Method, r.URL.Path)
-		}
-		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
-			t.Fatalf("decode password payload: %v", err)
-		}
-		w.WriteHeader(http.StatusAccepted)
-	}))
-	defer server.Close()
-
-	client := &managementClient{baseURL: server.URL, httpClient: server.Client()}
-	if err := client.UpdateOperatorPassword(context.Background(), "marklogic-kubernetes-operator", "rotated-password"); err != nil {
-		t.Fatalf("UpdateOperatorPassword returned error: %v", err)
-	}
-	if !reflect.DeepEqual(payload, map[string]any{"password": "rotated-password"}) {
-		t.Fatalf("password update payload = %+v, want password only", payload)
 	}
 }
 
@@ -143,7 +144,7 @@ func TestEnsureOperatorRoleCreateAndUpdate(t *testing.T) {
 		wantWritePath string
 	}{
 		{name: "create missing role", lookupStatus: http.StatusNotFound, wantWriteVerb: http.MethodPost, wantWritePath: "/manage/v2/roles"},
-		{name: "update existing role", lookupStatus: http.StatusOK, wantWriteVerb: http.MethodPut, wantWritePath: "/manage/v2/roles/marklogic-operator/properties"},
+		{name: "update existing role", lookupStatus: http.StatusOK, wantWriteVerb: http.MethodPut, wantWritePath: "/manage/v2/roles/marklogic-kubernetes-operator/properties"},
 	}
 
 	for _, test := range tests {
@@ -153,7 +154,7 @@ func TestEnsureOperatorRoleCreateAndUpdate(t *testing.T) {
 			var writePayload map[string]any
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if r.Method == http.MethodGet {
-					if r.URL.Path != "/manage/v2/roles/marklogic-operator" || r.URL.Query().Get("format") != "json" {
+					if r.URL.Path != "/manage/v2/roles/marklogic-kubernetes-operator" || r.URL.Query().Get("format") != "json" {
 						t.Errorf("unexpected role lookup request: %s %s", r.Method, r.URL.RequestURI())
 					}
 					w.WriteHeader(test.lookupStatus)
@@ -197,6 +198,8 @@ func TestEnsureOperatorRoleCreateAndUpdate(t *testing.T) {
 				map[string]any{"privilege-name": "admin-issue-dynamic-host-token", "action": "http://marklogic.com/xdmp/privileges/admin/issue-dynamic-host-token", "kind": "execute"},
 				map[string]any{"privilege-name": "xdmp:eval", "action": "http://marklogic.com/xdmp/privileges/xdmp-eval", "kind": "execute"},
 				map[string]any{"privilege-name": "create-external-security", "action": "http://marklogic.com/xdmp/privileges/create-external-security", "kind": "execute"},
+				map[string]any{"privilege-name": "credentials-set-aws", "action": "http://marklogic.com/xdmp/privileges/credentials-set-aws", "kind": "execute"},
+				map[string]any{"privilege-name": "credentials-set-azure", "action": "http://marklogic.com/xdmp/privileges/credentials-set-azure", "kind": "execute"},
 			}
 			if !ok || !reflect.DeepEqual(privileges, expectedPrivileges) {
 				t.Fatalf("unexpected execute privileges: %+v", writePayload["privilege"])
@@ -662,6 +665,41 @@ func TestDoJSONRetriesWithDigestAuthChallenge(t *testing.T) {
 	}
 	if !strings.HasPrefix(authHeaders[1], "Digest ") {
 		t.Fatalf("expected second request to use digest auth, got %q", authHeaders[1])
+	}
+}
+
+func TestDoJSONRetriesWithBasicAuthChallenge(t *testing.T) {
+	t.Parallel()
+
+	var calls int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		username, password, authenticated := r.BasicAuth()
+		if !authenticated {
+			w.Header().Set("WWW-Authenticate", `Basic realm="public"`)
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		if username != "operator" || password != "password" {
+			t.Fatalf("unexpected basic credentials: username=%q", username)
+		}
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(map[string]any{"ok": true})
+	}))
+	defer server.Close()
+
+	client := &managementClient{
+		baseURL:    server.URL,
+		username:   "operator",
+		password:   "password",
+		httpClient: server.Client(),
+	}
+	_, _, err := client.doJSON(context.Background(), http.MethodGet, "/manage/v2", nil, nil, http.StatusOK)
+	if err != nil {
+		t.Fatalf("doJSON returned error: %v", err)
+	}
+	if calls != 2 {
+		t.Fatalf("expected 2 calls (no-auth then basic), got %d", calls)
 	}
 }
 
