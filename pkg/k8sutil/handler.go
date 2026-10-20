@@ -3,6 +3,13 @@
 package k8sutil
 
 import (
+	"strings"
+
+	"github.com/marklogic/marklogic-operator-kubernetes/pkg/result"
+	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
 
@@ -40,9 +47,52 @@ func (oc *OperatorContext) ReconsileMarklogicGroupHandler() (reconcile.Result, e
 		return result.Output()
 	}
 
-	result, err := oc.ReconcileStatefulset()
+	credentialsActive := oc.MarklogicGroup.Status.CredentialSecretName != ""
+	statefulSetExists := false
+	var statefulSet *appsv1.StatefulSet
+	if credentialsActive {
+		statefulSet = &appsv1.StatefulSet{}
+		err := oc.Client.Get(oc.Ctx, client.ObjectKey{Namespace: oc.MarklogicGroup.Namespace, Name: oc.MarklogicGroup.Spec.Name}, statefulSet)
+		if err == nil {
+			statefulSetExists = true
+		} else if !apierrors.IsNotFound(err) {
+			return reconcile.Result{}, err
+		}
+	}
+
+	var pendingOperatorUserResult result.ReconcileResult
+	if credentialsActive && statefulSetExists {
+		if operatorUserResult := oc.ReconcileOperatorUser(); operatorUserResult.Completed() {
+			if !oc.activeOperatorCredentialSecretMissing() {
+				if err := oc.reconcileBootstrapStatefulSetRecovery(statefulSet); err != nil {
+					return reconcile.Result{}, err
+				}
+				return operatorUserResult.Output()
+			}
+			pendingOperatorUserResult = operatorUserResult
+		}
+	}
+
+	statefulSetResult, err := oc.ReconcileStatefulset()
 	if err != nil {
-		return result, err
+		return statefulSetResult, err
+	}
+	if pendingOperatorUserResult != nil {
+		return pendingOperatorUserResult.Output()
+	}
+	if !credentialsActive || !statefulSetExists {
+		if operatorUserResult := oc.ReconcileOperatorUser(); operatorUserResult.Completed() {
+			return operatorUserResult.Output()
+		}
+	}
+	rotated, rotationErr := oc.rotateCredentialPodsIfNeeded()
+	if rotationErr != nil {
+		return reconcile.Result{}, rotationErr
+	}
+	if rotated && oc.MarklogicGroup.Spec.IsDynamic {
+		if cleanupResult := oc.reconcileDynamicCredentialRotationCleanup(); cleanupResult.Completed() {
+			return cleanupResult.Output()
+		}
 	}
 
 	if oc.MarklogicGroup.Spec.IsDynamic {
@@ -50,8 +100,34 @@ func (oc *OperatorContext) ReconsileMarklogicGroupHandler() (reconcile.Result, e
 			return dynamicResult.Output()
 		}
 	}
+	if rotated {
+		return result.RequeueSoon(5).Output()
+	}
 
-	return result, err
+	return statefulSetResult, err
+}
+
+func (oc *OperatorContext) activeOperatorCredentialSecretMissing() bool {
+	secretName := oc.MarklogicGroup.Status.CredentialSecretName
+	if secretName == "" {
+		secretName = operatorCredentialSecretNameForGroup(oc.MarklogicGroup)
+	}
+	secret := &corev1.Secret{}
+	err := oc.Client.Get(oc.Ctx, client.ObjectKey{
+		Namespace: oc.MarklogicGroup.Namespace,
+		Name:      secretName,
+	}, secret)
+	return apierrors.IsNotFound(err)
+}
+
+func (oc *OperatorContext) reconcileBootstrapStatefulSetRecovery(statefulSet *appsv1.StatefulSet) error {
+	if statefulSet == nil || strings.TrimSpace(oc.MarklogicGroup.Spec.BootstrapHost) != "" || oc.MarklogicGroup.Spec.Replicas == nil || *oc.MarklogicGroup.Spec.Replicas < 1 || statefulSet.Spec.Replicas == nil || *statefulSet.Spec.Replicas != 0 {
+		return nil
+	}
+	patch := client.MergeFrom(statefulSet.DeepCopy())
+	recoveryReplicas := int32(1)
+	statefulSet.Spec.Replicas = &recoveryReplicas
+	return oc.Client.Patch(oc.Ctx, statefulSet, patch)
 }
 
 func (cc *ClusterContext) ReconsileMarklogicClusterHandler() (reconcile.Result, error) {

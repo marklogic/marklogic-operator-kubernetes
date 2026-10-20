@@ -4,7 +4,11 @@ package k8sutil
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
+	"maps"
+	"sort"
 	"strconv"
 
 	"github.com/cisco-open/k8s-objectmatcher/patch"
@@ -18,6 +22,12 @@ import (
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+)
+
+const (
+	credentialRevisionAnnotation    = "marklogic.progress.com/credential-revision"
+	credentialRotationPodAnnotation = "marklogic.progress.com/credential-rotation-pod"
+	credentialRotationUIDAnnotation = "marklogic.progress.com/credential-rotation-uid"
 )
 
 type statefulSetParameters struct {
@@ -39,32 +49,35 @@ type statefulSetParameters struct {
 }
 
 type containerParameters struct {
-	Name                   string
-	Namespace              string
-	ClusterDomain          string
-	Image                  string
-	ImagePullPolicy        corev1.PullPolicy
-	Resources              *corev1.ResourceRequirements
-	Persistence            *marklogicv1.Persistence
-	Volumes                []corev1.Volume
-	MountPaths             []corev1.VolumeMount
-	LicenseKey             string
-	Licensee               string
-	BootstrapHost          string
-	LivenessProbe          marklogicv1.ContainerProbe
-	ReadinessProbe         marklogicv1.ContainerProbe
-	LogCollection          *marklogicv1.LogCollection
-	GroupConfig            *marklogicv1.GroupConfig
-	PodSecurityContext     *corev1.PodSecurityContext
-	SecurityContext        *corev1.SecurityContext
-	EnableConverters       bool
-	HugePages              *marklogicv1.HugePages
-	PathBasedRouting       bool
-	Tls                    *marklogicv1.Tls
-	AdditionalVolumes      *[]corev1.Volume
-	AdditionalVolumeMounts *[]corev1.VolumeMount
-	SecretName             string
-	IsDynamic              bool
+	Name                      string
+	Namespace                 string
+	ClusterDomain             string
+	Image                     string
+	ImagePullPolicy           corev1.PullPolicy
+	Resources                 *corev1.ResourceRequirements
+	Persistence               *marklogicv1.Persistence
+	Volumes                   []corev1.Volume
+	MountPaths                []corev1.VolumeMount
+	LicenseKey                string
+	Licensee                  string
+	BootstrapHost             string
+	LivenessProbe             marklogicv1.ContainerProbe
+	ReadinessProbe            marklogicv1.ContainerProbe
+	LogCollection             *marklogicv1.LogCollection
+	GroupConfig               *marklogicv1.GroupConfig
+	PodSecurityContext        *corev1.PodSecurityContext
+	SecurityContext           *corev1.SecurityContext
+	EnableConverters          bool
+	HugePages                 *marklogicv1.HugePages
+	PathBasedRouting          bool
+	Tls                       *marklogicv1.Tls
+	AdditionalVolumes         *[]corev1.Volume
+	AdditionalVolumeMounts    *[]corev1.VolumeMount
+	SecretName                string
+	OperatorSecretName        string
+	CredentialRevision        string
+	OperatorCredentialsActive bool
+	IsDynamic                 bool
 }
 
 func (oc *OperatorContext) ReconcileStatefulset() (reconcile.Result, error) {
@@ -81,6 +94,14 @@ func (oc *OperatorContext) ReconcileStatefulset() (reconcile.Result, error) {
 	objectMeta := generateObjectMeta(cr.Spec.Name, cr.Namespace, groupLabels, groupAnnotations)
 	currentSts, err := oc.GetStatefulSet(cr.Namespace, objectMeta.Name)
 	containerParams := generateContainerParams(cr)
+	if containerParams.SecretName != "" {
+		activeSecret, secretErr := oc.getStatefulSetCredentialSecret(&containerParams)
+		if secretErr != nil {
+			return result.Error(secretErr).Output()
+		}
+		secretHash := sha256.Sum256(secretDataForCredentialRevision(activeSecret.Data))
+		containerParams.CredentialRevision = hex.EncodeToString(secretHash[:])
+	}
 	statefulSetParams := generateStatefulSetsParams(cr)
 	statefulSetDef := generateStatefulSetsDef(objectMeta, statefulSetParams, marklogicServerAsOwner(cr), containerParams)
 	if err != nil {
@@ -96,6 +117,7 @@ func (oc *OperatorContext) ReconcileStatefulset() (reconcile.Result, error) {
 		logger.Error(err, "Cannot get statefulSet for MarkLogic")
 		return result.Error(err).Output()
 	}
+	preserveCredentialRotationState(currentSts, statefulSetDef)
 
 	patchDiff, err := patch.DefaultPatchMaker.Calculate(currentSts, statefulSetDef,
 		patch.IgnoreStatusFields(),
@@ -176,6 +198,161 @@ func (oc *OperatorContext) ReconcileStatefulset() (reconcile.Result, error) {
 	return result.Done().Output()
 }
 
+func (oc *OperatorContext) getStatefulSetCredentialSecret(containerParams *containerParameters) (*corev1.Secret, error) {
+	secretName := containerParams.SecretName
+	if containerParams.OperatorCredentialsActive {
+		secretName = containerParams.OperatorSecretName
+	}
+	secret := &corev1.Secret{}
+	err := oc.Client.Get(oc.Ctx, client.ObjectKey{Namespace: oc.MarklogicGroup.Namespace, Name: secretName}, secret)
+	if err == nil || !apierrors.IsNotFound(err) || !containerParams.OperatorCredentialsActive {
+		return secret, err
+	}
+
+	containerParams.OperatorCredentialsActive = false
+	secret = &corev1.Secret{}
+	err = oc.Client.Get(oc.Ctx, client.ObjectKey{Namespace: oc.MarklogicGroup.Namespace, Name: containerParams.SecretName}, secret)
+	if err == nil && oc.MarklogicGroup.Status.CredentialSecretName != "" {
+		patch := client.MergeFrom(oc.MarklogicGroup.DeepCopy())
+		oc.MarklogicGroup.Status.CredentialSecretName = ""
+		if err := oc.Client.Status().Patch(oc.Ctx, oc.MarklogicGroup, patch); err != nil {
+			return nil, err
+		}
+	}
+	return secret, err
+}
+
+func (oc *OperatorContext) rotateCredentialPodsIfNeeded() (bool, error) {
+	if oc.MarklogicGroup.Status.CredentialSecretName == "" || oc.MarklogicGroup.Spec.UpdateStrategy != appsv1.OnDeleteStatefulSetStrategyType {
+		return false, nil
+	}
+	statefulSet := &appsv1.StatefulSet{}
+	if err := oc.Client.Get(oc.Ctx, client.ObjectKey{Namespace: oc.MarklogicGroup.Namespace, Name: oc.MarklogicGroup.Spec.Name}, statefulSet); err != nil {
+		if apierrors.IsNotFound(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	return oc.rotateCredentialPods(statefulSet, generateStatefulSetsParams(oc.MarklogicGroup))
+}
+
+func (oc *OperatorContext) rotateCredentialPods(desired *appsv1.StatefulSet, params statefulSetParameters) (bool, error) {
+	pods := &corev1.PodList{}
+	selector := client.MatchingLabels(getSelectorLabelsByComponent(params.Name, params.IsDynamic))
+	if err := oc.Client.List(oc.Ctx, pods, selector, client.InNamespace(oc.MarklogicGroup.Namespace)); err != nil {
+		return false, err
+	}
+	replicas := int32(0)
+	if desired.Spec.Replicas != nil {
+		replicas = *desired.Spec.Replicas
+	} else if params.Replicas != nil {
+		replicas = *params.Replicas
+	}
+	revision := desired.Spec.Template.Annotations[credentialRevisionAnnotation]
+	if revision == "" {
+		return false, nil
+	}
+
+	expectedPods := make(map[string]*corev1.Pod, replicas)
+	for i := range pods.Items {
+		pod := &pods.Items[i]
+		if !isPodControlledByStatefulSet(pod, desired) {
+			continue
+		}
+		ordinal := podOrdinal(pod.Name)
+		if ordinal < 0 || int32(ordinal) >= replicas || pod.Name != fmt.Sprintf("%s-%d", desired.Name, ordinal) {
+			return true, nil
+		}
+		expectedPods[pod.Name] = pod
+	}
+	for ordinal := int32(0); ordinal < replicas; ordinal++ {
+		name := fmt.Sprintf("%s-%d", desired.Name, ordinal)
+		pod, found := expectedPods[name]
+		if !found || pod.DeletionTimestamp != nil || !hasPodReadyCondition(pod) {
+			return true, nil
+		}
+	}
+
+	trackedPodName := desired.Annotations[credentialRotationPodAnnotation]
+	trackedPodUID := desired.Annotations[credentialRotationUIDAnnotation]
+	if trackedPodName != "" || trackedPodUID != "" {
+		replacement, found := expectedPods[trackedPodName]
+		if !found || trackedPodName == "" || trackedPodUID == "" || string(replacement.UID) == trackedPodUID || replacement.Annotations[credentialRevisionAnnotation] != revision {
+			return true, nil
+		}
+		if err := oc.updateCredentialRotationState(desired, "", ""); err != nil {
+			return false, err
+		}
+		return true, nil
+	}
+
+	stalePods := make([]*corev1.Pod, 0, len(expectedPods))
+	for _, pod := range expectedPods {
+		if pod.Annotations[credentialRevisionAnnotation] != revision {
+			stalePods = append(stalePods, pod)
+		}
+	}
+	if len(stalePods) == 0 {
+		return false, nil
+	}
+	sort.Slice(stalePods, func(i, j int) bool {
+		return podOrdinal(stalePods[i].Name) > podOrdinal(stalePods[j].Name)
+	})
+	candidate := stalePods[0]
+	for ordinal := int32(podOrdinal(candidate.Name) + 1); ordinal < replicas; ordinal++ {
+		peer := expectedPods[fmt.Sprintf("%s-%d", desired.Name, ordinal)]
+		if peer.Annotations[credentialRevisionAnnotation] != revision {
+			return true, nil
+		}
+	}
+	if candidate.UID == "" {
+		return false, fmt.Errorf("cannot rotate pod %s without a UID", candidate.Name)
+	}
+	if err := oc.updateCredentialRotationState(desired, candidate.Name, string(candidate.UID)); err != nil {
+		return false, err
+	}
+	if err := oc.Client.Delete(oc.Ctx, candidate); err != nil && !apierrors.IsNotFound(err) {
+		if clearErr := oc.updateCredentialRotationState(desired, "", ""); clearErr != nil {
+			return false, fmt.Errorf("delete pod %s: %w; clear rotation state: %v", candidate.Name, err, clearErr)
+		}
+		return false, err
+	}
+	return true, nil
+}
+
+func preserveCredentialRotationState(current, desired *appsv1.StatefulSet) {
+	if desired.Annotations == nil {
+		desired.Annotations = map[string]string{}
+	}
+	for _, key := range []string{credentialRotationPodAnnotation, credentialRotationUIDAnnotation} {
+		if value := current.Annotations[key]; value != "" {
+			desired.Annotations[key] = value
+		} else {
+			delete(desired.Annotations, key)
+		}
+	}
+}
+
+func (oc *OperatorContext) updateCredentialRotationState(statefulSet *appsv1.StatefulSet, podName, podUID string) error {
+	patchBase := statefulSet.DeepCopy()
+	if statefulSet.Annotations == nil {
+		statefulSet.Annotations = map[string]string{}
+	}
+	if podName == "" || podUID == "" {
+		delete(statefulSet.Annotations, credentialRotationPodAnnotation)
+		delete(statefulSet.Annotations, credentialRotationUIDAnnotation)
+	} else {
+		statefulSet.Annotations[credentialRotationPodAnnotation] = podName
+		statefulSet.Annotations[credentialRotationUIDAnnotation] = podUID
+	}
+	return oc.Client.Patch(oc.Ctx, statefulSet, client.MergeFrom(patchBase))
+}
+
+func isPodControlledByStatefulSet(pod *corev1.Pod, statefulSet *appsv1.StatefulSet) bool {
+	controller := metav1.GetControllerOf(pod)
+	return controller != nil && controller.APIVersion == appsv1.SchemeGroupVersion.String() && controller.Kind == "StatefulSet" && controller.Name == statefulSet.Name && controller.UID == statefulSet.UID
+}
+
 func shouldDelayDynamicEmptyDirScaleDown(cr *marklogicv1.MarklogicGroup, currentSts *appsv1.StatefulSet) bool {
 	if cr == nil || currentSts == nil || !cr.Spec.IsDynamic {
 		return false
@@ -233,6 +410,11 @@ func (oc *OperatorContext) createStatefulSet(statefulset *appsv1.StatefulSet, cr
 }
 
 func generateStatefulSetsDef(stsMeta metav1.ObjectMeta, params statefulSetParameters, ownerDef metav1.OwnerReference, containerParams containerParameters) *appsv1.StatefulSet {
+	templateAnnotations := stsMeta.GetAnnotations()
+	if templateAnnotations == nil {
+		templateAnnotations = make(map[string]string)
+	}
+	templateAnnotations[credentialRevisionAnnotation] = containerParams.CredentialRevision
 	statefulSet := &appsv1.StatefulSet{
 		TypeMeta:   generateTypeMeta("StatefulSet", "apps/v1"),
 		ObjectMeta: stsMeta,
@@ -245,7 +427,7 @@ func generateStatefulSetsDef(stsMeta metav1.ObjectMeta, params statefulSetParame
 			Template: corev1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{
 					Labels:      stsMeta.GetLabels(),
-					Annotations: stsMeta.GetAnnotations(),
+					Annotations: templateAnnotations,
 				},
 				Spec: corev1.PodSpec{
 					Containers:                    generateContainerDef("marklogic-server", containerParams),
@@ -261,6 +443,7 @@ func generateStatefulSetsDef(stsMeta metav1.ObjectMeta, params statefulSetParame
 			},
 		},
 	}
+	statefulSet.Spec.Template.Annotations = maps.Clone(statefulSet.Spec.Template.Annotations)
 	// add EmptyDir volume if persistence is not provided
 	if containerParams.Persistence == nil || !containerParams.Persistence.Enabled {
 		emptyDir := corev1.Volume{
@@ -323,6 +506,10 @@ func generateStatefulSetsDef(stsMeta metav1.ObjectMeta, params statefulSetParame
 					{
 						Name:  "MARKLOGIC_ADMIN_PASSWORD_FILE",
 						Value: "ml-secrets/password",
+					},
+					{
+						Name:  "MARKLOGIC_OPERATOR_CREDENTIALS_ACTIVE",
+						Value: strconv.FormatBool(containerParams.OperatorCredentialsActive),
 					},
 					{
 						Name:  "MARKLOGIC_FQDN_SUFFIX",
@@ -431,34 +618,35 @@ func generateStatefulSetsParams(cr *marklogicv1.MarklogicGroup) statefulSetParam
 }
 
 func generateContainerParams(cr *marklogicv1.MarklogicGroup) containerParameters {
+	operatorSecretName := operatorCredentialSecretNameForGroup(cr)
+	if cr.Status.CredentialSecretName != "" {
+		operatorSecretName = cr.Status.CredentialSecretName
+	}
 	containerParams := containerParameters{
-		Image:                  cr.Spec.Image,
-		Resources:              cr.Spec.Resources,
-		Name:                   cr.Spec.Name,
-		Namespace:              cr.Namespace,
-		ClusterDomain:          cr.Spec.ClusterDomain,
-		BootstrapHost:          cr.Spec.BootstrapHost,
-		LivenessProbe:          cr.Spec.LivenessProbe,
-		ReadinessProbe:         cr.Spec.ReadinessProbe,
-		GroupConfig:            cr.Spec.GroupConfig,
-		EnableConverters:       cr.Spec.EnableConverters,
-		PodSecurityContext:     cr.Spec.PodSecurityContext,
-		SecurityContext:        cr.Spec.ContainerSecurityContext,
-		LogCollection:          cr.Spec.LogCollection,
-		PathBasedRouting:       cr.Spec.PathBasedRouting,
-		Tls:                    cr.Spec.Tls,
-		AdditionalVolumes:      cr.Spec.AdditionalVolumes,
-		AdditionalVolumeMounts: cr.Spec.AdditionalVolumeMounts,
-		Persistence:            cr.Spec.Persistence,
-		IsDynamic:              cr.Spec.IsDynamic,
+		Image:                     cr.Spec.Image,
+		Resources:                 cr.Spec.Resources,
+		Name:                      cr.Spec.Name,
+		Namespace:                 cr.Namespace,
+		ClusterDomain:             cr.Spec.ClusterDomain,
+		BootstrapHost:             cr.Spec.BootstrapHost,
+		LivenessProbe:             cr.Spec.LivenessProbe,
+		ReadinessProbe:            cr.Spec.ReadinessProbe,
+		GroupConfig:               cr.Spec.GroupConfig,
+		EnableConverters:          cr.Spec.EnableConverters,
+		PodSecurityContext:        cr.Spec.PodSecurityContext,
+		SecurityContext:           cr.Spec.ContainerSecurityContext,
+		LogCollection:             cr.Spec.LogCollection,
+		PathBasedRouting:          cr.Spec.PathBasedRouting,
+		Tls:                       cr.Spec.Tls,
+		AdditionalVolumes:         cr.Spec.AdditionalVolumes,
+		AdditionalVolumeMounts:    cr.Spec.AdditionalVolumeMounts,
+		Persistence:               cr.Spec.Persistence,
+		IsDynamic:                 cr.Spec.IsDynamic,
+		OperatorSecretName:        operatorSecretName,
+		OperatorCredentialsActive: cr.Status.CredentialSecretName != "",
 	}
 
-	// Set SecretName with fallback to default if not specified
-	if cr.Spec.SecretName != "" {
-		containerParams.SecretName = cr.Spec.SecretName
-	} else {
-		containerParams.SecretName = cr.ObjectMeta.Name + "-admin"
-	}
+	containerParams.SecretName = adminCredentialSecretNameForGroup(cr)
 
 	if cr.Spec.License != nil {
 		containerParams.LicenseKey = cr.Spec.License.Key
@@ -472,6 +660,22 @@ func generateContainerParams(cr *marklogicv1.MarklogicGroup) containerParameters
 	}
 
 	return containerParams
+}
+
+func secretDataForCredentialRevision(data map[string][]byte) []byte {
+	keys := make([]string, 0, len(data))
+	for key := range data {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	var serialized []byte
+	for _, key := range keys {
+		serialized = append(serialized, key...)
+		serialized = append(serialized, 0)
+		serialized = append(serialized, data[key]...)
+		serialized = append(serialized, 0)
+	}
+	return serialized
 }
 
 func getLifeCycle() *corev1.Lifecycle {
@@ -518,6 +722,14 @@ func generateVolumes(stsName string, containerParams containerParameters) []core
 		VolumeSource: corev1.VolumeSource{
 			Secret: &corev1.SecretVolumeSource{
 				SecretName: containerParams.SecretName,
+			},
+		},
+	}, corev1.Volume{
+		Name: "mloperator-secrets",
+		VolumeSource: corev1.VolumeSource{
+			Secret: &corev1.SecretVolumeSource{
+				SecretName: containerParams.OperatorSecretName,
+				Optional:   func(value bool) *bool { return &value }(true),
 			},
 		},
 	})
@@ -634,6 +846,9 @@ func getEnvironmentVariables(containerParams containerParameters) []corev1.EnvVa
 		Name:  "MARKLOGIC_ADMIN_PASSWORD_FILE",
 		Value: "ml-secrets/password",
 	}, corev1.EnvVar{
+		Name:  "MARKLOGIC_OPERATOR_CREDENTIALS_ACTIVE",
+		Value: strconv.FormatBool(containerParams.OperatorCredentialsActive),
+	}, corev1.EnvVar{
 		Name:  "MARKLOGIC_FQDN_SUFFIX",
 		Value: fmt.Sprintf("%s.%s.svc.%s", containerParams.Name, containerParams.Namespace, containerParams.ClusterDomain),
 	}, corev1.EnvVar{
@@ -744,6 +959,11 @@ func getVolumeMount(containerParams containerParameters) []corev1.VolumeMount {
 			MountPath: "/run/secrets/ml-secrets",
 			ReadOnly:  true,
 		},
+		corev1.VolumeMount{
+			Name:      "mloperator-secrets",
+			MountPath: "/run/secrets/ml-operator-secrets",
+			ReadOnly:  true,
+		},
 	)
 	if containerParams.HugePages != nil && containerParams.HugePages.Enabled {
 		VolumeMounts = append(VolumeMounts,
@@ -825,8 +1045,7 @@ func getReadinessProbe(probe marklogicv1.ContainerProbe) *corev1.Probe {
 					"/bin/bash",
 					"-c",
 					// Only pass if MarkLogic is healthy AND the Wrapper finished successfully
-					// curl -f
-					"test -f /tmp/marklogic_ready && curl -s -f http://localhost:7997/",
+					"test -f /tmp/marklogic_ready && [ \"$(curl -f -s -o /dev/null -w '%{http_code}' http://localhost:7997/)\" = \"200\" ]",
 				},
 			},
 		},

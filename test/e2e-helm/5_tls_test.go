@@ -594,15 +594,30 @@ func TestTlsWithMultiNode(t *testing.T) {
 		cmd := fmt.Sprintf("curl -k --anyauth -u %s:%s %s", adminUsername, adminPassword, url)
 		var certs string
 		var err error
-		for i := 0; i < 10; i++ {
+		converged := false
+		for i := 0; i < 90; i++ {
 			certs, err = utils.ExecCmdInPod(podName, tlsEdNS, mlContainerName, cmd)
-			if err == nil {
+			if err != nil {
+				t.Logf("Failed to get certificates (attempt %d/90): %v", i+1, err)
+				time.Sleep(2 * time.Second)
+				continue
+			}
+
+			certCount := gjson.Get(certs, "certificate-default-list.list-items.list-count.value").Int()
+			if certCount == 0 {
+				certCount = int64(len(gjson.Get(certs, "certificate-default-list.list-items.list-item.#.uriref").Array()))
+			}
+			t.Logf("TLS certificate convergence check (attempt %d/90): certs=%d", i+1, certCount)
+			if certCount >= 2 {
+				converged = true
 				break
 			}
+
 			time.Sleep(2 * time.Second)
 		}
-		if err != nil {
-			t.Fatalf("Failed to get certificates list: %v", err)
+		if !converged {
+			t.Logf("Last certs payload: %s", certs)
+			t.Fatal("Timed out waiting for both node TLS certificates")
 		}
 		certURIs := gjson.Get(certs, `certificate-default-list.list-items.list-item.#.uriref`).Array()
 		if len(certURIs) < 2 {

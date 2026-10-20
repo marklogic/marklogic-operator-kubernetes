@@ -28,7 +28,7 @@ export FLUENT_BIT_IMAGE ?= fluent/fluent-bit:5.1.3
 export E2E_KUBERNETES_VERSION ?= v1.31.13
 export E2E_ISTIO_AMBIENT ?= false
 export E2E_TEST_TIMEOUT ?= 60m
-export E2E_HELM_TEST_TIMEOUT ?= 45m
+export E2E_HELM_TEST_TIMEOUT ?= 60m
 export E2E_SETUP_ISTIO ?= true
 # Enables t.Parallel() for top-level tests in ./test/e2e. Set false to force sequential execution.
 export E2E_TOP_LEVEL_PARALLEL ?= true

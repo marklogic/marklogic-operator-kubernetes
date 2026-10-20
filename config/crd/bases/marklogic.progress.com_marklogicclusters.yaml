@@ -3344,6 +3344,11 @@ spec:
                     type: string
                   adminUsername:
                     type: string
+                  operatorSecretName:
+                    description: OperatorSecretName references a Secret containing
+                      the operator user's password. When omitted, the Operator creates
+                      <cluster>-operator.
+                    type: string
                   secretName:
                     type: string
                   walletPassword:

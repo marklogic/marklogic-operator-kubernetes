@@ -32,6 +32,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"sigs.k8s.io/e2e-framework/klient"
+	"sigs.k8s.io/e2e-framework/klient/k8s/resources"
 	"sigs.k8s.io/e2e-framework/pkg/envconf"
 	"sigs.k8s.io/e2e-framework/pkg/utils"
 )
@@ -237,6 +238,7 @@ func WaitForPod(ctx context.Context, t *testing.T, client klient.Client, namespa
 			describeCmd := fmt.Sprintf("kubectl describe pod %s -n %s", podName, namespace)
 			describeResult := utils.RunCommand(describeCmd)
 			t.Logf("Pod description:\n%s", describeResult.Result())
+			logPodContainerDiagnostics(t, pod, namespace, podName)
 			return fmt.Errorf("timed out after %v waiting for pod %s to be %s", timeout, podName, statusMsg)
 		}
 
@@ -354,6 +356,45 @@ func WaitForPod(ctx context.Context, t *testing.T, client klient.Client, namespa
 
 		time.Sleep(5 * time.Second)
 	}
+}
+
+func logPodContainerDiagnostics(t *testing.T, pod *corev1.Pod, namespace, podName string) {
+	for _, containerStatus := range pod.Status.ContainerStatuses {
+		logsCmd := fmt.Sprintf("kubectl logs %s -n %s -c %s --tail=200", podName, namespace, containerStatus.Name)
+		logResult := utils.RunCommand(logsCmd)
+		t.Logf("Container %s logs:\n%s", containerStatus.Name, logResult.Result())
+
+		if containerStatus.RestartCount == 0 {
+			continue
+		}
+		previousLogsCmd := fmt.Sprintf("kubectl logs %s -n %s -c %s --previous --tail=200", podName, namespace, containerStatus.Name)
+		previousLogResult := utils.RunCommand(previousLogsCmd)
+		t.Logf("Container %s previous logs after %d restart(s):\n%s", containerStatus.Name, containerStatus.RestartCount, previousLogResult.Result())
+	}
+}
+
+func forceDeleteTerminatingPod(ctx context.Context, client klient.Client, namespace, podName string) error {
+	pod := &corev1.Pod{}
+	resourceClient := client.Resources(namespace)
+	if err := resourceClient.Get(ctx, podName, namespace, pod); err != nil {
+		if errors.IsNotFound(err) {
+			return nil
+		}
+		return fmt.Errorf("failed to get pod %s/%s for cleanup: %w", namespace, podName, err)
+	}
+
+	if len(pod.Finalizers) > 0 {
+		pod.Finalizers = nil
+		if err := resourceClient.Update(ctx, pod); err != nil && !errors.IsNotFound(err) {
+			return fmt.Errorf("failed to clear finalizers on pod %s/%s: %w", namespace, podName, err)
+		}
+	}
+
+	if err := resourceClient.Delete(ctx, pod, resources.WithGracePeriod(0)); err != nil && !errors.IsNotFound(err) {
+		return fmt.Errorf("failed to force delete pod %s/%s: %w", namespace, podName, err)
+	}
+
+	return nil
 }
 
 // util function to get secret data
