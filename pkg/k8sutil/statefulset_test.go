@@ -35,7 +35,7 @@ func TestStatefulSetPodTemplateIgnoresVACAdmissionRetryToken(t *testing.T) {
 				Annotations: map[string]string{volumeAttributesClassAdmissionRetryAnnotation: token},
 			},
 			Spec: marklogicv1.MarklogicGroupSpec{
-				Name: "dnode", Replicas: &replicas, Image: "marklogic:12.0.3",
+				Name: "dnode", Replicas: &replicas, Image: testMarkLogicImage,
 				HugePages: &marklogicv1.HugePages{}, LogCollection: &marklogicv1.LogCollection{},
 			},
 		}
@@ -104,7 +104,7 @@ func TestStatefulSetRejectsUnsupportedClaimTemplateDrift(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			operator, statefulSet, _, _ := liveVolumeAttributesClassFixture(t)
 			group := operator.MarklogicGroup
-			group.Spec.Image = "marklogic:12.0.3"
+			group.Spec.Image = testMarkLogicImage
 			group.Spec.GroupConfig = &marklogicv1.GroupConfig{Name: "Default"}
 			group.Spec.HugePages = &marklogicv1.HugePages{}
 			group.Spec.LogCollection = &marklogicv1.LogCollection{}
@@ -129,7 +129,7 @@ func TestStatefulSetRejectsUnsupportedClaimTemplateDrift(t *testing.T) {
 				desiredReplicas = 1
 			}
 			group.Spec.Replicas = &desiredReplicas
-			group.Spec.Image = "marklogic:12.0.4"
+			group.Spec.Image = testUpdatedMarkLogicImage
 			if test.additional {
 				desired := &(*group.Spec.AdditionalVolumeClaimTemplates)[0]
 				desired.Spec.StorageClassName = pointerToVACStorageClass("other-storage-class")

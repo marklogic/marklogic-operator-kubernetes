@@ -30,7 +30,7 @@ func TestGroupHandlerContinuesAfterScaleUpPVCPreparationFailure(t *testing.T) {
 			operator, statefulSet, _, claim := liveVolumeAttributesClassFixture(t)
 			group := operator.MarklogicGroup
 			group.Spec.IsDynamic = dynamic
-			group.Spec.Image = "marklogic:12.0.3"
+			group.Spec.Image = testMarkLogicImage
 			group.Spec.GroupConfig = &marklogicv1.GroupConfig{Name: "Default"}
 			group.Spec.HugePages = &marklogicv1.HugePages{}
 			group.Spec.LogCollection = &marklogicv1.LogCollection{}
@@ -49,7 +49,7 @@ func TestGroupHandlerContinuesAfterScaleUpPVCPreparationFailure(t *testing.T) {
 			}
 			desiredReplicas := int32(2)
 			group.Spec.Replicas = &desiredReplicas
-			group.Spec.Image = "marklogic:12.0.4"
+			group.Spec.Image = testUpdatedMarkLogicImage
 			group.Spec.NodeSelector = map[string]string{"nodepool": "updated"}
 			if dynamic {
 				group.Spec.Persistence.VolumeAttributesClassName = nil
@@ -113,7 +113,7 @@ func TestGroupHandlerContinuesWhileResizeWaitsForVAC(t *testing.T) {
 				}
 				group := operator.MarklogicGroup
 				group.Spec.IsDynamic = dynamic
-				group.Spec.Image = "marklogic:12.0.3"
+				group.Spec.Image = testMarkLogicImage
 				group.Spec.GroupConfig = &marklogicv1.GroupConfig{Name: "Default"}
 				group.Spec.HugePages = &marklogicv1.HugePages{}
 				group.Spec.LogCollection = &marklogicv1.LogCollection{}
@@ -130,7 +130,7 @@ func TestGroupHandlerContinuesWhileResizeWaitsForVAC(t *testing.T) {
 				}
 				group.Spec.Persistence.Size = "40Gi"
 				group.Spec.Persistence.VolumeAttributesClassName = nil
-				group.Spec.Image = "marklogic:12.0.4"
+				group.Spec.Image = testUpdatedMarkLogicImage
 				group.Spec.NodeSelector = map[string]string{"nodepool": "updated"}
 				if err := operator.Client.Update(operator.Ctx, group); err != nil {
 					t.Fatal(err)
@@ -176,7 +176,7 @@ func TestGroupHandlerContinuesWhileResizeWaitsForVAC(t *testing.T) {
 				if err := operator.Client.Status().Update(operator.Ctx, claim); err != nil {
 					t.Fatal(err)
 				}
-				saved.Spec.Image = "marklogic:12.0.5"
+				saved.Spec.Image = testUpdatedMarkLogicImage + "-next"
 				if err := operator.Client.Update(operator.Ctx, saved); err != nil {
 					t.Fatal(err)
 				}
@@ -194,7 +194,7 @@ func TestGroupHandlerContinuesWhileResizeWaitsForVAC(t *testing.T) {
 				if err := operator.Client.Get(operator.Ctx, client.ObjectKeyFromObject(current), actual); err != nil {
 					t.Fatal(err)
 				}
-				if actual.Spec.Template.Spec.Containers[0].Image != "marklogic:12.0.4" {
+				if actual.Spec.Template.Spec.Containers[0].Image != testUpdatedMarkLogicImage {
 					t.Fatal("starting a real resize must retain the normal handler stop boundary")
 				}
 			})

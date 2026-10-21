@@ -265,7 +265,7 @@ func TestVolumeAttributesClassProvisioningValidation(t *testing.T) {
 			group := &marklogicv1.MarklogicGroup{
 				ObjectMeta: metav1.ObjectMeta{Name: "dnode", Namespace: "testns", UID: "group-uid", Generation: 1},
 				Spec: marklogicv1.MarklogicGroupSpec{
-					Name: "dnode", Replicas: &replicas, Image: "marklogic:12.0.3", Persistence: storageWithClass("profile"),
+					Name: "dnode", Replicas: &replicas, Image: testMarkLogicImage, Persistence: storageWithClass("profile"),
 					GroupConfig: &marklogicv1.GroupConfig{Name: "Default"}, HugePages: &marklogicv1.HugePages{}, LogCollection: &marklogicv1.LogCollection{},
 				},
 			}
@@ -294,7 +294,7 @@ func TestVolumeAttributesClassProvisioningValidation(t *testing.T) {
 				desired := int32(2)
 				group.Spec.Replicas = &desired
 			}
-			group.Spec.Image = "marklogic:12.0.4"
+			group.Spec.Image = testUpdatedMarkLogicImage
 			objects := []client.Object{group}
 			if test.existing {
 				objects = append(objects, current)
@@ -524,7 +524,7 @@ func TestVolumeAttributesClassProvisioningFallbackTemplates(t *testing.T) {
 				logs := generatePVCTemplate(storageWithClass("logs-profile"))
 				logs.Name = "logsdir"
 				group := &marklogicv1.MarklogicGroup{ObjectMeta: metav1.ObjectMeta{Name: "dnode", Namespace: "testns", UID: "group-uid", Generation: 1}, Spec: marklogicv1.MarklogicGroupSpec{
-					Name: "dnode", Replicas: &replicas, Image: "marklogic:12.0.3", Persistence: storageWithClass("profile"), AdditionalVolumeClaimTemplates: &[]corev1.PersistentVolumeClaim{logs},
+					Name: "dnode", Replicas: &replicas, Image: testMarkLogicImage, Persistence: storageWithClass("profile"), AdditionalVolumeClaimTemplates: &[]corev1.PersistentVolumeClaim{logs},
 					GroupConfig: &marklogicv1.GroupConfig{Name: "Default"}, HugePages: &marklogicv1.HugePages{}, LogCollection: &marklogicv1.LogCollection{},
 				}}
 				labels := getSelectorLabelsByComponent(group.Spec.Name, false)
@@ -1452,7 +1452,10 @@ func TestVolumeAttributesClassAdmissionFailureRetryBoundaries(t *testing.T) {
 		completed       bool
 	}{
 		{name: "unrelated group generation does not retry", mutate: func(t *testing.T, operator *OperatorContext, _ *corev1.PersistentVolumeClaim) {
-			updateGroup(t, operator, func(group *marklogicv1.MarklogicGroup) { group.Generation++; group.Spec.Image = "new-image" })
+			updateGroup(t, operator, func(group *marklogicv1.MarklogicGroup) {
+				group.Generation++
+				group.Spec.Image = testUpdatedMarkLogicImage
+			})
 		}},
 		{name: "class metadata revision does not retry", mutate: func(t *testing.T, operator *OperatorContext, _ *corev1.PersistentVolumeClaim) {
 			profile := &storagev1.VolumeAttributesClass{}
@@ -2819,7 +2822,7 @@ func TestDay1VolumeAttributesClassProvisioning(t *testing.T) {
 			cluster := &marklogicv1.MarklogicCluster{
 				ObjectMeta: metav1.ObjectMeta{Name: "ml", Namespace: "testns"},
 				Spec: marklogicv1.MarklogicClusterSpec{
-					Image:         "marklogic:12.0.3",
+					Image:         testMarkLogicImage,
 					ClusterDomain: "cluster.local",
 					Persistence:   &marklogicv1.Persistence{Enabled: true, Size: "20Gi", StorageClassName: "gp3"},
 					MarkLogicGroups: []*marklogicv1.MarklogicGroups{
@@ -2897,7 +2900,7 @@ func TestDay1StorageStandaloneAndTemplateIsolation(t *testing.T) {
 		Spec: marklogicv1.MarklogicGroupSpec{
 			Name:                           "dnode",
 			Replicas:                       &replicas,
-			Image:                          "marklogic:12.0.3",
+			Image:                          testMarkLogicImage,
 			Persistence:                    &marklogicv1.Persistence{Enabled: true, Size: "20Gi"},
 			GroupConfig:                    &marklogicv1.GroupConfig{Name: "Default"},
 			HugePages:                      &marklogicv1.HugePages{},
@@ -2963,7 +2966,7 @@ func TestDay1VACStatefulSetReconciliation(t *testing.T) {
 					Spec: marklogicv1.MarklogicGroupSpec{
 						Name:                           "dnode",
 						Replicas:                       &liveReplicas,
-						Image:                          "marklogic:12.0.3",
+						Image:                          testMarkLogicImage,
 						Persistence:                    &marklogicv1.Persistence{Enabled: true, Size: "20Gi"},
 						GroupConfig:                    &marklogicv1.GroupConfig{Name: "Default"},
 						HugePages:                      &marklogicv1.HugePages{},
@@ -3179,7 +3182,7 @@ func TestAdditionalVolumeAttributesClassReconciliation(t *testing.T) {
 				group.Spec.Persistence.VolumeAttributesClassName = storageWithClass("ml-premium").VolumeAttributesClassName
 			}
 			group.Spec.Replicas = &test.replicas
-			group.Spec.Image = "marklogic:12.0.4"
+			group.Spec.Image = testUpdatedMarkLogicImage
 			group.Spec.NodeSelector = map[string]string{"nodepool": "updated"}
 			desired := generateStatefulSetsParams(group)
 			expectedTemplates := append([]corev1.PersistentVolumeClaim{}, (*desired.AdditionalVolumeClaimTemplates)...)
@@ -3445,7 +3448,7 @@ func TestScaleUpVACPrecreationSafety(t *testing.T) {
 			group := &marklogicv1.MarklogicGroup{
 				ObjectMeta: metav1.ObjectMeta{Name: "dnode", Namespace: "testns", UID: "group-uid"},
 				Spec: marklogicv1.MarklogicGroupSpec{
-					Name: "dnode", Replicas: &liveReplicas, Image: "marklogic:12.0.3",
+					Name: "dnode", Replicas: &liveReplicas, Image: testMarkLogicImage,
 					Persistence: &marklogicv1.Persistence{
 						Enabled: true, Size: "20Gi", StorageClassName: "gp3",
 						VolumeAttributesClassName: storageWithClass("ml-standard").VolumeAttributesClassName,
@@ -3480,7 +3483,7 @@ func TestScaleUpVACPrecreationSafety(t *testing.T) {
 			}
 			group.Spec.Persistence.VolumeAttributesClassName = storageWithClass("ml-premium").VolumeAttributesClassName
 			group.Spec.Replicas = &desiredReplicas
-			group.Spec.Image = "marklogic:12.0.4"
+			group.Spec.Image = testUpdatedMarkLogicImage
 			group.Spec.NodeSelector = map[string]string{"nodepool": "updated"}
 			newTemplate := generateStatefulSetsParams(group).PersistentVolumeClaim
 			objects := []client.Object{group, current}
