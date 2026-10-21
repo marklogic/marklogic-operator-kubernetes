@@ -70,35 +70,40 @@ func (oc *OperatorContext) ReconsileMarklogicGroupHandler() (outcome reconcile.R
 	return result, errors.Join(err, vacErr)
 }
 
-func (cc *ClusterContext) ReconsileMarklogicClusterHandler() (outcome reconcile.Result, reconcileErr error) {
-	defer func() {
-		progressResult, progressErr := cc.observeVolumeAttributesClasses()
-		if progressResult.RequeueAfter > 0 && (outcome.RequeueAfter == 0 || progressResult.RequeueAfter < outcome.RequeueAfter) {
-			outcome.RequeueAfter = progressResult.RequeueAfter
-		}
-		reconcileErr = errors.Join(reconcileErr, progressErr)
-	}()
-	if result := cc.ReconcileServiceAccount(); result.Completed() {
-		return result.Output()
+func (cc *ClusterContext) ReconsileMarklogicClusterHandler() (reconcile.Result, error) {
+	outcome := &reconcileOutcome{}
+	cc.reconcileClusterCore(outcome)
+	// Object storage is independent of the core steps: it always runs once the cluster context exists.
+	outcome.add(cc.ReconcileObjectStorage())
+	outcome.add(cc.observeVolumeAttributesClasses())
+	return outcome.output()
+}
+
+// reconcileClusterCore keeps the dependencies between core steps but records every outcome
+// instead of returning, so later independent work still runs.
+func (cc *ClusterContext) reconcileClusterCore(outcome *reconcileOutcome) {
+	if step := cc.ReconcileServiceAccount(); step.Completed() {
+		outcome.addStep(step)
+		return
 	}
-	if result := cc.ReconcileSecret(); result.Completed() {
-		return result.Output()
+	if step := cc.ReconcileSecret(); step.Completed() {
+		outcome.addStep(step)
+		return
 	}
-	result, err := cc.ReconsileMarklogicCluster()
+	outcome.add(cc.ReconsileMarklogicCluster())
 	if cc.MarklogicCluster.Spec.NetworkPolicy.Enabled {
-		if result := cc.ReconcileNetworkPolicy(); result.Completed() {
-			return result.Output()
+		if step := cc.ReconcileNetworkPolicy(); step.Completed() {
+			outcome.addStep(step)
+			return
 		}
 	}
 	if cc.MarklogicCluster.Spec.HAProxy != nil && cc.MarklogicCluster.Spec.HAProxy.Enabled {
-		if result := cc.ReconcileHAProxy(); result.Completed() {
-			return result.Output()
+		if step := cc.ReconcileHAProxy(); step.Completed() {
+			outcome.addStep(step)
+			return
 		}
 		if cc.MarklogicCluster.Spec.HAProxy.Ingress.Enabled {
-			if result := cc.ReconcileIngress(); result.Completed() {
-				return result.Output()
-			}
+			outcome.addStep(cc.ReconcileIngress())
 		}
 	}
-	return result, err
 }
