@@ -14,6 +14,9 @@ The MarkLogic Operator for Kubernetes is an operator that allows you to deploy a
 
 This operator supports Kubernetes 1.30 or later.
 
+VolumeAttributesClass (VAC) requires **Kubernetes 1.34 or later** for GA support;
+see [Change Disk Performance](#change-disk-performance).
+
 ### MarkLogic Version
 
 This operator supports MarkLogic 11.1 or later.
@@ -106,6 +109,10 @@ For additional manifests to deploy a MarkLogic cluster inside a Kubernetes clust
 For Fluent Bit log collection configuration, including secret-backed environment variables for authenticated OpenTelemetry exports, see [Fluent Bit Log Collection](./docs/log-collection.md).
 
 ### Change Disk Performance
+
+**VAC requires Kubernetes 1.34 or later for GA support.** Kubernetes 1.34
+introduced the GA `storage.k8s.io/v1` VAC API; see the
+[official Kubernetes VolumeAttributesClass documentation](https://kubernetes.io/docs/concepts/storage/volume-attributes-classes/).
 
 Operator 1.4 adds VolumeAttributesClass support for selecting and changing CSI
 volume performance without a VAC-driven Pod restart or capacity change. See
