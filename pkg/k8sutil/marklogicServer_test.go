@@ -93,6 +93,14 @@ func TestMarklogicClusterReconcileOwnerReferences(t *testing.T) {
 					owner.Name != cluster.Name || owner.UID != cluster.UID || owner.Controller == nil || !*owner.Controller {
 					t.Fatalf("invalid cluster owner reference: %+v", owner)
 				}
+				if replicas == 1 {
+					group.Annotations[volumeAttributesClassAdmissionRetryAnnotation] = "after-admission-repair"
+					if err := apiClient.Update(ctx, group); err != nil {
+						t.Fatal(err)
+					}
+				} else if group.Annotations[volumeAttributesClassAdmissionRetryAnnotation] != "after-admission-repair" {
+					t.Fatal("unrelated parent updates must preserve the group's explicit admission retry token")
+				}
 			}
 			if creates != 1 || updates != 1 || apiReads != 0 {
 				t.Fatalf("expected one create/update using the reconciled parent and cached client: creates=%d updates=%d apiReads=%d", creates, updates, apiReads)

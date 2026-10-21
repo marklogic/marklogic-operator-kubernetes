@@ -5,6 +5,7 @@ package k8sutil
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strconv"
 
 	"github.com/cisco-open/k8s-objectmatcher/patch"
@@ -12,6 +13,7 @@ import (
 	"github.com/marklogic/marklogic-operator-kubernetes/pkg/result"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	apiequality "k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -117,18 +119,35 @@ func (oc *OperatorContext) ReconcileStatefulset() (reconcile.Result, error) {
 		return result.Error(err).Output()
 	}
 
+	if err := validateClaimTemplateChanges(currentSts.Spec.VolumeClaimTemplates, statefulSetDef.Spec.VolumeClaimTemplates); err != nil {
+		logger.Error(err, "Unsupported PVC claim-template change")
+		if oc.Recorder != nil {
+			oc.Recorder.Event(cr, corev1.EventTypeWarning, "UnsupportedClaimTemplateChange", err.Error())
+		}
+		return result.Error(err).Output()
+	}
+	reconcileResult := result.Done()
+	prepared := true
+	var preparationErr error
 	if validationErr == nil {
-		if err := oc.ensureScaleUpDataPVCs(cr, currentSts, statefulSetDef.Spec.VolumeClaimTemplates); err != nil {
-			logger.Error(err, "Cannot prepare data PVCs for scale-up")
-			return result.Error(err).Output()
-		}
+		preparationErr = oc.ensureScaleUpDataPVCs(cr, currentSts, statefulSetDef.Spec.VolumeClaimTemplates)
 	} else if statefulSetDef.Spec.Replicas != nil && currentSts.Spec.Replicas != nil && *statefulSetDef.Spec.Replicas > *currentSts.Spec.Replicas {
-		prepared, err := oc.scaleUpPVCsAlreadyPrepared(cr, currentSts, statefulSetDef.Spec.VolumeClaimTemplates)
-		if err != nil {
-			return result.Error(err).Output()
+		prepared, preparationErr = oc.scaleUpPVCsAlreadyPrepared(cr, currentSts, statefulSetDef.Spec.VolumeClaimTemplates)
+	}
+	if preparationErr != nil || !prepared {
+		if cr.UID == "" || currentSts.UID == "" || currentSts.DeletionTimestamp != nil || !metav1.IsControlledBy(currentSts, cr) {
+			if preparationErr == nil {
+				preparationErr = fmt.Errorf("cannot prepare scale-up PVCs for an unverified or terminating StatefulSet")
+			}
+			return result.Error(preparationErr).Output()
 		}
-		if !prepared {
-			statefulSetDef.Spec.Replicas = currentSts.Spec.Replicas
+		statefulSetDef.Spec.Replicas = currentSts.Spec.Replicas
+		reconcileResult = result.RequeueSoon(30)
+		if preparationErr != nil {
+			logger.Error(preparationErr, "Cannot prepare data PVCs for scale-up; holding replicas at the live count")
+			if oc.Recorder != nil {
+				oc.Recorder.Eventf(cr, corev1.EventTypeWarning, "ScaleUpPVCPreparationFailed", "Scale-up held at %d replicas: %v", *currentSts.Spec.Replicas, preparationErr)
+			}
 		}
 	}
 	statefulSetDef.Spec.Ordinals = currentSts.Spec.Ordinals.DeepCopy()
@@ -194,7 +213,7 @@ func (oc *OperatorContext) ReconcileStatefulset() (reconcile.Result, error) {
 				oc.ReqLogger.Error(err, "error updating the MarkLogic Operator Internal status")
 			}
 		}
-		return result.Done().Output()
+		return reconcileResult.Output()
 	} else {
 		logger.Info("MarkLogic statefulSet is ready, setting condition")
 		condition := metav1.Condition{
@@ -212,10 +231,85 @@ func (oc *OperatorContext) ReconcileStatefulset() (reconcile.Result, error) {
 		}
 	}
 
-	return result.Done().Output()
+	return reconcileResult.Output()
 }
 
 const dataPVCGroupUIDAnnotation = "marklogic.progress.com/storage-group-uid"
+
+func validateClaimTemplateChanges(current, desired []corev1.PersistentVolumeClaim) error {
+	if len(current) != len(desired) {
+		return fmt.Errorf("StatefulSet claim templates are immutable: adding or removing templates requires an explicit storage migration")
+	}
+	currentByName := make(map[string]corev1.PersistentVolumeClaim, len(current))
+	for _, template := range current {
+		currentByName[template.Name] = template
+	}
+	for _, template := range desired {
+		previous, found := currentByName[template.Name]
+		if !found {
+			return fmt.Errorf("PVC template %q is new or renamed; StatefulSet claim templates are immutable and require an explicit storage migration", template.Name)
+		}
+		delete(currentByName, template.Name)
+		if !apiequality.Semantic.DeepEqual(claimTemplateSpecForComparison(previous.Spec), claimTemplateSpecForComparison(template.Spec)) {
+			return fmt.Errorf("PVC template %q has unsupported non-VAC spec changes; StatefulSet claim templates are immutable except for separately reconciled VAC and storage-size changes; revert the change or migrate storage explicitly", template.Name)
+		}
+		for key, value := range template.Labels {
+			if previousValue, exists := previous.Labels[key]; !exists || previousValue != value {
+				return fmt.Errorf("PVC template %q label %q differs from its immutable StatefulSet template; revert the change or migrate storage explicitly", template.Name, key)
+			}
+		}
+		for key, value := range template.Annotations {
+			if previousValue, exists := previous.Annotations[key]; !exists || previousValue != value {
+				return fmt.Errorf("PVC template %q annotation %q differs from its immutable StatefulSet template; revert the change or migrate storage explicitly", template.Name, key)
+			}
+		}
+	}
+	return nil
+}
+
+func claimTemplateSpecForComparison(spec corev1.PersistentVolumeClaimSpec) *corev1.PersistentVolumeClaimSpec {
+	normalized := spec.DeepCopy()
+	normalized.VolumeAttributesClassName = nil
+	if size, exists := normalized.Resources.Requests[corev1.ResourceStorage]; exists && size.Sign() > 0 {
+		normalized.Resources.Requests[corev1.ResourceStorage] = resource.MustParse("1")
+	}
+	if len(normalized.Resources.Requests) == 0 {
+		normalized.Resources.Requests = nil
+	}
+	if len(normalized.Resources.Limits) == 0 {
+		normalized.Resources.Limits = nil
+	}
+	if normalized.VolumeMode == nil {
+		mode := corev1.PersistentVolumeFilesystem
+		normalized.VolumeMode = &mode
+	}
+	slices.Sort(normalized.AccessModes)
+	if normalized.DataSourceRef != nil {
+		if normalized.DataSourceRef.Namespace != nil && *normalized.DataSourceRef.Namespace == "" {
+			normalized.DataSourceRef.Namespace = nil
+		}
+		if normalized.DataSourceRef.APIGroup != nil && *normalized.DataSourceRef.APIGroup == "" {
+			normalized.DataSourceRef.APIGroup = nil
+		}
+	}
+	if normalized.DataSource != nil {
+		if normalized.DataSource.APIGroup != nil && *normalized.DataSource.APIGroup == "" {
+			normalized.DataSource.APIGroup = nil
+		}
+		source := &corev1.TypedObjectReference{
+			APIGroup: normalized.DataSource.APIGroup,
+			Kind:     normalized.DataSource.Kind,
+			Name:     normalized.DataSource.Name,
+		}
+		if normalized.DataSourceRef == nil {
+			normalized.DataSourceRef = source
+		}
+		if apiequality.Semantic.DeepEqual(normalized.DataSourceRef, source) {
+			normalized.DataSource = nil
+		}
+	}
+	return normalized
+}
 
 func (oc *OperatorContext) ensureScaleUpDataPVCs(cr *marklogicv1.MarklogicGroup, currentSts *appsv1.StatefulSet, templates []corev1.PersistentVolumeClaim) error {
 	if cr.Spec.Replicas == nil || currentSts.Spec.Replicas == nil || *cr.Spec.Replicas <= *currentSts.Spec.Replicas {

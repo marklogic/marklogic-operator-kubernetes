@@ -41,7 +41,6 @@ type ClusterContext struct {
 	Client           controllerClient.Client
 	Scheme           *runtime.Scheme
 	MarklogicCluster *marklogicv1.MarklogicCluster
-	APIReader        controllerClient.Reader
 	ReqLogger        logr.Logger
 	Recorder         record.EventRecorder
 
@@ -244,5 +243,6 @@ func propagatedAnnotations(annotations map[string]string) map[string]string {
 	delete(copied, "kubectl.kubernetes.io/last-applied-configuration")
 	delete(copied, "e2e.marklogic.progress.com/reconcile-kick")
 	delete(copied, ReconcileRequestAnnotation)
+	delete(copied, volumeAttributesClassAdmissionRetryAnnotation)
 	return copied
 }

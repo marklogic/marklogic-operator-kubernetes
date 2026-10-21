@@ -195,6 +195,23 @@ Cluster `groups` entries contain `name`, `observedGeneration`, `state`, `reason`
 
 Desired/current values are read-only diagnostic fields, not two configurable native PVC fields. Retry timestamps or last-progress timestamps may be stored separately if needed for restart-safe backoff/stall detection. Do not add resize markers, filesystem checkpoints, or restart metadata.
 
+#### Admission Failure Suppression
+
+If a successful PVC patch does not retain the requested VAC reference, report `Failed` with reason `VACFieldNotPersisted` and pause resubmission for that PVC name, UID, and desired class. Continue observing native progress; an externally applied desired class can still reach `Completed` without another operator write.
+
+The group persists rejection records in `status.storage.volumeAttributesClassAdmissionFailures`, independently of active-replica progress. Each record contains `pvcName`, `pvcUID`, `templateName`, `desiredClassName`, and a capability `fingerprint`. Scale-down does not erase these records. Dispatch first persists the same target in `status.storage.operation.admissionTarget`; recovery uses it and the PVC operation ID to retain suppression if a failure-record status write temporarily fails. The API must retain both new status fields. Missing/pruned admission intent prevents PVC dispatch with `VACAdmissionStateNotPersisted`; a pruned failure record keeps the operation guard held. Install the matching updated CRDs and repair status admission before retrying.
+
+The fingerprint includes the served VAC API version, class UID, class name, and group retry token. A new desired class, replacement PVC UID, recreated class UID, changed served API version, or changed retry token permits a fresh validated attempt. Unrelated CR generation/image changes, class metadata/resourceVersion changes, discovery-cache refreshes, and operator restarts do not permit resubmission. Observed opt-out removes that template's rejection records and obsolete guard target evidence; later reselection permits retry. Native work and normal guard fencing remain protected after opt-out.
+
+After repairing API-server feature configuration or admission, change this annotation on the affected `MarklogicGroup`, including a child group of a cluster:
+
+```bash
+kubectl annotate marklogicgroup <group> -n <namespace> \
+  marklogic.progress.com/vac-admission-retry=after-admission-repair-1 --overwrite
+```
+
+Use a different value for each intentional retry. A rejected retry is latched again; the same token does not repeatedly resubmit. Parent-cluster updates preserve this group token, and the operator does not propagate it to StatefulSets or Pod templates. The token permits a validated request, not a bypass of ownership, binding, resize, or CSI safety checks. Discovery changes still do not prove CSI capability.
+
 #### Unused Precreated PVCs
 
 `MarklogicGroup.status.storage.unusedPVCs` reports potentially unused operator-precreated claims independently of VAC completion. Each record includes `name`, `uid`, `templateName`, optional native `phase`, `volumeName`, `volumeAttributesClassName`, `reason`, `message`, and a stable `firstObservedTime`. Records are sorted by claim name. The parent cluster does not aggregate this inventory; inspect the affected group. Unused candidates do not alter `StorageAttributesSynced` or count toward VAC completion.
@@ -316,6 +333,8 @@ Read native PVC modification status and correlate it with each template's latest
 | Opt-out with conflicting historical template | Precreate missing claims with no VAC; if the safeguard fails, block only the affected scale action and retain its diagnostic/Event. Do not clear existing PVC references. |
 | Permission denied or discovery timeout | Report authorization/validation-unknown, not class-not-found/API-absent. Retry with bounded backoff and block affected explicit new provisioning rather than substituting defaults; continue unrelated reconciliation and required scheduling. |
 | Conflict/throttling/transient API failure | Fresh-read conflict handling and capped jittered backoff; preserve partial progress. |
+| PVC admission drops the requested VAC field | Persist `VACFieldNotPersisted` for the PVC UID and target; suppress further submissions until a defined target/capability change or explicit group retry-token change. Continue observation; do not recreate claims or restart Pods. |
+| Admission intent or rejection status is pruned | Report `VACAdmissionStateNotPersisted`; prevent dispatch without durable intent or retain the recovery guard until rejection persistence succeeds. Upgrade the operator CRDs and verify status admission. |
 | Native `Infeasible` | Failed for that target; require a feasible class/environment change, no destructive fallback. |
 | Provider modification error/cooldown | Preserve native reason/message and keep retryable progress observable; no automatic rollback or Pod restart. |
 | Stalled or unknown progress | Report non-success and continue observation; elapsed time alone is not proof of unsupported CSI. |

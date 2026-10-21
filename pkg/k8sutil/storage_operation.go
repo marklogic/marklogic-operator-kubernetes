@@ -1,3 +1,5 @@
+// This file coordinates VAC changes and volume resizing within a group.
+// Persisted guards and PVC operation IDs preserve safety across retries and operator restarts.
 package k8sutil
 
 import (
@@ -20,7 +22,7 @@ func storageOperation(group *marklogicv1.MarklogicGroup) *marklogicv1.StorageOpe
 	return group.Status.Storage.Operation
 }
 
-func (oc *OperatorContext) claimVACStorageOperation(group *marklogicv1.MarklogicGroup, claim *corev1.PersistentVolumeClaim) (*marklogicv1.MarklogicGroup, *marklogicv1.StorageOperationStatus, error) {
+func (oc *OperatorContext) claimVACStorageOperation(group *marklogicv1.MarklogicGroup, claim *corev1.PersistentVolumeClaim, target *marklogicv1.VolumeAttributesClassAdmissionFailure) (*marklogicv1.MarklogicGroup, *marklogicv1.StorageOperationStatus, error) {
 	if isResizeOperationActive(group.Status.VolumeResizeStatus) {
 		return nil, nil, nil
 	}
@@ -34,7 +36,7 @@ func (oc *OperatorContext) claimVACStorageOperation(group *marklogicv1.Marklogic
 	if group.Status.Storage == nil {
 		group.Status.Storage = &marklogicv1.StorageStatus{}
 	}
-	operation := &marklogicv1.StorageOperationStatus{ID: string(uuid.NewUUID()), PVCName: claim.Name, PVCUID: string(claim.UID)}
+	operation := &marklogicv1.StorageOperationStatus{ID: string(uuid.NewUUID()), PVCName: claim.Name, PVCUID: string(claim.UID), AdmissionTarget: target}
 	group.Status.Storage.Operation = operation
 	if err := oc.Client.Status().Patch(oc.Ctx, group, client.MergeFromWithOptions(original, client.MergeFromWithOptimisticLock{})); err != nil {
 		return nil, nil, err
@@ -67,7 +69,26 @@ func (oc *OperatorContext) reconcileStorageOperation() (bool, error) {
 		if volumeAttributesClassOperationPending(claim) {
 			return true, nil
 		}
-		if claim.Annotations[storageOperationAnnotation] != operation.ID {
+		admissionRejected := false
+		if target := operation.AdmissionTarget; target != nil && (claim.Spec.VolumeAttributesClassName == nil || *claim.Spec.VolumeAttributesClassName != target.DesiredClassName) {
+			knownFailure := false
+			for _, failure := range group.Status.Storage.VolumeAttributesClassAdmissionFailures {
+				knownFailure = knownFailure || failure == *target
+			}
+			admissionRejected = knownFailure || claim.Annotations[storageOperationAnnotation] == operation.ID
+			if admissionRejected && !knownFailure {
+				if err := oc.persistVolumeAttributesClassAdmissionFailure(group, *target); err != nil {
+					return true, err
+				}
+				if err := reader.Get(oc.Ctx, client.ObjectKeyFromObject(group), group); err != nil {
+					return true, err
+				}
+				if latest := storageOperation(group); latest == nil || latest.ID != operation.ID {
+					return true, nil
+				}
+			}
+		}
+		if !admissionRejected && claim.Annotations[storageOperationAnnotation] != operation.ID {
 			original := claim.DeepCopy()
 			if claim.Annotations == nil {
 				claim.Annotations = map[string]string{}

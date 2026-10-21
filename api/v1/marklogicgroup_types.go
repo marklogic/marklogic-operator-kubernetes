@@ -257,15 +257,26 @@ type UnusedPVCStatus struct {
 }
 
 type StorageOperationStatus struct {
-	ID      string `json:"id"`
-	PVCName string `json:"pvcName"`
-	PVCUID  string `json:"pvcUID"`
+	ID              string                                 `json:"id"`
+	PVCName         string                                 `json:"pvcName"`
+	PVCUID          string                                 `json:"pvcUID"`
+	AdmissionTarget *VolumeAttributesClassAdmissionFailure `json:"admissionTarget,omitempty"`
+}
+
+type VolumeAttributesClassAdmissionFailure struct {
+	PVCName          string `json:"pvcName"`
+	PVCUID           string `json:"pvcUID"`
+	TemplateName     string `json:"templateName"`
+	DesiredClassName string `json:"desiredClassName"`
+	// +kubebuilder:validation:MaxLength=64
+	Fingerprint string `json:"fingerprint"`
 }
 
 type StorageStatus struct {
-	Operation             *StorageOperationStatus      `json:"operation,omitempty"`
-	VolumeAttributesClass *VolumeAttributesClassStatus `json:"volumeAttributesClass,omitempty"`
-	UnusedPVCs            []UnusedPVCStatus            `json:"unusedPVCs,omitempty"`
+	Operation                              *StorageOperationStatus                 `json:"operation,omitempty"`
+	VolumeAttributesClass                  *VolumeAttributesClassStatus            `json:"volumeAttributesClass,omitempty"`
+	UnusedPVCs                             []UnusedPVCStatus                       `json:"unusedPVCs,omitempty"`
+	VolumeAttributesClassAdmissionFailures []VolumeAttributesClassAdmissionFailure `json:"volumeAttributesClassAdmissionFailures,omitempty"`
 }
 
 // MarklogicGroupStatus defines the observed state of MarklogicGroup

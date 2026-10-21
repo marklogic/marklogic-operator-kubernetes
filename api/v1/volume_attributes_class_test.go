@@ -68,10 +68,14 @@ func TestVolumeAttributesClassStatusDeepCopy(t *testing.T) {
 		Groups: []GroupVolumeAttributesClassStatus{{Name: "data", State: VolumeAttributesClassPending}},
 	}}
 	storage.UnusedPVCs = []UnusedPVCStatus{{Name: "data-1", VolumeAttributesClassName: pointerToClass("premium")}}
-	storage.Operation = &StorageOperationStatus{ID: "dispatch", PVCName: "data-0", PVCUID: "claim-uid"}
+	failure := VolumeAttributesClassAdmissionFailure{PVCName: "data-0", PVCUID: "claim-uid", TemplateName: "data", DesiredClassName: "premium", Fingerprint: "original"}
+	storage.VolumeAttributesClassAdmissionFailures = []VolumeAttributesClassAdmissionFailure{failure}
+	storage.Operation = &StorageOperationStatus{ID: "dispatch", PVCName: "data-0", PVCUID: "claim-uid", AdmissionTarget: failure.DeepCopy()}
 	group := (&MarklogicGroup{Status: MarklogicGroupStatus{Storage: storage}}).DeepCopy()
 	cluster := (&MarklogicCluster{Status: MarklogicClusterStatus{Storage: storage}}).DeepCopy()
 	storage.Operation.ID = "changed"
+	storage.Operation.AdmissionTarget.Fingerprint = "changed"
+	storage.VolumeAttributesClassAdmissionFailures[0].Fingerprint = "changed"
 	storage.UnusedPVCs[0].Name = "changed"
 	*storage.UnusedPVCs[0].VolumeAttributesClassName = "changed"
 	storage.VolumeAttributesClass.PVCs[0].Name = "changed"
@@ -82,6 +86,9 @@ func TestVolumeAttributesClassStatusDeepCopy(t *testing.T) {
 	for _, copied := range []*StorageStatus{group.Status.Storage, cluster.Status.Storage} {
 		if copied.Operation.ID != "dispatch" {
 			t.Fatal("storage operation guards must deep-copy independently")
+		}
+		if *copied.Operation.AdmissionTarget != failure || copied.VolumeAttributesClassAdmissionFailures[0] != failure {
+			t.Fatal("admission targets and failure latches must deep-copy independently")
 		}
 		if copied.UnusedPVCs[0].Name != "data-1" || *copied.UnusedPVCs[0].VolumeAttributesClassName != "premium" {
 			t.Fatal("unused claim reports must deep-copy their records and class pointers")
@@ -295,7 +302,9 @@ func TestVolumeAttributesClassStatusSchemas(t *testing.T) {
 					Groups: []GroupVolumeAttributesClassStatus{{Name: "data", ObservedGeneration: 1, State: VolumeAttributesClassInProgress, Reason: "VACInProgress", Message: "Waiting"}},
 				}}}
 				value["storage"].(*StorageStatus).UnusedPVCs = []UnusedPVCStatus{{Name: "data-1", UID: "unused-uid", TemplateName: "data", Phase: corev1.ClaimBound, VolumeName: "pv-retained", VolumeAttributesClassName: pointerToClass("premium"), Reason: "OutsideReplicaRange", Message: "Retained for review; may contain data", FirstObservedTime: metav1.Now()}}
-				value["storage"].(*StorageStatus).Operation = &StorageOperationStatus{ID: "dispatch", PVCName: "data-0", PVCUID: "claim-uid"}
+				failure := VolumeAttributesClassAdmissionFailure{PVCName: "data-0", PVCUID: "claim-uid", TemplateName: "data", DesiredClassName: "premium", Fingerprint: strings.Repeat("a", 64)}
+				value["storage"].(*StorageStatus).VolumeAttributesClassAdmissionFailures = []VolumeAttributesClassAdmissionFailure{failure}
+				value["storage"].(*StorageStatus).Operation = &StorageOperationStatus{ID: "dispatch", PVCName: "data-0", PVCUID: "claim-uid", AdmissionTarget: failure.DeepCopy()}
 				encoded, err := json.Marshal(value)
 				if err != nil {
 					t.Fatal(err)
@@ -322,6 +331,18 @@ func TestVolumeAttributesClassStatusSchemas(t *testing.T) {
 						t.Fatalf("unknown VAC states must be rejected by %s", path)
 					}
 					record["state"] = previous
+				}
+				storageValue := object["storage"].(map[string]any)
+				for _, record := range []map[string]any{
+					storageValue["operation"].(map[string]any)["admissionTarget"].(map[string]any),
+					storageValue["volumeAttributesClassAdmissionFailures"].([]any)[0].(map[string]any),
+				} {
+					previous := record["fingerprint"]
+					record["fingerprint"] = strings.Repeat("a", 65)
+					if failures := validation.ValidateCustomResource(field.NewPath("status"), object, validator); len(failures) == 0 {
+						t.Fatalf("oversized admission fingerprint must be rejected by %s", path)
+					}
+					record["fingerprint"] = previous
 				}
 			}
 		})

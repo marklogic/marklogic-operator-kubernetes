@@ -212,6 +212,14 @@ func (cc *ClusterContext) ReconsileMarklogicCluster() (reconcile.Result, error) 
 				logger.Error(err, "Existing MarkLogicGroup cannot be reconciled to desired immutable spec")
 				return result.Error(err).Output()
 			}
+			if token, exists := currentMlg.Annotations[volumeAttributesClassAdmissionRetryAnnotation]; exists {
+				if _, requested := markLogicGroupDef.Annotations[volumeAttributesClassAdmissionRetryAnnotation]; !requested {
+					if markLogicGroupDef.Annotations == nil {
+						markLogicGroupDef.Annotations = map[string]string{}
+					}
+					markLogicGroupDef.Annotations[volumeAttributesClassAdmissionRetryAnnotation] = token
+				}
+			}
 
 			patchDiff, err := patch.DefaultPatchMaker.Calculate(currentMlg, markLogicGroupDef,
 				patch.IgnoreStatusFields(),

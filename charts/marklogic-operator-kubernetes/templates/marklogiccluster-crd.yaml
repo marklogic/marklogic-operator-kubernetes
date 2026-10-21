@@ -11317,6 +11317,26 @@ spec:
                 properties:
                   operation:
                     properties:
+                      admissionTarget:
+                        properties:
+                          desiredClassName:
+                            type: string
+                          fingerprint:
+                            maxLength: 64
+                            type: string
+                          pvcName:
+                            type: string
+                          pvcUID:
+                            type: string
+                          templateName:
+                            type: string
+                        required:
+                        - desiredClassName
+                        - fingerprint
+                        - pvcName
+                        - pvcUID
+                        - templateName
+                        type: object
                       id:
                         type: string
                       pvcName:
@@ -11455,6 +11475,28 @@ spec:
                     - reason
                     - state
                     type: object
+                  volumeAttributesClassAdmissionFailures:
+                    items:
+                      properties:
+                        desiredClassName:
+                          type: string
+                        fingerprint:
+                          maxLength: 64
+                          type: string
+                        pvcName:
+                          type: string
+                        pvcUID:
+                          type: string
+                        templateName:
+                          type: string
+                      required:
+                      - desiredClassName
+                      - fingerprint
+                      - pvcName
+                      - pvcUID
+                      - templateName
+                      type: object
+                    type: array
                 type: object
               objectStorage:
                 description: ObjectStorage reports the per-provider object storage credential

@@ -282,6 +282,7 @@ func TestVolumeAttributesClassProvisioningValidation(t *testing.T) {
 			labels["app.kubernetes.io/instance"] = group.Spec.Name
 			labels["app.kubernetes.io/component"] = getMarkLogicComponentLabel(false)
 			current := generateStatefulSetsDef(generateObjectMeta(group.Spec.Name, group.Namespace, labels, nil), generateStatefulSetsParams(group), marklogicServerAsOwner(group), generateContainerParams(group)).DeepCopy()
+			current.UID = "statefulset-uid"
 			if test.templateMetadata {
 				current.Spec.VolumeClaimTemplates[0].TypeMeta = metav1.TypeMeta{APIVersion: "v1", Kind: "PersistentVolumeClaim"}
 				current.Spec.VolumeClaimTemplates[0].Status.Phase = corev1.ClaimPending
@@ -1332,6 +1333,308 @@ func TestVolumeAttributesClassDroppedField(t *testing.T) {
 	}
 }
 
+func TestVolumeAttributesClassAdmissionTargetMustPersist(t *testing.T) {
+	operator, statefulSet, template, claim := liveVolumeAttributesClassFixture(t)
+	writes := 0
+	operator.Client = interceptor.NewClient(operator.Client.(client.WithWatch), interceptor.Funcs{
+		Patch: func(ctx context.Context, underlying client.WithWatch, object client.Object, patch client.Patch, options ...client.PatchOption) error {
+			if _, ok := object.(*corev1.PersistentVolumeClaim); ok {
+				writes++
+			}
+			return underlying.Patch(ctx, object, patch, options...)
+		},
+		SubResourcePatch: func(ctx context.Context, underlying client.Client, subresource string, object client.Object, patch client.Patch, options ...client.SubResourcePatchOption) error {
+			if group, ok := object.(*marklogicv1.MarklogicGroup); ok && storageOperation(group) != nil {
+				storageOperation(group).AdmissionTarget = nil
+			}
+			return underlying.SubResource(subresource).Patch(ctx, object, patch, options...)
+		},
+	})
+	for pass := 0; pass < 2; pass++ {
+		attempted, err := operator.reconcileBoundVolumeAttributesClass(statefulSet, template, 0, claim)
+		var failure *volumeAttributesClassValidationError
+		if attempted || !errors.As(err, &failure) || failure.reason != "VACAdmissionStateNotPersisted" {
+			t.Fatalf("pruned admission target must prevent dispatch: attempted=%t, err=%v", attempted, err)
+		}
+	}
+	if writes != 0 {
+		t.Fatalf("PVC writes without durable admission intent = %d, want 0", writes)
+	}
+}
+
+func TestVolumeAttributesClassAdmissionFailureSuppression(t *testing.T) {
+	for _, nilReference := range []bool{false, true} {
+		t.Run(fmt.Sprintf("nilReference=%t", nilReference), func(t *testing.T) {
+			operator, _, _, claim := liveVolumeAttributesClassFixture(t)
+			if nilReference {
+				if err := operator.Client.Get(operator.Ctx, client.ObjectKeyFromObject(claim), claim); err != nil {
+					t.Fatal(err)
+				}
+				claim.Spec.VolumeAttributesClassName = nil
+				if err := operator.Client.Update(operator.Ctx, claim); err != nil {
+					t.Fatal(err)
+				}
+				claim.Status.CurrentVolumeAttributesClassName = nil
+				if err := operator.Client.Status().Update(operator.Ctx, claim); err != nil {
+					t.Fatal(err)
+				}
+			}
+			writes := 0
+			operator.Client = interceptor.NewClient(operator.Client.(client.WithWatch), interceptor.Funcs{
+				Patch: func(ctx context.Context, underlying client.WithWatch, object client.Object, patch client.Patch, options ...client.PatchOption) error {
+					if pvc, ok := object.(*corev1.PersistentVolumeClaim); ok {
+						writes++
+						saved := &corev1.PersistentVolumeClaim{}
+						if err := underlying.Get(ctx, client.ObjectKeyFromObject(pvc), saved); err != nil {
+							return err
+						}
+						pvc.Spec.VolumeAttributesClassName = saved.Spec.VolumeAttributesClassName
+					}
+					return underlying.Patch(ctx, object, patch, options...)
+				},
+			})
+			for pass := 0; pass < 4; pass++ {
+				fresh := &marklogicv1.MarklogicGroup{}
+				if err := operator.APIReader.Get(operator.Ctx, client.ObjectKeyFromObject(operator.MarklogicGroup), fresh); err != nil {
+					t.Fatal(err)
+				}
+				restarted := *operator
+				restarted.MarklogicGroup = fresh
+				restarted.VACValidator = NewVolumeAttributesClassValidator(operator.VACValidator.reader, vacDiscoveryFor("v1"))
+				operator = &restarted
+				_, dispatchErr := operator.ReconcileVolumeAttributesClasses()
+				var failure *volumeAttributesClassValidationError
+				if !errors.As(dispatchErr, &failure) || failure.reason != "VACFieldNotPersisted" {
+					t.Fatalf("admission failure must remain diagnostic, got %v", dispatchErr)
+				}
+				if _, err := operator.observeVolumeAttributesClasses(dispatchErr); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if writes != 1 {
+				t.Fatalf("the same rejected target must cause only one PVC write across restarts, got %d", writes)
+			}
+			if _, err := operator.observeVolumeAttributesClasses(nil); err != nil {
+				t.Fatal(err)
+			}
+			saved := &marklogicv1.MarklogicGroup{}
+			if err := operator.APIReader.Get(operator.Ctx, client.ObjectKeyFromObject(operator.MarklogicGroup), saved); err != nil {
+				t.Fatal(err)
+			}
+			if saved.Status.Storage == nil || saved.Status.Storage.VolumeAttributesClass == nil || saved.Status.Storage.VolumeAttributesClass.Reason != "VACFieldNotPersisted" {
+				t.Fatal("read-only observation must retain the persisted admission failure")
+			}
+		})
+	}
+}
+
+func TestVolumeAttributesClassAdmissionFailureRetryBoundaries(t *testing.T) {
+	updateGroup := func(t *testing.T, operator *OperatorContext, mutate func(*marklogicv1.MarklogicGroup)) {
+		t.Helper()
+		group := &marklogicv1.MarklogicGroup{}
+		if err := operator.APIReader.Get(operator.Ctx, client.ObjectKeyFromObject(operator.MarklogicGroup), group); err != nil {
+			t.Fatal(err)
+		}
+		mutate(group)
+		if err := operator.Client.Update(operator.Ctx, group); err != nil {
+			t.Fatal(err)
+		}
+		operator.MarklogicGroup = group
+	}
+	for _, test := range []struct {
+		name            string
+		mutate          func(*testing.T, *OperatorContext, *corev1.PersistentVolumeClaim)
+		wantRetry       bool
+		failStatusWrite bool
+		pruneLatch      bool
+		rejectRetry     bool
+		completed       bool
+	}{
+		{name: "unrelated group generation does not retry", mutate: func(t *testing.T, operator *OperatorContext, _ *corev1.PersistentVolumeClaim) {
+			updateGroup(t, operator, func(group *marklogicv1.MarklogicGroup) { group.Generation++; group.Spec.Image = "new-image" })
+		}},
+		{name: "class metadata revision does not retry", mutate: func(t *testing.T, operator *OperatorContext, _ *corev1.PersistentVolumeClaim) {
+			profile := &storagev1.VolumeAttributesClass{}
+			if err := operator.Client.Get(operator.Ctx, client.ObjectKey{Name: "premium"}, profile); err != nil {
+				t.Fatal(err)
+			}
+			profile.Annotations = map[string]string{"unrelated": "updated"}
+			if err := operator.Client.Update(operator.Ctx, profile); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{name: "explicit capability retry", wantRetry: true, mutate: func(t *testing.T, operator *OperatorContext, _ *corev1.PersistentVolumeClaim) {
+			updateGroup(t, operator, func(group *marklogicv1.MarklogicGroup) {
+				group.Annotations = map[string]string{volumeAttributesClassAdmissionRetryAnnotation: "after-admission-repair"}
+			})
+		}},
+		{name: "desired target change", wantRetry: true, mutate: func(t *testing.T, operator *OperatorContext, _ *corev1.PersistentVolumeClaim) {
+			profile := &storagev1.VolumeAttributesClass{ObjectMeta: metav1.ObjectMeta{Name: "next", UID: "next-uid"}, DriverName: "ebs.csi.aws.com"}
+			if err := operator.Client.Create(operator.Ctx, profile); err != nil {
+				t.Fatal(err)
+			}
+			updateGroup(t, operator, func(group *marklogicv1.MarklogicGroup) {
+				group.Generation++
+				group.Spec.Persistence.VolumeAttributesClassName = pointerToVACStorageClass("next")
+			})
+		}},
+		{name: "class recreation", wantRetry: true, mutate: func(t *testing.T, operator *OperatorContext, _ *corev1.PersistentVolumeClaim) {
+			profile := &storagev1.VolumeAttributesClass{}
+			if err := operator.Client.Get(operator.Ctx, client.ObjectKey{Name: "premium"}, profile); err != nil {
+				t.Fatal(err)
+			}
+			if err := operator.Client.Delete(operator.Ctx, profile); err != nil {
+				t.Fatal(err)
+			}
+			profile.UID, profile.ResourceVersion = "replacement-class-uid", ""
+			if err := operator.Client.Create(operator.Ctx, profile); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{name: "served API version change", wantRetry: true, mutate: func(t *testing.T, operator *OperatorContext, _ *corev1.PersistentVolumeClaim) {
+			reader := interceptor.NewClient(operator.VACValidator.reader.(client.WithWatch), interceptor.Funcs{
+				Get: func(ctx context.Context, underlying client.WithWatch, key client.ObjectKey, object client.Object, options ...client.GetOption) error {
+					if class, ok := object.(*unstructured.Unstructured); ok && class.GetKind() == "VolumeAttributesClass" {
+						version := class.GroupVersionKind()
+						class.SetGroupVersionKind(storagev1.SchemeGroupVersion.WithKind("VolumeAttributesClass"))
+						err := underlying.Get(ctx, key, object, options...)
+						class.SetGroupVersionKind(version)
+						return err
+					}
+					return underlying.Get(ctx, key, object, options...)
+				},
+			})
+			operator.VACValidator = NewVolumeAttributesClassValidator(reader, vacDiscoveryFor("v1beta1"))
+		}},
+		{name: "PVC replacement", wantRetry: true, mutate: func(t *testing.T, operator *OperatorContext, claim *corev1.PersistentVolumeClaim) {
+			if err := operator.Client.Get(operator.Ctx, client.ObjectKeyFromObject(claim), claim); err != nil {
+				t.Fatal(err)
+			}
+			if err := operator.Client.Delete(operator.Ctx, claim); err != nil {
+				t.Fatal(err)
+			}
+			claim.UID, claim.ResourceVersion = "replacement-pvc-uid", ""
+			if err := operator.Client.Create(operator.Ctx, claim); err != nil {
+				t.Fatal(err)
+			}
+			volume := &corev1.PersistentVolume{}
+			if err := operator.Client.Get(operator.Ctx, client.ObjectKey{Name: claim.Spec.VolumeName}, volume); err != nil {
+				t.Fatal(err)
+			}
+			volume.Spec.ClaimRef.UID = claim.UID
+			if err := operator.Client.Update(operator.Ctx, volume); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{name: "scale down does not erase rejection", mutate: func(t *testing.T, operator *OperatorContext, _ *corev1.PersistentVolumeClaim) {
+			updateGroup(t, operator, func(group *marklogicv1.MarklogicGroup) { replicas := int32(0); group.Spec.Replicas = &replicas })
+			if _, err := operator.observeVolumeAttributesClasses(nil); err != nil {
+				t.Fatal(err)
+			}
+			updateGroup(t, operator, func(group *marklogicv1.MarklogicGroup) { replicas := int32(1); group.Spec.Replicas = &replicas })
+		}},
+		{name: "opt out and reselect permits retry", wantRetry: true, mutate: func(t *testing.T, operator *OperatorContext, _ *corev1.PersistentVolumeClaim) {
+			updateGroup(t, operator, func(group *marklogicv1.MarklogicGroup) { group.Spec.Persistence.VolumeAttributesClassName = nil })
+			if _, err := operator.observeVolumeAttributesClasses(nil); err != nil {
+				t.Fatal(err)
+			}
+			updateGroup(t, operator, func(group *marklogicv1.MarklogicGroup) {
+				group.Spec.Persistence.VolumeAttributesClassName = pointerToVACStorageClass("premium")
+			})
+		}},
+		{name: "external native convergence remains observable", completed: true, mutate: func(t *testing.T, operator *OperatorContext, claim *corev1.PersistentVolumeClaim) {
+			if err := operator.Client.Get(operator.Ctx, client.ObjectKeyFromObject(claim), claim); err != nil {
+				t.Fatal(err)
+			}
+			claim.Spec.VolumeAttributesClassName = pointerToVACStorageClass("premium")
+			if err := operator.Client.Update(operator.Ctx, claim); err != nil {
+				t.Fatal(err)
+			}
+			claim.Status.CurrentVolumeAttributesClassName = pointerToVACStorageClass("premium")
+			if err := operator.Client.Status().Update(operator.Ctx, claim); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{name: "temporary latch persistence failure does not resubmit", failStatusWrite: true},
+		{name: "pruned latch keeps the guard held", pruneLatch: true},
+		{name: "rejected explicit retry is latched again", wantRetry: true, rejectRetry: true, mutate: func(t *testing.T, operator *OperatorContext, _ *corev1.PersistentVolumeClaim) {
+			updateGroup(t, operator, func(group *marklogicv1.MarklogicGroup) {
+				group.Annotations = map[string]string{volumeAttributesClassAdmissionRetryAnnotation: "retry-still-rejected"}
+			})
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			operator, _, _, claim := liveVolumeAttributesClassFixture(t)
+			writes, statusFailed := 0, false
+			admit := false
+			operator.Client = interceptor.NewClient(operator.Client.(client.WithWatch), interceptor.Funcs{
+				Patch: func(ctx context.Context, underlying client.WithWatch, object client.Object, patch client.Patch, options ...client.PatchOption) error {
+					if pvc, ok := object.(*corev1.PersistentVolumeClaim); ok {
+						writes++
+						if !admit {
+							saved := &corev1.PersistentVolumeClaim{}
+							if err := underlying.Get(ctx, client.ObjectKeyFromObject(pvc), saved); err != nil {
+								return err
+							}
+							pvc.Spec.VolumeAttributesClassName = saved.Spec.VolumeAttributesClassName
+						}
+					}
+					return underlying.Patch(ctx, object, patch, options...)
+				},
+				SubResourcePatch: func(ctx context.Context, underlying client.Client, subresource string, object client.Object, patch client.Patch, options ...client.SubResourcePatchOption) error {
+					if group, ok := object.(*marklogicv1.MarklogicGroup); ok && group.Status.Storage != nil && len(group.Status.Storage.VolumeAttributesClassAdmissionFailures) > 0 && test.failStatusWrite && !statusFailed {
+						statusFailed = true
+						return apierrors.NewServiceUnavailable("temporary admission-latch status failure")
+					}
+					if group, ok := object.(*marklogicv1.MarklogicGroup); ok && group.Status.Storage != nil && test.pruneLatch {
+						group.Status.Storage.VolumeAttributesClassAdmissionFailures = nil
+					}
+					return underlying.SubResource(subresource).Patch(ctx, object, patch, options...)
+				},
+			})
+			if _, err := operator.ReconcileVolumeAttributesClasses(); err == nil {
+				t.Fatal("initial rejected admission must be reported")
+			}
+			if test.mutate != nil {
+				test.mutate(t, operator, claim)
+			}
+			admit = !test.rejectRetry
+			for pass := 0; pass < 2; pass++ {
+				fresh := &marklogicv1.MarklogicGroup{}
+				if err := operator.APIReader.Get(operator.Ctx, client.ObjectKeyFromObject(operator.MarklogicGroup), fresh); err != nil {
+					t.Fatal(err)
+				}
+				restarted := *operator
+				restarted.MarklogicGroup = fresh
+				operator = &restarted
+				_, dispatchErr := operator.ReconcileVolumeAttributesClasses()
+				if (test.wantRetry && !test.rejectRetry || test.completed) && dispatchErr != nil {
+					t.Fatal(dispatchErr)
+				}
+				if _, err := operator.observeVolumeAttributesClasses(dispatchErr); err != nil {
+					t.Fatal(err)
+				}
+			}
+			wantWrites := 1
+			if test.wantRetry {
+				wantWrites++
+			}
+			if writes != wantWrites {
+				t.Fatalf("PVC writes = %d, want %d", writes, wantWrites)
+			}
+			if test.completed {
+				saved := &marklogicv1.MarklogicGroup{}
+				if err := operator.APIReader.Get(operator.Ctx, client.ObjectKeyFromObject(operator.MarklogicGroup), saved); err != nil {
+					t.Fatal(err)
+				}
+				if saved.Status.Storage.VolumeAttributesClass.State != marklogicv1.VolumeAttributesClassCompleted {
+					t.Fatal("native convergence must replace the failure diagnostic")
+				}
+			}
+		})
+	}
+}
+
 func TestStorageOperationStaleCache(t *testing.T) {
 	operator, set, template, claim := liveVolumeAttributesClassFixture(t)
 	stale := claim.DeepCopy()
@@ -1383,17 +1686,17 @@ func TestStorageOperationCAS(t *testing.T) {
 				if acquired, err := operator.claimResizeStatusCAS(resize); err != nil || !acquired {
 					t.Fatalf("claim resize: acquired=%t error=%v", acquired, err)
 				}
-				if _, _, err := operator.claimVACStorageOperation(group, claim); !apierrors.IsConflict(err) {
+				if _, _, err := operator.claimVACStorageOperation(group, claim, nil); !apierrors.IsConflict(err) {
 					t.Fatalf("stale VAC acquisition must conflict with resize: %v", err)
 				}
 				if err := operator.Client.Get(operator.Ctx, client.ObjectKeyFromObject(group), group); err != nil {
 					t.Fatal(err)
 				}
-				if _, operation, err := operator.claimVACStorageOperation(group, claim); err != nil || operation != nil {
+				if _, operation, err := operator.claimVACStorageOperation(group, claim, nil); err != nil || operation != nil {
 					t.Fatalf("active resize must prevent VAC acquisition: %v", err)
 				}
 			} else {
-				if _, operation, err := operator.claimVACStorageOperation(group, claim); err != nil || operation == nil {
+				if _, operation, err := operator.claimVACStorageOperation(group, claim, nil); err != nil || operation == nil {
 					t.Fatalf("claim VAC: %v", err)
 				}
 				if acquired, err := operator.claimResizeStatusCAS(resize); err != nil || acquired {
@@ -1420,7 +1723,7 @@ func TestStorageOperationConcurrentClaims(t *testing.T) {
 		snapshot := group.DeepCopy()
 		go func() {
 			<-start
-			_, operation, err := worker.claimVACStorageOperation(snapshot, target)
+			_, operation, err := worker.claimVACStorageOperation(snapshot, target, nil)
 			if err == nil && operation == nil {
 				err = errors.New("missing operation")
 			}
@@ -1618,6 +1921,149 @@ func TestVolumeAttributesClassNativeProgress(t *testing.T) {
 			state, reason, message := volumeAttributesClassNativeProgress(claim, "premium")
 			if state != test.state || reason != test.reason || message == "" {
 				t.Fatalf("progress = %s/%s/%s, want %s/%s", state, reason, message, test.state, test.reason)
+			}
+		})
+	}
+}
+
+func TestVolumeAttributesClassPendingSavedReference(t *testing.T) {
+	for _, test := range []struct {
+		name           string
+		savedDriver    string
+		missingDesired bool
+		lookupErr      error
+		mutate         func(*testing.T, *OperatorContext, *appsv1.StatefulSet, *corev1.PersistentVolumeClaim)
+		state          marklogicv1.VolumeAttributesClassState
+		reason         string
+		message        string
+		recover        bool
+	}{
+		{name: "missing original class", state: marklogicv1.VolumeAttributesClassFailed, reason: "ProvisioningBlocked", message: "VolumeAttributesClass standard", recover: true},
+		{name: "valid original class", savedDriver: "ebs.csi.aws.com", state: marklogicv1.VolumeAttributesClassPending, reason: "PendingClassMismatch"},
+		{name: "both classes missing", missingDesired: true, state: marklogicv1.VolumeAttributesClassFailed, reason: "ProvisioningBlocked", message: "VolumeAttributesClass standard"},
+		{name: "only desired class missing", savedDriver: "ebs.csi.aws.com", missingDesired: true, state: marklogicv1.VolumeAttributesClassFailed, reason: "VACNotFound", message: "VolumeAttributesClass premium"},
+		{name: "original class read forbidden", lookupErr: apierrors.NewForbidden(schema.GroupResource{Group: "storage.k8s.io", Resource: "volumeattributesclasses"}, "standard", errors.New("denied")), state: marklogicv1.VolumeAttributesClassUnknown, reason: "VACAccessDenied", message: "Saved PVC class reference"},
+		{name: "original class read unauthorized", lookupErr: apierrors.NewUnauthorized("authentication failed"), state: marklogicv1.VolumeAttributesClassUnknown, reason: "VACAccessDenied", message: "Saved PVC class reference"},
+		{name: "original class read timeout", lookupErr: apierrors.NewTimeoutError("temporary lookup timeout", 1), state: marklogicv1.VolumeAttributesClassUnknown, reason: "VACValidationFailed", message: "temporary lookup timeout"},
+		{name: "original class endpoint unavailable", lookupErr: apierrors.NewNotFound(schema.GroupResource{Group: "storage.k8s.io", Resource: "volumeattributesclasses"}, ""), state: marklogicv1.VolumeAttributesClassUnknown, reason: "VACDiscoveryFailed", message: "Saved PVC class reference"},
+		{name: "original class driver mismatch", savedDriver: "other.csi.example", state: marklogicv1.VolumeAttributesClassFailed, reason: "VACDriverMismatch", message: "VolumeAttributesClass standard"},
+		{name: "no saved selection", mutate: func(t *testing.T, operator *OperatorContext, _ *appsv1.StatefulSet, claim *corev1.PersistentVolumeClaim) {
+			claim.Spec.VolumeAttributesClassName = nil
+			if err := operator.Client.Update(operator.Ctx, claim); err != nil {
+				t.Fatal(err)
+			}
+		}, state: marklogicv1.VolumeAttributesClassPending, reason: "PendingClassMismatch"},
+		{name: "same saved and desired missing class", missingDesired: true, mutate: func(t *testing.T, operator *OperatorContext, _ *appsv1.StatefulSet, claim *corev1.PersistentVolumeClaim) {
+			claim.Spec.VolumeAttributesClassName = pointerToVACStorageClass("premium")
+			if err := operator.Client.Update(operator.Ctx, claim); err != nil {
+				t.Fatal(err)
+			}
+		}, state: marklogicv1.VolumeAttributesClassFailed, reason: "ProvisioningBlocked", message: "VolumeAttributesClass premium"},
+		{name: "foreign claim beats invalid desired class", missingDesired: true, mutate: func(t *testing.T, operator *OperatorContext, _ *appsv1.StatefulSet, claim *corev1.PersistentVolumeClaim) {
+			claim.Annotations[dataPVCGroupUIDAnnotation] = "foreign-group"
+			if err := operator.Client.Update(operator.Ctx, claim); err != nil {
+				t.Fatal(err)
+			}
+		}, state: marklogicv1.VolumeAttributesClassUnknown, reason: "PVCOwnershipUnverified"},
+		{name: "terminating claim beats invalid desired class", missingDesired: true, mutate: func(t *testing.T, operator *OperatorContext, _ *appsv1.StatefulSet, claim *corev1.PersistentVolumeClaim) {
+			claim.Finalizers = []string{"test.example/retain"}
+			if err := operator.Client.Update(operator.Ctx, claim); err != nil {
+				t.Fatal(err)
+			}
+			if err := operator.Client.Delete(operator.Ctx, claim); err != nil {
+				t.Fatal(err)
+			}
+		}, state: marklogicv1.VolumeAttributesClassPending, reason: "PVCTerminating"},
+		{name: "foreign workload beats invalid desired class", missingDesired: true, mutate: func(t *testing.T, operator *OperatorContext, set *appsv1.StatefulSet, _ *corev1.PersistentVolumeClaim) {
+			set.OwnerReferences = nil
+			if err := operator.Client.Update(operator.Ctx, set); err != nil {
+				t.Fatal(err)
+			}
+		}, state: marklogicv1.VolumeAttributesClassFailed, reason: "WorkloadUnverified"},
+		{name: "terminating workload beats invalid desired class", missingDesired: true, mutate: func(t *testing.T, operator *OperatorContext, set *appsv1.StatefulSet, _ *corev1.PersistentVolumeClaim) {
+			set.Finalizers = []string{"test.example/retain"}
+			if err := operator.Client.Update(operator.Ctx, set); err != nil {
+				t.Fatal(err)
+			}
+			if err := operator.Client.Delete(operator.Ctx, set); err != nil {
+				t.Fatal(err)
+			}
+		}, state: marklogicv1.VolumeAttributesClassFailed, reason: "WorkloadUnverified"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			operator, set, _, claim := liveVolumeAttributesClassFixture(t)
+			claim.Spec.VolumeName = ""
+			if err := operator.Client.Update(operator.Ctx, claim); err != nil {
+				t.Fatal(err)
+			}
+			claim.Status = corev1.PersistentVolumeClaimStatus{Phase: corev1.ClaimPending}
+			if err := operator.Client.Status().Update(operator.Ctx, claim); err != nil {
+				t.Fatal(err)
+			}
+			if test.savedDriver != "" {
+				if err := operator.Client.Create(operator.Ctx, &storagev1.VolumeAttributesClass{ObjectMeta: metav1.ObjectMeta{Name: "standard"}, DriverName: test.savedDriver}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if test.missingDesired {
+				if err := operator.Client.Delete(operator.Ctx, &storagev1.VolumeAttributesClass{ObjectMeta: metav1.ObjectMeta{Name: "premium"}}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if test.lookupErr != nil {
+				operator.VACValidator.reader = interceptor.NewClient(operator.Client.(client.WithWatch), interceptor.Funcs{
+					Get: func(ctx context.Context, underlying client.WithWatch, key client.ObjectKey, object client.Object, options ...client.GetOption) error {
+						if _, ok := object.(*unstructured.Unstructured); ok && key.Name == "standard" {
+							return test.lookupErr
+						}
+						return underlying.Get(ctx, key, object, options...)
+					},
+				})
+			}
+			if test.mutate != nil {
+				test.mutate(t, operator, set, claim)
+			}
+			if err := operator.Client.Get(operator.Ctx, client.ObjectKeyFromObject(claim), claim); err != nil {
+				t.Fatal(err)
+			}
+			before := claim.DeepCopy()
+			saved := &marklogicv1.MarklogicGroup{}
+			previousVersion := ""
+			for pass := 0; pass < 2; pass++ {
+				if next, err := operator.observeVolumeAttributesClasses(nil); err != nil || next.RequeueAfter != 30*time.Second {
+					t.Fatalf("observe = %+v, %v", next, err)
+				}
+				if err := operator.Client.Get(operator.Ctx, client.ObjectKeyFromObject(operator.MarklogicGroup), saved); err != nil {
+					t.Fatal(err)
+				}
+				progress := saved.Status.Storage.VolumeAttributesClass
+				if progress.State != test.state || progress.Reason != test.reason || len(progress.PVCs) != 1 || progress.PVCs[0].Reason != test.reason || !strings.Contains(progress.PVCs[0].Message, test.message) {
+					t.Fatalf("unexpected saved-reference diagnostic: %+v", progress)
+				}
+				if pass > 0 && saved.ResourceVersion != previousVersion {
+					t.Fatal("unchanged observations must not rewrite status")
+				}
+				previousVersion = saved.ResourceVersion
+			}
+			if test.recover {
+				if err := operator.Client.Create(operator.Ctx, &storagev1.VolumeAttributesClass{ObjectMeta: metav1.ObjectMeta{Name: "standard"}, DriverName: "ebs.csi.aws.com"}); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := operator.observeVolumeAttributesClasses(nil); err != nil {
+					t.Fatal(err)
+				}
+				if err := operator.Client.Get(operator.Ctx, client.ObjectKeyFromObject(operator.MarklogicGroup), saved); err != nil {
+					t.Fatal(err)
+				}
+				if progress := saved.Status.Storage.VolumeAttributesClass; progress.State != marklogicv1.VolumeAttributesClassPending || progress.Reason != "PendingClassMismatch" {
+					t.Fatalf("repairing the original prerequisite must clear ProvisioningBlocked: %+v", progress)
+				}
+			}
+			if err := operator.Client.Get(operator.Ctx, client.ObjectKeyFromObject(claim), claim); err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(before, claim) {
+				t.Fatal("observation must leave the Pending PVC unchanged")
 			}
 		})
 	}
@@ -2668,6 +3114,7 @@ func TestAdditionalVolumeAttributesClassReconciliation(t *testing.T) {
 				generateObjectMeta(group.Spec.Name, group.Namespace, getSelectorLabels(group.Spec.Name), nil),
 				generateStatefulSetsParams(group), marklogicServerAsOwner(group), generateContainerParams(group),
 			).DeepCopy()
+			current.UID = "statefulset-uid"
 			objects := []client.Object{group}
 			if !test.create {
 				objects = append(objects, current)
@@ -2688,6 +3135,8 @@ func TestAdditionalVolumeAttributesClassReconciliation(t *testing.T) {
 				group.Spec.Persistence.VolumeAttributesClassName = storageWithClass("ml-premium").VolumeAttributesClassName
 			}
 			group.Spec.Replicas = &test.replicas
+			group.Spec.Image = "marklogic:12.0.4"
+			group.Spec.NodeSelector = map[string]string{"nodepool": "updated"}
 			desired := generateStatefulSetsParams(group)
 			expectedTemplates := append([]corev1.PersistentVolumeClaim{}, (*desired.AdditionalVolumeClaimTemplates)...)
 			if test.changePrimary {
@@ -2720,8 +3169,12 @@ func TestAdditionalVolumeAttributesClassReconciliation(t *testing.T) {
 				}).Build()
 			operator := &OperatorContext{Ctx: context.Background(), Client: fakeClient, Scheme: scheme, MarklogicGroup: group, Recorder: record.NewFakeRecorder(10)}
 			operator.VACValidator = vacValidatorForGroup(t, group)
-			if _, err := operator.ReconcileStatefulset(); (err != nil) != (test.failCreate || test.partialCreate) {
+			outcome, err := operator.ReconcileStatefulset()
+			if err != nil {
 				t.Fatalf("unexpected reconciliation error: %v", err)
+			}
+			if (test.failCreate || test.partialCreate) && outcome.RequeueAfter <= 0 {
+				t.Fatal("failed additional PVC preparation must request a retry")
 			}
 			actual := &appsv1.StatefulSet{}
 			if err := fakeClient.Get(operator.Ctx, client.ObjectKeyFromObject(current), actual); err != nil {
@@ -2733,6 +3186,9 @@ func TestAdditionalVolumeAttributesClassReconciliation(t *testing.T) {
 			}
 			if *actual.Spec.Replicas != wantReplicas {
 				t.Fatal("PVC preparation must precede replica updates")
+			}
+			if actual.Spec.Template.Spec.Containers[0].Image != group.Spec.Image || !reflect.DeepEqual(actual.Spec.Template.Spec.NodeSelector, group.Spec.NodeSelector) {
+				t.Fatal("additional PVC preparation must not block image and scheduling updates")
 			}
 			if !test.create && !reflect.DeepEqual(actual.Spec.VolumeClaimTemplates, current.Spec.VolumeClaimTemplates) {
 				t.Fatal("existing primary and additional templates must remain unchanged")
@@ -2839,18 +3295,29 @@ func TestScaleUpVACPrecreationSafety(t *testing.T) {
 		failUpdateOnce bool
 		unowned        bool
 		wantError      bool
+		wantBlocked    bool
+		invalidVAC     bool
+		failRead       bool
+		terminatingSet bool
+		ready          bool
 	}{
 		{name: "nonzero starting ordinal", start: 5},
 		{name: "retained claim is unchanged", existing: true},
-		{name: "unverified retained claim blocks scaling", existing: true, unverified: true, wantError: true},
-		{name: "foreign owner blocks scaling", existing: true, foreignOwner: true, wantError: true},
-		{name: "incompatible retained claim blocks scaling", existing: true, wrongClass: true, wantError: true},
-		{name: "terminating retained claim blocks scaling", existing: true, terminating: true, wantError: true},
-		{name: "create failure blocks scaling", failCreate: true, wantError: true},
+		{name: "unverified retained claim blocks scaling", existing: true, unverified: true, wantBlocked: true},
+		{name: "foreign owner blocks scaling", existing: true, foreignOwner: true, wantBlocked: true},
+		{name: "incompatible retained claim blocks scaling", existing: true, wrongClass: true, wantBlocked: true},
+		{name: "terminating retained claim blocks scaling", existing: true, terminating: true, wantBlocked: true},
+		{name: "create failure blocks scaling", failCreate: true, wantBlocked: true},
+		{name: "ready workload creation failure preserves updates", ready: true, failCreate: true, wantBlocked: true},
 		{name: "retry after partial PVC creation", partialCreate: true},
 		{name: "already exists race is reread", alreadyExists: true},
 		{name: "retry after replica update failure", failUpdateOnce: true},
 		{name: "unowned StatefulSet blocks precreation", unowned: true, wantError: true},
+		{name: "invalid VAC retained verification failure preserves updates", invalidVAC: true, existing: true, wrongClass: true, wantBlocked: true},
+		{name: "invalid VAC foreign retained owner preserves updates", invalidVAC: true, existing: true, foreignOwner: true, wantBlocked: true},
+		{name: "invalid VAC PVC read failure preserves updates", invalidVAC: true, failRead: true, wantBlocked: true},
+		{name: "invalid VAC unowned StatefulSet blocks updates", invalidVAC: true, unowned: true, wantError: true},
+		{name: "terminating StatefulSet blocks updates", terminatingSet: true, wantError: true},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -2883,13 +3350,24 @@ func TestScaleUpVACPrecreationSafety(t *testing.T) {
 			if test.unowned {
 				current.OwnerReferences = nil
 			}
+			if test.terminatingSet {
+				now := metav1.Now()
+				current.DeletionTimestamp = &now
+				current.Finalizers = []string{"storage-test"}
+			}
 			current.Spec.Ordinals = &appsv1.StatefulSetOrdinals{Start: test.start}
 			current.Spec.PersistentVolumeClaimRetentionPolicy = &appsv1.StatefulSetPersistentVolumeClaimRetentionPolicy{
 				WhenDeleted: appsv1.RetainPersistentVolumeClaimRetentionPolicyType,
 				WhenScaled:  appsv1.RetainPersistentVolumeClaimRetentionPolicyType,
 			}
+			if test.ready {
+				current.Status.Replicas = liveReplicas
+				current.Status.ReadyReplicas = liveReplicas
+			}
 			group.Spec.Persistence.VolumeAttributesClassName = storageWithClass("ml-premium").VolumeAttributesClassName
 			group.Spec.Replicas = &desiredReplicas
+			group.Spec.Image = "marklogic:12.0.4"
+			group.Spec.NodeSelector = map[string]string{"nodepool": "updated"}
 			newTemplate := generateStatefulSetsParams(group).PersistentVolumeClaim
 			objects := []client.Object{group, current}
 			active := current.Spec.VolumeClaimTemplates[0].DeepCopy()
@@ -2921,12 +3399,19 @@ func TestScaleUpVACPrecreationSafety(t *testing.T) {
 			}
 			failedUpdate := false
 			createCalls := 0
+			patchCalls := 0
 			fakeClient := fake.NewClientBuilder().WithScheme(scheme).
 				WithStatusSubresource(&marklogicv1.MarklogicGroup{}).
 				WithIndex(&corev1.PersistentVolumeClaim{}, PrecreatedPVCGroupUIDIndex, PrecreatedPVCGroupUIDs).
 				WithIndex(&corev1.Pod{}, PodPVCReferenceIndex, PodPVCReferences).
 				WithObjects(objects...).
 				WithInterceptorFuncs(interceptor.Funcs{
+					Get: func(ctx context.Context, underlying client.WithWatch, key client.ObjectKey, object client.Object, options ...client.GetOption) error {
+						if _, claim := object.(*corev1.PersistentVolumeClaim); claim && test.failRead && key.Name == "datadir-dnode-1" {
+							return apierrors.NewForbidden(schema.GroupResource{Resource: "persistentvolumeclaims"}, key.Name, fmt.Errorf("PVC reads denied"))
+						}
+						return underlying.Get(ctx, key, object, options...)
+					},
 					Create: func(ctx context.Context, underlying client.WithWatch, object client.Object, options ...client.CreateOption) error {
 						if _, ok := object.(*corev1.PersistentVolumeClaim); ok {
 							createCalls++
@@ -2945,6 +3430,7 @@ func TestScaleUpVACPrecreationSafety(t *testing.T) {
 					},
 					Patch: func(ctx context.Context, underlying client.WithWatch, object client.Object, patch client.Patch, options ...client.PatchOption) error {
 						if statefulSet, ok := object.(*appsv1.StatefulSet); ok {
+							patchCalls++
 							if !reflect.DeepEqual(statefulSet.Spec.VolumeClaimTemplates, current.Spec.VolumeClaimTemplates) {
 								return fmt.Errorf("StatefulSet volumeClaimTemplates are immutable")
 							}
@@ -2952,7 +3438,7 @@ func TestScaleUpVACPrecreationSafety(t *testing.T) {
 								failedUpdate = true
 								return apierrors.NewConflict(schema.GroupResource{Group: "apps", Resource: "statefulsets"}, current.Name, fmt.Errorf("replica update conflict"))
 							}
-							for ordinal := test.start + liveReplicas; ordinal < test.start+desiredReplicas; ordinal++ {
+							for ordinal := test.start + liveReplicas; ordinal < test.start+*statefulSet.Spec.Replicas; ordinal++ {
 								claim := &corev1.PersistentVolumeClaim{}
 								if err := underlying.Get(ctx, client.ObjectKey{Namespace: group.Namespace, Name: fmt.Sprintf("datadir-%s-%d", current.Name, ordinal)}, claim); err != nil {
 									return fmt.Errorf("PVC must exist before scale-up: %w", err)
@@ -2962,8 +3448,19 @@ func TestScaleUpVACPrecreationSafety(t *testing.T) {
 						return underlying.Patch(ctx, object, patch, options...)
 					},
 				}).Build()
-			operatorContext := &OperatorContext{Ctx: context.Background(), Client: fakeClient, Scheme: scheme, MarklogicGroup: group, Recorder: record.NewFakeRecorder(10)}
+			recorder := record.NewFakeRecorder(20)
+			operatorContext := &OperatorContext{Ctx: context.Background(), Client: fakeClient, Scheme: scheme, MarklogicGroup: group, Recorder: recorder}
 			operatorContext.VACValidator = vacValidatorForGroup(t, group)
+			if test.invalidVAC {
+				storageScheme := runtime.NewScheme()
+				if err := storagev1.AddToScheme(storageScheme); err != nil {
+					t.Fatal(err)
+				}
+				operatorContext.VACValidator.reader = fake.NewClientBuilder().WithScheme(storageScheme).WithObjects(
+					&storagev1.VolumeAttributesClass{ObjectMeta: metav1.ObjectMeta{Name: "ml-premium"}, DriverName: "different.csi.example.com"},
+					&storagev1.StorageClass{ObjectMeta: metav1.ObjectMeta{Name: "gp3"}, Provisioner: "ebs.csi.aws.com"},
+				).Build()
+			}
 			assertUnused := func(want int) {
 				t.Helper()
 				if _, err := operatorContext.observeUnusedPrecreatedPVCs(); err != nil {
@@ -2986,7 +3483,7 @@ func TestScaleUpVACPrecreationSafety(t *testing.T) {
 					}
 				}
 			}
-			_, err := operatorContext.ReconcileStatefulset()
+			outcome, err := operatorContext.ReconcileStatefulset()
 			if test.failUpdateOnce {
 				if !apierrors.IsConflict(err) {
 					t.Fatalf("expected replica update conflict, got %v", err)
@@ -2995,14 +3492,32 @@ func TestScaleUpVACPrecreationSafety(t *testing.T) {
 				_, err = operatorContext.ReconcileStatefulset()
 			}
 			if test.partialCreate {
-				if !apierrors.IsForbidden(err) {
-					t.Fatalf("expected partial PVC creation failure, got %v", err)
+				if err != nil || outcome.RequeueAfter <= 0 {
+					t.Fatalf("expected partial PVC creation to preserve unrelated updates and retry, got %+v, %v", outcome, err)
 				}
 				assertUnused(1)
 				_, err = operatorContext.ReconcileStatefulset()
 			}
 			if (err != nil) != test.wantError {
 				t.Fatalf("unexpected reconciliation error: %v", err)
+			}
+			if test.wantError && patchCalls != 0 {
+				t.Fatal("unverified or terminating workloads must not receive mutable updates")
+			}
+			if test.invalidVAC && createCalls != 0 {
+				t.Fatal("invalid VAC validation must not create scale-up PVCs")
+			}
+			if test.wantBlocked {
+				if outcome.RequeueAfter <= 0 {
+					t.Fatalf("blocked scale-up must request a retry, got %+v", outcome)
+				}
+				warned := false
+				for len(recorder.Events) > 0 {
+					warned = strings.Contains(<-recorder.Events, "ScaleUpPVCPreparationFailed") || warned
+				}
+				if !warned {
+					t.Fatal("blocked scale-up must retain its preparation diagnostic")
+				}
 			}
 			if test.failUpdateOnce || test.partialCreate {
 				assertUnused(0)
@@ -3012,7 +3527,7 @@ func TestScaleUpVACPrecreationSafety(t *testing.T) {
 				t.Fatal(err)
 			}
 			wantReplicas := desiredReplicas
-			if test.wantError {
+			if test.wantError || test.wantBlocked {
 				wantReplicas = liveReplicas
 			}
 			if *actual.Spec.Replicas != wantReplicas {
@@ -3022,6 +3537,11 @@ func TestScaleUpVACPrecreationSafety(t *testing.T) {
 				t.Fatal("scale-up must preserve claim templates, starting ordinals, and retention policy")
 			}
 			if !test.wantError {
+				if actual.Spec.Template.Spec.Containers[0].Image != group.Spec.Image || !reflect.DeepEqual(actual.Spec.Template.Spec.NodeSelector, group.Spec.NodeSelector) {
+					t.Fatal("PVC preparation must not block unrelated image and scheduling updates")
+				}
+			}
+			if !test.wantError && !test.wantBlocked {
 				for ordinal := test.start + liveReplicas; ordinal < test.start+desiredReplicas; ordinal++ {
 					claim := &corev1.PersistentVolumeClaim{}
 					if err := fakeClient.Get(operatorContext.Ctx, client.ObjectKey{Namespace: group.Namespace, Name: fmt.Sprintf("datadir-%s-%d", current.Name, ordinal)}, claim); err != nil {

@@ -2,8 +2,12 @@ package k8sutil
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
+	"sort"
 	"sync"
 	"time"
 
@@ -24,6 +28,8 @@ import (
 const volumeAttributesClassDiscoveryTTL = 5 * time.Minute
 
 const VolumeAttributesClassValidationCondition = "StorageAttributesValidated"
+
+const volumeAttributesClassAdmissionRetryAnnotation = "marklogic.progress.com/vac-admission-retry"
 
 type VolumeAttributesClassDiscovery interface {
 	ServerResourcesForGroupVersion(string) (*metav1.APIResourceList, error)
@@ -442,7 +448,18 @@ func (oc *OperatorContext) reconcileBoundVolumeAttributesClass(statefulSet *apps
 		if err := oc.validateVolumeAttributesClassBinding(claim, requested); err != nil {
 			return err
 		}
-		group, operation, err := oc.claimVACStorageOperation(group, claim)
+		if err := oc.volumeAttributesClassAdmissionFailure(group, claim, *requested); err != nil {
+			return err
+		}
+		fingerprint, err := oc.volumeAttributesClassAdmissionFingerprint(group, *requested)
+		if err != nil {
+			return err
+		}
+		admissionTarget := &marklogicv1.VolumeAttributesClassAdmissionFailure{
+			PVCName: claim.Name, PVCUID: string(claim.UID), TemplateName: template.Name,
+			DesiredClassName: *requested, Fingerprint: fingerprint,
+		}
+		group, operation, err := oc.claimVACStorageOperation(group, claim, admissionTarget)
 		if err != nil || operation == nil {
 			return err
 		}
@@ -455,6 +472,8 @@ func (oc *OperatorContext) reconcileBoundVolumeAttributesClass(statefulSet *apps
 		}
 		if savedOperation := storageOperation(latestGroup); savedOperation == nil || savedOperation.ID != operation.ID {
 			return fmt.Errorf("storage-operation guard was not persisted for PVC %s", claim.Name)
+		} else if savedOperation.AdmissionTarget == nil || *savedOperation.AdmissionTarget != *admissionTarget {
+			return vacValidationError("VACAdmissionStateNotPersisted", "The API did not retain the VAC admission target; install the updated operator CRDs before submitting PVC changes", nil)
 		}
 		original := claim.DeepCopy()
 		claim.Spec.VolumeAttributesClassName = requested
@@ -470,8 +489,20 @@ func (oc *OperatorContext) reconcileBoundVolumeAttributesClass(statefulSet *apps
 		if err := reader.Get(oc.Ctx, key, saved); err != nil {
 			return err
 		}
-		if saved.UID != claim.UID || saved.Spec.VolumeName != claim.Spec.VolumeName || saved.Spec.VolumeAttributesClassName == nil || *saved.Spec.VolumeAttributesClassName != *requested {
-			return vacValidationError("VACFieldNotPersisted", fmt.Sprintf("PVC %s did not retain requested VolumeAttributesClass %s", claim.Name, *requested), nil)
+		if saved.UID != claim.UID || saved.Spec.VolumeName != claim.Spec.VolumeName {
+			return fmt.Errorf("PVC %s identity or binding changed during VAC readback", claim.Name)
+		}
+		if saved.Spec.VolumeAttributesClassName == nil || *saved.Spec.VolumeAttributesClassName != *requested {
+			failure := volumeAttributesClassAdmissionError(claim.Name, *requested)
+			persistErr := oc.persistVolumeAttributesClassAdmissionFailure(group, *admissionTarget)
+			return errors.Join(failure, persistErr)
+		}
+		if group.Status.Storage != nil && len(group.Status.Storage.VolumeAttributesClassAdmissionFailures) > 0 {
+			resolved := *admissionTarget
+			resolved.Fingerprint = ""
+			if err := oc.persistVolumeAttributesClassAdmissionFailure(group, resolved); err != nil {
+				return err
+			}
 		}
 		if oc.Recorder != nil {
 			oc.Recorder.Eventf(group, corev1.EventTypeNormal, "VolumeAttributesClassRequested", "Requested VolumeAttributesClass %s for PVC %s; awaiting CSI application", *requested, claim.Name)
@@ -479,6 +510,116 @@ func (oc *OperatorContext) reconcileBoundVolumeAttributesClass(statefulSet *apps
 		return nil
 	})
 	return attempted, err
+}
+
+func volumeAttributesClassAdmissionError(name, requested string) error {
+	return vacValidationError("VACFieldNotPersisted", fmt.Sprintf("PVC %s did not retain requested VolumeAttributesClass %s; automatic resubmission is paused until its target or capability changes (set %s after repairing admission)", name, requested, volumeAttributesClassAdmissionRetryAnnotation), nil)
+}
+
+func (oc *OperatorContext) volumeAttributesClassAdmissionFingerprint(group *marklogicv1.MarklogicGroup, requested string) (string, error) {
+	if oc.VACValidator == nil || oc.VACValidator.reader == nil {
+		return "", vacValidationError("VACDiscoveryFailed", "VolumeAttributesClass admission retry validation is not configured", nil)
+	}
+	version, err := oc.VACValidator.discoverVersion()
+	if err != nil {
+		return "", err
+	}
+	class := &unstructured.Unstructured{}
+	class.SetGroupVersionKind(schema.GroupVersionKind{Group: "storage.k8s.io", Version: version, Kind: "VolumeAttributesClass"})
+	if err := oc.VACValidator.reader.Get(oc.Ctx, client.ObjectKey{Name: requested}, class); err != nil {
+		return "", err
+	}
+	data, err := json.Marshal(map[string]string{
+		"apiVersion": version, "classUID": string(class.GetUID()), "target": requested,
+		"retryToken": group.Annotations[volumeAttributesClassAdmissionRetryAnnotation],
+	})
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%x", sha256.Sum256(data)), nil
+}
+
+func (oc *OperatorContext) volumeAttributesClassAdmissionFailure(group *marklogicv1.MarklogicGroup, claim *corev1.PersistentVolumeClaim, requested string) error {
+	if group.Status.Storage == nil || claim.Spec.VolumeAttributesClassName != nil && *claim.Spec.VolumeAttributesClassName == requested {
+		return nil
+	}
+	for _, failure := range group.Status.Storage.VolumeAttributesClassAdmissionFailures {
+		if failure.PVCName != claim.Name || failure.PVCUID != string(claim.UID) || failure.DesiredClassName != requested {
+			continue
+		}
+		fingerprint, err := oc.volumeAttributesClassAdmissionFingerprint(group, requested)
+		if err != nil {
+			return err
+		}
+		if fingerprint == failure.Fingerprint {
+			return volumeAttributesClassAdmissionError(claim.Name, requested)
+		}
+	}
+	return nil
+}
+
+func (oc *OperatorContext) persistVolumeAttributesClassAdmissionFailure(expected *marklogicv1.MarklogicGroup, failure marklogicv1.VolumeAttributesClassAdmissionFailure) error {
+	return retry.OnError(retry.DefaultBackoff, apierrors.IsConflict, func() error {
+		latest := &marklogicv1.MarklogicGroup{}
+		if err := oc.volumeAttributesClassReader().Get(oc.Ctx, client.ObjectKeyFromObject(expected), latest); err != nil {
+			return err
+		}
+		if latest.UID != expected.UID || latest.DeletionTimestamp != nil {
+			return nil
+		}
+		selected := false
+		for _, template := range volumeAttributesClassTemplates(latest) {
+			selected = selected || template.Name == failure.TemplateName && template.Spec.VolumeAttributesClassName != nil && *template.Spec.VolumeAttributesClassName == failure.DesiredClassName
+		}
+		if !selected {
+			return nil
+		}
+		original := latest.DeepCopy()
+		if latest.Status.Storage == nil {
+			latest.Status.Storage = &marklogicv1.StorageStatus{}
+		}
+		failures := []marklogicv1.VolumeAttributesClassAdmissionFailure{}
+		for _, previous := range latest.Status.Storage.VolumeAttributesClassAdmissionFailures {
+			if previous.PVCName != failure.PVCName {
+				failures = append(failures, previous)
+			}
+		}
+		if failure.Fingerprint != "" {
+			failures = append(failures, failure)
+		}
+		if len(failures) == 0 {
+			failures = nil
+		}
+		sort.Slice(failures, func(first, second int) bool { return failures[first].PVCName < failures[second].PVCName })
+		latest.Status.Storage.VolumeAttributesClassAdmissionFailures = failures
+		if reflect.DeepEqual(original, latest) {
+			return nil
+		}
+		if err := oc.Client.Status().Patch(oc.Ctx, latest, client.MergeFromWithOptions(original, client.MergeFromWithOptimisticLock{})); err != nil {
+			return err
+		}
+		saved := &marklogicv1.MarklogicGroup{}
+		if err := oc.volumeAttributesClassReader().Get(oc.Ctx, client.ObjectKeyFromObject(expected), saved); err != nil {
+			return err
+		}
+		retained := failure.Fingerprint == ""
+		if saved.UID == expected.UID && saved.Status.Storage != nil {
+			for _, previous := range saved.Status.Storage.VolumeAttributesClassAdmissionFailures {
+				if previous.PVCName == failure.PVCName {
+					retained = failure.Fingerprint != "" && previous == failure
+					break
+				}
+			}
+		} else {
+			retained = false
+		}
+		if !retained {
+			return vacValidationError("VACAdmissionStateNotPersisted", "The API did not retain the VAC admission failure latch; verify the operator CRD upgrade and status admission", nil)
+		}
+		oc.MarklogicGroup.ResourceVersion = saved.ResourceVersion
+		oc.MarklogicGroup.Status.Storage = saved.Status.Storage.DeepCopy()
+		return nil
+	})
 }
 
 func (oc *OperatorContext) validateVolumeAttributesClassBinding(claim *corev1.PersistentVolumeClaim, requested *string) error {

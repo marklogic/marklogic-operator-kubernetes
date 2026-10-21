@@ -327,6 +327,8 @@ func (oc *OperatorContext) observeVolumeAttributesClasses(dispatchErr error) (re
 				status.State, status.Reason, status.Message = marklogicv1.VolumeAttributesClassPending, "WorkloadNotReady", "Waiting for the managed StatefulSet"
 			} else if group.UID == "" || statefulSet.UID == "" || statefulSet.DeletionTimestamp != nil || !metav1.IsControlledBy(statefulSet, group) {
 				status.State, status.Reason, status.Message = marklogicv1.VolumeAttributesClassFailed, "WorkloadUnverified", "StatefulSet identity, ownership or lifecycle could not be verified"
+			} else if apierrors.IsNotFound(readErr) && validationErr != nil {
+				status.State, status.Reason, status.Message = volumeAttributesClassFailureProgress(validationErr)
 			} else if readErr == nil {
 				declared := false
 				for _, current := range statefulSet.Spec.VolumeClaimTemplates {
@@ -336,14 +338,25 @@ func (oc *OperatorContext) observeVolumeAttributesClasses(dispatchErr error) (re
 					status.State, status.Reason, status.Message = marklogicv1.VolumeAttributesClassPending, "TemplateNotReady", "Waiting for the managed StatefulSet claim template"
 				} else if err := oc.verifyVolumeAttributesClassClaim(group, statefulSet, template.Name, ordinal, claim); err != nil {
 					status.State, status.Reason, status.Message = marklogicv1.VolumeAttributesClassUnknown, "PVCOwnershipUnverified", err.Error()
+				} else if claim.DeletionTimestamp != nil {
+					status.State, status.Reason, status.Message = volumeAttributesClassNativeProgress(claim, status.DesiredClassName)
 				} else if claim.Status.Phase == corev1.ClaimBound && claim.Spec.VolumeName != "" {
 					if err := oc.validateVolumeAttributesClassBinding(claim, template.Spec.VolumeAttributesClassName); err != nil {
 						status.State, status.Reason, status.Message = volumeAttributesClassFailureProgress(err)
+					} else if err := oc.volumeAttributesClassAdmissionFailure(group, claim, status.DesiredClassName); err != nil {
+						status.State, status.Reason, status.Message = volumeAttributesClassFailureProgress(err)
 					}
+				} else if err := oc.VACValidator.Validate(oc.Ctx, []corev1.PersistentVolumeClaim{*claim}); err != nil {
+					status.State, status.Reason, status.Message = volumeAttributesClassFailureProgress(err)
+					status.Message = "Saved PVC class reference: " + status.Message
+					var failure *volumeAttributesClassValidationError
+					if errors.As(err, &failure) && failure.reason == "VACNotFound" {
+						status.Reason = "ProvisioningBlocked"
+						status.Message += "; repair the original provisioning prerequisite, since the desired class cannot replace this reference before binding"
+					}
+				} else if validationErr != nil {
+					status.State, status.Reason, status.Message = volumeAttributesClassFailureProgress(validationErr)
 				}
-			}
-			if validationErr != nil && (readErr != nil || claim.Status.Phase != corev1.ClaimBound || claim.Spec.VolumeName == "") {
-				status.State, status.Reason, status.Message = volumeAttributesClassFailureProgress(validationErr)
 			}
 			if failure := volumeAttributesClassClaimFailure(dispatchErr, status.Name); failure != nil {
 				status.State, status.Reason, status.Message = marklogicv1.VolumeAttributesClassUnknown, "VACRequestUnconfirmed", failure.err.Error()
@@ -660,6 +673,22 @@ func patchVolumeAttributesClassProgress(ctx context.Context, writer client.Clien
 			return nil
 		}
 		original := latest.DeepCopyObject().(client.Object)
+		if group, ok := latest.(*marklogicv1.MarklogicGroup); ok && group.Status.Storage != nil {
+			selected := map[string]string{}
+			for _, template := range selectedVolumeAttributesClassTemplates(group) {
+				selected[template.Name] = *template.Spec.VolumeAttributesClassName
+			}
+			if operation := storageOperation(group); operation != nil && operation.AdmissionTarget != nil && selected[operation.AdmissionTarget.TemplateName] != operation.AdmissionTarget.DesiredClassName {
+				operation.AdmissionTarget = nil
+			}
+			var failures []marklogicv1.VolumeAttributesClassAdmissionFailure
+			for _, failure := range group.Status.Storage.VolumeAttributesClassAdmissionFailures {
+				if selected[failure.TemplateName] == failure.DesiredClassName {
+					failures = append(failures, failure)
+				}
+			}
+			group.Status.Storage.VolumeAttributesClassAdmissionFailures = failures
+		}
 		storage, conditions := volumeAttributesClassStatusFields(latest)
 		var previous *marklogicv1.VolumeAttributesClassStatus
 		if *storage != nil {

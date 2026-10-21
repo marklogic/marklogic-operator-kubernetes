@@ -9,10 +9,11 @@ import (
 )
 
 func (oc *OperatorContext) ReconsileMarklogicGroupHandler() (outcome reconcile.Result, reconcileErr error) {
+	var resizeWait reconcile.Result
 	defer func() {
 		unusedResult, unusedErr := oc.observeUnusedPrecreatedPVCs()
 		progressResult, progressErr := oc.observeVolumeAttributesClasses(reconcileErr)
-		for _, observation := range []reconcile.Result{unusedResult, progressResult} {
+		for _, observation := range []reconcile.Result{resizeWait, unusedResult, progressResult} {
 			if observation.RequeueAfter > 0 && (outcome.RequeueAfter == 0 || observation.RequeueAfter < outcome.RequeueAfter) {
 				outcome.RequeueAfter = observation.RequeueAfter
 			}
@@ -48,8 +49,12 @@ func (oc *OperatorContext) ReconsileMarklogicGroupHandler() (outcome reconcile.R
 		}
 	}
 
-	if result := oc.ReconcileVolumeResizeValidation(); result.Completed() {
-		return result.Output()
+	if step := oc.ReconcileVolumeResizeValidation(); step.Completed() {
+		next, err := step.Output()
+		if _, deferred := step.(resizeDeferredForVAC); !deferred || err != nil {
+			return next, err
+		}
+		resizeWait = next
 	}
 
 	result, err := oc.ReconcileStatefulset()
@@ -60,7 +65,11 @@ func (oc *OperatorContext) ReconsileMarklogicGroupHandler() (outcome reconcile.R
 	vacResult, vacErr := oc.ReconcileVolumeAttributesClasses()
 	if oc.MarklogicGroup.Spec.IsDynamic {
 		if dynamicResult := oc.ReconcileDynamicGroupConfig(); dynamicResult.Completed() {
+			previousResult := result
 			result, err = dynamicResult.Output()
+			if previousResult.RequeueAfter > 0 && (result.RequeueAfter == 0 || previousResult.RequeueAfter < result.RequeueAfter) {
+				result.RequeueAfter = previousResult.RequeueAfter
+			}
 		}
 	}
 

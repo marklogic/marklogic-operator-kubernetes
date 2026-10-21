@@ -53,6 +53,10 @@ type resizePVCDiscovery struct {
 
 type templateResizeTargets map[string]resource.Quantity
 
+type resizeDeferredForVAC struct {
+	result.ReconcileResult
+}
+
 func (oc *OperatorContext) ReconcileVolumeResizeValidation() result.ReconcileResult {
 	cr := oc.MarklogicGroup
 	if cr == nil {
@@ -99,7 +103,7 @@ func (oc *OperatorContext) ReconcileVolumeResizeValidation() result.ReconcileRes
 	if active, err := oc.reconcileStorageOperation(); err != nil {
 		return result.Error(err)
 	} else if active {
-		return result.RequeueSoon(30)
+		return resizeDeferredForVAC{result.RequeueSoon(30)}
 	}
 	for _, claim := range pvcState.foundPVCs {
 		live := &corev1.PersistentVolumeClaim{}
@@ -107,7 +111,7 @@ func (oc *OperatorContext) ReconcileVolumeResizeValidation() result.ReconcileRes
 			return result.Error(err)
 		}
 		if live.UID != claim.UID || volumeAttributesClassOperationPending(live) {
-			return result.RequeueSoon(30)
+			return resizeDeferredForVAC{result.RequeueSoon(30)}
 		}
 	}
 
