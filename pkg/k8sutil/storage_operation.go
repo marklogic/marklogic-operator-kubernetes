@@ -14,6 +14,7 @@ import (
 )
 
 const storageOperationAnnotation = "marklogic.progress.com/storage-operation-id"
+const storageOperationSubmissionAnnotation = "marklogic.progress.com/storage-operation-submitted"
 
 func storageOperation(group *marklogicv1.MarklogicGroup) *marklogicv1.StorageOperationStatus {
 	if group.Status.Storage == nil {
@@ -75,7 +76,7 @@ func (oc *OperatorContext) reconcileStorageOperation() (bool, error) {
 			for _, failure := range group.Status.Storage.VolumeAttributesClassAdmissionFailures {
 				knownFailure = knownFailure || failure == *target
 			}
-			admissionRejected = knownFailure || claim.Annotations[storageOperationAnnotation] == operation.ID
+			admissionRejected = knownFailure || claim.Annotations[storageOperationSubmissionAnnotation] == operation.ID
 			if admissionRejected && !knownFailure {
 				if err := oc.persistVolumeAttributesClassAdmissionFailure(group, *target); err != nil {
 					return true, err

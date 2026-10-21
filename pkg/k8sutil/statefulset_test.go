@@ -3,6 +3,7 @@
 package k8sutil
 
 import (
+	"context"
 	"reflect"
 	"strings"
 	"testing"
@@ -12,9 +13,56 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
+
+func TestStatefulSetPodTemplateIgnoresVACAdmissionRetryToken(t *testing.T) {
+	reconcile := func(token string) (*appsv1.StatefulSet, *marklogicv1.MarklogicGroup) {
+		t.Helper()
+		scheme := runtime.NewScheme()
+		for _, register := range []func(*runtime.Scheme) error{marklogicv1.AddToScheme, appsv1.AddToScheme, corev1.AddToScheme} {
+			if err := register(scheme); err != nil {
+				t.Fatal(err)
+			}
+		}
+		replicas := int32(1)
+		group := &marklogicv1.MarklogicGroup{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: "dnode", Namespace: "testns",
+				Annotations: map[string]string{volumeAttributesClassAdmissionRetryAnnotation: token},
+			},
+			Spec: marklogicv1.MarklogicGroupSpec{
+				Name: "dnode", Replicas: &replicas, Image: "marklogic:12.0.3",
+				HugePages: &marklogicv1.HugePages{}, LogCollection: &marklogicv1.LogCollection{},
+			},
+		}
+		fakeClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(group).Build()
+		operator := &OperatorContext{
+			Ctx: context.Background(), Client: fakeClient, Scheme: scheme, MarklogicGroup: group,
+			Recorder:     record.NewFakeRecorder(10),
+			VACValidator: NewVolumeAttributesClassValidator(nil, vacDiscoveryFor("v1")),
+		}
+		if _, err := operator.ReconcileStatefulset(); err != nil {
+			t.Fatal(err)
+		}
+		statefulSet := &appsv1.StatefulSet{}
+		if err := fakeClient.Get(operator.Ctx, client.ObjectKeyFromObject(group), statefulSet); err != nil {
+			t.Fatal(err)
+		}
+		return statefulSet, group
+	}
+	before, beforeGroup := reconcile("before")
+	after, afterGroup := reconcile("after")
+	if !reflect.DeepEqual(before.Spec.Template, after.Spec.Template) {
+		t.Fatal("changing only the VAC admission retry token must not change the Pod template")
+	}
+	if beforeGroup.Annotations[volumeAttributesClassAdmissionRetryAnnotation] != "before" || afterGroup.Annotations[volumeAttributesClassAdmissionRetryAnnotation] != "after" {
+		t.Fatal("StatefulSet reconciliation must not mutate group annotations")
+	}
+}
 
 func TestGeneratePVCTemplateVolumeAttributesClassName(t *testing.T) {
 	volumeAttributesClassName := "gold-iops"

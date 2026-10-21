@@ -1808,6 +1808,49 @@ func TestStorageOperationInterruptedWrite(t *testing.T) {
 	}
 }
 
+func TestStorageOperationRecoveryFenceIsNotAdmissionFailure(t *testing.T) {
+	operator, _, _, claim := liveVolumeAttributesClassFixture(t)
+	target := &marklogicv1.VolumeAttributesClassAdmissionFailure{
+		PVCName: claim.Name, PVCUID: string(claim.UID), TemplateName: "datadir",
+		DesiredClassName: "premium", Fingerprint: "fingerprint",
+	}
+	if _, operation, err := operator.claimVACStorageOperation(operator.MarklogicGroup, claim, target); err != nil || operation == nil {
+		t.Fatalf("claim storage operation: operation=%+v error=%v", operation, err)
+	}
+
+	base := operator.Client
+	operator.Client = interceptor.NewClient(base.(client.WithWatch), interceptor.Funcs{
+		SubResourcePatch: func(ctx context.Context, underlying client.Client, subresource string, object client.Object, patch client.Patch, options ...client.SubResourcePatchOption) error {
+			if group, ok := object.(*marklogicv1.MarklogicGroup); ok && subresource == "status" && storageOperation(group) == nil {
+				return apierrors.NewTimeoutError("interrupted before clearing storage-operation guard", 1)
+			}
+			return underlying.SubResource(subresource).Patch(ctx, object, patch, options...)
+		},
+	})
+	if active, err := operator.reconcileStorageOperation(); err == nil || !active {
+		t.Fatalf("interrupted recovery must retain its guard: active=%t error=%v", active, err)
+	}
+
+	operator.Client = base
+	restarted := &OperatorContext{Ctx: operator.Ctx, Client: base, APIReader: base, MarklogicGroup: operator.MarklogicGroup}
+	if active, err := restarted.reconcileStorageOperation(); err != nil || active {
+		t.Fatalf("recovery retry: active=%t error=%v", active, err)
+	}
+	saved := &marklogicv1.MarklogicGroup{}
+	if err := base.Get(operator.Ctx, client.ObjectKeyFromObject(operator.MarklogicGroup), saved); err != nil {
+		t.Fatal(err)
+	}
+	if saved.Status.Storage != nil && len(saved.Status.Storage.VolumeAttributesClassAdmissionFailures) != 0 {
+		t.Fatalf("recovery-only fence must not record admission failure: %+v", saved.Status.Storage.VolumeAttributesClassAdmissionFailures)
+	}
+	if err := base.Get(operator.Ctx, client.ObjectKeyFromObject(claim), claim); err != nil {
+		t.Fatal(err)
+	}
+	if claim.Annotations[storageOperationAnnotation] == "" || claim.Annotations[storageOperationSubmissionAnnotation] != "" {
+		t.Fatalf("recovery must fence without recording a VAC submission: %+v", claim.Annotations)
+	}
+}
+
 func TestVolumeAttributesClassResizeInterlock(t *testing.T) {
 	operator, statefulSet, template, claim := liveVolumeAttributesClassFixture(t)
 	if submitted, err := operator.reconcileBoundVolumeAttributesClass(statefulSet, template, 0, claim); err != nil || !submitted {

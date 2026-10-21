@@ -78,7 +78,7 @@ func (oc *OperatorContext) ReconcileStatefulset() (reconcile.Result, error) {
 	}
 	groupLabels["app.kubernetes.io/instance"] = cr.Spec.Name
 	groupLabels["app.kubernetes.io/component"] = getMarkLogicComponentLabel(cr.Spec.IsDynamic)
-	groupAnnotations := cr.GetAnnotations()
+	groupAnnotations := propagatedAnnotations(cr.GetAnnotations())
 	delete(groupAnnotations, "banzaicloud.com/last-applied")
 	objectMeta := generateObjectMeta(cr.Spec.Name, cr.Namespace, groupLabels, groupAnnotations)
 	currentSts, err := oc.GetStatefulSet(cr.Namespace, objectMeta.Name)
