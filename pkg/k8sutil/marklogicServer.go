@@ -152,7 +152,7 @@ func (cc *ClusterContext) GenerateMarkLogicGroupDef(cr *marklogicv1.MarklogicClu
 			UpdateStrategy:                 params.UpdateStrategy,
 			Affinity:                       params.Affinity,
 			NodeSelector:                   params.NodeSelector,
-			Persistence:                    params.Persistence,
+			Persistence:                    params.Persistence.DeepCopy(),
 			Service:                        params.Service,
 			LivenessProbe:                  params.LivenessProbe,
 			ReadinessProbe:                 params.ReadinessProbe,
@@ -211,6 +211,14 @@ func (cc *ClusterContext) ReconsileMarklogicCluster() (reconcile.Result, error) 
 			if err := immutableMarklogicGroupSpecMismatch(currentMlg, markLogicGroupDef); err != nil {
 				logger.Error(err, "Existing MarkLogicGroup cannot be reconciled to desired immutable spec")
 				return result.Error(err).Output()
+			}
+			if token, exists := currentMlg.Annotations[volumeAttributesClassAdmissionRetryAnnotation]; exists {
+				if _, requested := markLogicGroupDef.Annotations[volumeAttributesClassAdmissionRetryAnnotation]; !requested {
+					if markLogicGroupDef.Annotations == nil {
+						markLogicGroupDef.Annotations = map[string]string{}
+					}
+					markLogicGroupDef.Annotations[volumeAttributesClassAdmissionRetryAnnotation] = token
+				}
 			}
 
 			patchDiff, err := patch.DefaultPatchMaker.Calculate(currentMlg, markLogicGroupDef,

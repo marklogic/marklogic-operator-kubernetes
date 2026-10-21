@@ -9,6 +9,12 @@ rules:
 - apiGroups:
   - ""
   resources:
+  - persistentvolumes
+  verbs:
+  - get
+- apiGroups:
+  - ""
+  resources:
   - configmaps
   - pods
   - secrets
@@ -27,6 +33,7 @@ rules:
   resources:
   - persistentvolumeclaims
   verbs:
+  - create
   - get
   - list
   - patch
@@ -111,6 +118,12 @@ rules:
   - get
   - list
   - watch
+- apiGroups:
+  - storage.k8s.io
+  resources:
+  - volumeattributesclasses
+  verbs:
+  - get
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
@@ -184,6 +197,7 @@ rules:
   resources:
   - persistentvolumeclaims
   verbs:
+  - create
   - get
   - list
   - patch
@@ -281,9 +295,9 @@ subjects:
   namespace: '{{ $.Release.Namespace }}'
 {{- end }}
 {{- /*
-storageclass is a cluster-scoped resource; a namespaced Role cannot grant access
-to it. A dedicated ClusterRole + ClusterRoleBinding is required in namespace mode
-so the operator can read allowVolumeExpansion and perform PVC resize operations.
+PersistentVolumes, StorageClasses and VolumeAttributesClasses are cluster-scoped.
+A dedicated ClusterRole + ClusterRoleBinding grants storage validation reads
+in namespace mode.
 */}}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
@@ -294,6 +308,12 @@ metadata:
   {{- include "marklogic-operator-kubernetes.labels" . | nindent 4 }}
 rules:
 - apiGroups:
+  - ""
+  resources:
+  - persistentvolumes
+  verbs:
+  - get
+- apiGroups:
   - storage.k8s.io
   resources:
   - storageclasses
@@ -301,6 +321,12 @@ rules:
   - get
   - list
   - watch
+- apiGroups:
+  - storage.k8s.io
+  resources:
+  - volumeattributesclasses
+  verbs:
+  - get
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding

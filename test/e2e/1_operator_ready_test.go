@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	testutils "github.com/marklogic/marklogic-operator-kubernetes/test/utils"
 	coreV1 "k8s.io/api/core/v1"
 	apiextensionsV1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 
@@ -19,19 +20,34 @@ import (
 func TestOperatorReady(t *testing.T) {
 	trackTest(t)
 	runTopLevelParallel(t)
-	podCreationSig := make(chan *coreV1.Pod)
+	var podCreationSig <-chan *coreV1.Pod
+	var cancelWatch context.CancelFunc
+	t.Cleanup(func() {
+		if cancelWatch != nil {
+			cancelWatch()
+		}
+	})
 
 	feature := features.New("Operator Ready")
 	// Use feature.Setup to define pre-test configuration
 	feature.Setup(func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
 		client := cfg.Client()
+		watchCtx, cancel := context.WithCancel(ctx)
+		cancelWatch = cancel
+		var notifyPod func(interface{})
+		podCreationSig, notifyPod = testutils.OperatorPodNotifications(watchCtx)
 
-		if err := client.Resources(namespace).Watch(&coreV1.PodList{}).WithAddFunc(func(obj interface{}) {
-			pod := obj.(*coreV1.Pod)
-			if strings.HasPrefix(pod.Name, "marklogic-operator-controller") {
-				podCreationSig <- pod
+		var podList coreV1.PodList
+		if err := client.Resources(namespace).List(ctx, &podList); err != nil {
+			t.Fatalf("Cannot list operator Pods: %v", err)
+		}
+		for index := range podList.Items {
+			if strings.HasPrefix(podList.Items[index].Name, "marklogic-operator-controller") {
+				notifyPod(&podList.Items[index])
+				return ctx
 			}
-		}).Start(ctx); err != nil {
+		}
+		if err := client.Resources(namespace).Watch(&coreV1.PodList{}).WithAddFunc(notifyPod).Start(watchCtx); err != nil {
 			t.Fatal(err)
 		}
 		return ctx
@@ -57,9 +73,12 @@ func TestOperatorReady(t *testing.T) {
 	feature.Assess("Pod created", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 		select {
 		case <-time.After(60 * time.Second):
-			t.Error("Timed out wating for pod creation by MarklogicCluster contoller")
+			t.Error("Timed out waiting for controller-manager pod")
 		case pod := <-podCreationSig:
 			t.Log("Pod created by MarklogicCluster controller")
+			if len(pod.OwnerReferences) == 0 {
+				t.Fatalf("Pod %s has no owner references", pod.Name)
+			}
 			refname := pod.GetOwnerReferences()[0].Name
 			if !strings.HasPrefix(refname, "marklogic-operator") {
 				t.Fatalf("Pod has unexpected owner ref: %#v", refname)
@@ -70,7 +89,9 @@ func TestOperatorReady(t *testing.T) {
 
 	// Using feature.Teardown to clean up
 	feature.Teardown(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
-		close(podCreationSig)
+		if cancelWatch != nil {
+			cancelWatch()
+		}
 		return ctx
 	})
 

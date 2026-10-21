@@ -3,10 +3,23 @@
 package k8sutil
 
 import (
+	"errors"
+
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
 
-func (oc *OperatorContext) ReconsileMarklogicGroupHandler() (reconcile.Result, error) {
+func (oc *OperatorContext) ReconsileMarklogicGroupHandler() (outcome reconcile.Result, reconcileErr error) {
+	var resizeWait reconcile.Result
+	defer func() {
+		unusedResult, unusedErr := oc.observeUnusedPrecreatedPVCs()
+		progressResult, progressErr := oc.observeVolumeAttributesClasses(reconcileErr)
+		for _, observation := range []reconcile.Result{resizeWait, unusedResult, progressResult} {
+			if observation.RequeueAfter > 0 && (outcome.RequeueAfter == 0 || observation.RequeueAfter < outcome.RequeueAfter) {
+				outcome.RequeueAfter = observation.RequeueAfter
+			}
+		}
+		reconcileErr = errors.Join(reconcileErr, unusedErr, progressErr)
+	}()
 	oc.ReqLogger.Info("handler::ReconsileMarklogicGroupHandler")
 
 	if oc.MarklogicGroup.Spec.IsDynamic && oc.MarklogicGroup.DeletionTimestamp != nil {
@@ -36,8 +49,12 @@ func (oc *OperatorContext) ReconsileMarklogicGroupHandler() (reconcile.Result, e
 		}
 	}
 
-	if result := oc.ReconcileVolumeResizeValidation(); result.Completed() {
-		return result.Output()
+	if step := oc.ReconcileVolumeResizeValidation(); step.Completed() {
+		next, err := step.Output()
+		if _, deferred := step.(resizeDeferredForVAC); !deferred || err != nil {
+			return next, err
+		}
+		resizeWait = next
 	}
 
 	result, err := oc.ReconcileStatefulset()
@@ -45,13 +62,21 @@ func (oc *OperatorContext) ReconsileMarklogicGroupHandler() (reconcile.Result, e
 		return result, err
 	}
 
+	vacResult, vacErr := oc.ReconcileVolumeAttributesClasses()
 	if oc.MarklogicGroup.Spec.IsDynamic {
 		if dynamicResult := oc.ReconcileDynamicGroupConfig(); dynamicResult.Completed() {
-			return dynamicResult.Output()
+			previousResult := result
+			result, err = dynamicResult.Output()
+			if previousResult.RequeueAfter > 0 && (result.RequeueAfter == 0 || previousResult.RequeueAfter < result.RequeueAfter) {
+				result.RequeueAfter = previousResult.RequeueAfter
+			}
 		}
 	}
 
-	return result, err
+	if vacResult.RequeueAfter > 0 && (result.RequeueAfter == 0 || vacResult.RequeueAfter < result.RequeueAfter) {
+		result.RequeueAfter = vacResult.RequeueAfter
+	}
+	return result, errors.Join(err, vacErr)
 }
 
 func (cc *ClusterContext) ReconsileMarklogicClusterHandler() (reconcile.Result, error) {
@@ -59,6 +84,7 @@ func (cc *ClusterContext) ReconsileMarklogicClusterHandler() (reconcile.Result, 
 	cc.reconcileClusterCore(outcome)
 	// Object storage is independent of the core steps: it always runs once the cluster context exists.
 	outcome.add(cc.ReconcileObjectStorage())
+	outcome.add(cc.observeVolumeAttributesClasses())
 	return outcome.output()
 }
 

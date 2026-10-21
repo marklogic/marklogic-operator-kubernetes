@@ -199,6 +199,86 @@ type VolumeResizeStatus struct {
 	CompletionTime     *metav1.Time `json:"completionTime,omitempty"`
 }
 
+type VolumeAttributesClassState string
+
+const (
+	VolumeAttributesClassPending    VolumeAttributesClassState = "Pending"
+	VolumeAttributesClassInProgress VolumeAttributesClassState = "InProgress"
+	VolumeAttributesClassCompleted  VolumeAttributesClassState = "Completed"
+	VolumeAttributesClassFailed     VolumeAttributesClassState = "Failed"
+	VolumeAttributesClassStalled    VolumeAttributesClassState = "Stalled"
+	VolumeAttributesClassUnknown    VolumeAttributesClassState = "Unknown"
+)
+
+type PVCVolumeAttributesClassStatus struct {
+	Name               string  `json:"name"`
+	UID                string  `json:"uid,omitempty"`
+	TemplateName       string  `json:"templateName"`
+	DesiredClassName   string  `json:"desiredClassName"`
+	RequestedClassName *string `json:"requestedClassName,omitempty"`
+	CurrentClassName   *string `json:"currentClassName,omitempty"`
+	ModifyVolumeError  bool    `json:"modifyVolumeError,omitempty"`
+	// +kubebuilder:validation:Enum=Pending;InProgress;Completed;Failed;Stalled;Unknown
+	State            VolumeAttributesClassState `json:"state"`
+	Reason           string                     `json:"reason"`
+	Message          string                     `json:"message"`
+	LastProgressTime metav1.Time                `json:"lastProgressTime"`
+}
+
+type GroupVolumeAttributesClassStatus struct {
+	Name               string `json:"name"`
+	ObservedGeneration int64  `json:"observedGeneration"`
+	// +kubebuilder:validation:Enum=Pending;InProgress;Completed;Failed;Stalled;Unknown
+	State   VolumeAttributesClassState `json:"state"`
+	Reason  string                     `json:"reason"`
+	Message string                     `json:"message"`
+}
+
+type VolumeAttributesClassStatus struct {
+	ObservedGeneration int64 `json:"observedGeneration"`
+	// +kubebuilder:validation:Enum=Pending;InProgress;Completed;Failed;Stalled;Unknown
+	State   VolumeAttributesClassState         `json:"state"`
+	Reason  string                             `json:"reason"`
+	Message string                             `json:"message"`
+	PVCs    []PVCVolumeAttributesClassStatus   `json:"pvcs,omitempty"`
+	Groups  []GroupVolumeAttributesClassStatus `json:"groups,omitempty"`
+}
+
+type UnusedPVCStatus struct {
+	Name                      string                            `json:"name"`
+	UID                       string                            `json:"uid"`
+	TemplateName              string                            `json:"templateName"`
+	Phase                     corev1.PersistentVolumeClaimPhase `json:"phase,omitempty"`
+	VolumeName                string                            `json:"volumeName,omitempty"`
+	VolumeAttributesClassName *string                           `json:"volumeAttributesClassName,omitempty"`
+	Reason                    string                            `json:"reason"`
+	Message                   string                            `json:"message"`
+	FirstObservedTime         metav1.Time                       `json:"firstObservedTime"`
+}
+
+type StorageOperationStatus struct {
+	ID              string                                 `json:"id"`
+	PVCName         string                                 `json:"pvcName"`
+	PVCUID          string                                 `json:"pvcUID"`
+	AdmissionTarget *VolumeAttributesClassAdmissionFailure `json:"admissionTarget,omitempty"`
+}
+
+type VolumeAttributesClassAdmissionFailure struct {
+	PVCName          string `json:"pvcName"`
+	PVCUID           string `json:"pvcUID"`
+	TemplateName     string `json:"templateName"`
+	DesiredClassName string `json:"desiredClassName"`
+	// +kubebuilder:validation:MaxLength=64
+	Fingerprint string `json:"fingerprint"`
+}
+
+type StorageStatus struct {
+	Operation                              *StorageOperationStatus                 `json:"operation,omitempty"`
+	VolumeAttributesClass                  *VolumeAttributesClassStatus            `json:"volumeAttributesClass,omitempty"`
+	UnusedPVCs                             []UnusedPVCStatus                       `json:"unusedPVCs,omitempty"`
+	VolumeAttributesClassAdmissionFailures []VolumeAttributesClassAdmissionFailure `json:"volumeAttributesClassAdmissionFailures,omitempty"`
+}
+
 // MarklogicGroupStatus defines the observed state of MarklogicGroup
 type MarklogicGroupStatus struct {
 	// INSERT ADDITIONAL STATUS FIELD - define observed state of cluster
@@ -207,6 +287,7 @@ type MarklogicGroupStatus struct {
 	Stage              string                   `json:"stage,omitempty"`
 	MarkLogicPods      []corev1.ObjectReference `json:"active,omitempty"`
 	VolumeResizeStatus *VolumeResizeStatus      `json:"volumeResizeStatus,omitempty"`
+	Storage            *StorageStatus           `json:"storage,omitempty"`
 
 	// +optional
 	MarklogicGroupStatus InternalState `json:"markLogicGroupStatus,omitempty"`

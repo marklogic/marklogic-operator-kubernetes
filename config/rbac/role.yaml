@@ -25,6 +25,7 @@ rules:
   resources:
   - persistentvolumeclaims
   verbs:
+  - create
   - get
   - list
   - patch
@@ -34,6 +35,7 @@ rules:
   - ""
   resources:
   - persistentvolumeclaims/status
+  - persistentvolumes
   verbs:
   - get
 - apiGroups:
@@ -109,3 +111,9 @@ rules:
   - get
   - list
   - watch
+- apiGroups:
+  - storage.k8s.io
+  resources:
+  - volumeattributesclasses
+  verbs:
+  - get

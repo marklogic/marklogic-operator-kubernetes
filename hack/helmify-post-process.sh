@@ -220,9 +220,8 @@ fi
 # ──────────────────────────────────────────────────────────────────────────────
 # 3. manager-rbac.yaml – scope-conditional ClusterRole vs Role/RoleBinding
 # ──────────────────────────────────────────────────────────────────────────────
-if ! grep -q "scope.type" "${MANAGER_RBAC_FILE}"; then
-    echo "  [manager-rbac.yaml] Rewriting with scope-conditional RBAC..."
-    cat > "${MANAGER_RBAC_FILE}" << 'TMPL_EOF'
+echo "  [manager-rbac.yaml] Refreshing scope-conditional storage and manager RBAC..."
+cat > "${MANAGER_RBAC_FILE}" << 'TMPL_EOF'
 {{- if eq .Values.scope.type "cluster" }}
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
@@ -231,6 +230,12 @@ metadata:
   labels:
   {{- include "marklogic-operator-kubernetes.labels" . | nindent 4 }}
 rules:
+- apiGroups:
+  - ""
+  resources:
+  - persistentvolumes
+  verbs:
+  - get
 - apiGroups:
   - ""
   resources:
@@ -252,6 +257,7 @@ rules:
   resources:
   - persistentvolumeclaims
   verbs:
+  - create
   - get
   - list
   - patch
@@ -336,6 +342,12 @@ rules:
   - get
   - list
   - watch
+- apiGroups:
+  - storage.k8s.io
+  resources:
+  - volumeattributesclasses
+  verbs:
+  - get
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
@@ -409,6 +421,7 @@ rules:
   resources:
   - persistentvolumeclaims
   verbs:
+  - create
   - get
   - list
   - patch
@@ -506,9 +519,9 @@ subjects:
   namespace: '{{ $.Release.Namespace }}'
 {{- end }}
 {{- /*
-storageclass is a cluster-scoped resource; a namespaced Role cannot grant access
-to it. A dedicated ClusterRole + ClusterRoleBinding is required in namespace mode
-so the operator can read allowVolumeExpansion and perform PVC resize operations.
+PersistentVolumes, StorageClasses and VolumeAttributesClasses are cluster-scoped.
+A dedicated ClusterRole + ClusterRoleBinding grants storage validation reads
+in namespace mode.
 */}}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
@@ -519,6 +532,12 @@ metadata:
   {{- include "marklogic-operator-kubernetes.labels" . | nindent 4 }}
 rules:
 - apiGroups:
+  - ""
+  resources:
+  - persistentvolumes
+  verbs:
+  - get
+- apiGroups:
   - storage.k8s.io
   resources:
   - storageclasses
@@ -526,6 +545,12 @@ rules:
   - get
   - list
   - watch
+- apiGroups:
+  - storage.k8s.io
+  resources:
+  - volumeattributesclasses
+  verbs:
+  - get
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
@@ -543,10 +568,7 @@ subjects:
   namespace: '{{ .Release.Namespace }}'
 {{- end }}
 TMPL_EOF
-    echo "  [manager-rbac.yaml] Done."
-else
-    echo "  [manager-rbac.yaml] scope logic already present – skipping."
-fi
+echo "  [manager-rbac.yaml] Done."
 
 # ──────────────────────────────────────────────────────────────────────────────
 # 4. metrics-auth-rbac.yaml – guard with scope=cluster AND metrics.secure=true.

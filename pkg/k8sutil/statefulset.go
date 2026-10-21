@@ -5,6 +5,7 @@ package k8sutil
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strconv"
 
 	"github.com/cisco-open/k8s-objectmatcher/patch"
@@ -12,6 +13,7 @@ import (
 	"github.com/marklogic/marklogic-operator-kubernetes/pkg/result"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	apiequality "k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -76,15 +78,35 @@ func (oc *OperatorContext) ReconcileStatefulset() (reconcile.Result, error) {
 	}
 	groupLabels["app.kubernetes.io/instance"] = cr.Spec.Name
 	groupLabels["app.kubernetes.io/component"] = getMarkLogicComponentLabel(cr.Spec.IsDynamic)
-	groupAnnotations := cr.GetAnnotations()
+	groupAnnotations := propagatedAnnotations(cr.GetAnnotations())
 	delete(groupAnnotations, "banzaicloud.com/last-applied")
 	objectMeta := generateObjectMeta(cr.Spec.Name, cr.Namespace, groupLabels, groupAnnotations)
 	currentSts, err := oc.GetStatefulSet(cr.Namespace, objectMeta.Name)
 	containerParams := generateContainerParams(cr)
 	statefulSetParams := generateStatefulSetsParams(cr)
 	statefulSetDef := generateStatefulSetsDef(objectMeta, statefulSetParams, marklogicServerAsOwner(cr), containerParams)
+	validationErr, statusErr := oc.validateVolumeAttributesClassTemplates(statefulSetDef.Spec.VolumeClaimTemplates)
+	if statusErr != nil {
+		return result.Error(statusErr).Output()
+	}
+	if validationErr != nil {
+		validationErr = nil
+		for index := range statefulSetDef.Spec.VolumeClaimTemplates {
+			template := &statefulSetDef.Spec.VolumeClaimTemplates[index]
+			templateErr := oc.VACValidator.Validate(oc.Ctx, []corev1.PersistentVolumeClaim{*template})
+			if volumeAttributesClassProvisioningFallback(templateErr) {
+				template.Spec.VolumeAttributesClassName = nil
+			} else if templateErr != nil {
+				validationErr = templateErr
+				break
+			}
+		}
+	}
 	if err != nil {
 		if apierrors.IsNotFound(err) {
+			if validationErr != nil {
+				return reconcile.Result{}, nil
+			}
 			err := oc.createStatefulSet(statefulSetDef, cr)
 			if err != nil {
 				logger.Error(err, "Failed to create statefulSet")
@@ -96,6 +118,41 @@ func (oc *OperatorContext) ReconcileStatefulset() (reconcile.Result, error) {
 		logger.Error(err, "Cannot get statefulSet for MarkLogic")
 		return result.Error(err).Output()
 	}
+
+	if err := validateClaimTemplateChanges(currentSts.Spec.VolumeClaimTemplates, statefulSetDef.Spec.VolumeClaimTemplates); err != nil {
+		logger.Error(err, "Unsupported PVC claim-template change")
+		if oc.Recorder != nil {
+			oc.Recorder.Event(cr, corev1.EventTypeWarning, "UnsupportedClaimTemplateChange", err.Error())
+		}
+		return result.Error(err).Output()
+	}
+	reconcileResult := result.Done()
+	prepared := true
+	var preparationErr error
+	if validationErr == nil {
+		preparationErr = oc.ensureScaleUpDataPVCs(cr, currentSts, statefulSetDef.Spec.VolumeClaimTemplates)
+	} else if statefulSetDef.Spec.Replicas != nil && currentSts.Spec.Replicas != nil && *statefulSetDef.Spec.Replicas > *currentSts.Spec.Replicas {
+		prepared, preparationErr = oc.scaleUpPVCsAlreadyPrepared(cr, currentSts, statefulSetDef.Spec.VolumeClaimTemplates)
+	}
+	if preparationErr != nil || !prepared {
+		if cr.UID == "" || currentSts.UID == "" || currentSts.DeletionTimestamp != nil || !metav1.IsControlledBy(currentSts, cr) {
+			if preparationErr == nil {
+				preparationErr = fmt.Errorf("cannot prepare scale-up PVCs for an unverified or terminating StatefulSet")
+			}
+			return result.Error(preparationErr).Output()
+		}
+		statefulSetDef.Spec.Replicas = currentSts.Spec.Replicas
+		reconcileResult = result.RequeueSoon(30)
+		if preparationErr != nil {
+			logger.Error(preparationErr, "Cannot prepare data PVCs for scale-up; holding replicas at the live count")
+			if oc.Recorder != nil {
+				oc.Recorder.Eventf(cr, corev1.EventTypeWarning, "ScaleUpPVCPreparationFailed", "Scale-up held at %d replicas: %v", *currentSts.Spec.Replicas, preparationErr)
+			}
+		}
+	}
+	statefulSetDef.Spec.Ordinals = currentSts.Spec.Ordinals.DeepCopy()
+	statefulSetDef.Spec.PersistentVolumeClaimRetentionPolicy = currentSts.Spec.PersistentVolumeClaimRetentionPolicy.DeepCopy()
+	statefulSetDef.Spec.VolumeClaimTemplates = currentSts.Spec.DeepCopy().VolumeClaimTemplates
 
 	patchDiff, err := patch.DefaultPatchMaker.Calculate(currentSts, statefulSetDef,
 		patch.IgnoreStatusFields(),
@@ -117,10 +174,11 @@ func (oc *OperatorContext) ReconcileStatefulset() (reconcile.Result, error) {
 
 	if !patchDiff.IsEmpty() {
 		logger.Info("MarkLogic statefulSet spec is different from the MarkLogicGroup spec, updating the statefulSet")
+		original := currentSts.DeepCopy()
 		currentSts.Spec = statefulSetDef.Spec
 		currentSts.ObjectMeta.Annotations = statefulSetDef.ObjectMeta.Annotations
 		currentSts.ObjectMeta.Labels = statefulSetDef.ObjectMeta.Labels
-		err := oc.Client.Update(oc.Ctx, currentSts)
+		err := oc.Client.Patch(oc.Ctx, currentSts, client.MergeFromWithOptions(original, client.MergeFromWithOptimisticLock{}))
 		if err != nil {
 			logger.Error(err, "Error updating statefulSet")
 			return result.Error(err).Output()
@@ -155,7 +213,7 @@ func (oc *OperatorContext) ReconcileStatefulset() (reconcile.Result, error) {
 				oc.ReqLogger.Error(err, "error updating the MarkLogic Operator Internal status")
 			}
 		}
-		return result.Done().Output()
+		return reconcileResult.Output()
 	} else {
 		logger.Info("MarkLogic statefulSet is ready, setting condition")
 		condition := metav1.Condition{
@@ -173,7 +231,214 @@ func (oc *OperatorContext) ReconcileStatefulset() (reconcile.Result, error) {
 		}
 	}
 
-	return result.Done().Output()
+	return reconcileResult.Output()
+}
+
+const dataPVCGroupUIDAnnotation = "marklogic.progress.com/storage-group-uid"
+
+func validateClaimTemplateChanges(current, desired []corev1.PersistentVolumeClaim) error {
+	if len(current) != len(desired) {
+		return fmt.Errorf("StatefulSet claim templates are immutable: adding or removing templates requires an explicit storage migration")
+	}
+	currentByName := make(map[string]corev1.PersistentVolumeClaim, len(current))
+	for _, template := range current {
+		currentByName[template.Name] = template
+	}
+	for _, template := range desired {
+		previous, found := currentByName[template.Name]
+		if !found {
+			return fmt.Errorf("PVC template %q is new or renamed; StatefulSet claim templates are immutable and require an explicit storage migration", template.Name)
+		}
+		delete(currentByName, template.Name)
+		if !apiequality.Semantic.DeepEqual(claimTemplateSpecForComparison(previous.Spec), claimTemplateSpecForComparison(template.Spec)) {
+			return fmt.Errorf("PVC template %q has unsupported non-VAC spec changes; StatefulSet claim templates are immutable except for separately reconciled VAC and storage-size changes; revert the change or migrate storage explicitly", template.Name)
+		}
+		for key, value := range template.Labels {
+			if previousValue, exists := previous.Labels[key]; !exists || previousValue != value {
+				return fmt.Errorf("PVC template %q label %q differs from its immutable StatefulSet template; revert the change or migrate storage explicitly", template.Name, key)
+			}
+		}
+		for key, value := range template.Annotations {
+			if previousValue, exists := previous.Annotations[key]; !exists || previousValue != value {
+				return fmt.Errorf("PVC template %q annotation %q differs from its immutable StatefulSet template; revert the change or migrate storage explicitly", template.Name, key)
+			}
+		}
+	}
+	return nil
+}
+
+func claimTemplateSpecForComparison(spec corev1.PersistentVolumeClaimSpec) *corev1.PersistentVolumeClaimSpec {
+	normalized := spec.DeepCopy()
+	normalized.VolumeAttributesClassName = nil
+	if size, exists := normalized.Resources.Requests[corev1.ResourceStorage]; exists && size.Sign() > 0 {
+		normalized.Resources.Requests[corev1.ResourceStorage] = resource.MustParse("1")
+	}
+	if len(normalized.Resources.Requests) == 0 {
+		normalized.Resources.Requests = nil
+	}
+	if len(normalized.Resources.Limits) == 0 {
+		normalized.Resources.Limits = nil
+	}
+	if normalized.VolumeMode == nil {
+		mode := corev1.PersistentVolumeFilesystem
+		normalized.VolumeMode = &mode
+	}
+	slices.Sort(normalized.AccessModes)
+	if normalized.DataSourceRef != nil {
+		if normalized.DataSourceRef.Namespace != nil && *normalized.DataSourceRef.Namespace == "" {
+			normalized.DataSourceRef.Namespace = nil
+		}
+		if normalized.DataSourceRef.APIGroup != nil && *normalized.DataSourceRef.APIGroup == "" {
+			normalized.DataSourceRef.APIGroup = nil
+		}
+	}
+	if normalized.DataSource != nil {
+		if normalized.DataSource.APIGroup != nil && *normalized.DataSource.APIGroup == "" {
+			normalized.DataSource.APIGroup = nil
+		}
+		source := &corev1.TypedObjectReference{
+			APIGroup: normalized.DataSource.APIGroup,
+			Kind:     normalized.DataSource.Kind,
+			Name:     normalized.DataSource.Name,
+		}
+		if normalized.DataSourceRef == nil {
+			normalized.DataSourceRef = source
+		}
+		if apiequality.Semantic.DeepEqual(normalized.DataSourceRef, source) {
+			normalized.DataSource = nil
+		}
+	}
+	return normalized
+}
+
+func (oc *OperatorContext) ensureScaleUpDataPVCs(cr *marklogicv1.MarklogicGroup, currentSts *appsv1.StatefulSet, templates []corev1.PersistentVolumeClaim) error {
+	if cr.Spec.Replicas == nil || currentSts.Spec.Replicas == nil || *cr.Spec.Replicas <= *currentSts.Spec.Replicas {
+		return nil
+	}
+	for _, template := range templates {
+		for _, liveTemplate := range currentSts.Spec.VolumeClaimTemplates {
+			if liveTemplate.Name != template.Name {
+				continue
+			}
+			liveClass, desiredClass := liveTemplate.Spec.VolumeAttributesClassName, template.Spec.VolumeAttributesClassName
+			if liveClass == nil && desiredClass == nil || liveClass != nil && desiredClass != nil && *liveClass == *desiredClass {
+				break
+			}
+			if cr.UID == "" || currentSts.DeletionTimestamp != nil {
+				return fmt.Errorf("cannot precreate PVCs without a group UID or for a terminating StatefulSet")
+			}
+			if !metav1.IsControlledBy(currentSts, cr) {
+				return fmt.Errorf("cannot precreate PVCs for a StatefulSet not controlled by this group")
+			}
+			start := int64(0)
+			if currentSts.Spec.Ordinals != nil {
+				start = int64(currentSts.Spec.Ordinals.Start)
+			}
+			for ordinal := start + int64(*currentSts.Spec.Replicas); ordinal < start+int64(*cr.Spec.Replicas); ordinal++ {
+				claim := template.DeepCopy()
+				claim.Name = fmt.Sprintf("%s-%s-%d", template.Name, currentSts.Name, ordinal)
+				claim.Namespace = currentSts.Namespace
+				if claim.Labels == nil {
+					claim.Labels = map[string]string{}
+				}
+				for key, value := range currentSts.Spec.Selector.MatchLabels {
+					claim.Labels[key] = value
+				}
+				if claim.Annotations == nil {
+					claim.Annotations = map[string]string{}
+				}
+				claim.Annotations[dataPVCGroupUIDAnnotation] = string(cr.UID)
+				if err := oc.Client.Create(oc.Ctx, claim); err != nil {
+					if !apierrors.IsAlreadyExists(err) {
+						return fmt.Errorf("create scale-up PVC %s: %w", claim.Name, err)
+					}
+					existing := &corev1.PersistentVolumeClaim{}
+					if err := oc.volumeAttributesClassReader().Get(oc.Ctx, client.ObjectKeyFromObject(claim), existing); err != nil {
+						return fmt.Errorf("read existing scale-up PVC %s: %w", claim.Name, err)
+					}
+					if err := verifyScaleUpPVC(cr, currentSts, &template, existing); err != nil {
+						return err
+					}
+				}
+			}
+			break
+		}
+	}
+	return nil
+}
+
+func verifyScaleUpPVC(cr *marklogicv1.MarklogicGroup, currentSts *appsv1.StatefulSet, template, existing *corev1.PersistentVolumeClaim) error {
+	verified := cr.UID != "" && existing.Annotations[dataPVCGroupUIDAnnotation] == string(cr.UID)
+	for _, owner := range existing.OwnerReferences {
+		if owner.Kind == "MarklogicGroup" && cr.UID != "" && owner.UID == cr.UID || owner.Kind == "StatefulSet" && currentSts.UID != "" && owner.UID == currentSts.UID {
+			verified = true
+		} else {
+			return fmt.Errorf("scale-up PVC %s has an unverified owner", existing.Name)
+		}
+	}
+	if !verified {
+		return fmt.Errorf("scale-up PVC %s has no verified group identity", existing.Name)
+	}
+	if existing.DeletionTimestamp != nil {
+		return fmt.Errorf("scale-up PVC %s is terminating", existing.Name)
+	}
+	if template.Spec.StorageClassName != nil && (existing.Spec.StorageClassName == nil || *existing.Spec.StorageClassName != *template.Spec.StorageClassName) {
+		return fmt.Errorf("scale-up PVC %s has a different StorageClass", existing.Name)
+	}
+	templateMode, existingMode := corev1.PersistentVolumeFilesystem, corev1.PersistentVolumeFilesystem
+	if template.Spec.VolumeMode != nil {
+		templateMode = *template.Spec.VolumeMode
+	}
+	if existing.Spec.VolumeMode != nil {
+		existingMode = *existing.Spec.VolumeMode
+	}
+	if templateMode != existingMode {
+		return fmt.Errorf("scale-up PVC %s has incompatible volume mode %s (required %s)", existing.Name, existingMode, templateMode)
+	}
+	for _, required := range template.Spec.AccessModes {
+		compatible := false
+		for _, available := range existing.Spec.AccessModes {
+			compatible = compatible || available == required
+		}
+		if !compatible {
+			return fmt.Errorf("scale-up PVC %s does not provide required access mode %s", existing.Name, required)
+		}
+	}
+	requiredSize := template.Spec.Resources.Requests[corev1.ResourceStorage]
+	availableSize := existing.Spec.Resources.Requests[corev1.ResourceStorage]
+	if capacity := existing.Status.Capacity[corev1.ResourceStorage]; existing.Status.Phase == corev1.ClaimBound && !capacity.IsZero() {
+		availableSize = capacity
+	}
+	if availableSize.Cmp(requiredSize) < 0 {
+		return fmt.Errorf("scale-up PVC %s has insufficient storage %s (required %s); expand the retained claim before reuse", existing.Name, availableSize.String(), requiredSize.String())
+	}
+	return nil
+}
+
+func (oc *OperatorContext) scaleUpPVCsAlreadyPrepared(cr *marklogicv1.MarklogicGroup, currentSts *appsv1.StatefulSet, templates []corev1.PersistentVolumeClaim) (bool, error) {
+	if cr.UID == "" || currentSts.DeletionTimestamp != nil || !metav1.IsControlledBy(currentSts, cr) {
+		return false, nil
+	}
+	start := int64(0)
+	if currentSts.Spec.Ordinals != nil {
+		start = int64(currentSts.Spec.Ordinals.Start)
+	}
+	for _, template := range templates {
+		for ordinal := start + int64(*currentSts.Spec.Replicas); ordinal < start+int64(*cr.Spec.Replicas); ordinal++ {
+			existing := &corev1.PersistentVolumeClaim{}
+			key := client.ObjectKey{Namespace: currentSts.Namespace, Name: fmt.Sprintf("%s-%s-%d", template.Name, currentSts.Name, ordinal)}
+			if err := oc.volumeAttributesClassReader().Get(oc.Ctx, key, existing); err != nil {
+				if apierrors.IsNotFound(err) {
+					return false, nil
+				}
+				return false, err
+			}
+			if err := verifyScaleUpPVC(cr, currentSts, &template, existing); err != nil {
+				return false, err
+			}
+		}
+	}
+	return true, nil
 }
 
 func shouldDelayDynamicEmptyDirScaleDown(cr *marklogicv1.MarklogicGroup, currentSts *appsv1.StatefulSet) bool {
@@ -427,6 +692,16 @@ func generateStatefulSetsParams(cr *marklogicv1.MarklogicGroup) statefulSetParam
 	if cr.Spec.Persistence != nil && cr.Spec.Persistence.Enabled {
 		params.PersistentVolumeClaim = generatePVCTemplate(cr.Spec.Persistence)
 	}
+	if cr.Spec.AdditionalVolumeClaimTemplates != nil {
+		claims := make([]corev1.PersistentVolumeClaim, len(*cr.Spec.AdditionalVolumeClaimTemplates))
+		for index := range *cr.Spec.AdditionalVolumeClaimTemplates {
+			(*cr.Spec.AdditionalVolumeClaimTemplates)[index].DeepCopyInto(&claims[index])
+			if className := claims[index].Spec.VolumeAttributesClassName; className != nil && *className == "" {
+				claims[index].Spec.VolumeAttributesClassName = nil
+			}
+		}
+		params.AdditionalVolumeClaimTemplates = &claims
+	}
 	return params
 }
 
@@ -608,6 +883,10 @@ func generatePVCTemplate(persistence *marklogicv1.Persistence) corev1.Persistent
 
 	if persistence.StorageClassName != "" {
 		pvcTemplate.Spec.StorageClassName = &persistence.StorageClassName
+	}
+	if persistence.VolumeAttributesClassName != nil && *persistence.VolumeAttributesClassName != "" {
+		className := *persistence.VolumeAttributesClassName
+		pvcTemplate.Spec.VolumeAttributesClassName = &className
 	}
 	pvcTemplate.Spec.AccessModes = persistence.AccessModes
 	pvcTemplate.ObjectMeta.Annotations = persistence.Annotations

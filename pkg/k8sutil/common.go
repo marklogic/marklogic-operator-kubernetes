@@ -94,8 +94,8 @@ func getFluentBitLabels(name string) map[string]string {
 func marklogicClusterAsOwner(cr *marklogicv1.MarklogicCluster) metav1.OwnerReference {
 	trueVar := true
 	return metav1.OwnerReference{
-		APIVersion: cr.APIVersion,
-		Kind:       cr.Kind,
+		APIVersion: marklogicv1.GroupVersion.String(),
+		Kind:       "MarklogicCluster",
 		Name:       cr.Name,
 		UID:        cr.UID,
 		Controller: &trueVar,

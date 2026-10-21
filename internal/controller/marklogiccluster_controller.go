@@ -36,6 +36,8 @@ import (
 
 	"reflect"
 
+	"k8s.io/apimachinery/pkg/api/meta"
+
 	"github.com/go-logr/logr"
 	marklogicv1 "github.com/marklogic/marklogic-operator-kubernetes/api/v1"
 	"github.com/marklogic/marklogic-operator-kubernetes/pkg/k8sutil"
@@ -89,7 +91,7 @@ func (r *MarklogicClusterReconciler) Reconcile(ctx context.Context, req ctrl.Req
 			return ctrl.Result{}, nil
 		}
 
-		logger.Error(err, "Failed to get MarkLogicCluster resource")
+		logger.Error(err, "Failed tso get MarkLogicCluster resource")
 		return ctrl.Result{}, err
 	}
 
@@ -113,6 +115,17 @@ func markLogicClusterCreateUpdateDeletePredicate() predicate.Predicate {
 		},
 		UpdateFunc: func(e event.UpdateEvent) bool {
 			switch e.ObjectNew.(type) {
+			case *marklogicv1.MarklogicGroup:
+				oldGroup, ok := e.ObjectOld.(*marklogicv1.MarklogicGroup)
+				if !ok {
+					return true
+				}
+				newGroup := e.ObjectNew.(*marklogicv1.MarklogicGroup)
+				return oldGroup.Generation != newGroup.Generation || !reflect.DeepEqual(oldGroup.Spec, newGroup.Spec) ||
+					!reflect.DeepEqual(oldGroup.OwnerReferences, newGroup.OwnerReferences) ||
+					!reflect.DeepEqual(oldGroup.DeletionTimestamp, newGroup.DeletionTimestamp) ||
+					!reflect.DeepEqual(oldGroup.Status.Storage, newGroup.Status.Storage) ||
+					!reflect.DeepEqual(meta.FindStatusCondition(oldGroup.Status.Conditions, k8sutil.VolumeAttributesClassSyncedCondition), meta.FindStatusCondition(newGroup.Status.Conditions, k8sutil.VolumeAttributesClassSyncedCondition))
 			case *marklogicv1.MarklogicCluster:
 				if !reflect.DeepEqual(comparableAnnotations(e.ObjectOld), comparableAnnotations(e.ObjectNew)) {
 					return true // Reconcile if annotations have changed
@@ -205,6 +218,7 @@ func (r *MarklogicClusterReconciler) secretToClusters(ctx context.Context, obj c
 
 // SetupWithManager sets up the controller with the Manager.
 func (r *MarklogicClusterReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	r.APIReader = mgr.GetAPIReader()
 	if err := mgr.GetFieldIndexer().IndexField(context.Background(), &marklogicv1.MarklogicCluster{}, objectStorageSecretIndex, objectStorageSecretNames); err != nil {
 		return err
 	}

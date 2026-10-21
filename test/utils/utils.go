@@ -45,6 +45,25 @@ const (
 	certmanagerURLTmpl = "https://github.com/jetstack/cert-manager/releases/download/%s/cert-manager.yaml"
 )
 
+func OperatorPodNotifications(ctx context.Context) (<-chan *corev1.Pod, func(interface{})) {
+	notifications := make(chan *corev1.Pod, 1)
+	return notifications, func(object interface{}) {
+		pod, ok := object.(*corev1.Pod)
+		if !ok || pod == nil || !strings.HasPrefix(pod.Name, "marklogic-operator-controller") {
+			return
+		}
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+		select {
+		case notifications <- pod.DeepCopy():
+		default:
+		}
+	}
+}
+
 func warnError(err error) {
 	fmt.Fprintf(GinkgoWriter, "warning: %v\n", err)
 }

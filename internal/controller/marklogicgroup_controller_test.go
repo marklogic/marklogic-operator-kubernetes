@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"testing"
 	"time"
 
 	marklogicv1 "github.com/marklogic/marklogic-operator-kubernetes/api/v1"
@@ -33,10 +34,68 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 )
+
+func TestVolumeAttributesClassPVCWatch(t *testing.T) {
+	scheme := runtime.NewScheme()
+	for _, register := range []func(*runtime.Scheme) error{marklogicv1.AddToScheme, appsv1.AddToScheme, corev1.AddToScheme} {
+		if err := register(scheme); err != nil {
+			t.Fatal(err)
+		}
+	}
+	replicaCount := int32(1)
+	group := &marklogicv1.MarklogicGroup{ObjectMeta: metav1.ObjectMeta{Name: "my-dnode", Namespace: "vac-test", UID: "group-uid"}}
+	statefulSet := &appsv1.StatefulSet{
+		ObjectMeta: metav1.ObjectMeta{Name: group.Name, Namespace: group.Namespace, UID: "sts-uid", OwnerReferences: []metav1.OwnerReference{*metav1.NewControllerRef(group, marklogicv1.GroupVersion.WithKind("MarklogicGroup"))}},
+		Spec:       appsv1.StatefulSetSpec{Replicas: &replicaCount, Ordinals: &appsv1.StatefulSetOrdinals{Start: 5}, VolumeClaimTemplates: []corev1.PersistentVolumeClaim{{ObjectMeta: metav1.ObjectMeta{Name: "datadir"}}, {ObjectMeta: metav1.ObjectMeta{Name: "logsdir"}}}},
+	}
+	reconciler := &MarklogicGroupReconciler{Client: fake.NewClientBuilder().WithScheme(scheme).WithObjects(group, statefulSet).Build()}
+	for _, test := range []struct {
+		name      string
+		namespace string
+		marker    string
+		want      bool
+	}{
+		{name: "datadir-my-dnode-5", namespace: group.Namespace, want: true},
+		{name: "logsdir-my-dnode-5", namespace: group.Namespace, want: true},
+		{name: "datadir-my-dnode-6", namespace: group.Namespace},
+		{name: "datadir-my-dnode-6", namespace: group.Namespace, marker: string(group.UID), want: true},
+		{name: "datadir-my-dnode-4", namespace: group.Namespace, marker: string(group.UID), want: true},
+		{name: "datadir-my-dnode-6", namespace: group.Namespace, marker: "foreign-group"},
+		{name: "datadir-my-dnode-05", namespace: group.Namespace},
+		{name: "external-my-dnode-5", namespace: group.Namespace},
+		{name: "datadir-my-dnode-5", namespace: "other-namespace"},
+	} {
+		claim := &corev1.PersistentVolumeClaim{ObjectMeta: metav1.ObjectMeta{Name: test.name, Namespace: test.namespace, Annotations: map[string]string{k8sutil.PrecreatedPVCGroupUIDIndex: test.marker}}}
+		requests := reconciler.pvcToMarklogicGroup(context.Background(), claim)
+		if (len(requests) == 1) != test.want {
+			t.Fatalf("PVC %s/%s mapped to %+v", test.namespace, test.name, requests)
+		}
+		if test.want && requests[0].NamespacedName != ctrlclient.ObjectKeyFromObject(group) {
+			t.Fatalf("wrong group request: %+v", requests)
+		}
+	}
+	precreated := &corev1.PersistentVolumeClaim{ObjectMeta: metav1.ObjectMeta{Name: "datadir-my-dnode-6", Namespace: group.Namespace, Annotations: map[string]string{k8sutil.PrecreatedPVCGroupUIDIndex: string(group.UID)}}}
+	if err := reconciler.Create(context.Background(), precreated); err != nil {
+		t.Fatal(err)
+	}
+	unrelatedPod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "external-consumer", Namespace: group.Namespace}, Spec: corev1.PodSpec{Volumes: []corev1.Volume{{Name: "data", VolumeSource: corev1.VolumeSource{PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: precreated.Name}}}}}}
+	if requests := reconciler.podToMarklogicGroup(context.Background(), unrelatedPod); len(requests) != 1 || requests[0].NamespacedName != ctrlclient.ObjectKeyFromObject(group) {
+		t.Fatalf("external Pod references must enqueue the storage-owning group: %+v", requests)
+	}
+	pending := &corev1.PersistentVolumeClaim{Status: corev1.PersistentVolumeClaimStatus{Phase: corev1.ClaimPending}}
+	bound := pending.DeepCopy()
+	bound.Status.Phase = corev1.ClaimBound
+	if !markLogicGroupCreateUpdateDeletePredicate().Update(event.UpdateEvent{ObjectOld: pending, ObjectNew: bound}) {
+		t.Fatal("PVC status-only binding events must trigger reconciliation")
+	}
+}
 
 const (
 	Name      = "dnode"
@@ -84,6 +143,31 @@ var hugePages = marklogicv1.HugePages{
 var _ = Describe("MarkLogicGroup controller", func() {
 	Context("When creating an MarklogicGroup", func() {
 		ctx := context.Background()
+		It("Should retain additional claim template metadata through API-server admission", func() {
+			namespace := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "vac-template-metadata"}}
+			Expect(k8sClient.Create(ctx, namespace)).Should(Succeed())
+			count := int32(1)
+			claims := []corev1.PersistentVolumeClaim{{
+				ObjectMeta: metav1.ObjectMeta{Name: "logs", Labels: map[string]string{"purpose": "audit"}, Annotations: map[string]string{"storage-test": "preserved"}},
+				Spec:       corev1.PersistentVolumeClaimSpec{AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce}, Resources: corev1.VolumeResourceRequirements{Requests: corev1.ResourceList{corev1.ResourceStorage: resource.MustParse("10Gi")}}},
+			}}
+			group := &marklogicv1.MarklogicGroup{
+				ObjectMeta: metav1.ObjectMeta{Name: "metadata-test", Namespace: namespace.Name},
+				Spec: marklogicv1.MarklogicGroupSpec{Name: "metadata-test", Image: imageName, Replicas: &count, GroupConfig: groupConfig,
+					HugePages: &marklogicv1.HugePages{}, LogCollection: &marklogicv1.LogCollection{}, AdditionalVolumeClaimTemplates: &claims,
+					AdditionalVolumeMounts: &[]corev1.VolumeMount{{Name: "logs", MountPath: "/var/log/custom"}}},
+			}
+			Expect(k8sClient.Create(ctx, group)).Should(Succeed())
+			stored := &marklogicv1.MarklogicGroup{}
+			Expect(k8sClient.Get(ctx, ctrlclient.ObjectKeyFromObject(group), stored)).Should(Succeed())
+			Expect(stored.Spec.AdditionalVolumeClaimTemplates).ShouldNot(BeNil())
+			Expect(*stored.Spec.AdditionalVolumeClaimTemplates).Should(HaveLen(1))
+			claim := (*stored.Spec.AdditionalVolumeClaimTemplates)[0]
+			Expect(claim.Name).Should(Equal("logs"))
+			Expect(claim.Labels).Should(HaveKeyWithValue("purpose", "audit"))
+			Expect(claim.Annotations).Should(HaveKeyWithValue("storage-test", "preserved"))
+		})
+
 		It("Should create a MarklogicGroup CR, StatefulSet and Service", func() {
 			// Create the namespace
 			ns := corev1.Namespace{
