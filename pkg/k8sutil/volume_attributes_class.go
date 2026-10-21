@@ -481,6 +481,7 @@ func (oc *OperatorContext) reconcileBoundVolumeAttributesClass(statefulSet *apps
 			claim.Annotations = map[string]string{}
 		}
 		claim.Annotations[storageOperationAnnotation] = operation.ID
+		claim.Annotations[dataPVCGroupUIDAnnotation] = string(group.UID)
 		attempted = true
 		if err := oc.Client.Patch(oc.Ctx, claim, client.MergeFromWithOptions(original, client.MergeFromWithOptimisticLock{})); err != nil {
 			return err

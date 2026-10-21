@@ -3280,6 +3280,76 @@ func TestScaleUpPVCCompatibility(t *testing.T) {
 	}
 }
 
+func TestScaleUpReusesOrdinaryClaimAfterVACProvenanceIsRecorded(t *testing.T) {
+	operator, statefulSet, desiredTemplate, activeClaim := liveVolumeAttributesClassFixture(t)
+	replicas := int32(2)
+	operator.MarklogicGroup.Spec.Replicas = &replicas
+	if err := operator.Client.Update(operator.Ctx, operator.MarklogicGroup); err != nil {
+		t.Fatal(err)
+	}
+	statefulSet.Spec.Replicas = &replicas
+	statefulSet.Spec.Selector = &metav1.LabelSelector{MatchLabels: getSelectorLabels(operator.MarklogicGroup.Name)}
+	statefulSet.Spec.VolumeClaimTemplates[0].Spec.VolumeAttributesClassName = pointerToVACStorageClass("standard")
+	if err := operator.Client.Update(operator.Ctx, statefulSet); err != nil {
+		t.Fatal(err)
+	}
+
+	retained := activeClaim.DeepCopy()
+	retained.Name = "datadir-dnode-1"
+	retained.UID = "ordinary-retained-uid"
+	retained.ResourceVersion = ""
+	retained.Annotations = nil
+	retained.Spec.VolumeName = "pv-retained"
+	retained.Status.CurrentVolumeAttributesClassName = pointerToVACStorageClass("standard")
+	if err := operator.Client.Create(operator.Ctx, retained); err != nil {
+		t.Fatal(err)
+	}
+	volume := &corev1.PersistentVolume{}
+	if err := operator.Client.Get(operator.Ctx, client.ObjectKey{Name: activeClaim.Spec.VolumeName}, volume); err != nil {
+		t.Fatal(err)
+	}
+	volume.Name = retained.Spec.VolumeName
+	volume.UID = "retained-volume-uid"
+	volume.ResourceVersion = ""
+	volume.Spec.ClaimRef.Name = retained.Name
+	volume.Spec.ClaimRef.UID = retained.UID
+	if err := operator.Client.Create(operator.Ctx, volume); err != nil {
+		t.Fatal(err)
+	}
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "dnode-1", Namespace: retained.Namespace, UID: "retained-pod-uid",
+			OwnerReferences: []metav1.OwnerReference{*metav1.NewControllerRef(statefulSet, appsv1.SchemeGroupVersion.WithKind("StatefulSet"))},
+		},
+		Spec: corev1.PodSpec{Volumes: []corev1.Volume{{Name: "datadir", VolumeSource: corev1.VolumeSource{PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: retained.Name}}}}},
+	}
+	if err := operator.Client.Create(operator.Ctx, pod); err != nil {
+		t.Fatal(err)
+	}
+	if submitted, err := operator.reconcileBoundVolumeAttributesClass(statefulSet, desiredTemplate, 1, retained); err != nil || !submitted {
+		t.Fatalf("VAC update for ordinary claim: submitted=%v, err=%v", submitted, err)
+	}
+	saved := &corev1.PersistentVolumeClaim{}
+	if err := operator.Client.Get(operator.Ctx, client.ObjectKeyFromObject(retained), saved); err != nil {
+		t.Fatal(err)
+	}
+	if saved.Annotations[dataPVCGroupUIDAnnotation] != string(operator.MarklogicGroup.UID) {
+		t.Fatal("verified ordinary claim must retain its group provenance")
+	}
+
+	if err := operator.Client.Delete(operator.Ctx, pod); err != nil {
+		t.Fatal(err)
+	}
+	oneReplica := int32(1)
+	statefulSet.Spec.Replicas = &oneReplica
+	if err := operator.Client.Update(operator.Ctx, statefulSet); err != nil {
+		t.Fatal(err)
+	}
+	if err := operator.ensureScaleUpDataPVCs(operator.MarklogicGroup, statefulSet, []corev1.PersistentVolumeClaim{desiredTemplate}); err != nil {
+		t.Fatalf("scale-up should reuse the retained ordinary claim after its Pod is gone: %v", err)
+	}
+}
+
 func TestScaleUpVACPrecreationSafety(t *testing.T) {
 	tests := []struct {
 		name           string
