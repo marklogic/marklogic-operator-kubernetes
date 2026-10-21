@@ -86,8 +86,16 @@ func TestClusterPredicateKeepsOwnedGroupFiltering(t *testing.T) {
 	changed := group.DeepCopy()
 	changed.Spec.Replicas = new(int32)
 
+	if !predicate.Update(event.UpdateEvent{ObjectOld: group, ObjectNew: changed}) {
+		t.Fatalf("owned MarklogicGroup spec updates must trigger parent convergence checks")
+	}
+	changed = group.DeepCopy()
+	changed.Status.Stage = "Unrelated"
 	if predicate.Update(event.UpdateEvent{ObjectOld: group, ObjectNew: changed}) {
-		t.Fatalf("owned MarklogicGroup updates stay filtered")
+		t.Fatalf("unrelated owned MarklogicGroup status updates stay filtered")
+	}
+	if predicate.Update(event.UpdateEvent{ObjectOld: group, ObjectNew: group.DeepCopy()}) {
+		t.Fatalf("unchanged owned MarklogicGroup updates stay filtered")
 	}
 	if !predicate.Create(event.CreateEvent{Object: group}) || !predicate.Delete(event.DeleteEvent{Object: group}) {
 		t.Fatalf("owned MarklogicGroup create/delete stay admitted")
