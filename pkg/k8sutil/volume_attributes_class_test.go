@@ -1023,6 +1023,7 @@ func TestVolumeAttributesClassBoundPVCUpdate(t *testing.T) {
 					t.Fatal("VAC submission requires a persisted identity-bound operation guard")
 				}
 				want.Annotations[storageOperationAnnotation] = operation.ID
+				want.Annotations[storageOperationSubmissionAnnotation] = operation.ID
 			}
 			if !reflect.DeepEqual(after.Spec, want.Spec) || !reflect.DeepEqual(after.Status, before.Status) || after.UID != before.UID || !reflect.DeepEqual(after.Annotations, want.Annotations) || !reflect.DeepEqual(after.OwnerReferences, before.OwnerReferences) {
 				t.Fatal("VAC submission must preserve every unrelated PVC field and identity")
