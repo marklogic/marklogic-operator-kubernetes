@@ -325,6 +325,9 @@ func (oc *OperatorContext) observeVolumeAttributesClasses(dispatchErr error) (re
 				status.State, status.Reason, status.Message = marklogicv1.VolumeAttributesClassUnknown, "StatefulSetReadFailed", setErr.Error()
 			} else if setErr != nil {
 				status.State, status.Reason, status.Message = marklogicv1.VolumeAttributesClassPending, "WorkloadNotReady", "Waiting for the managed StatefulSet"
+				if validationErr != nil && !volumeAttributesClassProvisioningFallback(validationErr) {
+					status.State, status.Reason, status.Message = volumeAttributesClassFailureProgress(validationErr)
+				}
 			} else if group.UID == "" || statefulSet.UID == "" || statefulSet.DeletionTimestamp != nil || !metav1.IsControlledBy(statefulSet, group) {
 				status.State, status.Reason, status.Message = marklogicv1.VolumeAttributesClassFailed, "WorkloadUnverified", "StatefulSet identity, ownership or lifecycle could not be verified"
 			} else if apierrors.IsNotFound(readErr) && validationErr != nil {

@@ -85,27 +85,27 @@ func (oc *OperatorContext) ReconcileStatefulset() (reconcile.Result, error) {
 	containerParams := generateContainerParams(cr)
 	statefulSetParams := generateStatefulSetsParams(cr)
 	statefulSetDef := generateStatefulSetsDef(objectMeta, statefulSetParams, marklogicServerAsOwner(cr), containerParams)
-	validationErr, statusErr := oc.validateVolumeAttributesClassTemplates(statefulSetDef.Spec.VolumeClaimTemplates)
+	validation, statusErr := oc.validateVolumeAttributesClassTemplates(statefulSetDef.Spec.VolumeClaimTemplates)
 	if statusErr != nil {
 		return result.Error(statusErr).Output()
 	}
-	if validationErr != nil {
-		validationErr = nil
-		for index := range statefulSetDef.Spec.VolumeClaimTemplates {
-			template := &statefulSetDef.Spec.VolumeClaimTemplates[index]
-			templateErr := oc.VACValidator.Validate(oc.Ctx, []corev1.PersistentVolumeClaim{*template})
-			if volumeAttributesClassProvisioningFallback(templateErr) {
-				template.Spec.VolumeAttributesClassName = nil
-			} else if templateErr != nil {
-				validationErr = templateErr
-				break
-			}
+	for index := range statefulSetDef.Spec.VolumeClaimTemplates {
+		if volumeAttributesClassProvisioningFallback(validation.templates[index]) {
+			statefulSetDef.Spec.VolumeClaimTemplates[index].Spec.VolumeAttributesClassName = nil
 		}
 	}
+	validationErr := validation.blocking
 	if err != nil {
 		if apierrors.IsNotFound(err) {
 			if validationErr != nil {
-				return reconcile.Result{}, nil
+				if !applyStatefulSetRecovery(cr, statefulSetDef) {
+					return result.RequeueSoon(30).Output()
+				}
+				message := fmt.Sprintf("Recreating StatefulSet for resize recovery with its last verified VolumeAttributesClass selections; the desired selection remains invalid: %v", validationErr)
+				logger.Info("WARNING: " + message)
+				if oc.Recorder != nil {
+					oc.Recorder.Event(cr, corev1.EventTypeWarning, "StatefulSetRecoveredWithPreviousVAC", message)
+				}
 			}
 			err := oc.createStatefulSet(statefulSetDef, cr)
 			if err != nil {

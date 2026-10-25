@@ -5730,6 +5730,27 @@ spec:
                   retryCount:
                     format: int32
                     type: integer
+                  statefulSetRecovery:
+                    description: Last verified claim-template configuration of the
+                      StatefulSet orphan-deleted for template synchronization.
+                    properties:
+                      claimTemplates:
+                        items:
+                          properties:
+                            name:
+                              type: string
+                            volumeAttributesClassName:
+                              type: string
+                          required:
+                          - name
+                          type: object
+                        type: array
+                      statefulSetUID:
+                        type: string
+                    required:
+                    - claimTemplates
+                    - statefulSetUID
+                    type: object
                   targetSize:
                     type: string
                   totalPvcs:

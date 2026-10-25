@@ -154,7 +154,7 @@ func (validator *VolumeAttributesClassValidator) Validate(ctx context.Context, t
 			}
 			driver, _, err = unstructured.NestedString(class.Object, "driverName")
 			if err != nil || driver == "" {
-				return vacValidationError("VACInvalid", fmt.Sprintf("VolumeAttributesClass %s has no valid driverName", *className), err)
+				return vacValidationError("VACInvalid", fmt.Sprintf("PVC template %s: VolumeAttributesClass %s has no valid driverName", template.Name, *className), err)
 			}
 			classDrivers[*className] = driver
 		}
@@ -429,6 +429,9 @@ func (oc *OperatorContext) reconcileBoundVolumeAttributesClass(statefulSet *apps
 		if err := oc.verifyVolumeAttributesClassClaim(group, currentSet, template.Name, ordinal, claim); err != nil {
 			return err
 		}
+		if err := oc.persistVolumeAttributesClassClaimIdentity(group, claim); err != nil {
+			return err
+		}
 		if claim.Spec.VolumeAttributesClassName != nil && *claim.Spec.VolumeAttributesClassName == *requested {
 			return nil
 		}
@@ -512,6 +515,19 @@ func (oc *OperatorContext) reconcileBoundVolumeAttributesClass(statefulSet *apps
 		return nil
 	})
 	return attempted, err
+}
+
+// Ownerless claims are verified through their Pod, which disappears on scale-down; retained reuse needs this annotation.
+func (oc *OperatorContext) persistVolumeAttributesClassClaimIdentity(group *marklogicv1.MarklogicGroup, claim *corev1.PersistentVolumeClaim) error {
+	if claim.Annotations[dataPVCGroupUIDAnnotation] == string(group.UID) {
+		return nil
+	}
+	original := claim.DeepCopy()
+	if claim.Annotations == nil {
+		claim.Annotations = map[string]string{}
+	}
+	claim.Annotations[dataPVCGroupUIDAnnotation] = string(group.UID)
+	return oc.Client.Patch(oc.Ctx, claim, client.MergeFromWithOptions(original, client.MergeFromWithOptimisticLock{}))
 }
 
 func volumeAttributesClassAdmissionError(name, requested string) error {
@@ -657,21 +673,43 @@ func volumeAttributesClassProvisioningFallback(err error) bool {
 	return errors.As(err, &failure) && (failure.reason == "VACUnsupported" || failure.reason == "VACNotFound")
 }
 
-func (oc *OperatorContext) validateVolumeAttributesClassTemplates(templates []corev1.PersistentVolumeClaim) (error, error) {
-	validationErr := oc.VACValidator.Validate(oc.Ctx, templates)
+type volumeAttributesClassTemplateValidation struct {
+	templates []error
+	blocking  error
+}
+
+func (oc *OperatorContext) validateVolumeAttributesClassTemplates(templates []corev1.PersistentVolumeClaim) (volumeAttributesClassTemplateValidation, error) {
+	validation := volumeAttributesClassTemplateValidation{templates: make([]error, len(templates))}
+	var fallback error
 	managed := false
-	for _, template := range templates {
-		if className := template.Spec.VolumeAttributesClassName; className != nil && *className != "" {
-			managed = true
-			break
+	for index, template := range templates {
+		if className := template.Spec.VolumeAttributesClassName; className == nil || *className == "" {
+			continue
 		}
+		managed = true
+		err := oc.VACValidator.Validate(oc.Ctx, []corev1.PersistentVolumeClaim{template})
+		validation.templates[index] = err
+		if err == nil {
+			continue
+		}
+		if volumeAttributesClassProvisioningFallback(err) {
+			if fallback == nil {
+				fallback = err
+			}
+		} else if validation.blocking == nil {
+			validation.blocking = err
+		}
+	}
+	validationErr := validation.blocking
+	if validationErr == nil {
+		validationErr = fallback
 	}
 	previous := meta.FindStatusCondition(oc.MarklogicGroup.Status.Conditions, VolumeAttributesClassValidationCondition)
 	if previous != nil {
 		previous = previous.DeepCopy()
 	}
 	if !managed && previous == nil {
-		return nil, nil
+		return validation, nil
 	}
 	original := oc.MarklogicGroup.DeepCopy()
 	changed := false
@@ -682,9 +720,13 @@ func (oc *OperatorContext) validateVolumeAttributesClassTemplates(templates []co
 	} else {
 		if validationErr != nil {
 			var failure *volumeAttributesClassValidationError
-			errors.As(validationErr, &failure)
+			if !errors.As(validationErr, &failure) {
+				failure = &volumeAttributesClassValidationError{reason: "VACValidationFailed", message: validationErr.Error(), cause: validationErr}
+			}
 			eventType, reason, message = corev1.EventTypeWarning, failure.reason, failure.message
-			if volumeAttributesClassProvisioningFallback(validationErr) {
+			if validation.blocking != nil {
+				message += "; new PVC provisioning, including initial StatefulSet creation, is blocked until this is fixed."
+			} else {
 				message += "; new PVCs will be provisioned without this VAC, using StorageClass/driver defaults. "
 				if reason == "VACUnsupported" {
 					message += "To fix: enable a supported storage.k8s.io VolumeAttributesClass API/feature configuration or upgrade Kubernetes, then verify CSI provisioner/resizer support; remove the VAC selection if it is not required."
@@ -704,14 +746,14 @@ func (oc *OperatorContext) validateVolumeAttributesClassTemplates(templates []co
 	}
 	if changed {
 		if err := oc.Client.Status().Patch(oc.Ctx, oc.MarklogicGroup, client.MergeFromWithOptions(original, client.MergeFromWithOptimisticLock{})); err != nil {
-			return validationErr, fmt.Errorf("record VolumeAttributesClass validation: %w", err)
+			return validation, fmt.Errorf("record VolumeAttributesClass validation: %w", err)
 		}
 		if managed && oc.Recorder != nil && (previous == nil || previous.Status != status || previous.Reason != reason || previous.Message != message) {
 			oc.Recorder.Event(oc.MarklogicGroup, eventType, reason, message)
 		}
-		if managed && volumeAttributesClassProvisioningFallback(validationErr) && (previous == nil || previous.Status != status || previous.Reason != reason || previous.Message != message) {
+		if managed && validation.blocking == nil && volumeAttributesClassProvisioningFallback(validationErr) && (previous == nil || previous.Status != status || previous.Reason != reason || previous.Message != message) {
 			oc.ReqLogger.Info("WARNING: provisioning without unavailable VolumeAttributesClass", "reason", reason, "message", message)
 		}
 	}
-	return validationErr, nil
+	return validation, nil
 }

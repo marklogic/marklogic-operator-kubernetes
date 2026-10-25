@@ -190,13 +190,25 @@ type VolumeResizeStatus struct {
 	PVCStatuses      []PVCResizeStatus    `json:"pvcStatuses,omitempty"`
 	FailedPVCs       []FailedPVCStatus    `json:"failedPVCs,omitempty"`
 	// Internal crash-recovery workflow markers for resize reconciliation.
-	Markers            []string     `json:"markers,omitempty"`
-	Warnings           []string     `json:"warnings,omitempty"`
-	RetryCount         int32        `json:"retryCount,omitempty"`
-	NextRetryTime      *metav1.Time `json:"nextRetryTime,omitempty"`
-	LastTransitionTime *metav1.Time `json:"lastTransitionTime,omitempty"`
-	FirstStartedTime   *metav1.Time `json:"firstStartedTime,omitempty"`
-	CompletionTime     *metav1.Time `json:"completionTime,omitempty"`
+	Markers []string `json:"markers,omitempty"`
+	// Last verified claim-template configuration of the StatefulSet orphan-deleted for template synchronization.
+	StatefulSetRecovery *StatefulSetRecoveryStatus `json:"statefulSetRecovery,omitempty"`
+	Warnings            []string                   `json:"warnings,omitempty"`
+	RetryCount          int32                      `json:"retryCount,omitempty"`
+	NextRetryTime       *metav1.Time               `json:"nextRetryTime,omitempty"`
+	LastTransitionTime  *metav1.Time               `json:"lastTransitionTime,omitempty"`
+	FirstStartedTime    *metav1.Time               `json:"firstStartedTime,omitempty"`
+	CompletionTime      *metav1.Time               `json:"completionTime,omitempty"`
+}
+
+type StatefulSetRecoveryStatus struct {
+	StatefulSetUID string                        `json:"statefulSetUID"`
+	ClaimTemplates []RecoveryClaimTemplateStatus `json:"claimTemplates"`
+}
+
+type RecoveryClaimTemplateStatus struct {
+	Name                      string  `json:"name"`
+	VolumeAttributesClassName *string `json:"volumeAttributesClassName,omitempty"`
 }
 
 type VolumeAttributesClassState string
