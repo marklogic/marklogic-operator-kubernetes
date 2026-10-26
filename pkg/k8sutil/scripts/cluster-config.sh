@@ -787,11 +787,13 @@ EOF
 
 function configure_app_server_basic_auth {
     local app_server=$1
-    local manage_protocol response_code response_file
+    local manage_protocol manage_host response_code response_file
     local -a manage_tls_options=()
 
     manage_protocol=$(get_current_host_protocol localhost 8002)
+    manage_host="localhost"
     if [[ "$manage_protocol" == "https" ]]; then
+        manage_host="$HOST_FQDN"
         if [[ -s "/run/secrets/marklogic-certs/cacert.pem" ]]; then
             manage_tls_options=(--cacert /run/secrets/marklogic-certs/cacert.pem)
         else
@@ -804,7 +806,7 @@ function configure_app_server_basic_auth {
         --user "${MARKLOGIC_MANAGEMENT_USERNAME}:${MARKLOGIC_MANAGEMENT_PASSWORD}" \
         -m 20 -s -o "$response_file" -w '%{http_code}' "${manage_tls_options[@]}" \
         -X PUT -H "Content-type: application/json" -d '{"authentication":"basic"}' \
-        "${manage_protocol}://localhost:8002/manage/v2/servers/${app_server}/properties?group-id=${MARKLOGIC_GROUP}")
+        "${manage_protocol}://${manage_host}:8002/manage/v2/servers/${app_server}/properties?group-id=${MARKLOGIC_GROUP}")
 
     case "$response_code" in
         200|202|204)
