@@ -8,8 +8,8 @@ controllerManager:
       readOnlyRootFilesystem: true
       runAsNonRoot: true
     image:
-      repository: harbor.ml-kube.com/marklogic/marklogic-operator-kubernetes
-      tag: 1.4.0-rc4
+      repository: progressofficial/marklogic-operator-kubernetes
+      tag: 1.4.0
     resources:
       limits:
         cpu: 500m
