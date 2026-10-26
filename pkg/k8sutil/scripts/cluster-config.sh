@@ -774,7 +774,7 @@ EOF
             if [[ "$certType" == "self-signed" ]]; then
             log "Info:  Generate temporary certificate if necessary"
             "${AUTH_CURL[@]}" $HTTPS_OPTION -X POST -i -d @createTempCert.xqy -H "Content-type: application/x-www-form-urlencoded" \
-            -H "Accept: multipart/mixed; boundary=BOUNDARY" https://localhost:8000/v1/eval
+            -H "Accept: multipart/mixed; boundary=BOUNDARY" "https://${HOST_FQDN}:8000/v1/eval"
             resp_code=$?
             info "response code for Generate temporary certificate is $resp_code"
         fi
