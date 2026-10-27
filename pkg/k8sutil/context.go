@@ -29,6 +29,8 @@ type OperatorContext struct {
 	Recorder       record.EventRecorder
 	Services       []*corev1.Service
 	StatefulSets   []*appsv1.StatefulSet
+	VACValidator   *VolumeAttributesClassValidator
+	APIReader      controllerClient.Reader
 }
 
 type ClusterContext struct {
@@ -241,5 +243,6 @@ func propagatedAnnotations(annotations map[string]string) map[string]string {
 	delete(copied, "kubectl.kubernetes.io/last-applied-configuration")
 	delete(copied, "e2e.marklogic.progress.com/reconcile-kick")
 	delete(copied, ReconcileRequestAnnotation)
+	delete(copied, volumeAttributesClassAdmissionRetryAnnotation)
 	return copied
 }

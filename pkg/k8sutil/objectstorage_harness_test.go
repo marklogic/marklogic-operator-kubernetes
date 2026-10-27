@@ -30,6 +30,11 @@ import (
 // Every credential value in these tests carries this marker so leaks are detectable.
 const secretMarker = "SECRET-VALUE"
 
+var (
+	testMarkLogicImage        = "progressofficial/marklogic-db:12.0.3-ubi9-rootless-2.2.6"
+	testUpdatedMarkLogicImage = testMarkLogicImage + "-updated"
+)
+
 type recordedEvent struct {
 	eventType string
 	reason    string
@@ -124,7 +129,7 @@ func newOSHarness(t *testing.T, mutate func(*marklogicv1.MarklogicCluster)) *osH
 		ObjectMeta: metav1.ObjectMeta{Name: osCluster, Namespace: osNamespace, UID: "cluster-uid-1", Generation: 1},
 		Spec: marklogicv1.MarklogicClusterSpec{
 			ClusterDomain: "cluster.local",
-			Image:         "progressofficial/marklogic-db:12.0.3-ubi9-rootless-2.2.6",
+			Image:         testMarkLogicImage,
 			MarkLogicGroups: []*marklogicv1.MarklogicGroups{
 				{Name: "dnode", IsBootstrap: true, GroupConfig: &marklogicv1.GroupConfig{Name: "Default"}},
 			},

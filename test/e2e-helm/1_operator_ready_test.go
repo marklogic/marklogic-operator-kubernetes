@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	testutils "github.com/marklogic/marklogic-operator-kubernetes/test/utils"
 	corev1 "k8s.io/api/core/v1"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	"sigs.k8s.io/e2e-framework/pkg/envconf"
@@ -19,14 +20,23 @@ import (
 // marklogic-operator Deployment.
 func TestOperatorReady(t *testing.T) {
 	trackTest(t)
-	podCreationSig := make(chan *corev1.Pod, 1)
-	done := make(chan struct{})
+	var podCreationSig <-chan *corev1.Pod
+	var cancelWatch context.CancelFunc
+	t.Cleanup(func() {
+		if cancelWatch != nil {
+			cancelWatch()
+		}
+	})
 
 	feature := features.New("Operator Ready (Helm Namespace-Scoped)").
 		WithLabel("type", "operator-ready")
 
 	feature.Setup(func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
 		client := cfg.Client()
+		watchCtx, cancel := context.WithCancel(ctx)
+		cancelWatch = cancel
+		var notifyPod func(interface{})
+		podCreationSig, notifyPod = testutils.OperatorPodNotifications(watchCtx)
 
 		// The operator was deployed by TestMain before this test runs, so the pod may
 		// already exist. A Watch only fires for future Add events and will miss it.
@@ -34,28 +44,14 @@ func TestOperatorReady(t *testing.T) {
 		if err := client.Resources(helmNS).List(ctx, &podList); err == nil {
 			for i := range podList.Items {
 				if strings.HasPrefix(podList.Items[i].Name, "marklogic-operator-controller") {
-					select {
-					case podCreationSig <- &podList.Items[i]:
-					case <-done:
-					}
+					notifyPod(&podList.Items[i])
 					return ctx
 				}
 			}
 		}
 
 		// If not yet visible, fall back to a Watch for the pod Add event.
-		if err := client.Resources(helmNS).Watch(&corev1.PodList{}).WithAddFunc(func(obj interface{}) {
-			pod, ok := obj.(*corev1.Pod)
-			if !ok {
-				return
-			}
-			if strings.HasPrefix(pod.Name, "marklogic-operator-controller") {
-				select {
-				case podCreationSig <- pod:
-				case <-done:
-				}
-			}
-		}).Start(ctx); err != nil {
+		if err := client.Resources(helmNS).Watch(&corev1.PodList{}).WithAddFunc(notifyPod).Start(watchCtx); err != nil {
 			t.Fatal(err)
 		}
 		return ctx
@@ -92,7 +88,9 @@ func TestOperatorReady(t *testing.T) {
 	})
 
 	feature.Teardown(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
-		close(done)
+		if cancelWatch != nil {
+			cancelWatch()
+		}
 		return ctx
 	})
 

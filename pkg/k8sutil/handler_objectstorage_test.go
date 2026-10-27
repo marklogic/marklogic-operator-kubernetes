@@ -272,6 +272,7 @@ func TestClusterAnnotationsExcludeTrackingAndReconcileRequestKeys(t *testing.T) 
 		"kubectl.kubernetes.io/last-applied-configuration": "x",
 		"e2e.marklogic.progress.com/reconcile-kick":        "1",
 		ReconcileRequestAnnotation:                         "2",
+		volumeAttributesClassAdmissionRetryAnnotation:      "after-admission-repair",
 		"example.com/keep":                                 "kept",
 	}
 	cc := &ClusterContext{}
@@ -284,7 +285,7 @@ func TestClusterAnnotationsExcludeTrackingAndReconcileRequestKeys(t *testing.T) 
 			t.Fatalf("%s annotations = %v, want only the user annotation", name, got)
 		}
 	}
-	if len(source) != 4 {
+	if len(source) != 5 {
 		t.Fatalf("the source map (an informer-owned object in other callers) must not be mutated")
 	}
 }

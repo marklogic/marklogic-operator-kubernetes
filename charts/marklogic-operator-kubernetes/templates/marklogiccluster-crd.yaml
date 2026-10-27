@@ -9593,6 +9593,10 @@ spec:
                           type: string
                         storageClassName:
                           type: string
+                        volumeAttributesClassName:
+                          maxLength: 253
+                          pattern: ^$|^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$
+                          type: string
                       required:
                       - size
                       type: object
@@ -10532,6 +10536,10 @@ spec:
                     type: string
                   storageClassName:
                     type: string
+                  volumeAttributesClassName:
+                    maxLength: 253
+                    pattern: ^$|^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$
+                    type: string
                 required:
                 - size
                 type: object
@@ -11305,6 +11313,191 @@ spec:
                   - type
                   type: object
                 type: array
+              storage:
+                properties:
+                  operation:
+                    properties:
+                      admissionTarget:
+                        properties:
+                          desiredClassName:
+                            type: string
+                          fingerprint:
+                            maxLength: 64
+                            type: string
+                          pvcName:
+                            type: string
+                          pvcUID:
+                            type: string
+                          templateName:
+                            type: string
+                        required:
+                        - desiredClassName
+                        - fingerprint
+                        - pvcName
+                        - pvcUID
+                        - templateName
+                        type: object
+                      id:
+                        type: string
+                      pvcName:
+                        type: string
+                      pvcUID:
+                        type: string
+                    required:
+                    - id
+                    - pvcName
+                    - pvcUID
+                    type: object
+                  unusedPVCs:
+                    items:
+                      properties:
+                        firstObservedTime:
+                          format: date-time
+                          type: string
+                        message:
+                          type: string
+                        name:
+                          type: string
+                        phase:
+                          type: string
+                        reason:
+                          type: string
+                        templateName:
+                          type: string
+                        uid:
+                          type: string
+                        volumeAttributesClassName:
+                          type: string
+                        volumeName:
+                          type: string
+                      required:
+                      - firstObservedTime
+                      - message
+                      - name
+                      - reason
+                      - templateName
+                      - uid
+                      type: object
+                    type: array
+                  volumeAttributesClass:
+                    properties:
+                      groups:
+                        items:
+                          properties:
+                            message:
+                              type: string
+                            name:
+                              type: string
+                            observedGeneration:
+                              format: int64
+                              type: integer
+                            reason:
+                              type: string
+                            state:
+                              enum:
+                              - Pending
+                              - InProgress
+                              - Completed
+                              - Failed
+                              - Stalled
+                              - Unknown
+                              type: string
+                          required:
+                          - message
+                          - name
+                          - observedGeneration
+                          - reason
+                          - state
+                          type: object
+                        type: array
+                      message:
+                        type: string
+                      observedGeneration:
+                        format: int64
+                        type: integer
+                      pvcs:
+                        items:
+                          properties:
+                            currentClassName:
+                              type: string
+                            desiredClassName:
+                              type: string
+                            lastProgressTime:
+                              format: date-time
+                              type: string
+                            message:
+                              type: string
+                            modifyVolumeError:
+                              type: boolean
+                            name:
+                              type: string
+                            reason:
+                              type: string
+                            requestedClassName:
+                              type: string
+                            state:
+                              enum:
+                              - Pending
+                              - InProgress
+                              - Completed
+                              - Failed
+                              - Stalled
+                              - Unknown
+                              type: string
+                            templateName:
+                              type: string
+                            uid:
+                              type: string
+                          required:
+                          - desiredClassName
+                          - lastProgressTime
+                          - message
+                          - name
+                          - reason
+                          - state
+                          - templateName
+                          type: object
+                        type: array
+                      reason:
+                        type: string
+                      state:
+                        enum:
+                        - Pending
+                        - InProgress
+                        - Completed
+                        - Failed
+                        - Stalled
+                        - Unknown
+                        type: string
+                    required:
+                    - message
+                    - observedGeneration
+                    - reason
+                    - state
+                    type: object
+                  volumeAttributesClassAdmissionFailures:
+                    items:
+                      properties:
+                        desiredClassName:
+                          type: string
+                        fingerprint:
+                          maxLength: 64
+                          type: string
+                        pvcName:
+                          type: string
+                        pvcUID:
+                          type: string
+                        templateName:
+                          type: string
+                      required:
+                      - desiredClassName
+                      - fingerprint
+                      - pvcName
+                      - pvcUID
+                      - templateName
+                      type: object
+                    type: array
+                type: object
               objectStorage:
                 description: ObjectStorage reports the per-provider object storage credential
                   results.

@@ -44,8 +44,9 @@ In namespace-scoped mode, the operator watches and manages MarkLogic resources o
 - You're working in a multi-tenant environment
 
 ### Requirements:
-- Role and RoleBinding permissions (namespace-level only)
+- Role and RoleBinding permissions for workload access in the watched namespaces
 - Permissions to create resources in the target namespace
+- An administrator must also authorize installation of the read-only storage ClusterRole and ClusterRoleBinding described below. Namespace-scoped workload management does not make PersistentVolumes, StorageClasses, or VolumeAttributesClasses namespaced resources.
 
 ### Deployment Examples:
 
@@ -136,11 +137,29 @@ kubectl logs -n <operator-namespace> deployment/marklogic-operator-controller-ma
 - `ClusterRoleBinding`: marklogic-operator-manager-rolebinding
 
 ### Namespace-Scoped Mode:
-- `Role`: marklogic-operator-manager-role (in watched namespace)
-- `RoleBinding`: marklogic-operator-manager-rolebinding (in watched namespace)
+- `Role`: marklogic-operator-manager-role (in every watched namespace and the operator's release namespace)
+- `RoleBinding`: marklogic-operator-manager-rolebinding (in those same namespaces)
+- `ClusterRole` and `ClusterRoleBinding`: `<chart-fullname>-storageclass-reader` (read-only cluster-scoped storage access)
 
-Note: Volume resize validation may need read access to `storage.k8s.io/storageclasses` even in namespace-scoped mode.
-The current chart templates do not create a dedicated StorageClass reader `ClusterRole`/`ClusterRoleBinding`, so do not expect those resources or names to be present unless they are added separately.
+### Storage and VAC Permissions:
+
+| Resource | Access | Purpose |
+| --- | --- | --- |
+| PersistentVolumeClaims | `create`, `get`, `list`, `watch`, `patch`, `update` | Precreate scale-up claims, observe native VAC progress, submit VAC requests, and resize claims. |
+| PersistentVolumeClaims/status | `get` | Read Kubernetes-owned claim status; the operator does not write it. |
+| PersistentVolumes | `get` only | Verify the bound claim identity and actual CSI driver. |
+| StorageClasses | `get`, `list`, `watch` | Resolve explicit/default classes and validate driver compatibility and resize support. |
+| VolumeAttributesClasses | `get` only | Validate externally managed class references and driver names. This covers both served `storage.k8s.io/v1` and `v1beta1` APIs. |
+| MarklogicGroup/status and MarklogicCluster/status | `get`, `patch`, `update` | Publish VAC validation, per-PVC progress, and cluster aggregation. |
+| Events in the core and `events.k8s.io` APIs | `create`, `patch`, `update` | Report request, completion, fallback, and error transitions. |
+
+Cluster-scoped mode includes storage reads in the manager ClusterRole. Namespace-scoped mode uses the separate storage-reader ClusterRole; its namespaced Roles do not grant cluster-scoped access. Neither mode grants writes or deletion of PersistentVolumes or VolumeAttributesClasses. Kubernetes API discovery uses the authenticated account's standard discovery permissions; denied discovery is reported as a lookup failure, not as unsupported VAC.
+
+The controller RBAC markers generate the native manager role through `make manifests`. The namespaced native roles are maintained in `config/rbac/role_namespaced.yaml`. `make helm` runs `hack/helmify-post-process.sh`, which refreshes the scope-aware manager RBAC template on every run, including already processed charts. Update that script when changing generated chart permissions. Regression coverage is available with:
+
+```bash
+go test ./api/v1 -run '^TestVolumeAttributesClass(RBAC|HelmifyRBAC)$' -count=1
+```
 
 ## Migration Between Scopes
 

@@ -16,6 +16,7 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	storagev1 "k8s.io/api/storage/v1"
+	apiequality "k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -52,6 +53,10 @@ type resizePVCDiscovery struct {
 }
 
 type templateResizeTargets map[string]resource.Quantity
+
+type resizeDeferredForVAC struct {
+	result.ReconcileResult
+}
 
 func (oc *OperatorContext) ReconcileVolumeResizeValidation() result.ReconcileResult {
 	cr := oc.MarklogicGroup
@@ -95,6 +100,20 @@ func (oc *OperatorContext) ReconcileVolumeResizeValidation() result.ReconcileRes
 	comparison, cmpMessage := compareTargetsWithCurrent(pvcState, targets)
 	if comparison == 0 {
 		return result.Continue()
+	}
+	if active, err := oc.reconcileStorageOperation(); err != nil {
+		return result.Error(err)
+	} else if active {
+		return resizeDeferredForVAC{result.RequeueSoon(30)}
+	}
+	for _, claim := range pvcState.foundPVCs {
+		live := &corev1.PersistentVolumeClaim{}
+		if err := oc.volumeAttributesClassReader().Get(oc.Ctx, client.ObjectKeyFromObject(claim), live); err != nil {
+			return result.Error(err)
+		}
+		if live.UID != claim.UID || volumeAttributesClassOperationPending(live) {
+			return resizeDeferredForVAC{result.RequeueSoon(30)}
+		}
 	}
 
 	if shouldIgnoreTerminalResizeRestart(cr.Status.VolumeResizeStatus, primaryTarget.String(), cr.Generation) {
@@ -912,8 +931,11 @@ func (oc *OperatorContext) patchResizeStatus(status *marklogicv1.VolumeResizeSta
 
 func (oc *OperatorContext) claimResizeStatusCAS(status *marklogicv1.VolumeResizeStatus) (bool, error) {
 	latest := &marklogicv1.MarklogicGroup{}
-	if err := oc.Client.Get(oc.Ctx, client.ObjectKey{Name: oc.MarklogicGroup.Name, Namespace: oc.MarklogicGroup.Namespace}, latest); err != nil {
+	if err := oc.volumeAttributesClassReader().Get(oc.Ctx, client.ObjectKey{Name: oc.MarklogicGroup.Name, Namespace: oc.MarklogicGroup.Namespace}, latest); err != nil {
 		return false, err
+	}
+	if latest.UID != oc.MarklogicGroup.UID || latest.Generation != oc.MarklogicGroup.Generation || latest.DeletionTimestamp != nil || storageOperation(latest) != nil {
+		return false, nil
 	}
 	expectedResourceVersion := latest.ResourceVersion
 
@@ -1276,6 +1298,9 @@ func (oc *OperatorContext) syncStatefulSetPVCTemplates(status *marklogicv1.Volum
 		return true, nil
 	}
 
+	if err := oc.persistStatefulSetRecovery(status, currentSts); err != nil {
+		return false, err
+	}
 	deletePolicy := metav1.DeletePropagationOrphan
 	err := oc.Client.Delete(oc.Ctx, currentSts, &client.DeleteOptions{PropagationPolicy: &deletePolicy})
 	if err != nil {
@@ -1287,6 +1312,58 @@ func (oc *OperatorContext) syncStatefulSetPVCTemplates(status *marklogicv1.Volum
 	}
 	addResizeMarker(status, resizeMarkerTemplateDeleted)
 	return true, nil
+}
+
+// The snapshot must be readable before orphan deletion, so recovery never depends on the latest desired VAC.
+func (oc *OperatorContext) persistStatefulSetRecovery(status *marklogicv1.VolumeResizeStatus, currentSts *appsv1.StatefulSet) error {
+	if recovery := status.StatefulSetRecovery; recovery != nil && recovery.StatefulSetUID == string(currentSts.UID) {
+		return nil
+	}
+	snapshot := &marklogicv1.StatefulSetRecoveryStatus{StatefulSetUID: string(currentSts.UID), ClaimTemplates: []marklogicv1.RecoveryClaimTemplateStatus{}}
+	for _, template := range currentSts.Spec.VolumeClaimTemplates {
+		snapshot.ClaimTemplates = append(snapshot.ClaimTemplates, marklogicv1.RecoveryClaimTemplateStatus{Name: template.Name, VolumeAttributesClassName: template.Spec.DeepCopy().VolumeAttributesClassName})
+	}
+	status.StatefulSetRecovery = snapshot
+	if err := oc.patchResizeStatus(status); err != nil {
+		return err
+	}
+	saved := &marklogicv1.MarklogicGroup{}
+	if err := oc.volumeAttributesClassReader().Get(oc.Ctx, client.ObjectKeyFromObject(oc.MarklogicGroup), saved); err != nil {
+		return err
+	}
+	if saved.Status.VolumeResizeStatus == nil || !apiequality.Semantic.DeepEqual(saved.Status.VolumeResizeStatus.StatefulSetRecovery, snapshot) {
+		return fmt.Errorf("StatefulSet %s recovery configuration was not persisted; keeping the StatefulSet (verify the MarklogicGroup CRD upgrade)", currentSts.Name)
+	}
+	return nil
+}
+
+// applyStatefulSetRecovery restores the last verified claim-template VAC selections for a resize-deleted StatefulSet.
+func applyStatefulSetRecovery(group *marklogicv1.MarklogicGroup, statefulSet *appsv1.StatefulSet) bool {
+	status := group.Status.VolumeResizeStatus
+	if !isResizeOperationActive(status) || status.StatefulSetRecovery == nil || !hasResizeMarker(status, resizeMarkerTemplateDeleted) {
+		return false
+	}
+	recovered := map[string]*string{}
+	for _, template := range status.StatefulSetRecovery.ClaimTemplates {
+		recovered[template.Name] = template.VolumeAttributesClassName
+	}
+	if len(recovered) != len(statefulSet.Spec.VolumeClaimTemplates) {
+		return false
+	}
+	for _, template := range statefulSet.Spec.VolumeClaimTemplates {
+		if _, found := recovered[template.Name]; !found {
+			return false
+		}
+	}
+	for index := range statefulSet.Spec.VolumeClaimTemplates {
+		template := &statefulSet.Spec.VolumeClaimTemplates[index]
+		template.Spec.VolumeAttributesClassName = nil
+		if className := recovered[template.Name]; className != nil {
+			value := *className
+			template.Spec.VolumeAttributesClassName = &value
+		}
+	}
+	return true
 }
 
 func getStatefulSetTemplateRequest(currentSts *appsv1.StatefulSet, templateName string) (resource.Quantity, bool) {

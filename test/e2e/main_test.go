@@ -63,6 +63,7 @@ var (
 		"log-test-filters",
 		"ml-resize-a",
 		"ml-resize-b",
+		"ml-vac",
 		"istio-ambient-test",
 		"istio-resilience-test",
 		"istio-multinode-test",
