@@ -523,6 +523,8 @@ ecr-login: ## Authenticate Docker to ECR.
 # Scale EKS worker nodes up to EKS_NODE_COUNT and wait for them to be Ready.
 .PHONY: eks-scale-up
 eks-scale-up: ## Scale EKS worker nodes to EKS_NODE_COUNT.
+	@echo "=====Waiting for nodegroup $(EKS_NODEGROUP_NAME) to be ACTIVE====="
+	aws eks wait nodegroup-active --cluster-name $(EKS_CLUSTER_NAME) --nodegroup-name $(EKS_NODEGROUP_NAME) --region $(EKS_REGION)
 	@echo "=====Scaling EKS worker nodes to $(EKS_NODE_COUNT)====="
 	eksctl scale nodegroup \
 	  --cluster $(EKS_CLUSTER_NAME) \
@@ -547,6 +549,8 @@ eks-scale-up: ## Scale EKS worker nodes to EKS_NODE_COUNT.
 # Scale EKS worker nodes to 0 to minimise cost when the cluster is idle.
 .PHONY: eks-scale-down
 eks-scale-down: ## Scale EKS worker nodes to 0.
+	@echo "=====Waiting for nodegroup $(EKS_NODEGROUP_NAME) to be ACTIVE====="
+	aws eks wait nodegroup-active --cluster-name $(EKS_CLUSTER_NAME) --nodegroup-name $(EKS_NODEGROUP_NAME) --region $(EKS_REGION)
 	@echo "=====Scaling EKS worker nodes to 0====="
 	eksctl scale nodegroup \
 	  --cluster $(EKS_CLUSTER_NAME) \

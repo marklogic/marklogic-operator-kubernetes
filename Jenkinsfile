@@ -588,13 +588,20 @@ pipeline {
                                         if (runIstioOnEKS) { runEKSIstioSetup() }
                                         else               { runEKSSetup() }
                                     }
-                                    stage('Run e2e Tests') { runEKSE2eTests(topLevelParallelism) }
+                                    // Each suite runs even if an earlier one fails; failures still fail the build.
+                                    stage('Run e2e Tests') {
+                                        catchError(buildResult: 'FAILURE', stageResult: 'FAILURE') { runEKSE2eTests(topLevelParallelism) }
+                                    }
                                     stage('Run Istio e2e Tests') {
-                                        if (runIstioOnEKS) { runEKSIstioE2eTests(topLevelParallelism) }
+                                        if (runIstioOnEKS) {
+                                            catchError(buildResult: 'FAILURE', stageResult: 'FAILURE') { runEKSIstioE2eTests(topLevelParallelism) }
+                                        }
                                         else { echo "Istio tests skipped (E2E_INSTALL_MODE=${params.E2E_INSTALL_MODE}, VERIFY_ISTIO_AMBIENT=${params.VERIFY_ISTIO_AMBIENT})" }
                                     }
                                     stage('Run VAC e2e Tests') {
-                                        if (params.VERIFY_VAC) { runEKSVacE2eTests() }
+                                        if (params.VERIFY_VAC) {
+                                            catchError(buildResult: 'FAILURE', stageResult: 'FAILURE') { runEKSVacE2eTests() }
+                                        }
                                         else { echo 'VAC tests skipped (VERIFY_VAC=false)' }
                                     }
                                 }
