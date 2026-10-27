@@ -3,12 +3,10 @@
 The operator has two e2e test environments: **Minikube** (local, for development)
 and **EKS** (the Jenkins CI target).
 
-Start with the [VAC EKS quick test](../docs/volume-attributes-class-eks-quick-test.md)
-for main functionality first, then additional checks. For full qualification,
-evidence collection, PR gates, and the demo checklist, see the
-[VAC EKS runbook](../docs/volume-attributes-class-eks-testing.md). These isolated
-workflows avoid the existing e2e harness's CRD/namespace cleanup on shared or
-demo clusters.
+For VolumeAttributesClass (VAC) coverage, see [VAC Core E2E](#vac-core-e2e) and
+the administrator guide in [docs/volume-attributes-class.md](../docs/volume-attributes-class.md).
+Run the VAC suite only on an exclusive, disposable cluster: the e2e harness
+cleans CRDs and namespaces, which is unsafe on shared or demo clusters.
 
 ## Test suites
 
@@ -168,6 +166,21 @@ go test -v -count=1 -timeout 6h ./test/e2e \
 	-run '^TestVolumeAttributesClassClusterScoped$' \
 	-args --context="$KUBE_CONTEXT" --labels='type=volume-attributes-class'
 ```
+
+In Jenkins, set `VERIFY_VAC=true` with `E2E_RUNTIME=eks` and
+`E2E_INSTALL_MODE=fresh`. After the EKS suite, `make e2e-test-eks-vac` applies
+the gp3 profiles in [eks-config/vac-profiles.yaml](eks-config/vac-profiles.yaml)
+and runs the cluster-scoped VAC suite into `test_results/e2e-eks-vac.xml`. The
+EKS cluster must run Kubernetes 1.34+ with the EBS CSI driver; it is off by
+default and not part of nightly builds.
+
+`TestVolumeAttributesClassUnsupportedEnvironment` (cluster suite) runs only
+when no VAC API is served, such as the default Minikube 1.31 lane, and skips
+otherwise. It selects a VAC and checks that the group reports
+`StorageAttributesValidated=False/VACUnsupported` with a Warning event, stays
+Ready, and provisions its PVC without a class. The upgrade suite starts from
+Operator 1.3.1 by default and verifies that a PVC-backed cluster without VAC
+keeps its StatefulSet claim templates and PVC UIDs/specs unchanged.
 
 Helm's default watch list includes `ml-ns-vac`. An explicit
 `E2E_WATCHED_NAMESPACES` override must include it before installation. Cluster

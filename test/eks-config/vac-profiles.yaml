@@ -1,0 +1,33 @@
+# Storage profiles for the opt-in VAC e2e suite (make e2e-test-eks-vac).
+# Requires Kubernetes 1.34+ (GA storage.k8s.io/v1 VolumeAttributesClass) and the EBS CSI driver.
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: ml-e2e-vac-gp3
+provisioner: ebs.csi.aws.com
+allowVolumeExpansion: true
+reclaimPolicy: Delete
+volumeBindingMode: WaitForFirstConsumer
+parameters:
+  type: gp3
+  encrypted: "true"
+---
+apiVersion: storage.k8s.io/v1
+kind: VolumeAttributesClass
+metadata:
+  name: ml-e2e-vac-standard
+driverName: ebs.csi.aws.com
+parameters:
+  type: gp3
+  iops: "3000"
+  throughput: "125"
+---
+apiVersion: storage.k8s.io/v1
+kind: VolumeAttributesClass
+metadata:
+  name: ml-e2e-vac-performance
+driverName: ebs.csi.aws.com
+parameters:
+  type: gp3
+  iops: "6000"
+  throughput: "250"

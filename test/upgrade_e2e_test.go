@@ -6,31 +6,37 @@ package upgradee2e
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
 
+	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
 	"sigs.k8s.io/yaml"
 )
 
 const (
-	defaultSourceChart          = "marklogic-operator/marklogic-operator-kubernetes"
-	defaultSourceVersion        = "1.2.0"
-	defaultTargetChart          = "charts/marklogic-operator-kubernetes"
-	defaultMarkLogicImage       = "progressofficial/marklogic-db:12.0.3-ubi9-rootless-2.2.6"
-	defaultHelmTimeout          = "10m"
-	defaultWorkloadWaitTimeout  = 25 * time.Minute
-	defaultNamespaceWaitTimeout = 2 * time.Minute
-	defaultClusterSuiteTimeout  = "60m"
+	defaultSourceChart           = "marklogic-operator/marklogic-operator-kubernetes"
+	defaultSourceVersion         = "1.3.1"
+	defaultTargetChart           = "charts/marklogic-operator-kubernetes"
+	defaultMarkLogicImage        = "progressofficial/marklogic-db:12.0.3-ubi9-rootless-2.2.6"
+	defaultHelmTimeout           = "10m"
+	defaultWorkloadWaitTimeout   = 25 * time.Minute
+	defaultNamespaceWaitTimeout  = 2 * time.Minute
+	defaultClusterSuiteTimeout   = "60m"
 	defaultNamespaceSuiteTimeout = "60m"
-	defaultOperatorDeployment   = "marklogic-operator-controller-manager"
+	defaultOperatorDeployment    = "marklogic-operator-controller-manager"
 
 	cleanupProbeSleep = 30 * time.Second
+
+	persistentGroupName = "compat"
 )
 
 var (
@@ -209,9 +215,12 @@ func (r *upgradeRunner) runClusterUpgradeScenario() {
 
 	r.waitForOperatorReady(operatorNamespace)
 	r.deployMarkLogicCluster(baselineNamespace, "ml-upgrade-baseline")
+	r.deployPersistentMarkLogicCluster(baselineNamespace, "ml-upgrade-persistent")
+	storageBefore := r.storageSnapshot(baselineNamespace)
 
 	r.runCommand("helm", r.buildTargetUpgradeArgs(release, operatorNamespace, "cluster", "")...)
 	r.waitForOperatorReady(operatorNamespace)
+	r.assertStoragePreserved(baselineNamespace, storageBefore)
 
 	r.assertClusterResourcePresent("clusterrole", "marklogic-operator-manager-role")
 	r.assertClusterResourcePresent("clusterrolebinding", "marklogic-operator-manager-rolebinding")
@@ -271,9 +280,12 @@ func (r *upgradeRunner) runNamespaceUpgradeScenario() {
 
 	r.waitForOperatorReady(operatorNamespace)
 	r.deployMarkLogicCluster(primaryWatchedNamespace, "ml-upgrade-baseline")
+	r.deployPersistentMarkLogicCluster(primaryWatchedNamespace, "ml-upgrade-persistent")
+	storageBefore := r.storageSnapshot(primaryWatchedNamespace)
 
 	r.runCommand("helm", r.buildTargetUpgradeArgs(release, operatorNamespace, "namespace", watchCSV)...)
 	r.waitForOperatorReady(operatorNamespace)
+	r.assertStoragePreserved(primaryWatchedNamespace, storageBefore)
 
 	r.assertClusterResourceAbsent("clusterrole", "marklogic-operator-manager-role")
 	r.assertClusterResourceAbsent("clusterrolebinding", "marklogic-operator-manager-rolebinding")
@@ -561,6 +573,92 @@ func (r *upgradeRunner) namespaceExists(namespace string) bool {
 }
 
 func (r *upgradeRunner) applyClusterManifest(namespace, clusterName string) {
+	r.applyClusterManifestWith(namespace, clusterName, "node", false)
+}
+
+// deployPersistentMarkLogicCluster creates a PVC-backed cluster without volumeAttributesClassName.
+func (r *upgradeRunner) deployPersistentMarkLogicCluster(namespace, clusterName string) {
+	r.applyClusterManifestWith(namespace, clusterName, persistentGroupName, true)
+	r.waitForPodReady(namespace, persistentGroupName+"-0")
+}
+
+type upgradeStorageSnapshot struct {
+	statefulSetUID string
+	templates      []corev1.PersistentVolumeClaim
+	claims         map[string]corev1.PersistentVolumeClaim
+}
+
+func (r *upgradeRunner) kubectlJSON(target interface{}, args ...string) {
+	r.testingT.Helper()
+	cmd := exec.Command("kubectl", append(args, "-o", "json")...)
+	cmd.Dir = r.repoRoot
+	cmd.Env = os.Environ()
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	if err != nil {
+		r.testingT.Fatalf("kubectl %s failed: %v\n%s", strings.Join(args, " "), err, stderr.String())
+	}
+	if err := json.Unmarshal(out, target); err != nil {
+		r.testingT.Fatalf("decode kubectl %s output: %v", strings.Join(args, " "), err)
+	}
+}
+
+func (r *upgradeRunner) storageSnapshot(namespace string) upgradeStorageSnapshot {
+	r.testingT.Helper()
+	set := &appsv1.StatefulSet{}
+	r.kubectlJSON(set, "get", "statefulset", persistentGroupName, "-n", namespace)
+	snapshot := upgradeStorageSnapshot{statefulSetUID: string(set.UID), templates: set.Spec.VolumeClaimTemplates, claims: map[string]corev1.PersistentVolumeClaim{}}
+	if len(snapshot.templates) == 0 {
+		r.testingT.Fatalf("persistent baseline StatefulSet %s/%s has no claim templates", namespace, persistentGroupName)
+	}
+	for _, template := range snapshot.templates {
+		claim := corev1.PersistentVolumeClaim{}
+		name := fmt.Sprintf("%s-%s-0", template.Name, persistentGroupName)
+		r.kubectlJSON(&claim, "get", "pvc", name, "-n", namespace)
+		if claim.Status.Phase != corev1.ClaimBound {
+			r.testingT.Fatalf("baseline PVC %s/%s is %s, want Bound", namespace, name, claim.Status.Phase)
+		}
+		snapshot.claims[name] = claim
+	}
+	return snapshot
+}
+
+// assertStoragePreserved checks that the upgraded operator leaves pre-VAC claims and claim templates untouched.
+func (r *upgradeRunner) assertStoragePreserved(namespace string, before upgradeStorageSnapshot) {
+	r.testingT.Helper()
+	r.waitForPodReady(namespace, persistentGroupName+"-0")
+	time.Sleep(cleanupProbeSleep)
+	after := r.storageSnapshot(namespace)
+	if after.statefulSetUID != before.statefulSetUID {
+		r.testingT.Fatalf("upgrade replaced StatefulSet %s/%s", namespace, persistentGroupName)
+	}
+	if !reflect.DeepEqual(after.templates, before.templates) {
+		r.testingT.Fatalf("upgrade changed StatefulSet claim templates in %s:\nbefore=%+v\nafter=%+v", namespace, before.templates, after.templates)
+	}
+	for _, template := range after.templates {
+		if template.Spec.VolumeAttributesClassName != nil {
+			r.testingT.Fatalf("upgrade added a VolumeAttributesClass to claim template %s", template.Name)
+		}
+	}
+	for name, original := range before.claims {
+		claim := after.claims[name]
+		if claim.UID != original.UID || claim.Spec.VolumeName != original.Spec.VolumeName || !reflect.DeepEqual(claim.Spec, original.Spec) {
+			r.testingT.Fatalf("upgrade changed PVC %s/%s:\nbefore=%+v\nafter=%+v", namespace, name, original.Spec, claim.Spec)
+		}
+		for key := range claim.Annotations {
+			if strings.HasPrefix(key, "marklogic.progress.com/") {
+				r.testingT.Fatalf("upgrade added operator annotation %s to PVC %s/%s", key, namespace, name)
+			}
+		}
+	}
+	conditions := r.runCommand("kubectl", "get", "marklogicgroup", persistentGroupName, "-n", namespace, "-o", "jsonpath={.status.conditions[*].type}")
+	r.assertNotContains(conditions, "StorageAttributesValidated", "a group without VAC must not report VAC validation")
+	reasons := r.runCommand("kubectl", "get", "events", "-n", namespace, "-o", "jsonpath={.items[*].reason}")
+	r.assertNotContains(reasons, "UnsupportedClaimTemplateChange", "upgrade must not reject existing claim templates")
+}
+
+func (r *upgradeRunner) applyClusterManifestWith(namespace, clusterName, groupName string, persistent bool) {
 	manifest, err := os.CreateTemp("", "marklogic-upgrade-*.yaml")
 	if err != nil {
 		r.testingT.Fatalf("create temp manifest: %v", err)
@@ -575,13 +673,13 @@ metadata:
 spec:
   image: %s
   persistence:
-    enabled: false
+    enabled: %t
     size: 10Gi
   markLogicGroups:
-  - name: node
+  - name: %s
     replicas: 1
     isBootstrap: true
-`, clusterName, namespace, r.marklogicImage)
+`, clusterName, namespace, r.marklogicImage, persistent, groupName)
 
 	if _, err := manifest.WriteString(content); err != nil {
 		_ = manifest.Close()

@@ -91,7 +91,7 @@ MINIKUBE_START_PROFILE_WITH_RETRIES = start_minikube_profile() { \
 # Namespace-scoped (Helm, scope.type=namespace) is the default going forward; set
 # E2E_SCOPE=cluster to run the cluster-scoped (kustomize/ClusterRole) suite instead.
 E2E_SCOPE ?= namespace
-E2E_UPGRADE_SOURCE_VERSION ?= 1.2.0
+E2E_UPGRADE_SOURCE_VERSION ?= 1.3.1
 E2E_UPGRADE_CLUSTER_TEST_TIMEOUT ?= 90m
 E2E_UPGRADE_HELM_NAMESPACE_TEST_TIMEOUT ?= 75m
 E2E_UPGRADE_CLEANUP_TIMEOUT ?= 15m
@@ -614,6 +614,21 @@ e2e-test-eks: ## Run e2e tests on EKS.
 	PATH=$(LOCALBIN):$$PATH IMG=$(ECR_OPERATOR_IMAGE) E2E_DOCKER_IMAGE=$(ECR_OPERATOR_IMAGE) \
 	  $(GO_TEST) -v -count=1 -parallel $(E2E_TEST_PARALLELISM) -timeout 60m ./test/e2e
 
+E2E_VAC_STORAGE_CLASS ?= ml-e2e-vac-gp3
+E2E_VAC_STANDARD_CLASS ?= ml-e2e-vac-standard
+E2E_VAC_PERFORMANCE_CLASS ?= ml-e2e-vac-performance
+E2E_VAC_TEST_TIMEOUT ?= 150m
+
+# Run the opt-in VolumeAttributesClass e2e suite on EKS (Kubernetes 1.34+ with the EBS CSI driver).
+.PHONY: e2e-test-eks-vac
+e2e-test-eks-vac: ## Run VolumeAttributesClass e2e tests on EKS.
+	@echo "=====Applying VAC e2e storage profiles====="
+	$(LOCALBIN)/kubectl apply -f test/eks-config/vac-profiles.yaml
+	@echo "=====Running VAC e2e tests on EKS====="
+	PATH=$(LOCALBIN):$$PATH IMG=$(ECR_OPERATOR_IMAGE) E2E_DOCKER_IMAGE=$(ECR_OPERATOR_IMAGE) AWS_REGION=$(EKS_REGION) \
+	  E2E_VAC_ENABLED=true E2E_VAC_STORAGE_CLASS=$(E2E_VAC_STORAGE_CLASS) \
+	  E2E_VAC_STANDARD_CLASS=$(E2E_VAC_STANDARD_CLASS) E2E_VAC_PERFORMANCE_CLASS=$(E2E_VAC_PERFORMANCE_CLASS) \
+	  $(GO_TEST) -v -count=1 -timeout $(E2E_VAC_TEST_TIMEOUT) ./test/e2e -run '^TestVolumeAttributesClassClusterScoped$$'
 # Scale EKS worker nodes back to 0 after a test run.
 # Note: Kubernetes resources (operator, test namespaces) are removed by the
 # test framework's teardown during the test run itself. This target only scales

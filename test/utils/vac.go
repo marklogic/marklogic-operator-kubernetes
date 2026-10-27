@@ -990,8 +990,9 @@ func (run *vacRun) execute(group string, command []string) (string, error) {
 
 func (run *vacRun) data(group string, write bool) {
 	uri := "/" + run.prefix + ".json"
-	script := fmt.Sprintf(`fn.doc(%q).toObject().marker`, uri)
-	shell := `curl --fail --silent --show-error --max-time 30 --digest --user "$1:$2" --data-urlencode "javascript=$3" 'http://127.0.0.1:8000/v1/eval?database=Documents'; cat /var/opt/MarkLogic/.vac-e2e /var/opt/MarkLogic-extra/.vac-e2e`
+	// The JavaScript toObject() accessor returns an empty body on MarkLogic 12.0.3; XQuery reads the stored marker reliably.
+	script := fmt.Sprintf(`fn:string(fn:doc(%q)/marker)`, uri)
+	shell := `curl --fail --silent --show-error --max-time 30 --digest --user "$1:$2" --data-urlencode "xquery=$3" 'http://127.0.0.1:8000/v1/eval?database=Documents'; cat /var/opt/MarkLogic/.vac-e2e /var/opt/MarkLogic-extra/.vac-e2e`
 	if write {
 		script = fmt.Sprintf(`declareUpdate(); xdmp.documentInsert(%q, {marker:%q})`, uri, run.prefix)
 		shell = `curl --fail --silent --show-error --max-time 30 --digest --user "$1:$2" --data-urlencode "javascript=$3" 'http://127.0.0.1:8000/v1/eval?database=Documents'; printf '%s\n' "$4" > /var/opt/MarkLogic/.vac-e2e; printf '%s\n' "$4" > /var/opt/MarkLogic-extra/.vac-e2e`

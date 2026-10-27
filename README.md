@@ -118,9 +118,11 @@ Operator 1.4 adds VolumeAttributesClass support for selecting and changing CSI
 volume performance without a VAC-driven Pod restart or capacity change. See
 [Change Disk Performance](./docs/volume-attributes-class.md) for Kubernetes/CSI
 prerequisites, AWS EBS gp3 profiles, cluster/group examples, monitoring,
-troubleshooting, and required RBAC. See the
-[Troubleshoot Safely](./docs/volume-attributes-class.md) for the feature
-and upgrade permissions.
+troubleshooting, and required RBAC. See
+[RBAC and Upgrades](./docs/volume-attributes-class.md#rbac-and-upgrades) for the
+feature and upgrade permissions, and
+[Troubleshoot Safely](./docs/volume-attributes-class.md#troubleshoot-safely) for
+unsupported, missing-class, and native modification failures.
 
 ### Configure Object Storage Credentials
 `spec.objectStorage` on a `MarklogicCluster` applies AWS S3 and/or Azure Blob credentials as a cluster-wide MarkLogic setting through the bootstrap host's Management API. Credentials always come from Secrets in the cluster's namespace; see [object-storage.yaml](./config/samples/object-storage.yaml).

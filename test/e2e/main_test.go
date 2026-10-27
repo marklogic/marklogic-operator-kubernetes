@@ -64,6 +64,7 @@ var (
 		"ml-resize-a",
 		"ml-resize-b",
 		"ml-vac",
+		"ml-vac-unsupported",
 		"istio-ambient-test",
 		"istio-resilience-test",
 		"istio-multinode-test",

@@ -355,6 +355,17 @@ void runEKSCleanup() {
     }
 }
 
+void runEKSVacE2eTests() {
+    withEksCredentials {
+        ensureGotestsum()
+        sh """
+            make e2e-test-eks-vac \\
+              E2E_MARKLOGIC_IMAGE_VERSION=${env.EKS_MARKLOGIC_IMAGE_VERSION} \\
+              ${goTestOverride('test/test_results/e2e-eks-vac.xml')}
+        """
+    }
+}
+
 void runEKSIstioSetup() {
     withEksCredentials {
         sh """
@@ -492,6 +503,7 @@ pipeline {
         booleanParam(name: 'VERIFY_ISTIO_AMBIENT', defaultValue: true, description: 'Run Istio ambient mode e2e tests. For Minikube, Istio is installed only when this test path is selected; no dedicated cluster is created.')
         string(name: 'E2E_TOP_LEVEL_PARALLELISM', defaultValue: '', description: 'Max e2e test parallelism (integer 1-4). Defaults to 4 for EKS and 1 for minikube, because minikube profiles already run as parallel shards.', trim: true)
         string(name: 'EKS_MARKLOGIC_IMAGE_TAG', defaultValue: 'latest-12', description: 'MarkLogic image tag to pull from the EKS ECR registry when E2E_RUNTIME=eks. The full ECR URL is constructed at runtime from the AWS account ID resolved via STS.', trim: true)
+        booleanParam(name: 'VERIFY_VAC', defaultValue: false, description: 'Run VolumeAttributesClass e2e tests after the EKS suite. Requires E2E_RUNTIME=eks, E2E_INSTALL_MODE=fresh, and an EKS cluster on Kubernetes 1.34+ with the EBS CSI driver; creates billable gp3 volumes.')
     }
 
     stages {
@@ -553,6 +565,10 @@ pipeline {
                         }
                     }
 
+                    if (params.VERIFY_VAC && (!runOnEks || params.E2E_INSTALL_MODE != 'fresh')) {
+                        error "VERIFY_VAC=true requires E2E_RUNTIME='eks' and E2E_INSTALL_MODE='fresh'; Minikube has no VAC-capable CSI driver."
+                    }
+
                     if (runOnEks) {
                         if (!runClusterScoped) {
                             error "E2E_RUNTIME='eks' requires E2E_SCOPE to include cluster tests."
@@ -567,7 +583,7 @@ pipeline {
                         def runIstioOnEKS = params.E2E_INSTALL_MODE == 'fresh' && params.VERIFY_ISTIO_AMBIENT
                         try {
                             lock(resource: 'jenkinsKubeNinjasEksCluster', inversePrecedence: true) {
-                                timeout(time: 3, unit: 'HOURS') {
+                                timeout(time: params.VERIFY_VAC ? 6 : 3, unit: 'HOURS') {
                                     stage('Setup') {
                                         if (runIstioOnEKS) { runEKSIstioSetup() }
                                         else               { runEKSSetup() }
@@ -576,6 +592,10 @@ pipeline {
                                     stage('Run Istio e2e Tests') {
                                         if (runIstioOnEKS) { runEKSIstioE2eTests(topLevelParallelism) }
                                         else { echo "Istio tests skipped (E2E_INSTALL_MODE=${params.E2E_INSTALL_MODE}, VERIFY_ISTIO_AMBIENT=${params.VERIFY_ISTIO_AMBIENT})" }
+                                    }
+                                    stage('Run VAC e2e Tests') {
+                                        if (params.VERIFY_VAC) { runEKSVacE2eTests() }
+                                        else { echo 'VAC tests skipped (VERIFY_VAC=false)' }
                                     }
                                 }
                             }
