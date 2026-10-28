@@ -187,7 +187,7 @@ Helm's default watch list includes `ml-ns-vac`. An explicit
 mode uses `ml-vac`. To focus one scenario, add `,case=primary-live-change` to
 the label expression. `E2E_VAC_SIZE` defaults to `20Gi` (choose a size supporting
 the requested provider performance), and
-`E2E_VAC_TIMEOUT` defaults to `30m` per convergence wait. Cases run serially
+`E2E_VAC_TIMEOUT` defaults to `15m` per convergence wait. Cases run serially
 with fresh uniquely named claims to avoid EBS modification-quota coupling;
 reserve capacity for at least three MarkLogic Pods and six volumes at peak.
 

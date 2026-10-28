@@ -54,7 +54,7 @@ func VACOptionsFromEnvironment(namespace, image, username, password string) (VAC
 	options := VACOptions{
 		Namespace: namespace, Image: image, Username: username, Password: password,
 		StorageClass: os.Getenv("E2E_VAC_STORAGE_CLASS"), StandardClass: os.Getenv("E2E_VAC_STANDARD_CLASS"),
-		PerformanceClass: os.Getenv("E2E_VAC_PERFORMANCE_CLASS"), Size: "20Gi", Timeout: 30 * time.Minute,
+		PerformanceClass: os.Getenv("E2E_VAC_PERFORMANCE_CLASS"), Size: "20Gi", Timeout: 15 * time.Minute,
 	}
 	if size := os.Getenv("E2E_VAC_SIZE"); size != "" {
 		options.Size = size
@@ -300,6 +300,14 @@ func (run *vacRun) patch(object client.Object, fields map[string]interface{}) {
 
 func (run *vacRun) patchCluster(fixture vacFixture, fields map[string]interface{}) {
 	run.patch(&marklogicv1.MarklogicCluster{ObjectMeta: metav1.ObjectMeta{Name: fixture.cluster, Namespace: run.options.Namespace}}, map[string]interface{}{"spec": fields})
+}
+
+func (run *vacRun) patchGroupService(fixture vacFixture, annotations map[string]string) {
+	cluster := &marklogicv1.MarklogicCluster{}
+	run.must(run.client.Get(run.ctx, run.key(fixture.cluster), cluster))
+	groups := cluster.Spec.DeepCopy().MarkLogicGroups
+	groups[0].Service.Annotations = annotations
+	run.patchCluster(fixture, map[string]interface{}{"markLogicGroups": groups})
 }
 
 func (run *vacRun) scale(fixture vacFixture, replicas int32) {
@@ -549,8 +557,8 @@ func (run *vacRun) inheritanceAndIsolation() {
 	fixture := run.cluster("inherit", run.options.StandardClass, run.options.StandardClass, func(cluster *marklogicv1.MarklogicCluster) {
 		replicas := int32(1)
 		cluster.Spec.MarkLogicGroups = append(cluster.Spec.MarkLogicGroups,
-			&marklogicv1.MarklogicGroups{Name: run.prefix + "-override", Replicas: &replicas, Persistence: run.persistence(run.options.PerformanceClass), AdditionalVolumeClaimTemplates: run.additional(run.options.PerformanceClass)},
-			&marklogicv1.MarklogicGroups{Name: run.prefix + "-no-inherit", Replicas: &replicas, Persistence: run.persistence("")})
+			&marklogicv1.MarklogicGroups{Name: run.prefix + "-override", Replicas: &replicas, GroupConfig: &marklogicv1.GroupConfig{Name: run.prefix + "-override"}, Persistence: run.persistence(run.options.PerformanceClass), AdditionalVolumeClaimTemplates: run.additional(run.options.PerformanceClass)},
+			&marklogicv1.MarklogicGroups{Name: run.prefix + "-no-inherit", Replicas: &replicas, GroupConfig: &marklogicv1.GroupConfig{Name: run.prefix + "-no-inherit"}, Persistence: run.persistence("")})
 	})
 	expected := map[string][2]string{fixture.groups[0]: {run.options.StandardClass, run.options.StandardClass},
 		fixture.groups[1]: {run.options.PerformanceClass, run.options.PerformanceClass}, fixture.groups[2]: {"", run.options.StandardClass}}
@@ -723,7 +731,7 @@ func (run *vacRun) wrongDriver() {
 	before := run.snapshot(group)
 	run.patchCluster(fixture, map[string]interface{}{"persistence": map[string]interface{}{"volumeAttributesClassName": wrong}})
 	run.reason(group, "VACDriverMismatch")
-	run.patchCluster(fixture, map[string]interface{}{"service": map[string]interface{}{"annotations": map[string]string{"vac-e2e-reconciled": run.prefix}}})
+	run.patchGroupService(fixture, map[string]string{"vac-e2e-reconciled": run.prefix})
 	run.eventually("service reconciliation during VAC validation failure", func() error {
 		services := &corev1.ServiceList{}
 		if err := run.client.List(run.ctx, services, client.InNamespace(run.options.Namespace)); err != nil {
@@ -800,7 +808,7 @@ func (run *vacRun) withoutVAC() {
 	run.ready(group, 1)
 	run.data(group, true)
 	original := run.snapshot(group)
-	run.patchCluster(fixture, map[string]interface{}{"service": map[string]interface{}{"annotations": map[string]string{"vac-e2e-reconciled": run.prefix}}})
+	run.patchGroupService(fixture, map[string]string{"vac-e2e-reconciled": run.prefix})
 	run.scale(fixture, 2)
 	run.ready(group, 2)
 	for _, template := range []string{"datadir", "audit"} {
@@ -954,8 +962,10 @@ func vacSnapshotsStable(before, after vacSnapshot, unchangedTemplates ...string)
 			return fmt.Errorf("unrelated PVC spec or ownership changed for %s", template)
 		}
 		originalAnnotations, currentAnnotations := original.DeepCopy().Annotations, current.DeepCopy().Annotations
-		delete(originalAnnotations, "marklogic.progress.com/storage-operation-id")
-		delete(currentAnnotations, "marklogic.progress.com/storage-operation-id")
+		for _, key := range []string{"marklogic.progress.com/storage-operation-id", "marklogic.progress.com/storage-operation-submitted"} {
+			delete(originalAnnotations, key)
+			delete(currentAnnotations, key)
+		}
 		if !maps.Equal(originalAnnotations, currentAnnotations) || !maps.Equal(original.Labels, current.Labels) {
 			return fmt.Errorf("unrelated PVC metadata changed for %s", template)
 		}
