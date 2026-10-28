@@ -621,7 +621,7 @@ e2e-test-eks: ## Run e2e tests on EKS.
 E2E_VAC_STORAGE_CLASS ?= ml-e2e-vac-gp3
 E2E_VAC_STANDARD_CLASS ?= ml-e2e-vac-standard
 E2E_VAC_PERFORMANCE_CLASS ?= ml-e2e-vac-performance
-E2E_VAC_TEST_TIMEOUT ?= 150m
+E2E_VAC_TEST_TIMEOUT ?= 90m
 
 # Run the opt-in VolumeAttributesClass e2e suite on EKS (Kubernetes 1.34+ with the EBS CSI driver).
 .PHONY: e2e-test-eks-vac

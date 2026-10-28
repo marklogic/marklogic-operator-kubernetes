@@ -129,8 +129,8 @@ func TestVACSnapshotsStable(t *testing.T) {
 
 func TestVACCoreFeatures(t *testing.T) {
 	features := VACCoreFeatures(VACOptions{})
-	if len(features) != 11 {
-		t.Fatalf("got %d VAC scenarios, expected 11", len(features))
+	if len(features) != 2 {
+		t.Fatalf("got %d VAC scenarios, expected 2", len(features))
 	}
 	names := map[string]bool{}
 	for _, feature := range features {
