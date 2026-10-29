@@ -4,8 +4,10 @@ package k8sutil
 
 import (
 	"context"
+	"encoding/pem"
 	"errors"
 	"fmt"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -14,10 +16,13 @@ import (
 	"github.com/marklogic/marklogic-operator-kubernetes/pkg/mlmanage"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 )
 
 type stubDynamicManagementClient struct {
@@ -272,7 +277,7 @@ func TestJoinDynamicPodSuccess(t *testing.T) {
 		},
 	}
 
-	host, err := oc.joinDynamicPod(client, "cluster", "DynamicGroup", hostFQDN, "PT15M")
+	host, err := oc.joinDynamicPodWithClients(client, client, "cluster", "DynamicGroup", hostFQDN, "PT15M")
 	if err != nil {
 		t.Fatalf("joinDynamicPod returned error: %v", err)
 	}
@@ -281,6 +286,72 @@ func TestJoinDynamicPodSuccess(t *testing.T) {
 	}
 	if requestCalls != 1 || joinCalls != 1 || listCalls != 1 {
 		t.Fatalf("expected 1 request/join/list call, got %d/%d/%d", requestCalls, joinCalls, listCalls)
+	}
+}
+
+func TestJoinDynamicPodUsesJoiningEndpointTLS(t *testing.T) {
+	server := httptest.NewTLSServer(nil)
+	defer server.Close()
+	joiningCA := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: server.Certificate().Raw})
+
+	scheme := runtime.NewScheme()
+	if err := corev1.AddToScheme(scheme); err != nil {
+		t.Fatalf("add core scheme: %v", err)
+	}
+	caSecret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "dynamic-ca", Namespace: "default"},
+		Data:       map[string][]byte{markLogicCACertificateKey: joiningCA},
+	}
+	hostFQDN := "dynamic-0.dynamic.default.svc.cluster.local"
+	group := &marklogicv1.MarklogicGroup{
+		ObjectMeta: metav1.ObjectMeta{Name: "dynamic", Namespace: "default"},
+		Spec: marklogicv1.MarklogicGroupSpec{
+			Name: "dynamic",
+			Tls:  &marklogicv1.Tls{EnableOnDefaultAppServers: true, CaSecretName: caSecret.Name},
+		},
+	}
+	oc := &OperatorContext{
+		Ctx:            context.Background(),
+		Client:         fake.NewClientBuilder().WithScheme(scheme).WithObjects(caSecret).Build(),
+		MarklogicGroup: group,
+	}
+
+	groupClient := &stubDynamicManagementClient{
+		requestTokenFn: func(clusterName, groupName, requestedHost, duration string) (string, error) {
+			return "token-1", nil
+		},
+		joinFn: func(requestedHost, token string) error {
+			return errors.New("bootstrap client must not perform the join request")
+		},
+		listGroupFn: func(groupName string) ([]mlmanage.GroupHost, error) {
+			return []mlmanage.GroupHost{{Name: hostFQDN, HostID: "host-id-1", Online: true}}, nil
+		},
+	}
+	joinCalls := 0
+	joinClient := &stubDynamicManagementClient{joinFn: func(requestedHost, token string) error {
+		joinCalls++
+		return nil
+	}}
+
+	originalFactory := NewDynamicManagementClient
+	var clientOptions mlmanage.ClientOptions
+	NewDynamicManagementClient = func(options mlmanage.ClientOptions) mlmanage.Client {
+		clientOptions = options
+		return joinClient
+	}
+	defer func() { NewDynamicManagementClient = originalFactory }()
+
+	if _, err := oc.joinDynamicPod(groupClient, "cluster", "DynamicGroup", hostFQDN, "PT15M"); err != nil {
+		t.Fatalf("joinDynamicPod returned error: %v", err)
+	}
+	if joinCalls != 1 {
+		t.Fatalf("joining-host client join calls = %d, want 1", joinCalls)
+	}
+	if clientOptions.Host != hostFQDN || !clientOptions.UseTLS || clientOptions.InsecureSkipVerify {
+		t.Fatalf("joining-host client options = %+v, want verified TLS for %s", clientOptions, hostFQDN)
+	}
+	if string(clientOptions.CACertificate) != string(joiningCA) {
+		t.Fatal("joining-host client did not use the joining group's CA")
 	}
 }
 
@@ -310,7 +381,7 @@ func TestJoinDynamicPodRetriesTokenExpired(t *testing.T) {
 		},
 	}
 
-	host, err := oc.joinDynamicPod(client, "cluster", "DynamicGroup", hostFQDN, "PT15M")
+	host, err := oc.joinDynamicPodWithClients(client, client, "cluster", "DynamicGroup", hostFQDN, "PT15M")
 	if err != nil {
 		t.Fatalf("joinDynamicPod returned error: %v", err)
 	}
@@ -341,7 +412,7 @@ func TestJoinDynamicPodFailsWhenJoinedHostMissingFromMembership(t *testing.T) {
 		},
 	}
 
-	_, err := oc.joinDynamicPod(client, "cluster", "DynamicGroup", hostFQDN, "PT15M")
+	_, err := oc.joinDynamicPodWithClients(client, client, "cluster", "DynamicGroup", hostFQDN, "PT15M")
 	if err == nil {
 		t.Fatal("expected error when joined host is missing from group membership")
 	}
@@ -387,7 +458,7 @@ func TestJoinDynamicPodFallsBackToBootstrapHostForToken(t *testing.T) {
 		},
 	}
 
-	host, err := oc.joinDynamicPod(client, "cluster", "DynamicGroup", hostFQDN, "PT15M")
+	host, err := oc.joinDynamicPodWithClients(client, client, "cluster", "DynamicGroup", hostFQDN, "PT15M")
 	if err != nil {
 		t.Fatalf("joinDynamicPod returned error: %v", err)
 	}
@@ -433,7 +504,7 @@ func TestJoinDynamicPodRetriesWithResolvedClusterNameForNoSuchCluster(t *testing
 		},
 	}
 
-	host, err := oc.joinDynamicPod(client, "ml-dynamic-cluster", "DynamicGroup", hostFQDN, "PT15M")
+	host, err := oc.joinDynamicPodWithClients(client, client, "ml-dynamic-cluster", "DynamicGroup", hostFQDN, "PT15M")
 	if err != nil {
 		t.Fatalf("joinDynamicPod returned error: %v", err)
 	}
@@ -481,7 +552,7 @@ func TestJoinDynamicPodRetriesAllResolvedClusterCandidatesForNoSuchCluster(t *te
 		},
 	}
 
-	host, err := oc.joinDynamicPod(client, "ml-dynamic-cluster", "DynamicGroup", hostFQDN, "PT15M")
+	host, err := oc.joinDynamicPodWithClients(client, client, "ml-dynamic-cluster", "DynamicGroup", hostFQDN, "PT15M")
 	if err != nil {
 		t.Fatalf("joinDynamicPod returned error: %v", err)
 	}
@@ -625,6 +696,60 @@ func TestDynamicPVCRestartCleanupJobUsesWorkloadSecurityContext(t *testing.T) {
 	securityContext := job.Spec.Template.Spec.Containers[0].SecurityContext
 	if securityContext == nil || securityContext.RunAsUser == nil || *securityContext.RunAsUser != runAsUser {
 		t.Fatalf("expected cleanup container runAsUser %d, got %+v", runAsUser, securityContext)
+	}
+}
+
+func TestReleaseDynamicPodFinalizerCancelsRestartCleanupJobFirst(t *testing.T) {
+	scheme := runtime.NewScheme()
+	if err := marklogicv1.AddToScheme(scheme); err != nil {
+		t.Fatalf("add Marklogic scheme: %v", err)
+	}
+	if err := corev1.AddToScheme(scheme); err != nil {
+		t.Fatalf("add core scheme: %v", err)
+	}
+	if err := batchv1.AddToScheme(scheme); err != nil {
+		t.Fatalf("add batch scheme: %v", err)
+	}
+
+	group := &marklogicv1.MarklogicGroup{
+		ObjectMeta: metav1.ObjectMeta{Name: "enode", Namespace: "database"},
+		Spec:       marklogicv1.MarklogicGroupSpec{Name: "enode"},
+	}
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{
+		Name:       "enode-0",
+		Namespace:  "database",
+		Finalizers: []string{dynamicHostCleanupFinalizer, dynamicRestartCleanupFinalizer},
+	}}
+	job := &batchv1.Job{ObjectMeta: metav1.ObjectMeta{
+		Name:      dynamicPVCRestartCleanupJobName(group.Spec.Name, pod.Name),
+		Namespace: pod.Namespace,
+	}}
+	fakeClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(pod, job).Build()
+	oc := &OperatorContext{Ctx: context.Background(), Client: fakeClient, Scheme: scheme, MarklogicGroup: group}
+
+	if err := oc.releaseDynamicPodFinalizer(pod); err != nil {
+		t.Fatalf("cancel restart cleanup Job: %v", err)
+	}
+	remainingJob := &batchv1.Job{}
+	if err := fakeClient.Get(context.Background(), client.ObjectKeyFromObject(job), remainingJob); !apierrors.IsNotFound(err) {
+		t.Fatalf("cleanup Job should be deleted before finalizer release, got %v", err)
+	}
+	currentPod := &corev1.Pod{}
+	if err := fakeClient.Get(context.Background(), client.ObjectKeyFromObject(pod), currentPod); err != nil {
+		t.Fatalf("get pod after cleanup cancellation: %v", err)
+	}
+	if !controllerutil.ContainsFinalizer(currentPod, dynamicRestartCleanupFinalizer) {
+		t.Fatal("restart cleanup finalizer was released before cleanup Job deletion completed")
+	}
+
+	if err := oc.releaseDynamicPodFinalizer(currentPod); err != nil {
+		t.Fatalf("release pod finalizers after cleanup cancellation: %v", err)
+	}
+	if err := fakeClient.Get(context.Background(), client.ObjectKeyFromObject(pod), currentPod); err != nil {
+		t.Fatalf("get pod after finalizer release: %v", err)
+	}
+	if controllerutil.ContainsFinalizer(currentPod, dynamicHostCleanupFinalizer) || controllerutil.ContainsFinalizer(currentPod, dynamicRestartCleanupFinalizer) {
+		t.Fatalf("expected both dynamic finalizers to be released, got %v", currentPod.Finalizers)
 	}
 }
 

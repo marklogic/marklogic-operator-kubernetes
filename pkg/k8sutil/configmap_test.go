@@ -56,6 +56,64 @@ func TestClusterConfigRejectsStaleStaticHostRegistration(t *testing.T) {
 	}
 }
 
+func TestScriptsSelectCredentialsWithoutPodTemplateSwitch(t *testing.T) {
+	t.Parallel()
+
+	clusterConfig, err := scriptsFolder.ReadFile("scripts/cluster-config.sh")
+	if err != nil {
+		t.Fatalf("read cluster configuration script: %v", err)
+	}
+	clusterContents := string(clusterConfig)
+	for _, expected := range []string{
+		`MARKLOGIC_MANAGEMENT_USERNAME="marklogic-kubernetes-operator"`,
+		`function activate_operator_credentials`,
+		`local deadline=$((SECONDS + max_wait_seconds))`,
+		`while ((SECONDS < deadline)); do`,
+		`Dedicated operator credentials did not become active after`,
+		`MARKLOGIC_MANAGEMENT_PASSWORD="$(< /run/secrets/ml-operator-secrets/password)"`,
+		`activate_operator_credentials`,
+		`"--anyauth" "--user" "${MARKLOGIC_MANAGEMENT_USERNAME}:${MARKLOGIC_MANAGEMENT_PASSWORD}"`,
+	} {
+		if !strings.Contains(clusterContents, expected) {
+			t.Fatalf("cluster configuration script is missing %q", expected)
+		}
+	}
+	if strings.Contains(clusterContents, `"--anyauth" "--user" "${MARKLOGIC_ADMIN_USERNAME}:${MARKLOGIC_ADMIN_PASSWORD}"`) {
+		t.Fatal("cluster join must not use admin credentials")
+	}
+	for _, expectedSequence := range []string{
+		"init_security_db\n        activate_operator_credentials\n        retry 5 configure_group",
+		"wait_bootstrap_ready\n    activate_operator_credentials",
+	} {
+		if !strings.Contains(clusterContents, expectedSequence) {
+			t.Fatalf("cluster configuration script is missing handoff sequence %q", expectedSequence)
+		}
+	}
+	if strings.Contains(clusterContents, "MARKLOGIC_OPERATOR_CREDENTIALS_ACTIVE") {
+		t.Fatal("cluster configuration must not depend on a pod-template credential switch")
+	}
+
+	prestopHook, err := scriptsFolder.ReadFile("scripts/prestop-hook.sh")
+	if err != nil {
+		t.Fatalf("read prestop hook: %v", err)
+	}
+	prestopContents := string(prestopHook)
+	for _, expected := range []string{
+		`if [[ -s /run/secrets/ml-operator-secrets/password ]]; then`,
+		`res_code=$(request_shutdown "${MARKLOGIC_OPERATOR_USERNAME}" "${MARKLOGIC_OPERATOR_PASSWORD}")`,
+	} {
+		if !strings.Contains(prestopContents, expected) {
+			t.Fatalf("prestop hook is missing %q", expected)
+		}
+	}
+	if strings.Contains(prestopContents, "MARKLOGIC_OPERATOR_CREDENTIALS_ACTIVE") {
+		t.Fatal("prestop hook must select credentials from mounted Secrets at runtime")
+	}
+	if strings.Contains(prestopContents, "MARKLOGIC_ADMIN_") {
+		t.Fatal("prestop hook must not fall back to admin credentials")
+	}
+}
+
 func TestNormalizeYAMLIndentationPreservesNestedOutputProcessors(t *testing.T) {
 	t.Parallel()
 

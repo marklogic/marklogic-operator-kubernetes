@@ -88,7 +88,7 @@ get_current_host_protocol() {
     hostname="${1:-localhost}"
     port="${2:-8001}"
     protocol="http"
-    resp_code=$(curl -s --retry 5 -o /dev/null -w '%{http_code}' http://$hostname:$port)
+    resp_code=$(curl -s --retry 5 -m 5 -o /dev/null -w '%{http_code}' http://$hostname:$port)
     if [[ $resp_code -eq 403 ]]; then
         protocol="https"
     fi
@@ -100,19 +100,61 @@ get_current_host_protocol() {
 ###############################################################
 MARKLOGIC_ADMIN_USERNAME="$(< /run/secrets/ml-secrets/username)"
 MARKLOGIC_ADMIN_PASSWORD="$(< /run/secrets/ml-secrets/password)"
-if [[ "${MARKLOGIC_OPERATOR_CREDENTIALS_ACTIVE:-false}" == "true" ]]; then
-    MARKLOGIC_MANAGEMENT_USERNAME="marklogic-kubernetes-operator"
-    MARKLOGIC_MANAGEMENT_PASSWORD="$(< /run/secrets/ml-operator-secrets/password)"
-else
-    MARKLOGIC_MANAGEMENT_USERNAME="${MARKLOGIC_ADMIN_USERNAME}"
-    MARKLOGIC_MANAGEMENT_PASSWORD="${MARKLOGIC_ADMIN_PASSWORD}"
-fi
+MARKLOGIC_MANAGEMENT_USERNAME="marklogic-kubernetes-operator"
+MARKLOGIC_MANAGEMENT_PASSWORD=""
 
 # Make sure username and password variables are not empty
-if [[ -z "${MARKLOGIC_ADMIN_USERNAME}" ]] || [[ -z "${MARKLOGIC_ADMIN_PASSWORD}" ]] || \
-    [[ -z "${MARKLOGIC_MANAGEMENT_USERNAME}" ]] || [[ -z "${MARKLOGIC_MANAGEMENT_PASSWORD}" ]]; then
-    error "MarkLogic admin and management credentials must be set." exit
+if [[ -z "${MARKLOGIC_ADMIN_USERNAME}" ]] || [[ -z "${MARKLOGIC_ADMIN_PASSWORD}" ]]; then
+	 error "MarkLogic admin credentials must be set." exit
 fi
+
+################################################################
+# Wait for the controller to create and verify the dedicated operator user,
+# then use it for every operation after host and Security initialization.
+################################################################
+function activate_operator_credentials {
+    local manage_protocol manage_host response_code max_wait_seconds=300
+    local deadline=$((SECONDS + max_wait_seconds))
+    local -a manage_tls_options=()
+
+    info "Waiting for dedicated operator credentials (up to ${max_wait_seconds} seconds)"
+    while ((SECONDS < deadline)); do
+        if [[ ! -s /run/secrets/ml-operator-secrets/password ]]; then
+            if ((SECONDS < deadline)); then
+                sleep "${RETRY_INTERVAL}"
+            fi
+            continue
+        fi
+
+        MARKLOGIC_MANAGEMENT_PASSWORD="$(< /run/secrets/ml-operator-secrets/password)"
+        manage_protocol=$(get_current_host_protocol "${MARKLOGIC_BOOTSTRAP_HOST}" 8002)
+        manage_host="${MARKLOGIC_BOOTSTRAP_HOST}"
+        manage_tls_options=()
+        if [[ "${manage_protocol}" == "https" ]]; then
+            if [[ -s /run/secrets/marklogic-certs/cacert.pem ]]; then
+                manage_tls_options=(--cacert /run/secrets/marklogic-certs/cacert.pem)
+            else
+                manage_tls_options=(-k)
+            fi
+        fi
+
+        response_code=$(curl -s -m 20 --anyauth -o /dev/null -w '%{http_code}' \
+            --user "${MARKLOGIC_MANAGEMENT_USERNAME}:${MARKLOGIC_MANAGEMENT_PASSWORD}" \
+            "${manage_tls_options[@]}" \
+            "${manage_protocol}://${manage_host}:8002/manage/v2/hosts?view=status&format=json")
+        if [[ "${response_code}" == "200" ]]; then
+            info "Dedicated operator credentials are active"
+            return 0
+        fi
+
+        info "Dedicated operator credentials are not active yet (HTTP ${response_code}). Retry in ${RETRY_INTERVAL}s."
+        if ((SECONDS < deadline)); then
+            sleep "${RETRY_INTERVAL}"
+        fi
+    done
+
+    error "Dedicated operator credentials did not become active after ${max_wait_seconds} seconds." exit
+}
 
 # generate JSON payload conditionally with license details.
 if [[ -z "${LICENSE_KEY}" ]] || [[ -z "${LICENSEE}" ]]; then
@@ -150,12 +192,14 @@ fi
 ################################################################
 function restart_check {
     info "Waiting for MarkLogic to restart."
-    local retry_count LAST_START
-    LAST_START=$(curl -s -m 5 --anyauth --user "${MARKLOGIC_ADMIN_USERNAME}":"${MARKLOGIC_ADMIN_PASSWORD}" "http://$1:8001/admin/v1/timestamp")
+    local retry_count LAST_START username password
+    username=$3
+    password=$4
+    LAST_START=$(curl -s -m 5 --anyauth --user "${username}:${password}" "http://$1:8001/admin/v1/timestamp")
     for ((retry_count = 0; retry_count < N_RETRY; retry_count = retry_count + 1)); do
         if [ "$2" == "${LAST_START}" ] || [ -z "${LAST_START}" ]; then
             sleep ${RETRY_INTERVAL}
-            LAST_START=$(curl -s -m 5 --anyauth --user "${MARKLOGIC_ADMIN_USERNAME}":"${MARKLOGIC_ADMIN_PASSWORD}" "http://$1:8001/admin/v1/timestamp")
+            LAST_START=$(curl -s -m 5 --anyauth --user "${username}:${password}" "http://$1:8001/admin/v1/timestamp")
         else
             info "MarkLogic has restarted."
             return 0
@@ -264,7 +308,7 @@ function init_marklogic {
                 sed 's%^.*<last-startup.*>\(.*\)</last-startup>.*$%\1%' \
             )
 
-            restart_check "${host}" "${last_startup}"
+            restart_check "${host}" "${last_startup}" "${MARKLOGIC_ADMIN_USERNAME}" "${MARKLOGIC_ADMIN_PASSWORD}"
             info "${host} - restarted"
             info "${host} - init complete"
         elif [ "${response_code}" -eq "204" ]; then
@@ -362,7 +406,7 @@ function init_security_db {
     response_code=$( \
         curl -s --anyauth \
         -w '%{http_code}' -o "/tmp/${MARKLOGIC_BOOTSTRAP_HOST}.out" \
-        --user "${MARKLOGIC_MANAGEMENT_USERNAME}:${MARKLOGIC_MANAGEMENT_PASSWORD}" $HTTPS_OPTION \
+        --user "${MARKLOGIC_ADMIN_USERNAME}:${MARKLOGIC_ADMIN_PASSWORD}" $HTTPS_OPTION \
         $HTTP_PROTOCOL://$MARKLOGIC_BOOTSTRAP_HOST:8002/manage/v2/hosts/$MARKLOGIC_BOOTSTRAP_HOST/properties
     )
 
@@ -463,7 +507,7 @@ function join_cluster {
     
     info "getting cluster-config from bootstrap host"
     curl_retry_validate false "$HTTP_PROTOCOL://${MARKLOGIC_BOOTSTRAP_HOST}:8001/admin/v1/cluster-config" 200 \
-        "--anyauth" "--user" "${MARKLOGIC_ADMIN_USERNAME}:${MARKLOGIC_ADMIN_PASSWORD}" \
+        "--anyauth" "--user" "${MARKLOGIC_MANAGEMENT_USERNAME}:${MARKLOGIC_MANAGEMENT_PASSWORD}" \
         "-X" "POST" "-d" "${MARKLOGIC_GROUP_PAYLOAD}" \
         "--data-urlencode" "server-config@/tmp/host.xml" \
         "-H" "Content-type: application/x-www-form-urlencoded" \
@@ -477,7 +521,7 @@ function join_cluster {
         error "Bootstrap host returned an invalid cluster configuration (HTTP ${response_code})." exit
     fi
 
-    timestamp=$(curl -s --anyauth --user "${MARKLOGIC_ADMIN_USERNAME}:${MARKLOGIC_ADMIN_PASSWORD}" "http://localhost:8001/admin/v1/timestamp" )
+    timestamp=$(curl -s "http://localhost:8001/admin/v1/timestamp")
 
     info "joining cluster of group ${MARKLOGIC_GROUP}"
     curl_retry_validate false "http://localhost:8001/admin/v1/cluster-config" 202 \
@@ -492,7 +536,7 @@ function join_cluster {
     
     # 202 causes restart
     info "restart triggered"
-    restart_check "localhost" "${timestamp}"
+    restart_check "localhost" "${timestamp}" "${MARKLOGIC_MANAGEMENT_USERNAME}" "${MARKLOGIC_MANAGEMENT_PASSWORD}"
     join_check "${hostname}"
 
     info "joined group ${MARKLOGIC_GROUP}"
@@ -914,9 +958,11 @@ if [[ "$IS_BOOTSTRAP_HOST" == "true" ]]; then
     if [[ "${MARKLOGIC_CLUSTER_TYPE}" == "bootstrap" ]]; then
         log "Info:  bootstrap host is ready"
         init_security_db
+        activate_operator_credentials
         retry 5 configure_group
     else 
         log "Info:  bootstrap host is ready"
+        activate_operator_credentials
         retry 5 configure_group
         join_cluster $HOST_FQDN
     fi
@@ -924,6 +970,7 @@ if [[ "$IS_BOOTSTRAP_HOST" == "true" ]]; then
 else 
     check_status_file_for_nonbootstrap
     wait_bootstrap_ready
+    activate_operator_credentials
     if local_host_uses_shared_security; then
         info "Local shared Security authentication succeeded. Skipping host initialization."
     else

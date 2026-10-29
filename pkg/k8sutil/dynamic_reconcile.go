@@ -144,7 +144,7 @@ func (oc *OperatorContext) ReconcileDynamicGroupConfig() result.ReconcileResult 
 		return result.RequeueSoon(5)
 	}
 
-	useTLS, insecureSkipVerify, caCertificate, err := oc.managementTLSOptions()
+	useTLS, insecureSkipVerify, caCertificate, err := oc.managementTLSOptionsForEndpoint(bootstrapHost)
 	if err != nil {
 		if statusErr := oc.setDynamicStatus(dynamicPhaseFailed, dynamicReasonInvalidConfig, err.Error(), false, false, false); statusErr != nil {
 			return result.Error(statusErr)
@@ -1570,6 +1570,20 @@ func (oc *OperatorContext) handleDynamicRemoveFailure(hostStatuses []marklogicv1
 }
 
 func (oc *OperatorContext) joinDynamicPod(groupClient mlmanage.Client, clusterName, groupName, hostFQDN, tokenDuration string) (mlmanage.GroupHost, error) {
+	useTLS, insecureSkipVerify, caCertificate, err := oc.managementTLSOptionsForEndpoint(hostFQDN)
+	if err != nil {
+		return mlmanage.GroupHost{}, err
+	}
+	joinClient := NewDynamicManagementClient(mlmanage.ClientOptions{
+		Host:               hostFQDN,
+		UseTLS:             useTLS,
+		InsecureSkipVerify: insecureSkipVerify,
+		CACertificate:      caCertificate,
+	})
+	return oc.joinDynamicPodWithClients(groupClient, joinClient, clusterName, groupName, hostFQDN, tokenDuration)
+}
+
+func (oc *OperatorContext) joinDynamicPodWithClients(groupClient, joinClient mlmanage.Client, clusterName, groupName, hostFQDN, tokenDuration string) (mlmanage.GroupHost, error) {
 	effectiveClusterName := clusterName
 	token, tokenHost, err := oc.requestDynamicTokenWithHostFallback(groupClient, effectiveClusterName, groupName, hostFQDN, tokenDuration)
 	if err != nil && isNoSuchClusterManagementError(err) {
@@ -1588,13 +1602,13 @@ func (oc *OperatorContext) joinDynamicPod(groupClient mlmanage.Client, clusterNa
 		return mlmanage.GroupHost{}, err
 	}
 
-	err = groupClient.JoinDynamicHost(oc.Ctx, hostFQDN, token)
+	err = joinClient.JoinDynamicHost(oc.Ctx, hostFQDN, token)
 	if err != nil && isTokenExpiredError(err) {
 		token, tokenErr := groupClient.RequestDynamicHostToken(oc.Ctx, effectiveClusterName, groupName, tokenHost, tokenDuration)
 		if tokenErr != nil {
 			return mlmanage.GroupHost{}, tokenErr
 		}
-		err = groupClient.JoinDynamicHost(oc.Ctx, hostFQDN, token)
+		err = joinClient.JoinDynamicHost(oc.Ctx, hostFQDN, token)
 	}
 	if err != nil {
 		return mlmanage.GroupHost{}, err
@@ -1979,16 +1993,47 @@ func (oc *OperatorContext) releaseUnexpectedDeletionFinalizers(pods []corev1.Pod
 }
 
 func (oc *OperatorContext) releaseDynamicPodFinalizer(pod *corev1.Pod) error {
-	if pod == nil || !controllerutil.ContainsFinalizer(pod, dynamicHostCleanupFinalizer) {
+	if pod == nil {
 		return nil
+	}
+	hasHostCleanupFinalizer := controllerutil.ContainsFinalizer(pod, dynamicHostCleanupFinalizer)
+	hasRestartCleanupFinalizer := controllerutil.ContainsFinalizer(pod, dynamicRestartCleanupFinalizer)
+	if !hasHostCleanupFinalizer && !hasRestartCleanupFinalizer {
+		return nil
+	}
+	if hasRestartCleanupFinalizer {
+		cleanupReleased, err := oc.cancelDynamicRestartCleanupJob(pod)
+		if err != nil || !cleanupReleased {
+			return err
+		}
 	}
 	mutablePod := pod.DeepCopy()
 	patch := client.MergeFrom(mutablePod.DeepCopy())
 	controllerutil.RemoveFinalizer(mutablePod, dynamicHostCleanupFinalizer)
+	controllerutil.RemoveFinalizer(mutablePod, dynamicRestartCleanupFinalizer)
 	if err := oc.Client.Patch(oc.Ctx, mutablePod, patch); err != nil && !apierrors.IsNotFound(err) {
 		return err
 	}
 	return nil
+}
+
+func (oc *OperatorContext) cancelDynamicRestartCleanupJob(pod *corev1.Pod) (bool, error) {
+	cleanupJob := &batchv1.Job{}
+	jobName := dynamicPVCRestartCleanupJobName(oc.MarklogicGroup.Spec.Name, pod.Name)
+	err := oc.Client.Get(oc.Ctx, types.NamespacedName{Name: jobName, Namespace: pod.Namespace}, cleanupJob)
+	if apierrors.IsNotFound(err) {
+		return true, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if cleanupJob.DeletionTimestamp == nil {
+		propagationPolicy := metav1.DeletePropagationForeground
+		if err := oc.Client.Delete(oc.Ctx, cleanupJob, &client.DeleteOptions{PropagationPolicy: &propagationPolicy}); err != nil && !apierrors.IsNotFound(err) {
+			return false, err
+		}
+	}
+	return false, nil
 }
 
 func (oc *OperatorContext) releaseDynamicPodFinalizers(pods []corev1.Pod) error {

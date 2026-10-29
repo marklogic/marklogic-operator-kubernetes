@@ -5,7 +5,6 @@ package k8sutil
 import (
 	"strings"
 
-	"github.com/marklogic/marklogic-operator-kubernetes/pkg/result"
 	appsv1 "k8s.io/api/apps/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -77,23 +76,10 @@ func (oc *OperatorContext) ReconsileMarklogicGroupHandler() (reconcile.Result, e
 			return operatorUserResult.Output()
 		}
 	}
-	rotated, rotationErr := oc.rotateCredentialPodsIfNeeded()
-	if rotationErr != nil {
-		return reconcile.Result{}, rotationErr
-	}
-	if rotated && oc.MarklogicGroup.Spec.IsDynamic {
-		if cleanupResult := oc.reconcileDynamicCredentialRotationCleanup(); cleanupResult.Completed() {
-			return cleanupResult.Output()
-		}
-	}
-
 	if oc.MarklogicGroup.Spec.IsDynamic {
 		if dynamicResult := oc.ReconcileDynamicGroupConfig(); dynamicResult.Completed() {
 			return dynamicResult.Output()
 		}
-	}
-	if rotated {
-		return result.RequeueSoon(5).Output()
 	}
 
 	return statefulSetResult, err

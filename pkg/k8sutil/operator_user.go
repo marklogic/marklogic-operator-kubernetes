@@ -43,7 +43,7 @@ func (oc *OperatorContext) ReconcileOperatorUser() result.ReconcileResult {
 		))
 	}
 
-	useTLS, insecureSkipVerify, caCertificate, err := oc.managementTLSOptions()
+	useTLS, insecureSkipVerify, caCertificate, err := oc.managementTLSOptionsForEndpoint(bootstrapHost)
 	if err != nil {
 		return oc.operatorUserPending("OperatorTLSConfigurationInvalid", err.Error())
 	}

@@ -2,6 +2,7 @@ package k8sutil
 
 import (
 	"context"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -72,7 +73,28 @@ func TestReadinessProbeFailsOnHTTPError(t *testing.T) {
 	}
 }
 
-func TestCredentialVolumesKeepAdminAndOperatorSecretsSeparate(t *testing.T) {
+func TestGenerateStatefulSetRetainsPersistentVolumeClaims(t *testing.T) {
+	replicas := int32(1)
+	statefulSet := generateStatefulSetsDef(
+		metav1.ObjectMeta{Name: "dynamic", Namespace: "database"},
+		statefulSetParameters{Name: "dynamic", IsDynamic: true, Replicas: &replicas},
+		metav1.OwnerReference{},
+		containerParameters{Name: "dynamic"},
+	)
+
+	policy := statefulSet.Spec.PersistentVolumeClaimRetentionPolicy
+	if policy == nil {
+		t.Fatal("expected StatefulSet PVC retention policy to be set")
+	}
+	if policy.WhenScaled != appsv1.RetainPersistentVolumeClaimRetentionPolicyType {
+		t.Fatalf("whenScaled = %q, want Retain", policy.WhenScaled)
+	}
+	if policy.WhenDeleted != appsv1.RetainPersistentVolumeClaimRetentionPolicyType {
+		t.Fatalf("whenDeleted = %q, want Retain", policy.WhenDeleted)
+	}
+}
+
+func TestCredentialHandoffKeepsBothSecretsWithoutChangingPodTemplate(t *testing.T) {
 	group := &marklogicv1.MarklogicGroup{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "node",
@@ -89,14 +111,32 @@ func TestCredentialVolumesKeepAdminAndOperatorSecretsSeparate(t *testing.T) {
 			HugePages:     &marklogicv1.HugePages{},
 			LogCollection: &marklogicv1.LogCollection{},
 		},
-		Status: marklogicv1.MarklogicGroupStatus{CredentialSecretName: "search-operator"},
 	}
-	params := generateContainerParams(group)
-	if params.SecretName != "search-admin" || params.OperatorSecretName != "search-operator" || !params.OperatorCredentialsActive {
-		t.Fatalf("generated credential parameters = %+v, want separate admin/operator Secrets with active operator credentials", params)
+	beforeHandoff := generateContainerParams(group)
+	beforeStatefulSet := generateStatefulSetsDef(
+		metav1.ObjectMeta{Name: "node", Namespace: "database"},
+		statefulSetParameters{Name: "node"},
+		metav1.OwnerReference{},
+		beforeHandoff,
+	)
+
+	group.Status.CredentialSecretName = "search-operator"
+	afterHandoff := generateContainerParams(group)
+	afterStatefulSet := generateStatefulSetsDef(
+		metav1.ObjectMeta{Name: "node", Namespace: "database"},
+		statefulSetParameters{Name: "node"},
+		metav1.OwnerReference{},
+		afterHandoff,
+	)
+
+	if afterHandoff.SecretName != "search-admin" || afterHandoff.OperatorSecretName != "search-operator" || !afterHandoff.OperatorCredentialsActive {
+		t.Fatalf("generated credential parameters = %+v, want active operator credentials with retained admin credentials", afterHandoff)
+	}
+	if !reflect.DeepEqual(beforeStatefulSet.Spec.Template, afterStatefulSet.Spec.Template) {
+		t.Fatal("controller credential handoff changed the pod template")
 	}
 
-	volumes := generateVolumes("node", params)
+	volumes := afterStatefulSet.Spec.Template.Spec.Volumes
 	secretNames := map[string]string{}
 	for _, volume := range volumes {
 		if volume.Secret != nil {
@@ -106,9 +146,26 @@ func TestCredentialVolumesKeepAdminAndOperatorSecretsSeparate(t *testing.T) {
 	if secretNames["mladmin-secrets"] != "search-admin" || secretNames["mloperator-secrets"] != "search-operator" {
 		t.Fatalf("credential Secret volumes = %v, want admin=search-admin and operator=search-operator", secretNames)
 	}
-	for _, volume := range volumes {
-		if volume.Name == "mloperator-secrets" && (volume.Secret.Optional == nil || !*volume.Secret.Optional) {
-			t.Fatal("operator credential Secret volume must be optional while bootstrap uses admin credentials")
+	container := afterStatefulSet.Spec.Template.Spec.Containers[0]
+	adminMountFound := false
+	operatorMountFound := false
+	for _, mount := range container.VolumeMounts {
+		if mount.Name == "mladmin-secrets" && mount.MountPath == "/run/secrets/ml-secrets" {
+			adminMountFound = true
+		}
+		if mount.Name == "mloperator-secrets" && mount.MountPath == "/run/secrets/ml-operator-secrets" {
+			operatorMountFound = true
+		}
+	}
+	if !adminMountFound {
+		t.Fatal("admin credential Secret mount is missing from the MarkLogic container")
+	}
+	if !operatorMountFound {
+		t.Fatal("operator credential Secret mount is missing from the MarkLogic container")
+	}
+	for _, envVar := range container.Env {
+		if envVar.Name == "MARKLOGIC_OPERATOR_CREDENTIALS_ACTIVE" {
+			t.Fatal("credential handoff environment must not trigger a pod-template update")
 		}
 	}
 }

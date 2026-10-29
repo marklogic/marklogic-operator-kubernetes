@@ -83,3 +83,72 @@ func TestManagementTLSOptionsRejectsInvalidCA(t *testing.T) {
 		t.Fatalf("managementTLSOptions error = %v, want invalid PEM error", err)
 	}
 }
+
+func TestManagementTLSOptionsForEndpointUsesOwningGroupCA(t *testing.T) {
+	t.Parallel()
+
+	bootstrapServer := httptest.NewTLSServer(nil)
+	defer bootstrapServer.Close()
+	dynamicServer := httptest.NewTLSServer(nil)
+	defer dynamicServer.Close()
+	bootstrapCA := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: bootstrapServer.Certificate().Raw})
+	dynamicCA := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: dynamicServer.Certificate().Raw})
+
+	scheme := runtime.NewScheme()
+	if err := corev1.AddToScheme(scheme); err != nil {
+		t.Fatalf("add core scheme: %v", err)
+	}
+	if err := marklogicv1.AddToScheme(scheme); err != nil {
+		t.Fatalf("add MarkLogic scheme: %v", err)
+	}
+	bootstrapCASecret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "bootstrap-ca", Namespace: "test"},
+		Data:       map[string][]byte{markLogicCACertificateKey: bootstrapCA},
+	}
+	dynamicCASecret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "dynamic-ca", Namespace: "test"},
+		Data:       map[string][]byte{markLogicCACertificateKey: dynamicCA},
+	}
+	cluster := &marklogicv1.MarklogicCluster{
+		ObjectMeta: metav1.ObjectMeta{Name: "search", Namespace: "test"},
+		Spec: marklogicv1.MarklogicClusterSpec{MarkLogicGroups: []*marklogicv1.MarklogicGroups{
+			{Name: "bootstrap", IsBootstrap: true, Tls: &marklogicv1.Tls{EnableOnDefaultAppServers: true, CaSecretName: bootstrapCASecret.Name}},
+			{Name: "dynamic", IsDynamic: true, Tls: &marklogicv1.Tls{EnableOnDefaultAppServers: true, CaSecretName: dynamicCASecret.Name}},
+		}},
+	}
+	dynamicGroup := &marklogicv1.MarklogicGroup{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "dynamic",
+			Namespace: "test",
+			OwnerReferences: []metav1.OwnerReference{{
+				Kind: "MarklogicCluster",
+				Name: cluster.Name,
+			}},
+		},
+		Spec: marklogicv1.MarklogicGroupSpec{
+			Name: "dynamic",
+			Tls:  &marklogicv1.Tls{EnableOnDefaultAppServers: true, CaSecretName: dynamicCASecret.Name},
+		},
+	}
+	operatorContext := &OperatorContext{
+		Ctx:            context.Background(),
+		Client:         fake.NewClientBuilder().WithScheme(scheme).WithObjects(cluster, bootstrapCASecret, dynamicCASecret).Build(),
+		MarklogicGroup: dynamicGroup,
+	}
+
+	_, _, actualBootstrapCA, err := operatorContext.managementTLSOptionsForEndpoint("bootstrap-0.bootstrap.test.svc.cluster.local")
+	if err != nil {
+		t.Fatalf("resolve bootstrap endpoint TLS: %v", err)
+	}
+	if string(actualBootstrapCA) != string(bootstrapCA) {
+		t.Fatal("bootstrap endpoint did not use the bootstrap group's CA")
+	}
+
+	_, _, actualDynamicCA, err := operatorContext.managementTLSOptionsForEndpoint("dynamic-0.dynamic.test.svc.cluster.local")
+	if err != nil {
+		t.Fatalf("resolve dynamic endpoint TLS: %v", err)
+	}
+	if string(actualDynamicCA) != string(dynamicCA) {
+		t.Fatal("dynamic endpoint did not use the dynamic group's CA")
+	}
+}
