@@ -59,20 +59,22 @@ func TestOAuthAuthorizationCodeInfrastructure(t *testing.T) {
 	testutil.WaitForDeploymentAvailable(t, oauthAuthCodeNamespace, haproxyServiceName, 5*time.Minute)
 	testutil.WaitForDeploymentAvailable(t, oauthAuthCodeNamespace, keycloak.Name, 5*time.Minute)
 	testutil.WaitForPodReady(t, oauthAuthCodeNamespace, oauthclient.DefaultName, 2*time.Minute)
+	operatorSecretName := testutil.WaitForMarklogicGroupCredentialActive(t, oauthAuthCodeNamespace, infrastructure.Cluster.Name, 5*time.Minute)
+	operatorPassword := testutil.GetSecretValue(t, oauthAuthCodeNamespace, operatorSecretName, "password")
 
 	document := discoverKeycloak(t, oauthAuthCodeNamespace)
 	if document.AuthorizationEndpoint == "" {
 		t.Fatalf("Keycloak discovery did not advertise an authorization endpoint")
 	}
-	importCertificateAuthority(t, oauthAuthCodeNamespace, infrastructure.Cluster.Name)
+	importCertificateAuthority(t, oauthAuthCodeNamespace, infrastructure.Cluster.Name, operatorPassword)
 
 	// Configure the Authorization Code external security and OAuth App Server.
 	externalSecurityPayload, err := mlmanage.BuildOAuthExternalSecurityPayload(authCodeExternalSecurityConfig(document, redirectURI))
 	if err != nil {
 		t.Fatalf("Build Authorization Code external-security payload: %v", err)
 	}
-	postManagementJSON(t, oauthAuthCodeNamespace, infrastructure.Cluster.Name, "/manage/v2/external-security", externalSecurityPayload)
-	postManagementJSON(t, oauthAuthCodeNamespace, infrastructure.Cluster.Name, "/manage/v2/servers?group-id=Default&server-type=http", mlmanage.BuildOAuthAppServerPayload(authCodeAppServerConfig()))
+	postManagementJSON(t, oauthAuthCodeNamespace, infrastructure.Cluster.Name, operatorPassword, "/manage/v2/external-security", externalSecurityPayload)
+	postManagementJSON(t, oauthAuthCodeNamespace, infrastructure.Cluster.Name, operatorPassword, "/manage/v2/servers?group-id=Default&server-type=http", mlmanage.BuildOAuthAppServerPayload(authCodeAppServerConfig()))
 
 	// Grant the disposable Keycloak identity a mapped MarkLogic role so a
 	// completed handshake yields an authorized 200 rather than only a 403.
@@ -234,19 +236,19 @@ func discoverKeycloak(t *testing.T, namespace string) openIDConfiguration {
 	return document
 }
 
-func importCertificateAuthority(t *testing.T, namespace, clusterName string) {
+func importCertificateAuthority(t *testing.T, namespace, clusterName, operatorPassword string) {
 	t.Helper()
 	testutil.ExecuteInPod(
 		t, namespace, oauthclient.DefaultName, "curl",
-		"curl", "--fail", "--silent", "--show-error", "--digest",
-		"--user", marklogicAdminUsername+":"+marklogicAdminPassword,
+		"curl", "--fail", "--silent", "--show-error", "--digest", "--cacert", oauthclient.CAPath,
+		"--user", marklogicOperatorUsername+":"+operatorPassword,
 		"--request", "POST", "--header", "Content-Type: text/plain",
 		"--data-binary", "@"+oauthclient.CAPath,
 		marklogicManagementURL(clusterName, namespace)+"/manage/v2/certificate-authorities",
 	)
 }
 
-func postManagementJSON(t *testing.T, namespace, clusterName, path string, payload any) {
+func postManagementJSON(t *testing.T, namespace, clusterName, operatorPassword, path string, payload any) {
 	t.Helper()
 	body, err := json.Marshal(payload)
 	if err != nil {
@@ -254,8 +256,8 @@ func postManagementJSON(t *testing.T, namespace, clusterName, path string, paylo
 	}
 	testutil.ExecuteInPod(
 		t, namespace, oauthclient.DefaultName, "curl",
-		"curl", "--fail", "--silent", "--show-error", "--digest",
-		"--user", marklogicAdminUsername+":"+marklogicAdminPassword,
+		"curl", "--fail", "--silent", "--show-error", "--digest", "--cacert", oauthclient.CAPath,
+		"--user", marklogicOperatorUsername+":"+operatorPassword,
 		"--request", "POST", "--header", "Accept: application/json", "--header", "Content-Type: application/json",
 		"--data-binary", string(body),
 		marklogicManagementURL(clusterName, namespace)+path,
@@ -273,7 +275,7 @@ func assignExternalNameToAdmin(t *testing.T, namespace, clusterName, externalNam
 	}
 	testutil.ExecuteInPod(
 		t, namespace, oauthclient.DefaultName, "curl",
-		"curl", "--fail", "--silent", "--show-error", "--digest",
+		"curl", "--fail", "--silent", "--show-error", "--digest", "--cacert", oauthclient.CAPath,
 		"--user", marklogicAdminUsername+":"+marklogicAdminPassword,
 		"--request", "PUT", "--header", "Content-Type: application/json",
 		"--data-binary", string(body),
@@ -309,8 +311,9 @@ func parseMarkers(output string) map[string]string {
 const authCodeFlowScript = `
 START_URL="$1"; CALLBACK_BASE="$2"; USER="$3"; PASS="$4"; CARRY="$5"
 JAR=$(mktemp); KCJAR=$(mktemp)
+CA=/etc/oauth-test/ca/cacert.pem
 
-H1=$(curl -sS --fail -c "$JAR" -D - -o /dev/null "$START_URL")
+H1=$(curl -sS --fail --cacert "$CA" -c "$JAR" -D - -o /dev/null "$START_URL")
 echo "STEP1_STATUS=$(printf '%s' "$H1" | head -1 | tr -d '\r')"
 LOC=$(printf '%s' "$H1" | tr -d '\r' | awk 'tolower($1)=="location:"{print $2; exit}')
 SID=$(awk '$6=="SessionID"{v=$7} END{print v}' "$JAR")
@@ -318,7 +321,7 @@ echo "STEP1_SESSIONID=$SID"
 echo "STEP1_LOCATION=$LOC"
 if [ -z "$LOC" ]; then echo "RESULT=NO_REDIRECT"; exit 0; fi
 
-LOGIN=$(curl -sk -c "$KCJAR" -b "$KCJAR" "$LOC")
+LOGIN=$(curl -s --cacert "$CA" -c "$KCJAR" -b "$KCJAR" "$LOC")
 ACTION=$(printf '%s' "$LOGIN" | grep -io 'action="[^"]*login-actions/authenticate[^"]*"' | head -1 | sed -e 's/^[aA][cC][tT][iI][oO][nN]="//' -e 's/"$//' -e 's/&amp;/\&/g')
 if [ -z "$ACTION" ]; then ACTION=$(printf '%s' "$LOGIN" | grep -io 'action="[^"]*"' | head -1 | sed -e 's/^[aA][cC][tT][iI][oO][nN]="//' -e 's/"$//' -e 's/&amp;/\&/g'); fi
 echo "STEP2_ACTION_PRESENT=$([ -n "$ACTION" ] && echo yes || echo no)"
@@ -326,7 +329,7 @@ if [ -z "$ACTION" ]; then echo "RESULT=NO_LOGIN_FORM"; printf '%s' "$LOGIN" | he
 
 # Keycloak's form_post response emits UPPERCASE HTML (<INPUT NAME="code" VALUE="..."/>)
 # while the login page is lowercase, so all attribute parsing must be case-insensitive.
-POST=$(curl -sk -c "$KCJAR" -b "$KCJAR" --data-urlencode "username=$USER" --data-urlencode "password=$PASS" --data-urlencode "credentialId=" "$ACTION")
+POST=$(curl -s --cacert "$CA" -c "$KCJAR" -b "$KCJAR" --data-urlencode "username=$USER" --data-urlencode "password=$PASS" --data-urlencode "credentialId=" "$ACTION")
 CODE=$(printf '%s' "$POST" | grep -io 'name="code"[^>]*' | head -1 | grep -io 'value="[^"]*"' | head -1 | sed -e 's/^[vV][aA][lL][uU][eE]="//' -e 's/"$//')
 STATE=$(printf '%s' "$POST" | grep -io 'name="state"[^>]*' | head -1 | grep -io 'value="[^"]*"' | head -1 | sed -e 's/^[vV][aA][lL][uU][eE]="//' -e 's/"$//')
 CBACT=$(printf '%s' "$POST" | grep -io 'action="[^"]*"' | head -1 | sed -e 's/^[aA][cC][tT][iI][oO][nN]="//' -e 's/"$//' -e 's/&amp;/\&/g')
@@ -341,9 +344,9 @@ echo "CALLBACK_URL=$CBURL"
 
 B4=$(mktemp)
 if [ "$CARRY" = "yes" ] && [ -n "$SID" ]; then
-  H4=$(curl -sk -b "SessionID=$SID" -D - -o "$B4" --data-urlencode "code=$CODE" --data-urlencode "state=$STATE" "$CBURL")
+	H4=$(curl -s --cacert "$CA" -b "SessionID=$SID" -D - -o "$B4" --data-urlencode "code=$CODE" --data-urlencode "state=$STATE" "$CBURL")
 else
-  H4=$(curl -sk -D - -o "$B4" --data-urlencode "code=$CODE" --data-urlencode "state=$STATE" "$CBURL")
+	H4=$(curl -s --cacert "$CA" -D - -o "$B4" --data-urlencode "code=$CODE" --data-urlencode "state=$STATE" "$CBURL")
 fi
 echo "STEP4_STATUS=$(printf '%s' "$H4" | head -1 | tr -d '\r')"
 echo "STEP4_LOCATION=$(printf '%s' "$H4" | tr -d '\r' | awk 'tolower($1)=="location:"{print $2; exit}')"

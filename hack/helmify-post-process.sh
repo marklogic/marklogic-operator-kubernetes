@@ -288,6 +288,16 @@ rules:
   - update
   - watch
 - apiGroups:
+  - batch
+  resources:
+  - jobs
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - watch
+- apiGroups:
   - marklogic.progress.com
   resources:
   - marklogicclusters
@@ -445,6 +455,16 @@ rules:
   - update
   - watch
 - apiGroups:
+  - batch
+  resources:
+  - jobs
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - watch
+- apiGroups:
   - marklogic.progress.com
   resources:
   - marklogicclusters
@@ -547,6 +567,49 @@ TMPL_EOF
 else
     echo "  [manager-rbac.yaml] scope logic already present – skipping."
 fi
+
+# Validate both scope branches even when the rewrite above was skipped. This
+# prevents an idempotent rerun from accepting a scoped template that lost the
+# dynamic PVC cleanup Job permissions.
+python3 - "${MANAGER_RBAC_FILE}" << 'PYEOF'
+import re
+import sys
+
+filename = sys.argv[1]
+with open(filename, 'r') as f:
+  content = f.read()
+
+namespace_marker = "{{- else }}\n{{- /*\nNamespace-scoped mode:"
+if namespace_marker not in content:
+  print("  ERROR: manager RBAC namespace-scope branch not found.")
+  sys.exit(1)
+
+cluster_branch, namespace_branch = content.split(namespace_marker, 1)
+job_rule = re.compile(
+  r'- apiGroups:\n'
+  r'  - batch\n'
+  r'  resources:\n'
+  r'  - jobs\n'
+  r'  verbs:\n'
+  r'((?:  - [^\n]+\n)+)'
+)
+expected_verbs = {"create", "delete", "get", "list", "watch"}
+
+for scope, branch in (("cluster", cluster_branch), ("namespace", namespace_branch)):
+  matches = job_rule.findall(branch)
+  if len(matches) != 1:
+    print(f"  ERROR: expected exactly one batch/jobs rule in {scope} scope, found {len(matches)}.")
+    sys.exit(1)
+  verbs = {line.removeprefix("  - ") for line in matches[0].splitlines()}
+  if verbs != expected_verbs:
+    print(
+      f"  ERROR: batch/jobs verbs in {scope} scope are {sorted(verbs)}; "
+      f"expected {sorted(expected_verbs)}."
+    )
+    sys.exit(1)
+
+print("  [manager-rbac.yaml] Verified batch/jobs RBAC for cluster and namespace scopes.")
+PYEOF
 
 # ──────────────────────────────────────────────────────────────────────────────
 # 4. metrics-auth-rbac.yaml – guard with scope=cluster AND metrics.secure=true.

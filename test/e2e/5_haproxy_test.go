@@ -94,6 +94,7 @@ func TestHAPorxyPathBaseEnabled(t *testing.T) {
 	feature := features.New("HAProxy Test with Pathbased Routing Enabled").WithLabel("type", "haproxy-pathbased-enabled")
 	namespace := "haproxy-pathbased"
 	releaseName := "ml"
+	additionalGroupName := "ml-new-group"
 	replicas := int32(1)
 	trueVal := true
 
@@ -117,6 +118,11 @@ func TestHAPorxyPathBaseEnabled(t *testing.T) {
 					Name:        releaseName,
 					Replicas:    &replicas,
 					IsBootstrap: true,
+				},
+				{
+					Name:        additionalGroupName,
+					Replicas:    &replicas,
+					IsBootstrap: false,
 				},
 			},
 			HAProxy: &marklogicv1.HAProxy{
@@ -180,6 +186,14 @@ func TestHAPorxyPathBaseEnabled(t *testing.T) {
 		return ctx
 	})
 
+	feature.Assess("new group pod created", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
+		podName := additionalGroupName + "-0"
+		if err := utils.WaitForPod(ctx, t, c.Client(), namespace, podName, 300*time.Second, true); err != nil {
+			t.Fatalf("Failed to wait for %s: %v", podName, err)
+		}
+		return ctx
+	})
+
 	feature.Assess("HAProxy with PathBased Route is working", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 		time.Sleep(5 * time.Second)
 		verifyPathBasedHAProxyRoutes(t, namespace, "ml-0", mlContainerName, adminUsername, adminPassword, cr.Spec.HAProxy.FrontendPort, cr.Spec.HAProxy.AppServers)
@@ -187,19 +201,20 @@ func TestHAPorxyPathBaseEnabled(t *testing.T) {
 	})
 
 	feature.Assess("HAProxy with PathBased Enabled Set Authentication to BASIC", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
-		svcName := "ml"
 		podName := "ml-0"
-		fqdn := fmt.Sprintf("%s.%s.%s.svc.cluster.local", podName, svcName, namespace)
-		url := "http://" + fqdn + ":8001"
-		t.Log("URL for testing authentication method: ", url)
-		// curl command to check if haproxy is working for path based routing
-		command := fmt.Sprintf("curl -I %s", url)
-		res, err := utils.ExecCmdInPod(podName, namespace, mlContainerName, command)
-		if err != nil {
-			t.Fatalf("Failed to execute curl command to check authentication method: %v", err)
+		urls := []string{
+			fmt.Sprintf("http://%s.ml.%s.svc.cluster.local:8001", podName, namespace),
+			fmt.Sprintf("http://%s-0.%s.%s.svc.cluster.local:8000", additionalGroupName, additionalGroupName, namespace),
 		}
-		if !strings.Contains(res, "WWW-Authenticate: Basic") {
-			t.Fatalf("Failed to check authentication method is Basic: %v", res)
+		for _, url := range urls {
+			t.Log("URL for testing authentication method: ", url)
+			res, err := utils.ExecCmdInPod(podName, namespace, mlContainerName, fmt.Sprintf("curl -I %s", url))
+			if err != nil {
+				t.Fatalf("Failed to execute curl command for %s: %v", url, err)
+			}
+			if !strings.Contains(res, "WWW-Authenticate: Basic") {
+				t.Fatalf("Expected Basic authentication from %s, got: %s", url, res)
+			}
 		}
 		return ctx
 	})

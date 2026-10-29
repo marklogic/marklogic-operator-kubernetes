@@ -100,6 +100,7 @@ type osHarness struct {
 	statusWriteErr func() error
 	secretGetErr   map[string]error
 	createErr      func(obj client.Object) error
+	clientOptions  []mlmanage.ClientOptions
 }
 
 const (
@@ -138,15 +139,15 @@ func newOSHarness(t *testing.T, mutate func(*marklogicv1.MarklogicCluster)) *osH
 		mutate(cluster)
 	}
 
-	admin := &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{Name: osCluster + "-admin", Namespace: osNamespace},
-		Data:       map[string][]byte{"username": []byte("admin"), "password": []byte("admin-" + secretMarker)},
+	operatorSecret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: osCluster + "-operator", Namespace: osNamespace},
+		Data:       map[string][]byte{"password": []byte("operator-" + secretMarker)},
 	}
 
 	h.c = fake.NewClientBuilder().
 		WithScheme(scheme).
 		WithStatusSubresource(&marklogicv1.MarklogicCluster{}).
-		WithObjects(cluster, admin).
+		WithObjects(cluster, operatorSecret).
 		WithInterceptorFuncs(interceptor.Funcs{
 			SubResourceUpdate: func(ctx context.Context, c client.Client, sub string, obj client.Object, opts ...client.SubResourceUpdateOption) error {
 				if h.statusWriteErr != nil {
@@ -277,14 +278,17 @@ func (h *osHarness) deleteSecret(name string) {
 func (h *osHarness) context() *ClusterContext {
 	cluster := h.cluster()
 	return &ClusterContext{
-		Ctx:                     context.Background(),
-		Request:                 &reconcile.Request{NamespacedName: types.NamespacedName{Namespace: osNamespace, Name: osCluster}},
-		Client:                  h.c,
-		Scheme:                  h.scheme,
-		MarklogicCluster:        cluster,
-		ReqLogger:               logr.Discard(),
-		Recorder:                opRecorder{h: h},
-		CredentialClientFactory: func(mlmanage.ClientOptions) mlmanage.CredentialClient { return h.creds },
+		Ctx:              context.Background(),
+		Request:          &reconcile.Request{NamespacedName: types.NamespacedName{Namespace: osNamespace, Name: osCluster}},
+		Client:           h.c,
+		Scheme:           h.scheme,
+		MarklogicCluster: cluster,
+		ReqLogger:        logr.Discard(),
+		Recorder:         opRecorder{h: h},
+		CredentialClientFactory: func(options mlmanage.ClientOptions) mlmanage.CredentialClient {
+			h.clientOptions = append(h.clientOptions, options)
+			return h.creds
+		},
 	}
 }
 

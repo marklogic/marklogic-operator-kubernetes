@@ -22,6 +22,14 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
 
+func TestOperatorUsernameIsFixed(t *testing.T) {
+	t.Parallel()
+
+	if operatorUsername != "marklogic-kubernetes-operator" {
+		t.Fatalf("operator username = %q, want marklogic-kubernetes-operator", operatorUsername)
+	}
+}
+
 func TestReconcileSecretCreatesAndReusesOperatorCredentials(t *testing.T) {
 	t.Parallel()
 
@@ -238,7 +246,7 @@ func TestReconcileOperatorUserUsesConfiguredSecretAndBootstrapCredentials(t *tes
 	}
 }
 
-func TestReconcileOperatorUserRotatesOnlyPasswordForActiveCredentials(t *testing.T) {
+func TestReconcileOperatorUserDoesNotRepairActiveCredentials(t *testing.T) {
 	scheme := runtime.NewScheme()
 	if err := marklogicv1.AddToScheme(scheme); err != nil {
 		t.Fatalf("add Marklogic scheme: %v", err)
@@ -262,55 +270,35 @@ func TestReconcileOperatorUserRotatesOnlyPasswordForActiveCredentials(t *testing
 		ObjectMeta: metav1.ObjectMeta{Name: "search-operator", Namespace: "database"},
 		Data:       map[string][]byte{"password": []byte("rotated-password")},
 	}
-	adminSecret := &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{Name: "bootstrap-admin", Namespace: "database"},
-		Data:       map[string][]byte{"username": []byte("bootstrap-admin"), "password": []byte("bootstrap-password")},
-	}
-	fakeClient := fake.NewClientBuilder().WithScheme(scheme).WithStatusSubresource(&marklogicv1.MarklogicGroup{}).WithObjects(group, operatorSecret, adminSecret).Build()
-	listCalls := 0
-	roleCalls := 0
-	userCalls := 0
-	passwordCalls := 0
+	fakeClient := fake.NewClientBuilder().WithScheme(scheme).WithStatusSubresource(&marklogicv1.MarklogicGroup{}).WithObjects(group, operatorSecret).Build()
 	stub := &stubDynamicManagementClient{
 		listHostStatusesFn: func() ([]mlmanage.HostStatus, error) {
-			listCalls++
-			if listCalls == 1 {
-				return nil, fmt.Errorf("management api GET /manage/v2/hosts returned status 401")
-			}
-			return []mlmanage.HostStatus{{Name: bootstrapHost, Online: true}}, nil
-		},
-		ensureOperatorRoleFn: func() error { roleCalls++; return nil },
-		ensureOperatorUser: func(username, password string) error {
-			userCalls++
-			return nil
-		},
-		updateOperatorPass: func(username, password string) error {
-			passwordCalls++
-			if username != operatorUsername || password != "rotated-password" {
-				t.Fatalf("UpdateOperatorPassword got (%q, %q)", username, password)
-			}
-			return nil
+			return nil, fmt.Errorf("management api GET /manage/v2/hosts returned status 401")
 		},
 	}
 	originalFactory := NewDynamicManagementClient
-	NewDynamicManagementClient = func(mlmanage.ClientOptions) mlmanage.Client { return stub }
+	factoryCalls := 0
+	NewDynamicManagementClient = func(mlmanage.ClientOptions) mlmanage.Client {
+		factoryCalls++
+		return stub
+	}
 	defer func() { NewDynamicManagementClient = originalFactory }()
 
 	recorder := record.NewFakeRecorder(1)
 	oc := &OperatorContext{Ctx: context.Background(), Client: fakeClient, MarklogicGroup: group, Recorder: recorder}
 	if result := oc.ReconcileOperatorUser(); !result.Completed() {
-		t.Fatal("expected password rotation to requeue for credential verification")
+		t.Fatal("expected rejected active credentials to requeue")
 	}
-	if roleCalls != 0 || userCalls != 0 || passwordCalls != 1 {
-		t.Fatalf("role/user/password calls = %d/%d/%d, want 0/0/1", roleCalls, userCalls, passwordCalls)
+	if factoryCalls != 1 {
+		t.Fatalf("management clients created = %d, want operator client only", factoryCalls)
 	}
 	select {
 	case event := <-recorder.Events:
-		if !strings.Contains(event, "Normal OperatorPasswordRotated") {
-			t.Fatalf("password rotation event = %q, want Normal OperatorPasswordRotated", event)
+		if !strings.Contains(event, "Warning OperatorAuthenticationRejected") {
+			t.Fatalf("authentication event = %q, want Warning OperatorAuthenticationRejected", event)
 		}
 	case <-time.After(time.Second):
-		t.Fatal("password rotation did not emit a Normal event")
+		t.Fatal("authentication rejection did not emit a Warning event")
 	}
 }
 

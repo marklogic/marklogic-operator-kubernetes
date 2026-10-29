@@ -199,27 +199,8 @@ func (oc *OperatorContext) ReconcileStatefulset() (reconcile.Result, error) {
 }
 
 func (oc *OperatorContext) getStatefulSetCredentialSecret(containerParams *containerParameters) (*corev1.Secret, error) {
-	secretName := containerParams.SecretName
-	if containerParams.OperatorCredentialsActive {
-		secretName = containerParams.OperatorSecretName
-	}
 	secret := &corev1.Secret{}
-	err := oc.Client.Get(oc.Ctx, client.ObjectKey{Namespace: oc.MarklogicGroup.Namespace, Name: secretName}, secret)
-	if err == nil || !apierrors.IsNotFound(err) || !containerParams.OperatorCredentialsActive {
-		return secret, err
-	}
-
-	containerParams.OperatorCredentialsActive = false
-	secret = &corev1.Secret{}
-	err = oc.Client.Get(oc.Ctx, client.ObjectKey{Namespace: oc.MarklogicGroup.Namespace, Name: containerParams.SecretName}, secret)
-	if err == nil && oc.MarklogicGroup.Status.CredentialSecretName != "" {
-		patch := client.MergeFrom(oc.MarklogicGroup.DeepCopy())
-		oc.MarklogicGroup.Status.CredentialSecretName = ""
-		if err := oc.Client.Status().Patch(oc.Ctx, oc.MarklogicGroup, patch); err != nil {
-			return nil, err
-		}
-	}
-	return secret, err
+	return secret, oc.Client.Get(oc.Ctx, client.ObjectKey{Namespace: oc.MarklogicGroup.Namespace, Name: containerParams.SecretName}, secret)
 }
 
 func (oc *OperatorContext) rotateCredentialPodsIfNeeded() (bool, error) {
@@ -419,9 +400,13 @@ func generateStatefulSetsDef(stsMeta metav1.ObjectMeta, params statefulSetParame
 		TypeMeta:   generateTypeMeta("StatefulSet", "apps/v1"),
 		ObjectMeta: stsMeta,
 		Spec: appsv1.StatefulSetSpec{
-			Selector:            LabelSelectors(getSelectorLabelsByComponent(params.Name, params.IsDynamic)),
-			ServiceName:         stsMeta.Name,
-			Replicas:            params.Replicas,
+			Selector:    LabelSelectors(getSelectorLabelsByComponent(params.Name, params.IsDynamic)),
+			ServiceName: stsMeta.Name,
+			Replicas:    params.Replicas,
+			PersistentVolumeClaimRetentionPolicy: &appsv1.StatefulSetPersistentVolumeClaimRetentionPolicy{
+				WhenDeleted: appsv1.RetainPersistentVolumeClaimRetentionPolicyType,
+				WhenScaled:  appsv1.RetainPersistentVolumeClaimRetentionPolicyType,
+			},
 			PodManagementPolicy: appsv1.ParallelPodManagement,
 			UpdateStrategy:      appsv1.StatefulSetUpdateStrategy{Type: params.UpdateStrategy},
 			Template: corev1.PodTemplateSpec{
@@ -506,10 +491,6 @@ func generateStatefulSetsDef(stsMeta metav1.ObjectMeta, params statefulSetParame
 					{
 						Name:  "MARKLOGIC_ADMIN_PASSWORD_FILE",
 						Value: "ml-secrets/password",
-					},
-					{
-						Name:  "MARKLOGIC_OPERATOR_CREDENTIALS_ACTIVE",
-						Value: strconv.FormatBool(containerParams.OperatorCredentialsActive),
 					},
 					{
 						Name:  "MARKLOGIC_FQDN_SUFFIX",
@@ -845,9 +826,6 @@ func getEnvironmentVariables(containerParams containerParameters) []corev1.EnvVa
 	}, corev1.EnvVar{
 		Name:  "MARKLOGIC_ADMIN_PASSWORD_FILE",
 		Value: "ml-secrets/password",
-	}, corev1.EnvVar{
-		Name:  "MARKLOGIC_OPERATOR_CREDENTIALS_ACTIVE",
-		Value: strconv.FormatBool(containerParams.OperatorCredentialsActive),
 	}, corev1.EnvVar{
 		Name:  "MARKLOGIC_FQDN_SUFFIX",
 		Value: fmt.Sprintf("%s.%s.svc.%s", containerParams.Name, containerParams.Namespace, containerParams.ClusterDomain),
