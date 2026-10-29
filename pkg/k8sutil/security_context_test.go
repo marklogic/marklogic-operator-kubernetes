@@ -111,7 +111,7 @@ func TestCreateHAProxyDeploymentDefAppliesSecurityContexts(t *testing.T) {
 			ObjectMeta: metav1.ObjectMeta{Name: "ml-cluster", Namespace: "default"},
 			Spec: marklogicv1.MarklogicClusterSpec{
 				HAProxy: &marklogicv1.HAProxy{
-					Image:            "haproxytech/haproxy-alpine:3.4.3",
+					Image:            "haproxytech/haproxy:alpine-3.4.7",
 					PathBasedRouting: &pathBasedRouting,
 					PodSecurityContext: &corev1.PodSecurityContext{
 						FSGroup: &fsGroup,

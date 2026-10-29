@@ -27,7 +27,7 @@ const (
 	sessionAffinityPort            = 8080
 
 	nginxImage   = "nginx:1.27.5-alpine"
-	haproxyImage = "haproxytech/haproxy-alpine:3.4.3"
+	haproxyImage = "haproxytech/haproxy:alpine-3.4.7"
 	curlImage    = "curlimages/curl:8.12.1"
 )
 
@@ -49,6 +49,7 @@ func TestHAProxySessionIDAffinityContract(t *testing.T) {
 		testutil.WaitForDeploymentAvailable(t, sessionAffinityNamespace, name, 2*time.Minute)
 	}
 	testutil.WaitForPodReady(t, sessionAffinityNamespace, sessionAffinityClientName, time.Minute)
+	waitForSessionAffinityBackends(t, time.Minute)
 
 	initial := sessionAffinityRequest(t, "curl -sS --retry 12 --retry-delay 1 --retry-connrefused -D /tmp/headers -o /tmp/body -c /tmp/cookies -w '%{http_code}' http://"+sessionAffinityProxyName+":8080/start")
 	if initial.status != "302" {
@@ -100,6 +101,27 @@ func sessionAffinityRequest(t *testing.T, request string) sessionAffinityRespons
 		status:  strings.TrimSpace(parts[0]),
 		headers: parts[1],
 		backend: headerValue(parts[1], "X-Test-Backend"),
+	}
+}
+
+// waitForSessionAffinityBackends blocks until HAProxy routes cookie-free requests to both backends.
+func waitForSessionAffinityBackends(t *testing.T, timeout time.Duration) {
+	t.Helper()
+	routable := make(map[string]bool)
+	deadline := time.Now().Add(timeout)
+	for {
+		response := sessionAffinityRequest(t, "curl -sS --retry 12 --retry-delay 1 --retry-connrefused -D /tmp/headers -o /tmp/body -w '%{http_code}' http://"+sessionAffinityProxyName+":8080/callback")
+		if response.status == "200" && response.backend != "" {
+			routable[response.backend] = true
+		}
+		if routable[sessionAffinityBackendAName] && routable[sessionAffinityBackendBName] {
+			t.Logf("HAProxy routes cookie-free requests to backends %v", routable)
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("HAProxy routed cookie-free requests to backends %v within %s, want both %s and %s; last status %q, headers: %s", routable, timeout, sessionAffinityBackendAName, sessionAffinityBackendBName, response.status, response.headers)
+		}
+		time.Sleep(time.Second)
 	}
 }
 
