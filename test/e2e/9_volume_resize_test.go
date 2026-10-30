@@ -415,7 +415,7 @@ func sizesEqual(a, b string) bool {
 // dumpResizeDiagnostics prints, for a failing namespace, the resources most
 // likely to explain why the resize did not complete: PVCs, the StatefulSet,
 // the MarklogicCluster + MarklogicGroup CRs, recent Kubernetes events in the
-// namespace, and the last 200 lines of the operator pod logs.
+// namespace, and the last 200 operator log lines that mention the namespace.
 func dumpResizeDiagnostics(t *testing.T, ns string) {
 	t.Helper()
 	line := strings.Repeat("-", 78)
@@ -432,10 +432,25 @@ func dumpResizeDiagnostics(t *testing.T, ns string) {
 		t.Logf("$ %s\n%s", cmd, p.Result())
 	}
 	p := frameworkutils.RunCommand(
-		fmt.Sprintf("kubectl logs -n %s -l control-plane=controller-manager --tail=200 --prefix=true", namespace),
+		fmt.Sprintf("kubectl logs -n %s -l control-plane=controller-manager --tail=-1 --prefix=true", namespace),
 	)
-	t.Logf("Operator logs (last 200 lines):\n%s", p.Result())
+	lines := operatorLogLinesForNamespace(p.Result(), ns, 200)
+	t.Logf("Operator logs mentioning %s (last %d lines):\n%s", ns, len(lines), strings.Join(lines, "\n"))
 	t.Logf("%s\n", line)
+}
+
+// operatorLogLinesForNamespace returns the last limit lines of logs that mention ns.
+func operatorLogLinesForNamespace(logs, ns string, limit int) []string {
+	var matched []string
+	for _, line := range strings.Split(logs, "\n") {
+		if strings.Contains(line, ns) {
+			matched = append(matched, line)
+		}
+	}
+	if len(matched) > limit {
+		matched = matched[len(matched)-limit:]
+	}
+	return matched
 }
 
 // printResizeSummary prints an easy-to-read banner describing each namespace's
