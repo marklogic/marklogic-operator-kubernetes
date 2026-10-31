@@ -243,7 +243,7 @@ void publishTestResults() {
 void ensureGotestsum() {
     sh '''
         command -v gotestsum >/dev/null 2>&1 || \
-          GO111MODULE=on GOBIN=/space/go/bin go install gotest.tools/gotestsum@v1.12.3
+          GO111MODULE=on GOBIN=/space/go/bin go install gotest.tools/gotestsum@v1.13.0
     '''
 }
 
@@ -487,6 +487,7 @@ pipeline {
         choice(name: 'E2E_INSTALL_MODE', choices: ['fresh', 'upgrade'], description: 'Run the standard fresh-install e2e flow or the upgrade validation flow. Default is fresh.')
         choice(name: 'E2E_SCOPE', choices: ['namespace-only', 'cluster', 'both', 'dynamic-host', 'volume-resize'], description: 'Combined test selector: namespace-only runs Helm namespace suite, cluster runs full cluster suite, both runs cluster+namespace in parallel minikube shards, dynamic-host and volume-resize run focused cluster tests.')
         choice(name: 'E2E_RUNTIME', choices: ['minikube', 'eks'], description: 'Execution runtime for e2e tests. minikube runs profile-parallel shards; eks runs the EKS suite only.')
+        choice(name: 'E2E_KUBERNETES_VERSION', choices: ['v1.36.6', 'v1.37.2', 'v1.35.10'], description: 'Kubernetes version for minikube e2e clusters. Not used when E2E_RUNTIME=eks, which runs against the existing EKS cluster.')
         booleanParam(name: 'PUBLISH_IMAGE', defaultValue: false, description: 'Publish image to internal registry')
         string(name: 'emailList', defaultValue: emailList, description: 'List of email for build notification', trim: true)
         booleanParam(name: 'VERIFY_ISTIO_AMBIENT', defaultValue: true, description: 'Run Istio ambient mode e2e tests. For Minikube, Istio is installed only when this test path is selected; no dedicated cluster is created.')

@@ -4,7 +4,7 @@ apiVersion: marklogic.progress.com/v1
 kind: MarklogicCluster
 metadata:
   annotations: {}
-  name: ml-cluster
+  name: ml-minimal
   namespace: prod
 spec:
   image: "progressofficial/marklogic-db:12.0.3-ubi9-rootless-2.2.6"

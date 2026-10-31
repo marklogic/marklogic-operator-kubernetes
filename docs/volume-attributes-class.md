@@ -16,7 +16,7 @@ Back up important data and test the intended profiles before production use.
 | --- | --- |
 | Operator | Install Operator 1.4 with its matching CRDs and RBAC. Older CRDs can prune configuration or progress fields. |
 | Kubernetes | Use **1.34 or later** for the GA `storage.k8s.io/v1` examples below. The VAC API and feature must be enabled. |
-| Earlier Kubernetes | The controller can discover `storage.k8s.io/v1beta1` on 1.31-1.33; use that API only with distribution-specific feature configuration and separate qualification. The 1.32 beta lane has not been qualified by the EKS test below. Alpha VAC APIs are not supported. The operator's general Kubernetes 1.30 minimum is unchanged. |
+| Earlier Kubernetes | The operator minimum is now Kubernetes 1.36. The 1.31-1.33 `storage.k8s.io/v1beta1` lane is not supported by this release. Alpha VAC APIs are not supported. |
 | CSI components | A VAC-aware external-provisioner for Day 1, and an external-resizer plus CSI driver implementing `ControllerModifyVolume` for Day 2. Expansion support alone is insufficient. Check the distribution's supported driver/sidecar versions and feature gates. |
 | Storage | A matching CSI StorageClass and complete, valid performance profiles. For these examples, use EBS gp3 and `ebs.csi.aws.com`, not EKS Auto Mode's different provisioner. |
 | Access | The operator needs the storage permissions described under [RBAC](#rbac-and-upgrades). A storage administrator creates the cluster-scoped VACs; the operator does not create them. The CSI controller separately needs provider permissions, including EBS volume modification. |

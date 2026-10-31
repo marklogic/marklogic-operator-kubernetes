@@ -316,7 +316,7 @@ env -u ML_MANAGE_ENDPOINT go test ./api/... ./pkg/... ./test/utils/... -run 'Obj
 env -u ML_MANAGE_ENDPOINT go test ./internal/controller -run 'TestClusterPredicate|TestSecretRevision|TestObjectStorageSecretNames|TestSecretToClusters' -count=1
 
 # envtest (schema/CEL, status round trip, real Secret and cluster watches); needs an absolute KUBEBUILDER_ASSETS
-export KUBEBUILDER_ASSETS="$PWD/$(bin/setup-envtest use 1.31.0 --bin-dir bin -p path)"
+export KUBEBUILDER_ASSETS="$PWD/$(bin/setup-envtest use 1.36.2 --bin-dir bin -p path)"
 go test ./internal/controller -run TestAPIs -ginkgo.focus "object storage" -count=1
 ```
 
