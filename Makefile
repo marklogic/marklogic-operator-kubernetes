@@ -10,12 +10,12 @@ VERSION ?= 1.3.1
 # Tool Versions
 KUSTOMIZE_VERSION ?= v5.5.0
 CONTROLLER_TOOLS_VERSION ?= v0.19.0
-ISTIO_VERSION ?= 1.28.3
+ISTIO_VERSION ?= 1.31.3
 OPERATOR_SDK_VERSION ?= v1.34.2
 GOLANGCI_LINT_VERSION ?= v1.62.2
 
 # ENVTEST_K8S_VERSION refers to the version of kubebuilder assets to be downloaded by envtest binary.
-ENVTEST_K8S_VERSION = 1.31.0
+ENVTEST_K8S_VERSION = 1.36.2
 
 # VERIFY_HUGE_PAGES defines if hugepages test is enabled or not for e2e test
 VERIFY_HUGE_PAGES ?= false
@@ -25,7 +25,7 @@ export E2E_KUSTOMIZE_VERSION ?= $(KUSTOMIZE_VERSION)
 export E2E_CONTROLLER_TOOLS_VERSION ?= $(CONTROLLER_TOOLS_VERSION)
 export E2E_MARKLOGIC_IMAGE_VERSION ?= progressofficial/marklogic-db:12.0.3-ubi9-rootless-2.2.6
 export FLUENT_BIT_IMAGE ?= fluent/fluent-bit:5.1.3
-export E2E_KUBERNETES_VERSION ?= v1.31.13
+export E2E_KUBERNETES_VERSION ?= v1.36.6
 export E2E_ISTIO_AMBIENT ?= false
 export E2E_TEST_TIMEOUT ?= 60m
 export E2E_HELM_TEST_TIMEOUT ?= 45m
