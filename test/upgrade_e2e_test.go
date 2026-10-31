@@ -26,6 +26,7 @@ const (
 	defaultSourceChart           = "marklogic-operator/marklogic-operator-kubernetes"
 	defaultSourceVersion         = "1.3.1"
 	defaultTargetChart           = "charts/marklogic-operator-kubernetes"
+	defaultUpgradeTargetImage    = "marklogic-operator-kubernetes:e2e-local"
 	defaultMarkLogicImage        = "progressofficial/marklogic-db:12.0.3-ubi9-rootless-2.2.6"
 	defaultHelmTimeout           = "10m"
 	defaultWorkloadWaitTimeout   = 25 * time.Minute
@@ -177,7 +178,7 @@ func newUpgradeRunner(t *testing.T) *upgradeRunner {
 		runID:                 os.Getenv("E2E_UPGRADE_RUN_ID"),
 	}
 
-	runner.targetImageRef = envOrDefault("E2E_UPGRADE_TARGET_IMAGE", os.Getenv("E2E_DOCKER_IMAGE"))
+	runner.targetImageRef = envOrDefault("E2E_UPGRADE_TARGET_IMAGE", defaultUpgradeTargetImage)
 
 	return runner
 }
@@ -436,7 +437,7 @@ func (r *upgradeRunner) verifyTargetImageAvailable() {
 	}
 
 	if r.targetImageFromChart {
-		r.testingT.Fatalf("target chart default image %s is not available in a registry or local Docker cache; build/load a local image and rerun with E2E_UPGRADE_TARGET_IMAGE or E2E_DOCKER_IMAGE set", r.targetImageRef)
+		r.testingT.Fatalf("target chart default image %s is not available in a registry or local Docker cache; build/load a local image and rerun with E2E_UPGRADE_TARGET_IMAGE set", r.targetImageRef)
 	}
 
 	r.testingT.Fatalf("target upgrade image %s is not available in a registry or local Docker cache; build/load the image first or rerun with a valid local image such as marklogic-operator-kubernetes:e2e-local", r.targetImageRef)

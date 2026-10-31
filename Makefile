@@ -158,6 +158,7 @@ endif
 # Image for dev: ml-marklogic-operator-dev.bed-artifactory.bedford.progress.com/marklogic-operator-kubernetes
 IMG ?= progressofficial/marklogic-operator-kubernetes:$(VERSION)
 LOCAL_E2E_IMG ?= marklogic-operator-kubernetes:e2e-local
+E2E_UPGRADE_TARGET_IMAGE ?= $(LOCAL_E2E_IMG)
 
 
 # Get the currently used golang install path (in GOPATH/bin, unless GOBIN is set)
@@ -321,7 +322,7 @@ e2e-test-upgrade:
 # MINIKUBE_PROFILE clusters from the same shell.
 e2e-test-upgrade-cluster:
 	@echo "=====Running cluster-scoped upgrade validation (minikube profile: $(MINIKUBE_PROFILE))====="
-	@TARGET_IMG='$(IMG)'; \
+	@TARGET_IMG='$(E2E_UPGRADE_TARGET_IMAGE)'; \
 	if minikube -p $(MINIKUBE_PROFILE) status >/dev/null 2>&1; then \
 		if ! docker image inspect "$$TARGET_IMG" >/dev/null 2>&1; then \
 			if docker image inspect '$(LOCAL_E2E_IMG)' >/dev/null 2>&1; then \
@@ -348,7 +349,7 @@ e2e-test-upgrade-cluster:
 # MINIKUBE_PROFILE clusters from the same shell.
 e2e-test-upgrade-helm-namespace:
 	@echo "=====Running namespace-scoped upgrade validation (minikube profile: $(MINIKUBE_PROFILE))====="
-	@TARGET_IMG='$(IMG)'; \
+	@TARGET_IMG='$(E2E_UPGRADE_TARGET_IMAGE)'; \
 	if minikube -p $(MINIKUBE_PROFILE) status >/dev/null 2>&1; then \
 		if ! docker image inspect "$$TARGET_IMG" >/dev/null 2>&1; then \
 			if docker image inspect '$(LOCAL_E2E_IMG)' >/dev/null 2>&1; then \

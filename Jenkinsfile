@@ -276,8 +276,9 @@ void runE2eTests(String scope = 'cluster', String installMode = 'fresh', String 
             error "Upgrade e2e flow only supports the cluster suite target."
         }
         ensureGotestsum()
+        def candidateOperatorImage = "${operatorRepo}:${VERSION}-candidate"
         sh """
-            make e2e-test-upgrade-cluster IMG=${operatorRepo}:${VERSION} MINIKUBE_PROFILE=${profile} ${goTestOverride("test/test_results/e2e-upgrade-cluster-${profile}.xml")}
+            make e2e-test-upgrade-cluster IMG=${operatorRepo}:${VERSION} E2E_UPGRADE_TARGET_IMAGE=${candidateOperatorImage} MINIKUBE_PROFILE=${profile} ${goTestOverride("test/test_results/e2e-upgrade-cluster-${profile}.xml")}
         """
         return
     }
@@ -590,17 +591,17 @@ pipeline {
                                     }
                                     // Each suite runs even if an earlier one fails; failures still fail the build.
                                     stage('Run e2e Tests') {
-                                        catchError(buildResult: 'FAILURE', stageResult: 'FAILURE') { runEKSE2eTests(topLevelParallelism) }
+                                        catchError(buildResult: 'FAILURE', stageResult: 'FAILURE', catchInterruptions: false) { runEKSE2eTests(topLevelParallelism) }
                                     }
                                     stage('Run Istio e2e Tests') {
                                         if (runIstioOnEKS) {
-                                            catchError(buildResult: 'FAILURE', stageResult: 'FAILURE') { runEKSIstioE2eTests(topLevelParallelism) }
+                                            catchError(buildResult: 'FAILURE', stageResult: 'FAILURE', catchInterruptions: false) { runEKSIstioE2eTests(topLevelParallelism) }
                                         }
                                         else { echo "Istio tests skipped (E2E_INSTALL_MODE=${params.E2E_INSTALL_MODE}, VERIFY_ISTIO_AMBIENT=${params.VERIFY_ISTIO_AMBIENT})" }
                                     }
                                     stage('Run VAC e2e Tests') {
                                         if (params.VERIFY_VAC) {
-                                            catchError(buildResult: 'FAILURE', stageResult: 'FAILURE') { runEKSVacE2eTests() }
+                                            catchError(buildResult: 'FAILURE', stageResult: 'FAILURE', catchInterruptions: false) { runEKSVacE2eTests() }
                                         }
                                         else { echo 'VAC tests skipped (VERIFY_VAC=false)' }
                                     }
@@ -627,11 +628,13 @@ pipeline {
                     def namespaceGoTestOverride = goTestOverride("test/test_results/e2e-helm-${namespaceMinikubeProfile}.xml")
                     def namespaceUpgradeGoTestOverride = goTestOverride("test/test_results/e2e-upgrade-helm-${namespaceMinikubeProfile}.xml")
                     def istioGoTestOverride = goTestOverride("test/test_results/e2e-istio-${clusterMinikubeProfile}.xml")
+                    def candidateOperatorImage = "${operatorRepo}:${VERSION}-candidate"
+                    def operatorImage = params.E2E_INSTALL_MODE == 'upgrade' ? candidateOperatorImage : "${operatorRepo}:${VERSION}"
                     def clusterTestCommand = params.E2E_INSTALL_MODE == 'upgrade'
-                        ? "make e2e-test-upgrade-cluster IMG=${operatorRepo}:${VERSION} MINIKUBE_PROFILE=${clusterMinikubeProfile} ${clusterUpgradeGoTestOverride}"
+                        ? "make e2e-test-upgrade-cluster IMG=${operatorRepo}:${VERSION} E2E_UPGRADE_TARGET_IMAGE=${candidateOperatorImage} MINIKUBE_PROFILE=${clusterMinikubeProfile} ${clusterUpgradeGoTestOverride}"
                         : "make e2e-test-${clusterScope} IMG=${operatorRepo}:${VERSION} MINIKUBE_PROFILE=${clusterMinikubeProfile} ${clusterGoTestOverride}"
                     def namespaceTestCommand = params.E2E_INSTALL_MODE == 'upgrade'
-                        ? "make e2e-test-upgrade-helm-namespace IMG=${operatorRepo}:${VERSION} MINIKUBE_PROFILE=${namespaceMinikubeProfile} ${namespaceUpgradeGoTestOverride}"
+                        ? "make e2e-test-upgrade-helm-namespace IMG=${operatorRepo}:${VERSION} E2E_UPGRADE_TARGET_IMAGE=${candidateOperatorImage} MINIKUBE_PROFILE=${namespaceMinikubeProfile} ${namespaceUpgradeGoTestOverride}"
                         : "make e2e-test-helm-namespace IMG=${operatorRepo}:${VERSION} MINIKUBE_PROFILE=${namespaceMinikubeProfile} ${namespaceGoTestOverride}"
 
                     sh """
@@ -647,7 +650,7 @@ pipeline {
                             export E2E_TEST_PARALLELISM='${topLevelParallelism}'
 
                             echo '=====Starting cluster-scoped shard====='
-                            make e2e-setup-minikube IMG=${operatorRepo}:${VERSION} MINIKUBE_PROFILE=${clusterMinikubeProfile} MINIKUBE_REUSE=false E2E_SETUP_ISTIO=${clusterSetupIstio}
+                            make e2e-setup-minikube IMG=${operatorImage} MINIKUBE_PROFILE=${clusterMinikubeProfile} MINIKUBE_REUSE=false E2E_SETUP_ISTIO=${clusterSetupIstio}
                             ${clusterTestCommand}
                             if [ '${runIstio}' = 'true' ]; then
                                 make e2e-test-istio IMG=${operatorRepo}:${VERSION} E2E_ISTIO_AMBIENT=true MINIKUBE_PROFILE=${clusterMinikubeProfile} ${istioGoTestOverride}
@@ -666,7 +669,7 @@ pipeline {
                             export E2E_TEST_PARALLELISM='${topLevelParallelism}'
 
                             echo '=====Starting namespace-scoped shard====='
-                            make e2e-setup-minikube IMG=${operatorRepo}:${VERSION} MINIKUBE_PROFILE=${namespaceMinikubeProfile} MINIKUBE_REUSE=false E2E_SETUP_ISTIO=false
+                            make e2e-setup-minikube IMG=${operatorImage} MINIKUBE_PROFILE=${namespaceMinikubeProfile} MINIKUBE_REUSE=false E2E_SETUP_ISTIO=false
                             ${namespaceTestCommand}
                             echo '=====Namespace-scoped shard complete====='
                         }
