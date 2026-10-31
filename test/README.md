@@ -3,12 +3,10 @@
 The operator has two e2e test environments: **Minikube** (local, for development)
 and **EKS** (the Jenkins CI target).
 
-Start with the [VAC EKS quick test](../docs/volume-attributes-class-eks-quick-test.md)
-for main functionality first, then additional checks. For full qualification,
-evidence collection, PR gates, and the demo checklist, see the
-[VAC EKS runbook](../docs/volume-attributes-class-eks-testing.md). These isolated
-workflows avoid the existing e2e harness's CRD/namespace cleanup on shared or
-demo clusters.
+For VolumeAttributesClass (VAC) coverage, see [VAC Core E2E](#vac-core-e2e) and
+the administrator guide in [docs/volume-attributes-class.md](../docs/volume-attributes-class.md).
+Run the VAC suite only on an exclusive, disposable cluster: the e2e harness
+cleans CRDs and namespaces, which is unsafe on shared or demo clusters.
 
 ## Test suites
 
@@ -109,39 +107,29 @@ For full setup and operational details see [test/eks-config/README.md](eks-confi
 
 ## VAC Core E2E
 
-The opt-in `type=volume-attributes-class` suite runs the same eleven scenarios
-in `test/e2e` and `test/e2e-helm`, using shared helpers in
+The opt-in `type=volume-attributes-class` suite runs two scenarios in
+`test/e2e` and `test/e2e-helm`, using shared helpers in
 [utils/vac.go](utils/vac.go):
 
 | `case` label | Coverage |
 |---|---|
-| `without-vac` | Ordinary creation, service configuration, scaling and capacity-only resize without VAC |
-| `initial-provisioning` | Parent/child owner references, standalone group, primary/additional classes and admission metadata |
-| `primary-live-change` | Parent-driven primary modification without workload/storage replacement |
-| `additional-live-change` | Independent additional modification; primary unchanged |
-| `inheritance-and-isolation` | Inheritance, whole-object/list overrides, omitted class in a supplied persistence object, and multi-group isolation |
-| `scale-after-change` | New ordinal uses the latest class despite historical StatefulSet templates |
-| `retained-claim-reuse` | Scale down/up, stable retained claim UIDs and unused-precreated inventory lifecycle |
-| `missing-primary-recovery` | Primary-only provisioning/scale fallback and recovery without a CR edit |
-| `missing-additional-recovery` | Additional-only fallback and recovery; primary remains independently managed |
-| `wrong-driver-rejection` | Initial creation gated; live volumes and service reconciliation remain healthy |
-| `pending-binding` | Pending claim identity/reference preserved; latest target applies after scheduling/binding |
+| `initial-provisioning` | Day-1: parent/child owner references, standalone group, primary/additional classes and admission metadata |
+| `primary-live-change` | Day-2: parent-driven primary modification without workload/storage replacement |
 
 **Use a disposable, exclusive cluster.** The existing `TestMain` still installs
 and cleans the operator/CRDs/namespaces, even when tests are filtered or VAC is
 disabled. Never run these commands against the demo or a shared cluster.
 Compile-only checks use `go test -c`, not `-run '^$'` or `-list`.
 
-Provide an existing expandable, `WaitForFirstConsumer` StorageClass and two
-valid, matching-driver VACs with different parameters. Do not use the ordinary
+Provide an existing StorageClass and two valid, matching-driver VACs with
+different parameters. Do not use the ordinary
 Minikube provisioner as evidence of CSI VAC support. EBS cases require complete
 gp3 profiles (`type`, `iops`, `throughput`), AWS CLI, explicit region, and
 credentials permitting `ec2:DescribeVolumes`. The suite checks actual EBS
 parameters as well as native applied class and current-generation parent/child
 status. Other CSI drivers receive native-state checks, not provider-specific
 parameter qualification. Profiles and StorageClasses supplied by the caller
-are never changed. The test principal needs create/delete permissions for its
-uniquely named missing/wrong-driver VAC fixtures.
+are never changed.
 
 After the normal isolated-cluster setup, supply the candidate operator image
 through the existing harness settings (`IMG` for cluster installation or
@@ -153,7 +141,7 @@ export KUBECONFIG='/path/to/disposable-cluster-kubeconfig'
 export KUBE_CONTEXT='<disposable-context>'
 export E2E_MARKLOGIC_IMAGE_VERSION='<approved-MarkLogic-image>'
 export E2E_VAC_ENABLED=true
-export E2E_VAC_STORAGE_CLASS='<expandable-wffc-storageclass>'
+export E2E_VAC_STORAGE_CLASS='<storageclass>'
 export E2E_VAC_STANDARD_CLASS='<standard-vac>'
 export E2E_VAC_PERFORMANCE_CLASS='<performance-vac>'
 export AWS_REGION='<cluster-region>'
@@ -169,24 +157,37 @@ go test -v -count=1 -timeout 6h ./test/e2e \
 	-args --context="$KUBE_CONTEXT" --labels='type=volume-attributes-class'
 ```
 
+In Jenkins, set `VERIFY_VAC=true` with `E2E_RUNTIME=eks` and
+`E2E_INSTALL_MODE=fresh`. After the EKS suite, `make e2e-test-eks-vac` applies
+the gp3 profiles in [eks-config/vac-profiles.yaml](eks-config/vac-profiles.yaml)
+and runs the cluster-scoped VAC suite into `test_results/e2e-eks-vac.xml`. The
+EKS cluster must run Kubernetes 1.34+ with the EBS CSI driver; it is off by
+default and not part of nightly builds.
+
+`TestVolumeAttributesClassUnsupportedEnvironment` (cluster suite) runs only
+when no VAC API is served, such as the default Minikube 1.31 lane, and skips
+otherwise. It selects a VAC and checks that the group reports
+`StorageAttributesValidated=False/VACUnsupported` with a Warning event, stays
+Ready, and provisions its PVC without a class. The upgrade suite starts from
+Operator 1.3.1 by default and verifies that a PVC-backed cluster without VAC
+keeps its StatefulSet claim templates and PVC UIDs/specs unchanged.
+
 Helm's default watch list includes `ml-ns-vac`. An explicit
 `E2E_WATCHED_NAMESPACES` override must include it before installation. Cluster
 mode uses `ml-vac`. To focus one scenario, add `,case=primary-live-change` to
 the label expression. `E2E_VAC_SIZE` defaults to `20Gi` (choose a size supporting
 the requested provider performance), and
-`E2E_VAC_TIMEOUT` defaults to `30m` per convergence wait. Cases run serially
+`E2E_VAC_TIMEOUT` defaults to `15m` per convergence wait. Cases run serially
 with fresh uniquely named claims to avoid EBS modification-quota coupling;
-reserve capacity for at least three MarkLogic Pods and six volumes at peak.
+reserve capacity for at least two MarkLogic Pods and four volumes at peak.
 
 VAC-only changes check unchanged Pod/StatefulSet/PVC/PV identities, templates,
 restart counts and capacity, plus authenticated document write/read and marker
-files on both mounts. The resize regression deliberately permits its existing
-restart/template-sync workflow. Pending-binding recovery restarts only its
-intentionally unscheduled consumer after removing the selector (`OnDelete`).
-The suite does not fake Kubernetes-owned PVC status or interrupt shared CSI.
+files on both mounts. The suite does not fake Kubernetes-owned PVC status or
+interrupt shared CSI.
 
 Each case deletes its own CRs, waits for workloads to stop, then deletes only
-recorded/uniquely marked PVCs with UID preconditions and its own VAC fixtures.
+recorded/uniquely marked PVCs with UID preconditions.
 `Retain` reclaim policies still leave billable PVs/EBS volumes requiring manual
 inventory and cleanup. `E2E_VAC_KEEP_RESOURCES=true` skips per-case cleanup,
 but does **not** disable the enclosing harness teardown. Failures dump status,

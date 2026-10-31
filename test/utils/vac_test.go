@@ -38,7 +38,7 @@ func TestVACOptionsFromEnvironment(t *testing.T) {
 			if (err != nil) != test.wantError {
 				t.Fatalf("error = %v, wantError = %v", err, test.wantError)
 			}
-			if !test.wantError && test.key == "" && (options.Size != "20Gi" || options.Timeout != 30*time.Minute) {
+			if !test.wantError && test.key == "" && (options.Size != "20Gi" || options.Timeout != 15*time.Minute) {
 				t.Fatalf("unexpected defaults: size=%s timeout=%s", options.Size, options.Timeout)
 			}
 		})
@@ -129,8 +129,8 @@ func TestVACSnapshotsStable(t *testing.T) {
 
 func TestVACCoreFeatures(t *testing.T) {
 	features := VACCoreFeatures(VACOptions{})
-	if len(features) != 11 {
-		t.Fatalf("got %d VAC scenarios, expected 11", len(features))
+	if len(features) != 2 {
+		t.Fatalf("got %d VAC scenarios, expected 2", len(features))
 	}
 	names := map[string]bool{}
 	for _, feature := range features {

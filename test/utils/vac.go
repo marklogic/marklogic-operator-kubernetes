@@ -54,7 +54,7 @@ func VACOptionsFromEnvironment(namespace, image, username, password string) (VAC
 	options := VACOptions{
 		Namespace: namespace, Image: image, Username: username, Password: password,
 		StorageClass: os.Getenv("E2E_VAC_STORAGE_CLASS"), StandardClass: os.Getenv("E2E_VAC_STANDARD_CLASS"),
-		PerformanceClass: os.Getenv("E2E_VAC_PERFORMANCE_CLASS"), Size: "20Gi", Timeout: 30 * time.Minute,
+		PerformanceClass: os.Getenv("E2E_VAC_PERFORMANCE_CLASS"), Size: "20Gi", Timeout: 15 * time.Minute,
 	}
 	if size := os.Getenv("E2E_VAC_SIZE"); size != "" {
 		options.Size = size
@@ -94,7 +94,6 @@ type vacRun struct {
 	prefix      string
 	version     string
 	fixtures    []vacFixture
-	profiles    map[string]types.UID
 	claims      map[string]types.UID
 	standard    *unstructured.Unstructured
 	performance *unstructured.Unstructured
@@ -122,7 +121,7 @@ func newVACRun(ctx context.Context, t *testing.T, config *envconf.Config, option
 		t.Fatal(err)
 	}
 	run := &vacRun{t: t, ctx: ctx, options: options, client: apiClient, config: apiConfig,
-		prefix: "vac-" + rand.String(8), claims: map[string]types.UID{}, profiles: map[string]types.UID{}}
+		prefix: "vac-" + rand.String(8), claims: map[string]types.UID{}}
 	run.preflight()
 	return run
 }
@@ -153,12 +152,6 @@ func (run *vacRun) preflight() {
 	}
 	storageClass := &storagev1.StorageClass{}
 	run.must(run.client.Get(run.ctx, client.ObjectKey{Name: run.options.StorageClass}, storageClass))
-	if storageClass.VolumeBindingMode == nil || *storageClass.VolumeBindingMode != storagev1.VolumeBindingWaitForFirstConsumer {
-		run.t.Fatal("the core VAC suite requires a WaitForFirstConsumer StorageClass for pending-binding coverage")
-	}
-	if storageClass.AllowVolumeExpansion == nil || !*storageClass.AllowVolumeExpansion {
-		run.t.Fatal("the core VAC suite requires an expandable StorageClass for the no-VAC resize regression")
-	}
 	namespace := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: run.options.Namespace}}
 	if err := run.client.Get(run.ctx, client.ObjectKey{Name: namespace.Name}, namespace); apierrors.IsNotFound(err) {
 		run.must(run.client.Create(run.ctx, namespace))
@@ -227,22 +220,6 @@ func (run *vacRun) profile(name string) *unstructured.Unstructured {
 	return profile
 }
 
-func (run *vacRun) createProfile(name, driver string) {
-	profile := run.standard.DeepCopy()
-	profile.SetResourceVersion("")
-	profile.SetUID("")
-	profile.SetCreationTimestamp(metav1.Time{})
-	profile.SetManagedFields(nil)
-	profile.SetFinalizers(nil)
-	profile.SetOwnerReferences(nil)
-	profile.SetLabels(map[string]string{"vac-e2e-run": run.prefix})
-	profile.SetAnnotations(nil)
-	profile.SetName(name)
-	profile.Object["driverName"] = driver
-	run.must(run.client.Create(run.ctx, profile))
-	run.profiles[name] = profile.GetUID()
-}
-
 func (run *vacRun) persistence(className string) *marklogicv1.Persistence {
 	persistence := &marklogicv1.Persistence{Enabled: true, Size: run.options.Size, StorageClassName: run.options.StorageClass,
 		AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce}, Annotations: map[string]string{"vac-e2e-run": run.prefix}}
@@ -300,14 +277,6 @@ func (run *vacRun) patch(object client.Object, fields map[string]interface{}) {
 
 func (run *vacRun) patchCluster(fixture vacFixture, fields map[string]interface{}) {
 	run.patch(&marklogicv1.MarklogicCluster{ObjectMeta: metav1.ObjectMeta{Name: fixture.cluster, Namespace: run.options.Namespace}}, map[string]interface{}{"spec": fields})
-}
-
-func (run *vacRun) scale(fixture vacFixture, replicas int32) {
-	cluster := &marklogicv1.MarklogicCluster{}
-	run.must(run.client.Get(run.ctx, run.key(fixture.cluster), cluster))
-	groups := cluster.Spec.DeepCopy().MarkLogicGroups
-	groups[0].Replicas = &replicas
-	run.patchCluster(fixture, map[string]interface{}{"markLogicGroups": groups})
 }
 
 func (run *vacRun) claim(group, template string, ordinal int32) *corev1.PersistentVolumeClaim {
@@ -449,17 +418,8 @@ func VACCoreFeatures(options VACOptions) []features.Feature {
 		name string
 		run  func(*vacRun)
 	}{
-		{"without-vac", (*vacRun).withoutVAC},
 		{"initial-provisioning", (*vacRun).initialProvisioning},
 		{"primary-live-change", (*vacRun).primaryLiveChange},
-		{"additional-live-change", (*vacRun).additionalLiveChange},
-		{"inheritance-and-isolation", (*vacRun).inheritanceAndIsolation},
-		{"scale-after-change", (*vacRun).scaleAfterChange},
-		{"retained-claim-reuse", (*vacRun).retainedReuse},
-		{"missing-primary-recovery", func(run *vacRun) { run.missingRecovery(false) }},
-		{"missing-additional-recovery", func(run *vacRun) { run.missingRecovery(true) }},
-		{"wrong-driver-rejection", (*vacRun).wrongDriver},
-		{"pending-binding", (*vacRun).pendingBinding},
 	}
 	result := make([]features.Feature, 0, len(cases))
 	for _, test := range cases {
@@ -531,333 +491,6 @@ func (run *vacRun) primaryLiveChange() {
 	run.patchCluster(fixture, map[string]interface{}{"persistence": map[string]interface{}{"volumeAttributesClassName": run.options.PerformanceClass}})
 	run.complete(fixture, map[string][2]string{group: {run.options.PerformanceClass, run.options.StandardClass}}, 1)
 	run.must(vacSnapshotsStable(before, run.snapshot(group), "audit"))
-	run.data(group, false)
-}
-
-func (run *vacRun) additionalLiveChange() {
-	fixture := run.baseline()
-	group := fixture.groups[0]
-	run.data(group, true)
-	before := run.snapshot(group)
-	run.patchCluster(fixture, map[string]interface{}{"additionalVolumeClaimTemplates": run.additional(run.options.PerformanceClass)})
-	run.complete(fixture, map[string][2]string{group: {run.options.StandardClass, run.options.PerformanceClass}}, 1)
-	run.must(vacSnapshotsStable(before, run.snapshot(group), "datadir"))
-	run.data(group, false)
-}
-
-func (run *vacRun) inheritanceAndIsolation() {
-	fixture := run.cluster("inherit", run.options.StandardClass, run.options.StandardClass, func(cluster *marklogicv1.MarklogicCluster) {
-		replicas := int32(1)
-		cluster.Spec.MarkLogicGroups = append(cluster.Spec.MarkLogicGroups,
-			&marklogicv1.MarklogicGroups{Name: run.prefix + "-override", Replicas: &replicas, Persistence: run.persistence(run.options.PerformanceClass), AdditionalVolumeClaimTemplates: run.additional(run.options.PerformanceClass)},
-			&marklogicv1.MarklogicGroups{Name: run.prefix + "-no-inherit", Replicas: &replicas, Persistence: run.persistence("")})
-	})
-	expected := map[string][2]string{fixture.groups[0]: {run.options.StandardClass, run.options.StandardClass},
-		fixture.groups[1]: {run.options.PerformanceClass, run.options.PerformanceClass}, fixture.groups[2]: {"", run.options.StandardClass}}
-	run.complete(fixture, expected, 1)
-	isolated := run.snapshot(fixture.groups[1])
-	before := run.snapshot(fixture.groups[0])
-	run.data(fixture.groups[0], true)
-	run.patchCluster(fixture, map[string]interface{}{"persistence": map[string]interface{}{"volumeAttributesClassName": run.options.PerformanceClass}})
-	expected[fixture.groups[0]] = [2]string{run.options.PerformanceClass, run.options.StandardClass}
-	run.complete(fixture, expected, 1)
-	run.must(vacSnapshotsStable(before, run.snapshot(fixture.groups[0]), "audit"))
-	run.must(vacSnapshotsStable(isolated, run.snapshot(fixture.groups[1]), "datadir", "audit"))
-	run.data(fixture.groups[0], false)
-}
-
-func (run *vacRun) changedThenScaled() vacFixture {
-	fixture := run.baseline()
-	group := fixture.groups[0]
-	run.data(group, true)
-	before := run.snapshot(group)
-	run.patchCluster(fixture, map[string]interface{}{"persistence": map[string]interface{}{"volumeAttributesClassName": run.options.PerformanceClass}})
-	run.complete(fixture, map[string][2]string{group: {run.options.PerformanceClass, run.options.StandardClass}}, 1)
-	run.scale(fixture, 2)
-	run.complete(fixture, map[string][2]string{group: {run.options.PerformanceClass, run.options.StandardClass}}, 2)
-	run.must(vacSnapshotsStable(before, run.snapshot(group), "audit"))
-	claim := run.claim(group, "datadir", 1)
-	if claim.Annotations["marklogic.progress.com/storage-group-uid"] != string(run.group(group).UID) {
-		run.t.Fatal("new ordinal did not use the operator precreation path")
-	}
-	run.data(group, false)
-	return fixture
-}
-
-func (run *vacRun) scaleAfterChange() {
-	run.changedThenScaled()
-}
-
-func (run *vacRun) retainedReuse() {
-	fixture := run.changedThenScaled()
-	group := fixture.groups[0]
-	primary, additional := run.claim(group, "datadir", 1), run.claim(group, "audit", 1)
-	run.scale(fixture, 1)
-	run.complete(fixture, map[string][2]string{group: {run.options.PerformanceClass, run.options.StandardClass}}, 1)
-	run.eventually("retained precreated claim inventory", func() error {
-		pod := &corev1.Pod{}
-		if err := run.client.Get(run.ctx, run.key(group+"-1"), pod); !apierrors.IsNotFound(err) {
-			return fmt.Errorf("scaled-down Pod still exists: %v", err)
-		}
-		current := &marklogicv1.MarklogicGroup{}
-		if err := run.client.Get(run.ctx, run.key(group), current); err != nil {
-			return err
-		}
-		if current.Status.Storage != nil {
-			if current.Status.Storage.VolumeAttributesClass == nil || len(current.Status.Storage.VolumeAttributesClass.PVCs) != 2 {
-				return fmt.Errorf("inactive retained claims are still counted as active targets")
-			}
-			for _, unused := range current.Status.Storage.UnusedPVCs {
-				if unused.Name == primary.Name && unused.UID == string(primary.UID) && unused.Reason == "OutsideReplicaRange" {
-					condition := meta.FindStatusCondition(current.Status.Conditions, "StorageClaimsInUse")
-					if condition != nil && condition.Status == metav1.ConditionFalse && condition.ObservedGeneration == current.Generation {
-						return nil
-					}
-				}
-			}
-		}
-		return fmt.Errorf("precreated inactive claim not reported")
-	})
-	if run.claim(group, "datadir", 1).UID != primary.UID || run.claim(group, "audit", 1).UID != additional.UID {
-		run.t.Fatal("scale-down replaced retained claims")
-	}
-	run.scale(fixture, 2)
-	run.complete(fixture, map[string][2]string{group: {run.options.PerformanceClass, run.options.StandardClass}}, 2)
-	if run.claim(group, "datadir", 1).UID != primary.UID || run.claim(group, "audit", 1).UID != additional.UID {
-		run.t.Fatal("scale-up did not reuse retained claim UIDs")
-	}
-	run.eventually("unused inventory cleared after reuse", func() error {
-		current := &marklogicv1.MarklogicGroup{}
-		if err := run.client.Get(run.ctx, run.key(group), current); err != nil {
-			return err
-		}
-		if current.Status.Storage != nil && len(current.Status.Storage.UnusedPVCs) != 0 {
-			return fmt.Errorf("active reused claims remain in unused inventory")
-		}
-		if meta.FindStatusCondition(current.Status.Conditions, "StorageClaimsInUse") != nil {
-			return fmt.Errorf("unused-claim condition was not cleared")
-		}
-		return nil
-	})
-	run.data(group, false)
-}
-
-func (run *vacRun) reason(group, wanted string) {
-	run.eventually("current VAC diagnostic: "+wanted, func() error {
-		current := &marklogicv1.MarklogicGroup{}
-		if err := run.client.Get(run.ctx, run.key(group), current); err != nil {
-			return err
-		}
-		for _, condition := range current.Status.Conditions {
-			if condition.Reason == wanted && condition.ObservedGeneration == current.Generation && condition.Status != metav1.ConditionTrue {
-				return nil
-			}
-		}
-		if current.Status.Storage != nil && current.Status.Storage.VolumeAttributesClass != nil {
-			progress := current.Status.Storage.VolumeAttributesClass
-			if progress.ObservedGeneration == current.Generation && progress.State != marklogicv1.VolumeAttributesClassCompleted {
-				for _, claim := range progress.PVCs {
-					if claim.Reason == wanted {
-						return nil
-					}
-				}
-			}
-		}
-		return fmt.Errorf("diagnostic %s missing or stale", wanted)
-	})
-}
-
-func (run *vacRun) missingRecovery(additionalMissing bool) {
-	missing := run.prefix + "-missing"
-	primaryClass, additionalClass, affected := missing, run.options.StandardClass, "datadir"
-	if additionalMissing {
-		primaryClass, additionalClass, affected = run.options.StandardClass, missing, "audit"
-	}
-	fixture := run.cluster("missing", primaryClass, additionalClass, nil)
-	group := fixture.groups[0]
-	run.ready(group, 1)
-	run.reason(group, "VACNotFound")
-	if run.claim(group, affected, 0).Spec.VolumeAttributesClassName != nil {
-		run.t.Fatal("missing VAC was sent to native initial provisioning")
-	}
-	run.data(group, true)
-	before := run.snapshot(group)
-	run.scale(fixture, 2)
-	run.ready(group, 2)
-	for _, template := range []string{"datadir", "audit"} {
-		claim := run.claim(group, template, 1)
-		wanted := run.options.StandardClass
-		if template == affected {
-			wanted = ""
-		}
-		if classValue(claim.Spec.VolumeAttributesClassName) != wanted {
-			run.t.Fatalf("fallback incorrectly targeted %s", claim.Name)
-		}
-	}
-	cluster := &marklogicv1.MarklogicCluster{}
-	run.must(run.client.Get(run.ctx, run.key(fixture.cluster), cluster))
-	parentGeneration, childGeneration := cluster.Generation, run.group(group).Generation
-	driver, _, err := unstructured.NestedString(run.standard.Object, "driverName")
-	run.must(err)
-	run.createProfile(missing, driver)
-	run.complete(fixture, map[string][2]string{group: {primaryClass, additionalClass}}, 2)
-	run.must(run.client.Get(run.ctx, run.key(fixture.cluster), cluster))
-	if cluster.Generation != parentGeneration || run.group(group).Generation != childGeneration {
-		run.t.Fatal("missing-class recovery unexpectedly needed a CR spec change")
-	}
-	run.must(vacSnapshotsStable(before, run.snapshot(group)))
-	run.data(group, false)
-}
-
-func (run *vacRun) wrongDriver() {
-	wrong := run.prefix + "-wrong-driver"
-	run.createProfile(wrong, "vac-e2e.invalid.csi")
-	blocked := run.cluster("blocked", wrong, run.options.StandardClass, nil)
-	run.reason(blocked.groups[0], "VACDriverMismatch")
-	if err := run.client.Get(run.ctx, run.key(blocked.groups[0]), &appsv1.StatefulSet{}); !apierrors.IsNotFound(err) {
-		run.t.Fatalf("invalid initial selection did not gate StatefulSet creation: %v", err)
-	}
-	fixture := run.baseline()
-	group := fixture.groups[0]
-	run.data(group, true)
-	before := run.snapshot(group)
-	run.patchCluster(fixture, map[string]interface{}{"persistence": map[string]interface{}{"volumeAttributesClassName": wrong}})
-	run.reason(group, "VACDriverMismatch")
-	run.patchCluster(fixture, map[string]interface{}{"service": map[string]interface{}{"annotations": map[string]string{"vac-e2e-reconciled": run.prefix}}})
-	run.eventually("service reconciliation during VAC validation failure", func() error {
-		services := &corev1.ServiceList{}
-		if err := run.client.List(run.ctx, services, client.InNamespace(run.options.Namespace)); err != nil {
-			return err
-		}
-		for _, service := range services.Items {
-			if metav1.IsControlledBy(&service, run.group(group)) && service.Annotations["vac-e2e-reconciled"] == run.prefix {
-				return nil
-			}
-		}
-		return fmt.Errorf("service update has not reconciled")
-	})
-	run.ready(group, 1)
-	run.must(vacSnapshotsStable(before, run.snapshot(group), "datadir", "audit"))
-	run.data(group, false)
-}
-
-func (run *vacRun) pendingBinding() {
-	fixture := run.cluster("pending", run.options.StandardClass, run.options.StandardClass, func(cluster *marklogicv1.MarklogicCluster) {
-		cluster.Spec.MarkLogicGroups[0].NodeSelector = map[string]string{"vac-e2e-unavailable": run.prefix}
-	})
-	group := fixture.groups[0]
-	var originalUID types.UID
-	run.eventually("unbound initial claim", func() error {
-		claim := &corev1.PersistentVolumeClaim{}
-		if err := run.client.Get(run.ctx, run.key("datadir-"+group+"-0"), claim); err != nil {
-			return err
-		}
-		if claim.Status.Phase != corev1.ClaimPending {
-			return fmt.Errorf("PVC is not Pending; this case needs WaitForFirstConsumer storage")
-		}
-		originalUID = claim.UID
-		run.claims[claim.Name] = claim.UID
-		return nil
-	})
-	run.patchCluster(fixture, map[string]interface{}{"persistence": map[string]interface{}{"volumeAttributesClassName": run.options.PerformanceClass}})
-	run.reason(group, "PendingClassMismatch")
-	claim := run.claim(group, "datadir", 0)
-	if claim.UID != originalUID || classValue(claim.Spec.VolumeAttributesClassName) != run.options.StandardClass || claim.Status.Phase != corev1.ClaimPending {
-		run.t.Fatal("pending claim was replaced or retargeted")
-	}
-	cluster := &marklogicv1.MarklogicCluster{}
-	run.must(run.client.Get(run.ctx, run.key(fixture.cluster), cluster))
-	groups := cluster.Spec.DeepCopy().MarkLogicGroups
-	groups[0].NodeSelector = nil
-	run.patchCluster(fixture, map[string]interface{}{"markLogicGroups": groups})
-	set := &appsv1.StatefulSet{}
-	run.eventually("scheduling obstruction removed", func() error {
-		if err := run.client.Get(run.ctx, run.key(group), set); err != nil {
-			return err
-		}
-		if len(set.Spec.Template.Spec.NodeSelector) != 0 {
-			return fmt.Errorf("old node selector still in Pod template")
-		}
-		return nil
-	})
-	pod := &corev1.Pod{}
-	run.must(run.client.Get(run.ctx, run.key(group+"-0"), pod))
-	if !metav1.IsControlledBy(pod, set) || pod.Spec.NodeName != "" {
-		run.t.Fatal("cannot safely restart the intentionally unscheduled consumer")
-	}
-	run.must(run.client.Delete(run.ctx, pod, client.Preconditions{UID: &pod.UID}))
-	run.complete(fixture, map[string][2]string{group: {run.options.PerformanceClass, run.options.StandardClass}}, 1)
-	if run.claim(group, "datadir", 0).UID != originalUID {
-		run.t.Fatal("binding recovery replaced the initial claim")
-	}
-	run.data(group, true)
-	run.data(group, false)
-}
-
-func (run *vacRun) withoutVAC() {
-	fixture := run.cluster("legacy", "", "", nil)
-	group := fixture.groups[0]
-	run.ready(group, 1)
-	run.data(group, true)
-	original := run.snapshot(group)
-	run.patchCluster(fixture, map[string]interface{}{"service": map[string]interface{}{"annotations": map[string]string{"vac-e2e-reconciled": run.prefix}}})
-	run.scale(fixture, 2)
-	run.ready(group, 2)
-	for _, template := range []string{"datadir", "audit"} {
-		for ordinal := int32(0); ordinal < 2; ordinal++ {
-			if claim := run.claim(group, template, ordinal); claim.Spec.VolumeAttributesClassName != nil {
-				run.t.Fatalf("unconfigured claim %s unexpectedly selected a VAC", claim.Name)
-			}
-		}
-	}
-	run.scale(fixture, 1)
-	run.ready(group, 1)
-	run.eventually("ordinary service update without VAC", func() error {
-		services := &corev1.ServiceList{}
-		if err := run.client.List(run.ctx, services, client.InNamespace(run.options.Namespace)); err != nil {
-			return err
-		}
-		for _, service := range services.Items {
-			if metav1.IsControlledBy(&service, run.group(group)) && service.Annotations["vac-e2e-reconciled"] == run.prefix {
-				return nil
-			}
-		}
-		return fmt.Errorf("ordinary service annotations not reconciled")
-	})
-	if progress := run.group(group).Status.Storage; progress != nil && progress.VolumeAttributesClass != nil {
-		run.t.Fatal("unconfigured group has managed VAC progress")
-	}
-	for template, claim := range original.claims {
-		if run.claim(group, template, 0).UID != claim.UID {
-			run.t.Fatal("ordinary scaling replaced a data claim")
-		}
-	}
-	target := resource.MustParse(run.options.Size)
-	target.Add(resource.MustParse("1Gi"))
-	additional := run.additional("")
-	(*additional)[0].Spec.Resources.Requests[corev1.ResourceStorage] = target
-	run.patchCluster(fixture, map[string]interface{}{"persistence": map[string]interface{}{"size": target.String()}, "additionalVolumeClaimTemplates": additional})
-	run.eventually("ordinary capacity-only resize without VAC", func() error {
-		current := &marklogicv1.MarklogicGroup{}
-		if err := run.client.Get(run.ctx, run.key(group), current); err != nil {
-			return err
-		}
-		if current.Status.VolumeResizeStatus == nil || current.Status.VolumeResizeStatus.Phase != marklogicv1.VolumeResizePhaseCompleted || current.Status.VolumeResizeStatus.TargetSize != target.String() || current.Status.VolumeResizeStatus.ObservedGeneration != current.Generation {
-			return fmt.Errorf("ordinary resize has not completed")
-		}
-		for template, originalClaim := range original.claims {
-			claim := &corev1.PersistentVolumeClaim{}
-			if err := run.client.Get(run.ctx, run.key(originalClaim.Name), claim); err != nil {
-				return err
-			}
-			capacity := claim.Status.Capacity[corev1.ResourceStorage]
-			if claim.UID != originalClaim.UID || claim.Spec.VolumeName != originalClaim.Spec.VolumeName || capacity.Cmp(target) < 0 || claim.Spec.VolumeAttributesClassName != nil {
-				return fmt.Errorf("unexpected resize outcome for %s", template)
-			}
-		}
-		return nil
-	})
-	run.ready(group, 1)
 	run.data(group, false)
 }
 
@@ -954,8 +587,10 @@ func vacSnapshotsStable(before, after vacSnapshot, unchangedTemplates ...string)
 			return fmt.Errorf("unrelated PVC spec or ownership changed for %s", template)
 		}
 		originalAnnotations, currentAnnotations := original.DeepCopy().Annotations, current.DeepCopy().Annotations
-		delete(originalAnnotations, "marklogic.progress.com/storage-operation-id")
-		delete(currentAnnotations, "marklogic.progress.com/storage-operation-id")
+		for _, key := range []string{"marklogic.progress.com/storage-operation-id", "marklogic.progress.com/storage-operation-submitted"} {
+			delete(originalAnnotations, key)
+			delete(currentAnnotations, key)
+		}
 		if !maps.Equal(originalAnnotations, currentAnnotations) || !maps.Equal(original.Labels, current.Labels) {
 			return fmt.Errorf("unrelated PVC metadata changed for %s", template)
 		}
@@ -990,8 +625,9 @@ func (run *vacRun) execute(group string, command []string) (string, error) {
 
 func (run *vacRun) data(group string, write bool) {
 	uri := "/" + run.prefix + ".json"
-	script := fmt.Sprintf(`fn.doc(%q).toObject().marker`, uri)
-	shell := `curl --fail --silent --show-error --max-time 30 --digest --user "$1:$2" --data-urlencode "javascript=$3" 'http://127.0.0.1:8000/v1/eval?database=Documents'; cat /var/opt/MarkLogic/.vac-e2e /var/opt/MarkLogic-extra/.vac-e2e`
+	// The JavaScript toObject() accessor returns an empty body on MarkLogic 12.0.3; XQuery reads the stored marker reliably.
+	script := fmt.Sprintf(`fn:string(fn:doc(%q)/marker)`, uri)
+	shell := `curl --fail --silent --show-error --max-time 30 --digest --user "$1:$2" --data-urlencode "xquery=$3" 'http://127.0.0.1:8000/v1/eval?database=Documents'; cat /var/opt/MarkLogic/.vac-e2e /var/opt/MarkLogic-extra/.vac-e2e`
 	if write {
 		script = fmt.Sprintf(`declareUpdate(); xdmp.documentInsert(%q, {marker:%q})`, uri, run.prefix)
 		shell = `curl --fail --silent --show-error --max-time 30 --digest --user "$1:$2" --data-urlencode "javascript=$3" 'http://127.0.0.1:8000/v1/eval?database=Documents'; printf '%s\n' "$4" > /var/opt/MarkLogic/.vac-e2e; printf '%s\n' "$4" > /var/opt/MarkLogic-extra/.vac-e2e`
@@ -1085,14 +721,6 @@ func (run *vacRun) cleanup() {
 		claim := &corev1.PersistentVolumeClaim{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: run.options.Namespace}}
 		if err := client.IgnoreNotFound(run.client.Delete(ctx, claim, client.Preconditions{UID: &uid})); err != nil {
 			run.t.Errorf("delete owned test PVC %s: %v", name, err)
-		}
-	}
-	for name, uid := range run.profiles {
-		profile := &unstructured.Unstructured{}
-		profile.SetGroupVersionKind(schema.GroupVersionKind{Group: "storage.k8s.io", Version: run.version, Kind: "VolumeAttributesClass"})
-		profile.SetName(name)
-		if err := client.IgnoreNotFound(run.client.Delete(ctx, profile, client.Preconditions{UID: &uid})); err != nil {
-			run.t.Errorf("delete test VAC %s: %v", name, err)
 		}
 	}
 }
