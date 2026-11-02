@@ -618,8 +618,8 @@ var _ = Describe("MarkLogicGroup controller", func() {
 				Spec: marklogicv1.MarklogicClusterSpec{
 					Image: imageName,
 					MarkLogicGroups: []*marklogicv1.MarklogicGroups{
-						{Name: "bootstrap", IsBootstrap: true, Tls: &marklogicv1.Tls{EnableOnDefaultAppServers: true, CaSecretName: bootstrapCASecret.Name}},
-						{Name: dynamicName, IsDynamic: true, Tls: &marklogicv1.Tls{EnableOnDefaultAppServers: true, CaSecretName: caSecret.Name}},
+						{Name: "bootstrap", GroupConfig: &marklogicv1.GroupConfig{Name: "Bootstrap", EnableXdqpSsl: true}, IsBootstrap: true, Tls: &marklogicv1.Tls{EnableOnDefaultAppServers: true, CaSecretName: bootstrapCASecret.Name}},
+						{Name: dynamicName, GroupConfig: &marklogicv1.GroupConfig{Name: "DynamicEval", EnableXdqpSsl: true}, IsDynamic: true, Tls: &marklogicv1.Tls{EnableOnDefaultAppServers: true, CaSecretName: caSecret.Name}},
 					},
 				},
 			}
