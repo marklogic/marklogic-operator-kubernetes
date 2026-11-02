@@ -2670,7 +2670,7 @@ func activeDynamicCredentialRevision(ctx context.Context, namespace, groupName s
 		if err := k8sClient.Get(ctx, types.NamespacedName{Name: group.Status.CredentialSecretName, Namespace: namespace}, operatorSecret); err != nil {
 			return false
 		}
-		expectedRevision := credentialRevisionForSecret(operatorSecret.Data)
+		expectedRevision := credentialRevisionForSecret(operatorSecret)
 		statefulSet := &appsv1.StatefulSet{}
 		if err := k8sClient.Get(ctx, types.NamespacedName{Name: groupName, Namespace: namespace}, statefulSet); err != nil {
 			return false
@@ -2681,17 +2681,17 @@ func activeDynamicCredentialRevision(ctx context.Context, namespace, groupName s
 	return credentialRevision
 }
 
-func credentialRevisionForSecret(data map[string][]byte) string {
-	keys := make([]string, 0, len(data))
-	for key := range data {
+func credentialRevisionForSecret(secret *corev1.Secret) string {
+	keys := make([]string, 0, len(secret.Data))
+	for key := range secret.Data {
 		keys = append(keys, key)
 	}
 	sort.Strings(keys)
-	serialized := []byte{}
+	serialized := append([]byte(secret.Name), 0)
 	for _, key := range keys {
 		serialized = append(serialized, key...)
 		serialized = append(serialized, 0)
-		serialized = append(serialized, data[key]...)
+		serialized = append(serialized, secret.Data[key]...)
 		serialized = append(serialized, 0)
 	}
 	hash := sha256.Sum256(serialized)
