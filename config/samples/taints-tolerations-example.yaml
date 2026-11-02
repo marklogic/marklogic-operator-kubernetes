@@ -1,0 +1,205 @@
+# Copyright (c) 2024-2025 Progress Software Corporation and/or its subsidiaries or affiliates. All Rights Reserved.
+
+# Example: MarkLogic Cluster with Taints and Tolerations
+# 
+# This example demonstrates how to configure a MarkLogic cluster with Kubernetes taints and tolerations.
+# This is useful for:
+# - Dedicating specific nodes for MarkLogic workloads
+# - Multi-tenant isolation
+# - Cost optimization with spot instances
+# - Compliance and workload segregation
+#
+# Prerequisites:
+# 1. Taint the nodes for MarkLogic workloads:
+#    kubectl taint nodes node-1 node-2 node-3 marklogic-pool=true:NoSchedule
+#    kubectl label nodes node-1 node-2 node-3 marklogic-pool=true
+#
+# 2. (Optional) For spot instances with graceful eviction:
+#    kubectl taint nodes spot-node-1 spot-node-2 spot-instance=true:NoExecute
+#    kubectl label nodes spot-node-1 spot-node-2 spot-instance=true
+
+apiVersion: marklogic.progress.com/v1
+kind: MarklogicCluster
+metadata:
+  name: ml-dedicated-pool
+  namespace: prod
+spec:
+  image: "progressofficial/marklogic-db:12.0.3-ubi9-rootless-2.2.6"
+  imagePullPolicy: IfNotPresent
+  imagePullSecrets: 
+    - name: regcred
+  
+  auth:
+    secretName: admincreds
+  
+  clusterDomain: cluster.local
+  
+  persistence: 
+    enabled: true
+    size: 100Gi
+    storageClassName: "gp3"
+    accessModes: 
+      - ReadWriteOnce
+  
+  resources: 
+    requests:
+      memory: "64Gi"
+      cpu: "8"
+    limits:
+      memory: "64Gi"
+      cpu: "8"
+  
+  # Node selector to schedule cluster pods on labeled nodes
+  nodeSelector:
+    marklogic-pool: "true"
+  
+  # Tolerations to allow scheduling on tainted nodes
+  tolerations:
+    - key: marklogic-pool
+      operator: Equal
+      value: "true"
+      effect: NoSchedule
+  
+  haproxy:
+    enabled: true
+    pathBasedRouting: true
+    frontendPort: 8080
+    appServers:
+      - name: "app-service"
+        port: 8000
+        path: "/console"
+      - name: "admin"
+        port: 8001
+        path: "/adminUI"
+    
+    # HAProxy can use same tolerations as MarkLogic pods
+    # or different tolerations for separate node pools
+    tolerations:
+      - key: marklogic-pool
+        operator: Equal
+        value: "true"
+        effect: NoSchedule
+  
+  terminationGracePeriodSeconds: 10
+  updateStrategy: OnDelete
+  
+  podSecurityContext:
+    fsGroup: 2
+    fsGroupChangePolicy: OnRootMismatch
+  
+  securityContext:
+    runAsUser: 1000
+    runAsNonRoot: true
+    allowPrivilegeEscalation: false
+  
+  # Topology spread constraints to distribute pods across nodes and zones
+  topologySpreadConstraints:
+    - maxSkew: 1
+      topologyKey: kubernetes.io/hostname
+      whenUnsatisfiable: DoNotSchedule
+      labelSelector:
+        matchLabels:
+          app.kubernetes.io/name: marklogiccluster
+    - maxSkew: 1
+      topologyKey: topology.kubernetes.io/zone
+      whenUnsatisfiable: ScheduleAnyway
+      labelSelector:
+        matchLabels:
+          app.kubernetes.io/name: marklogiccluster
+  
+  markLogicGroups:
+  - name: dnode
+    replicas: 3
+    groupConfig:
+      name: dnode
+      enableXdqpSsl: true
+    isBootstrap: true
+    image: "progressofficial/marklogic-db:12.0.3-ubi9-rootless-2.2.6"
+    imagePullPolicy: IfNotPresent
+    imagePullSecrets: 
+      - name: regcred
+    
+    persistence:
+      enabled: true
+      size: 100Gi
+      storageClassName: "gp3"
+      accessModes: 
+        - ReadWriteOnce
+    
+    service:
+      type: ClusterIP
+      additionalPorts: 
+      - name: app1
+        port: 8010
+        targetPort: 8010
+        protocol: TCP
+    
+    resources:
+      requests:
+        memory: "64Gi"
+        cpu: "8"
+      limits:
+        memory: "64Gi"
+        cpu: "8"
+    
+    # Group-level node selector
+    nodeSelector:
+      marklogic-pool: "true"
+    
+    # Group-level tolerations for dedicated nodes
+    tolerations:
+      - key: marklogic-pool
+        operator: Equal
+        value: "true"
+        effect: NoSchedule
+    
+    # Topology spread constraints for this group
+    topologySpreadConstraints:
+      - maxSkew: 1
+        topologyKey: kubernetes.io/hostname
+        whenUnsatisfiable: DoNotSchedule
+        labelSelector:
+          matchLabels:
+            app.kubernetes.io/name: marklogiccluster
+      - maxSkew: 1
+        topologyKey: topology.kubernetes.io/zone
+        whenUnsatisfiable: ScheduleAnyway
+        labelSelector:
+          matchLabels:
+            app.kubernetes.io/name: marklogiccluster
+  
+  - name: enode
+    replicas: 3
+    groupConfig:
+      name: enode
+      enableXdqpSsl: true
+    isBootstrap: false
+    
+    resources:
+      requests:
+        memory: "8Gi"
+        cpu: "4"
+      limits:
+        memory: "8Gi"
+        cpu: "4"
+    
+    # Different tolerations for enode group - can tolerate spot instances
+    # This example shows flexibility in toleration policies across groups
+    tolerations:
+      - key: marklogic-pool
+        operator: Equal
+        value: "true"
+        effect: NoSchedule
+      - key: spot-instance
+        operator: Equal
+        value: "true"
+        effect: NoExecute
+        tolerationSeconds: 1800  # 30-minute grace period before eviction
+    
+    service: 
+      type: ClusterIP
+      additionalPorts: 
+      - name: app1
+        port: 8012
+        targetPort: 8012
+        protocol: TCP

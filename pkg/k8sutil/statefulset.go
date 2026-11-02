@@ -38,6 +38,7 @@ type statefulSetParameters struct {
 	AdditionalVolumeClaimTemplates *[]corev1.PersistentVolumeClaim
 	ServiceAccountName             string
 	AutomountServiceAccountToken   *bool
+	Tolerations                    []corev1.Toleration
 }
 
 type containerParameters struct {
@@ -522,6 +523,7 @@ func generateStatefulSetsDef(stsMeta metav1.ObjectMeta, params statefulSetParame
 					TopologySpreadConstraints:     params.TopologySpreadConstraints,
 					PriorityClassName:             params.PriorityClassName,
 					ImagePullSecrets:              params.ImagePullSecrets,
+					Tolerations:                   params.Tolerations,
 				},
 			},
 		},
@@ -688,6 +690,7 @@ func generateStatefulSetsParams(cr *marklogicv1.MarklogicGroup) statefulSetParam
 		PriorityClassName:              cr.Spec.PriorityClassName,
 		ImagePullSecrets:               cr.Spec.ImagePullSecrets,
 		AdditionalVolumeClaimTemplates: cr.Spec.AdditionalVolumeClaimTemplates,
+		Tolerations:                    cr.Spec.Tolerations,
 	}
 	if cr.Spec.Persistence != nil && cr.Spec.Persistence.Enabled {
 		params.PersistentVolumeClaim = generatePVCTemplate(cr.Spec.Persistence)
