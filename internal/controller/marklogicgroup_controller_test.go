@@ -153,10 +153,12 @@ var _ = Describe("MarkLogicGroup controller", func() {
 		ctx := context.Background()
 
 		AfterEach(func() {
+			deleteMarklogicClusters(ctx)
 			deleteMarklogicGroups(ctx, true)
 		})
 
 		AfterAll(func() {
+			deleteMarklogicClusters(ctx)
 			deleteMarklogicGroups(ctx, false)
 		})
 
@@ -1681,6 +1683,20 @@ var _ = Describe("MarkLogicGroup controller", func() {
 				err := k8sClient.Get(ctx, dynamicNsName, createdCR)
 				return err == nil && createdCR.Status.Dynamic != nil && createdCR.Status.Dynamic.ReadyReplicas == 1
 			}, cleanupTimeout, interval).Should(BeTrue())
+			Eventually(func() error {
+				current := &marklogicv1.MarklogicGroup{}
+				if err := k8sClient.Get(ctx, dynamicNsName, current); err != nil {
+					return err
+				}
+				for hostIndex := range current.Status.Dynamic.Hosts {
+					if current.Status.Dynamic.Hosts[hostIndex].PodName == dynamicName+"-0" {
+						current.Status.Dynamic.Hosts[hostIndex].State = "removing"
+						current.Status.Dynamic.Hosts[hostIndex].Attempts = 2
+						return k8sClient.Status().Update(ctx, current)
+					}
+				}
+				return fmt.Errorf("dynamic host status for %s-0 was not found", dynamicName)
+			}, cleanupTimeout, interval).Should(Succeed())
 
 			zeroReplicas := int32(0)
 			Expect(k8sClient.Get(ctx, dynamicNsName, createdCR)).Should(Succeed())
@@ -2503,6 +2519,33 @@ var _ = Describe("MarkLogicGroup controller", func() {
 		})
 	})
 })
+
+func deleteMarklogicClusters(ctx context.Context) {
+	clusters := &marklogicv1.MarklogicClusterList{}
+	Expect(k8sClient.List(ctx, clusters)).Should(Succeed())
+	for clusterIndex := range clusters.Items {
+		clusterKey := ctrlclient.ObjectKeyFromObject(&clusters.Items[clusterIndex])
+		Eventually(func() bool {
+			current := &marklogicv1.MarklogicCluster{}
+			err := k8sClient.Get(ctx, clusterKey, current)
+			if apierrors.IsNotFound(err) {
+				return true
+			}
+			if err != nil {
+				return false
+			}
+			if len(current.Finalizers) > 0 {
+				patchBase := current.DeepCopy()
+				current.Finalizers = nil
+				if err := k8sClient.Patch(ctx, current, ctrlclient.MergeFrom(patchBase)); err != nil {
+					return false
+				}
+			}
+			_ = k8sClient.Delete(ctx, current)
+			return false
+		}, timeout, interval).Should(BeTrue())
+	}
+}
 
 func deleteMarklogicGroups(ctx context.Context, dynamicOnly bool) {
 	groups := &marklogicv1.MarklogicGroupList{}
