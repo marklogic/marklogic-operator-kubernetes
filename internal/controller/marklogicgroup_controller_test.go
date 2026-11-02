@@ -2676,7 +2676,7 @@ func activeDynamicCredentialRevision(ctx context.Context, namespace, groupName s
 			return false
 		}
 		credentialRevision = statefulSet.Spec.Template.Annotations["marklogic.progress.com/credential-revision"]
-		return credentialRevision == expectedRevision
+		return credentialRevision != "" && statefulSet.Annotations["marklogic.progress.com/validated-credential-revision"] == expectedRevision
 	}, timeout, interval).Should(BeTrue())
 	return credentialRevision
 }
