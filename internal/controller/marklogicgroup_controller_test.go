@@ -1685,20 +1685,6 @@ var _ = Describe("MarkLogicGroup controller", func() {
 				err := k8sClient.Get(ctx, dynamicNsName, createdCR)
 				return err == nil && createdCR.Status.Dynamic != nil && createdCR.Status.Dynamic.ReadyReplicas == 1
 			}, cleanupTimeout, interval).Should(BeTrue())
-			Eventually(func() error {
-				current := &marklogicv1.MarklogicGroup{}
-				if err := k8sClient.Get(ctx, dynamicNsName, current); err != nil {
-					return err
-				}
-				for hostIndex := range current.Status.Dynamic.Hosts {
-					if current.Status.Dynamic.Hosts[hostIndex].PodName == dynamicName+"-0" {
-						current.Status.Dynamic.Hosts[hostIndex].State = "removing"
-						current.Status.Dynamic.Hosts[hostIndex].Attempts = 2
-						return k8sClient.Status().Update(ctx, current)
-					}
-				}
-				return fmt.Errorf("dynamic host status for %s-0 was not found", dynamicName)
-			}, cleanupTimeout, interval).Should(Succeed())
 
 			zeroReplicas := int32(0)
 			Expect(k8sClient.Get(ctx, dynamicNsName, createdCR)).Should(Succeed())
@@ -1708,6 +1694,39 @@ var _ = Describe("MarkLogicGroup controller", func() {
 			deletingPod := &corev1.Pod{}
 			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: dynamicName + "-0", Namespace: dynamicNamespace}, deletingPod)).Should(Succeed())
 			Expect(k8sClient.Delete(ctx, deletingPod)).Should(Succeed())
+
+			Eventually(func() error {
+				current := &marklogicv1.MarklogicGroup{}
+				if err := k8sClient.Get(ctx, dynamicNsName, current); err != nil {
+					return err
+				}
+				if current.Status.Dynamic == nil {
+					return errors.New("dynamic status is not initialized")
+				}
+				if current.Status.Dynamic.Reason == "RetryBudgetExhausted" {
+					return nil
+				}
+				for hostIndex := range current.Status.Dynamic.Hosts {
+					host := &current.Status.Dynamic.Hosts[hostIndex]
+					if host.PodName == dynamicName+"-0" && host.State == "removing" {
+						host.Attempts = 2
+						return k8sClient.Status().Update(ctx, current)
+					}
+				}
+				return fmt.Errorf("dynamic host %s-0 has not entered removal", dynamicName)
+			}, cleanupTimeout, interval).Should(Succeed())
+
+			Eventually(func() error {
+				current := &marklogicv1.MarklogicGroup{}
+				if err := k8sClient.Get(ctx, dynamicNsName, current); err != nil {
+					return err
+				}
+				if current.Annotations == nil {
+					current.Annotations = map[string]string{}
+				}
+				current.Annotations["marklogic.progress.com/test-remove-retry-trigger"] = fmt.Sprintf("%d", time.Now().UnixNano())
+				return k8sClient.Update(ctx, current)
+			}, cleanupTimeout, interval).Should(Succeed())
 
 			Eventually(func() bool {
 				err := k8sClient.Get(ctx, dynamicNsName, createdCR)
