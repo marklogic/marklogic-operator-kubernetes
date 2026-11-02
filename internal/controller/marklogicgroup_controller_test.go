@@ -418,10 +418,24 @@ var _ = Describe("MarkLogicGroup controller", func() {
 			}
 			Expect(k8sClient.Create(ctx, adminSecret)).Should(Succeed())
 			createOperatorCredentialSecret(ctx, dynamicNamespace, adminSecretName)
+			parentCluster := &marklogicv1.MarklogicCluster{
+				TypeMeta:   metav1.TypeMeta{Kind: "MarklogicCluster", APIVersion: "marklogic.progress.com/v1"},
+				ObjectMeta: metav1.ObjectMeta{Name: clusterName, Namespace: dynamicNamespace},
+				Spec: marklogicv1.MarklogicClusterSpec{
+					Image: imageName,
+					MarkLogicGroups: []*marklogicv1.MarklogicGroups{
+						{Name: "bootstrap", IsBootstrap: true},
+					},
+				},
+			}
+			Expect(k8sClient.Create(ctx, parentCluster)).Should(Succeed())
 
 			mlGroup := &marklogicv1.MarklogicGroup{
-				TypeMeta:   metav1.TypeMeta{Kind: "MarklogicGroup", APIVersion: "marklogic.progress.com/v1"},
-				ObjectMeta: metav1.ObjectMeta{Name: dynamicName, Namespace: dynamicNamespace},
+				TypeMeta: metav1.TypeMeta{Kind: "MarklogicGroup", APIVersion: "marklogic.progress.com/v1"},
+				ObjectMeta: metav1.ObjectMeta{
+					Name: dynamicName, Namespace: dynamicNamespace,
+					OwnerReferences: []metav1.OwnerReference{{APIVersion: "marklogic.progress.com/v1", Kind: "MarklogicCluster", Name: clusterName, UID: parentCluster.UID}},
+				},
 				Spec: marklogicv1.MarklogicGroupSpec{
 					Replicas:      &replicas,
 					Name:          dynamicName,
