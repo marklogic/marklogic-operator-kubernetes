@@ -170,6 +170,38 @@ func TestCredentialHandoffKeepsBothSecretsWithoutChangingPodTemplate(t *testing.
 	}
 }
 
+func TestStatefulSetMountsBootstrapCASeparatelyFromLocalCA(t *testing.T) {
+	statefulSet := generateStatefulSetsDef(
+		metav1.ObjectMeta{Name: "joining", Namespace: "database"},
+		statefulSetParameters{Name: "joining"},
+		metav1.OwnerReference{},
+		containerParameters{
+			Name:                  "joining",
+			Tls:                   &marklogicv1.Tls{EnableOnDefaultAppServers: true, CaSecretName: "joining-ca"},
+			BootstrapCASecretName: "bootstrap-ca",
+		},
+	)
+
+	volumeSecrets := map[string]string{}
+	for _, volume := range statefulSet.Spec.Template.Spec.Volumes {
+		if volume.Secret != nil {
+			volumeSecrets[volume.Name] = volume.Secret.SecretName
+		}
+	}
+	if volumeSecrets["ca-cert-secret"] != "joining-ca" || volumeSecrets["bootstrap-ca-cert-secret"] != "bootstrap-ca" {
+		t.Fatalf("CA Secret volumes = %v, want local and bootstrap CAs", volumeSecrets)
+	}
+	bootstrapMountFound := false
+	for _, mount := range statefulSet.Spec.Template.Spec.Containers[0].VolumeMounts {
+		if mount.Name == "bootstrap-ca-cert-secret" && mount.MountPath == "/run/secrets/marklogic-bootstrap-certs/" && mount.ReadOnly {
+			bootstrapMountFound = true
+		}
+	}
+	if !bootstrapMountFound {
+		t.Fatal("bootstrap CA mount is missing from the MarkLogic container")
+	}
+}
+
 func TestMissingActiveOperatorSecretDoesNotFallBackToAdminSecret(t *testing.T) {
 	scheme := runtime.NewScheme()
 	if err := marklogicv1.AddToScheme(scheme); err != nil {
@@ -202,6 +234,70 @@ func TestMissingActiveOperatorSecretDoesNotFallBackToAdminSecret(t *testing.T) {
 	}
 	if updatedGroup.Status.CredentialSecretName != "deleted-operator" {
 		t.Fatalf("active credential Secret status = %q, want unchanged", updatedGroup.Status.CredentialSecretName)
+	}
+}
+
+func TestStatefulSetCredentialRevisionUsesValidatedOperatorSecret(t *testing.T) {
+	scheme := runtime.NewScheme()
+	if err := marklogicv1.AddToScheme(scheme); err != nil {
+		t.Fatalf("add Marklogic scheme: %v", err)
+	}
+	if err := corev1.AddToScheme(scheme); err != nil {
+		t.Fatalf("add core scheme: %v", err)
+	}
+	group := &marklogicv1.MarklogicGroup{
+		ObjectMeta: metav1.ObjectMeta{Name: "node", Namespace: "database"},
+		Spec: marklogicv1.MarklogicGroupSpec{
+			SecretName: "search-admin",
+			Auth:       &marklogicv1.AdminAuth{OperatorSecretName: stringPointer("search-operator")},
+		},
+		Status: marklogicv1.MarklogicGroupStatus{CredentialSecretName: "search-operator"},
+	}
+	adminSecret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "search-admin", Namespace: "database"},
+		Data:       map[string][]byte{"password": []byte("admin-password")},
+	}
+	operatorSecret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "search-operator", Namespace: "database"},
+		Data:       map[string][]byte{"password": []byte("operator-password")},
+	}
+	fakeClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(group, adminSecret, operatorSecret).Build()
+	oc := &OperatorContext{Ctx: context.Background(), Client: fakeClient, MarklogicGroup: group}
+
+	secret, err := oc.getStatefulSetCredentialSecret(&containerParameters{
+		SecretName:                "search-admin",
+		OperatorSecretName:        "search-operator",
+		OperatorCredentialsActive: true,
+	})
+	if err != nil {
+		t.Fatalf("get revision Secret: %v", err)
+	}
+	if secret.Name != "search-operator" {
+		t.Fatalf("revision Secret = %q, want validated operator Secret", secret.Name)
+	}
+}
+
+func TestInitialOperatorCredentialRevisionDoesNotRollPods(t *testing.T) {
+	current := credentialRotationStatefulSet("node", "database", "admin-revision", 1)
+	desired := credentialRotationStatefulSet("node", "database", "operator-revision", 1)
+	params := containerParameters{OperatorCredentialsActive: true, CredentialRevision: "operator-revision"}
+
+	preserveInitialOperatorCredentialRevision(current, desired, params)
+	if revision := desired.Spec.Template.Annotations[credentialRevisionAnnotation]; revision != "admin-revision" {
+		t.Fatalf("initial handoff template revision = %q, want current revision", revision)
+	}
+	if revision := desired.Annotations[validatedCredentialRevisionAnnotation]; revision != "operator-revision" {
+		t.Fatalf("validated operator revision = %q, want operator-revision", revision)
+	}
+
+	current = desired.DeepCopy()
+	desired = credentialRotationStatefulSet("node", "database", "rotated-operator-revision", 1)
+	preserveInitialOperatorCredentialRevision(current, desired, containerParameters{
+		OperatorCredentialsActive: true,
+		CredentialRevision:        "rotated-operator-revision",
+	})
+	if revision := desired.Spec.Template.Annotations[credentialRevisionAnnotation]; revision != "rotated-operator-revision" {
+		t.Fatalf("rotated template revision = %q, want rotated operator revision", revision)
 	}
 }
 

@@ -1982,6 +1982,9 @@ func (oc *OperatorContext) releaseUnexpectedDeletionFinalizers(pods []corev1.Pod
 		if pod.DeletionTimestamp == nil {
 			continue
 		}
+		if controllerutil.ContainsFinalizer(pod, dynamicRestartCleanupFinalizer) {
+			continue
+		}
 		if int32(podOrdinal(pod.Name)) >= desiredReplicas {
 			continue
 		}

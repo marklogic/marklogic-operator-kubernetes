@@ -753,6 +753,51 @@ func TestReleaseDynamicPodFinalizerCancelsRestartCleanupJobFirst(t *testing.T) {
 	}
 }
 
+func TestUnexpectedDeletionKeepsRestartCleanupProtection(t *testing.T) {
+	scheme := runtime.NewScheme()
+	if err := marklogicv1.AddToScheme(scheme); err != nil {
+		t.Fatalf("add Marklogic scheme: %v", err)
+	}
+	if err := corev1.AddToScheme(scheme); err != nil {
+		t.Fatalf("add core scheme: %v", err)
+	}
+	if err := batchv1.AddToScheme(scheme); err != nil {
+		t.Fatalf("add batch scheme: %v", err)
+	}
+
+	deletionTime := metav1.NewTime(time.Now())
+	group := &marklogicv1.MarklogicGroup{
+		ObjectMeta: metav1.ObjectMeta{Name: "enode", Namespace: "database"},
+		Spec:       marklogicv1.MarklogicGroupSpec{Name: "enode"},
+	}
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{
+		Name:              "enode-0",
+		Namespace:         "database",
+		DeletionTimestamp: &deletionTime,
+		Finalizers:        []string{dynamicHostCleanupFinalizer, dynamicRestartCleanupFinalizer},
+	}}
+	job := &batchv1.Job{ObjectMeta: metav1.ObjectMeta{
+		Name:      dynamicPVCRestartCleanupJobName(group.Spec.Name, pod.Name),
+		Namespace: pod.Namespace,
+	}}
+	fakeClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(pod, job).Build()
+	oc := &OperatorContext{Ctx: context.Background(), Client: fakeClient, Scheme: scheme, MarklogicGroup: group}
+
+	if err := oc.releaseUnexpectedDeletionFinalizers([]corev1.Pod{*pod}, 1); err != nil {
+		t.Fatalf("release unexpected deletion finalizers: %v", err)
+	}
+	currentPod := &corev1.Pod{}
+	if err := fakeClient.Get(context.Background(), client.ObjectKeyFromObject(pod), currentPod); err != nil {
+		t.Fatalf("get protected pod: %v", err)
+	}
+	if !controllerutil.ContainsFinalizer(currentPod, dynamicHostCleanupFinalizer) || !controllerutil.ContainsFinalizer(currentPod, dynamicRestartCleanupFinalizer) {
+		t.Fatalf("restart cleanup protection changed unexpectedly: %v", currentPod.Finalizers)
+	}
+	if err := fakeClient.Get(context.Background(), client.ObjectKeyFromObject(job), &batchv1.Job{}); err != nil {
+		t.Fatalf("restart cleanup Job changed unexpectedly: %v", err)
+	}
+}
+
 func TestIsValidDynamicTokenDuration(t *testing.T) {
 	tests := []struct {
 		name     string

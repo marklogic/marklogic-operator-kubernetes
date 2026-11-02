@@ -589,18 +589,39 @@ var _ = Describe("MarkLogicGroup controller", func() {
 				Data:       map[string][]byte{"password": []byte("operator-password")},
 			}
 			Expect(k8sClient.Create(ctx, operatorSecret)).Should(Succeed())
-			tlsServer := httptest.NewTLSServer(nil)
-			defer tlsServer.Close()
-			trustedCA := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: tlsServer.Certificate().Raw})
+			bootstrapTLSServer := httptest.NewTLSServer(nil)
+			defer bootstrapTLSServer.Close()
+			bootstrapCA := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: bootstrapTLSServer.Certificate().Raw})
+			dynamicTLSServer := httptest.NewTLSServer(nil)
+			defer dynamicTLSServer.Close()
+			dynamicCA := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: dynamicTLSServer.Certificate().Raw})
+			bootstrapCASecret := &corev1.Secret{
+				ObjectMeta: metav1.ObjectMeta{Name: "bootstrap-ca-secret", Namespace: dynamicNamespace},
+				Data:       map[string][]byte{"cacert.pem": bootstrapCA},
+			}
+			Expect(k8sClient.Create(ctx, bootstrapCASecret)).Should(Succeed())
 			caSecret := &corev1.Secret{
 				ObjectMeta: metav1.ObjectMeta{Name: "ca-secret", Namespace: dynamicNamespace},
-				Data:       map[string][]byte{"cacert.pem": trustedCA},
+				Data:       map[string][]byte{"cacert.pem": dynamicCA},
 			}
 			Expect(k8sClient.Create(ctx, caSecret)).Should(Succeed())
-
+			parentCluster := &marklogicv1.MarklogicCluster{
+				TypeMeta:   metav1.TypeMeta{Kind: "MarklogicCluster", APIVersion: "marklogic.progress.com/v1"},
+				ObjectMeta: metav1.ObjectMeta{Name: clusterName, Namespace: dynamicNamespace},
+				Spec: marklogicv1.MarklogicClusterSpec{
+					Image: imageName,
+					MarkLogicGroups: []*marklogicv1.MarklogicGroups{
+						{Name: "bootstrap", IsBootstrap: true, Tls: &marklogicv1.Tls{EnableOnDefaultAppServers: true, CaSecretName: bootstrapCASecret.Name}},
+						{Name: dynamicName, IsDynamic: true, Tls: &marklogicv1.Tls{EnableOnDefaultAppServers: true, CaSecretName: caSecret.Name}},
+					},
+				},
+			}
 			mlGroup := &marklogicv1.MarklogicGroup{
-				TypeMeta:   metav1.TypeMeta{Kind: "MarklogicGroup", APIVersion: "marklogic.progress.com/v1"},
-				ObjectMeta: metav1.ObjectMeta{Name: dynamicName, Namespace: dynamicNamespace},
+				TypeMeta: metav1.TypeMeta{Kind: "MarklogicGroup", APIVersion: "marklogic.progress.com/v1"},
+				ObjectMeta: metav1.ObjectMeta{
+					Name: dynamicName, Namespace: dynamicNamespace,
+					OwnerReferences: []metav1.OwnerReference{{APIVersion: "marklogic.progress.com/v1", Kind: "MarklogicCluster", Name: clusterName}},
+				},
 				Spec: marklogicv1.MarklogicGroupSpec{
 					Replicas:         &zeroReplicas,
 					Name:             dynamicName,
@@ -618,6 +639,7 @@ var _ = Describe("MarkLogicGroup controller", func() {
 				},
 			}
 			Expect(k8sClient.Create(ctx, mlGroup)).Should(Succeed())
+			Expect(k8sClient.Create(ctx, parentCluster)).Should(Succeed())
 
 			createdCR := &marklogicv1.MarklogicGroup{}
 			Eventually(func() bool {
@@ -635,7 +657,7 @@ var _ = Describe("MarkLogicGroup controller", func() {
 					capturedOptions.Password == "operator-password" &&
 					capturedOptions.UseTLS &&
 					!capturedOptions.InsecureSkipVerify &&
-					string(capturedOptions.CACertificate) == string(trustedCA)
+					string(capturedOptions.CACertificate) == string(bootstrapCA)
 			}, timeout, interval).Should(BeTrue())
 
 			legacyManageAdminSecret := &corev1.Secret{}

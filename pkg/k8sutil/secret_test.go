@@ -302,6 +302,77 @@ func TestReconcileOperatorUserDoesNotRepairActiveCredentials(t *testing.T) {
 	}
 }
 
+func TestReconcileOperatorUserRepairsLegacyIdentityBeforeHandoff(t *testing.T) {
+	scheme := runtime.NewScheme()
+	if err := marklogicv1.AddToScheme(scheme); err != nil {
+		t.Fatalf("add Marklogic scheme: %v", err)
+	}
+	if err := corev1.AddToScheme(scheme); err != nil {
+		t.Fatalf("add core scheme: %v", err)
+	}
+
+	const bootstrapHost = "bootstrap-0.bootstrap.database.svc.cluster.local"
+	group := &marklogicv1.MarklogicGroup{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "bootstrap", Namespace: "database",
+			OwnerReferences: []metav1.OwnerReference{{Kind: "MarklogicCluster", Name: "search"}},
+		},
+		Spec: marklogicv1.MarklogicGroupSpec{
+			Name: "bootstrap", BootstrapHost: bootstrapHost, SecretName: "bootstrap-admin",
+		},
+	}
+	operatorSecret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "search-operator", Namespace: "database"},
+		Data:       map[string][]byte{"password": []byte("operator-password")},
+	}
+	adminSecret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "bootstrap-admin", Namespace: "database"},
+		Data:       map[string][]byte{"username": []byte("admin"), "password": []byte("admin-password")},
+	}
+	fakeClient := fake.NewClientBuilder().WithScheme(scheme).WithStatusSubresource(&marklogicv1.MarklogicGroup{}).WithObjects(group, operatorSecret, adminSecret).Build()
+	roleCalls := 0
+	userCalls := 0
+	stub := &stubDynamicManagementClient{
+		hostStatuses:         []mlmanage.HostStatus{{Name: bootstrapHost, Online: true}},
+		ensureOperatorRoleFn: func() error { roleCalls++; return nil },
+		ensureOperatorUser: func(username, password string) error {
+			userCalls++
+			if username != operatorUsername || password != "operator-password" {
+				t.Fatalf("EnsureOperatorUser got (%q, %q)", username, password)
+			}
+			return nil
+		},
+	}
+	originalFactory := NewDynamicManagementClient
+	factoryCalls := 0
+	NewDynamicManagementClient = func(options mlmanage.ClientOptions) mlmanage.Client {
+		factoryCalls++
+		if factoryCalls == 1 && options.Username != operatorUsername {
+			t.Fatalf("first client should use operator credentials: %+v", options)
+		}
+		if factoryCalls == 2 && (options.Username != "admin" || options.Password != "admin-password") {
+			t.Fatalf("migration client should use admin credentials: %+v", options)
+		}
+		return stub
+	}
+	defer func() { NewDynamicManagementClient = originalFactory }()
+
+	oc := &OperatorContext{Ctx: context.Background(), Client: fakeClient, MarklogicGroup: group, Recorder: record.NewFakeRecorder(2)}
+	if result := oc.ReconcileOperatorUser(); !result.Completed() {
+		t.Fatal("expected migrated credentials to persist handoff status")
+	}
+	if factoryCalls != 2 || roleCalls != 1 || userCalls != 1 {
+		t.Fatalf("management clients/role/user calls = %d/%d/%d, want 2/1/1", factoryCalls, roleCalls, userCalls)
+	}
+	updated := &marklogicv1.MarklogicGroup{}
+	if err := fakeClient.Get(context.Background(), client.ObjectKeyFromObject(group), updated); err != nil {
+		t.Fatalf("get migrated group: %v", err)
+	}
+	if updated.Status.CredentialSecretName != "search-operator" {
+		t.Fatalf("active credential Secret = %q, want search-operator", updated.Status.CredentialSecretName)
+	}
+}
+
 func TestReconcileOperatorUserReportsMissingSecret(t *testing.T) {
 	scheme := runtime.NewScheme()
 	if err := marklogicv1.AddToScheme(scheme); err != nil {

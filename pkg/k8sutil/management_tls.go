@@ -40,7 +40,9 @@ func (oc *OperatorContext) managementTLSConfigForEndpoint(endpoint string) (*mar
 	if strings.EqualFold(endpointGroupName, currentGroupName) {
 		return oc.MarklogicGroup.Spec.Tls, nil
 	}
-
+	if !hasMarklogicClusterOwner(oc.MarklogicGroup) && (oc.MarklogicGroup.Spec.Tls == nil || !oc.MarklogicGroup.Spec.Tls.EnableOnDefaultAppServers) {
+		return oc.MarklogicGroup.Spec.Tls, nil
+	}
 	clusterName, err := oc.getOwningClusterName()
 	if err != nil {
 		return nil, fmt.Errorf("resolve Management API TLS for endpoint %q: %w", endpoint, err)
@@ -60,6 +62,15 @@ func (oc *OperatorContext) managementTLSConfigForEndpoint(endpoint string) (*mar
 	}
 
 	return nil, fmt.Errorf("resolve Management API TLS for endpoint %q: group %q is not defined in MarklogicCluster %q", endpoint, endpointGroupName, clusterName)
+}
+
+func hasMarklogicClusterOwner(group *marklogicv1.MarklogicGroup) bool {
+	for _, ownerRef := range group.OwnerReferences {
+		if ownerRef.Kind == "MarklogicCluster" {
+			return true
+		}
+	}
+	return false
 }
 
 func managementEndpointGroupName(endpoint string) string {

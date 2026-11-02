@@ -17,7 +17,7 @@ func TestClusterConfigSetsBasicAuthForPathBasedAppServers(t *testing.T) {
 		`app_services_authentication='"authentication":"basic", '`,
 		`-d "${app_services_payload}"`,
 		`function configure_app_server_basic_auth`,
-		`manage_tls_options=(--cacert /run/secrets/marklogic-certs/cacert.pem)`,
+		`manage_tls_options=(--cacert /run/secrets/marklogic-bootstrap-certs/cacert.pem)`,
 		`200|202|204)`,
 		`retry 5 configure_app_server_basic_auth "$app_server"`,
 	} {
@@ -82,12 +82,29 @@ func TestScriptsSelectCredentialsWithoutPodTemplateSwitch(t *testing.T) {
 		t.Fatal("cluster join must not use admin credentials")
 	}
 	for _, expectedSequence := range []string{
-		"init_security_db\n        activate_operator_credentials\n        retry 5 configure_group",
+		"init_security_db\n        configure_bootstrap_tls_before_operator_handoff\n        activate_operator_credentials\n        retry 5 configure_group",
 		"wait_bootstrap_ready\n    activate_operator_credentials",
 	} {
 		if !strings.Contains(clusterContents, expectedSequence) {
 			t.Fatalf("cluster configuration script is missing handoff sequence %q", expectedSequence)
 		}
+	}
+	for _, expected := range []string{
+		`username=${3:-$MARKLOGIC_ADMIN_USERNAME}`,
+		`password=${4:-$MARKLOGIC_ADMIN_PASSWORD}`,
+		`BOOTSTRAP_HTTPS_OPTION="--cacert /run/secrets/marklogic-bootstrap-certs/cacert.pem"`,
+		`function configure_bootstrap_tls_before_operator_handoff`,
+		`MARKLOGIC_MANAGEMENT_USERNAME="$MARKLOGIC_ADMIN_USERNAME"`,
+	} {
+		if !strings.Contains(clusterContents, expected) {
+			t.Fatalf("cluster configuration script is missing %q", expected)
+		}
+	}
+	tlsFunctionEnd := strings.Index(clusterContents, `function configure_app_server_basic_auth`)
+	tlsCleanup := strings.Index(clusterContents, "rm -f /run/secrets/marklogic-certs/*.key\n}")
+	preHandoffFunction := strings.Index(clusterContents, `function configure_bootstrap_tls_before_operator_handoff`)
+	if preHandoffFunction < 0 || tlsCleanup < 0 || tlsFunctionEnd < 0 || preHandoffFunction < tlsCleanup || preHandoffFunction > tlsFunctionEnd {
+		t.Fatal("bootstrap pre-handoff TLS helper must be defined after configure_tls and before its first call")
 	}
 	if strings.Contains(clusterContents, "MARKLOGIC_OPERATOR_CREDENTIALS_ACTIVE") {
 		t.Fatal("cluster configuration must not depend on a pod-template credential switch")

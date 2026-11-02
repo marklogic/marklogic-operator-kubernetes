@@ -66,6 +66,9 @@ func (oc *OperatorContext) ReconcileOperatorUser() result.ReconcileResult {
 						"Bootstrap host %q is not online yet; check the MarkLogic pod and server startup status.", bootstrapHost,
 					))
 				}
+				if oc.MarklogicGroup.Status.CredentialSecretName == "" {
+					return oc.reconcileOperatorIdentityWithAdmin(bootstrapHost, operatorPassword, useTLS, insecureSkipVerify, caCertificate, true)
+				}
 				return oc.markOperatorCredentialActive(clusterName)
 			}
 		}
@@ -87,6 +90,10 @@ func (oc *OperatorContext) ReconcileOperatorUser() result.ReconcileResult {
 		))
 	}
 
+	return oc.reconcileOperatorIdentityWithAdmin(bootstrapHost, operatorPassword, useTLS, insecureSkipVerify, caCertificate, false)
+}
+
+func (oc *OperatorContext) reconcileOperatorIdentityWithAdmin(bootstrapHost, operatorPassword string, useTLS, insecureSkipVerify bool, caCertificate []byte, operatorVerified bool) result.ReconcileResult {
 	adminSecretName := adminCredentialSecretNameForGroup(oc.MarklogicGroup)
 	adminUsername, adminPassword, err := oc.readCredentialSecret(adminSecretName)
 	if err != nil {
@@ -102,7 +109,7 @@ func (oc *OperatorContext) ReconcileOperatorUser() result.ReconcileResult {
 		InsecureSkipVerify: insecureSkipVerify,
 		CACertificate:      caCertificate,
 	})
-	hosts, err = adminClient.ListHostsStatus(oc.Ctx)
+	hosts, err := adminClient.ListHostsStatus(oc.Ctx)
 	if err != nil {
 		return oc.operatorUserPending("BootstrapAdminAccessFailed", fmt.Sprintf(
 			"Operator authentication failed and the bootstrap admin credentials could not access the Management API on %q: %v. Verify the admin credentials and host availability.", bootstrapHost, err,
@@ -125,6 +132,13 @@ func (oc *OperatorContext) ReconcileOperatorUser() result.ReconcileResult {
 		return oc.operatorUserPending("OperatorIdentityReconciliationFailed", fmt.Sprintf(
 			"Could not create the operator role and user using bootstrap admin credentials: %v. Verify the admin Secret and MarkLogic Management API access.", err,
 		))
+	}
+	if operatorVerified {
+		clusterName, err := oc.getOwningClusterName()
+		if err != nil {
+			return result.Error(err)
+		}
+		return oc.markOperatorCredentialActive(clusterName)
 	}
 	return oc.operatorUserPending("OperatorIdentityReconciled", "The bootstrap admin credentials created the operator role and user; waiting for the next reconciliation to verify operator authentication.")
 }

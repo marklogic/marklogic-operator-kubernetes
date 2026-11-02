@@ -76,6 +76,20 @@ func (oc *OperatorContext) ReconsileMarklogicGroupHandler() (reconcile.Result, e
 			return operatorUserResult.Output()
 		}
 	}
+	if credentialsActive {
+		if oc.MarklogicGroup.Spec.IsDynamic {
+			if cleanupResult := oc.reconcileDynamicCredentialRotationCleanup(); cleanupResult.Completed() {
+				return cleanupResult.Output()
+			}
+		}
+		rotating, rotationErr := oc.rotateCredentialPodsIfNeeded()
+		if rotationErr != nil {
+			return reconcile.Result{}, rotationErr
+		}
+		if rotating {
+			return reconcile.Result{Requeue: true}, nil
+		}
+	}
 	if oc.MarklogicGroup.Spec.IsDynamic {
 		if dynamicResult := oc.ReconcileDynamicGroupConfig(); dynamicResult.Completed() {
 			return dynamicResult.Output()
