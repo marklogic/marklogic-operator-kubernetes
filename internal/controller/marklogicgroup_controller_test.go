@@ -619,7 +619,6 @@ var _ = Describe("MarkLogicGroup controller", func() {
 					Image: imageName,
 					MarkLogicGroups: []*marklogicv1.MarklogicGroups{
 						{Name: "bootstrap", GroupConfig: &marklogicv1.GroupConfig{Name: "Bootstrap", EnableXdqpSsl: true}, IsBootstrap: true, Tls: &marklogicv1.Tls{EnableOnDefaultAppServers: true, CaSecretName: bootstrapCASecret.Name}},
-						{Name: dynamicName, GroupConfig: &marklogicv1.GroupConfig{Name: "DynamicEval", EnableXdqpSsl: true}, IsDynamic: true, Tls: &marklogicv1.Tls{EnableOnDefaultAppServers: true, CaSecretName: caSecret.Name}},
 					},
 				},
 			}
