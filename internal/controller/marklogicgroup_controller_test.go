@@ -1621,7 +1621,9 @@ var _ = Describe("MarkLogicGroup controller", func() {
 				return err == nil && createdCR.Status.Dynamic != nil && createdCR.Status.Dynamic.ReadyReplicas == 1
 			}, cleanupTimeout, interval).Should(BeTrue())
 
+			behavior.mu.Lock()
 			behavior.listGroupHostsErr = errors.New("connection refused")
+			behavior.mu.Unlock()
 
 			zeroReplicas := int32(0)
 			Expect(k8sClient.Get(ctx, dynamicNsName, createdCR)).Should(Succeed())
