@@ -616,11 +616,12 @@ var _ = Describe("MarkLogicGroup controller", func() {
 					},
 				},
 			}
+			Expect(k8sClient.Create(ctx, parentCluster)).Should(Succeed())
 			mlGroup := &marklogicv1.MarklogicGroup{
 				TypeMeta: metav1.TypeMeta{Kind: "MarklogicGroup", APIVersion: "marklogic.progress.com/v1"},
 				ObjectMeta: metav1.ObjectMeta{
 					Name: dynamicName, Namespace: dynamicNamespace,
-					OwnerReferences: []metav1.OwnerReference{{APIVersion: "marklogic.progress.com/v1", Kind: "MarklogicCluster", Name: clusterName}},
+					OwnerReferences: []metav1.OwnerReference{{APIVersion: "marklogic.progress.com/v1", Kind: "MarklogicCluster", Name: clusterName, UID: parentCluster.UID}},
 				},
 				Spec: marklogicv1.MarklogicGroupSpec{
 					Replicas:         &zeroReplicas,
@@ -639,7 +640,6 @@ var _ = Describe("MarkLogicGroup controller", func() {
 				},
 			}
 			Expect(k8sClient.Create(ctx, mlGroup)).Should(Succeed())
-			Expect(k8sClient.Create(ctx, parentCluster)).Should(Succeed())
 
 			createdCR := &marklogicv1.MarklogicGroup{}
 			Eventually(func() bool {

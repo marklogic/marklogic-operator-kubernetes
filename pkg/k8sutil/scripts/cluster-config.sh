@@ -665,9 +665,25 @@ function configure_group {
 
 }
 
+function current_host_group {
+    local response_code current_group
+    response_code=$(curl -s --anyauth -m 20 -o /tmp/current-host-group.xml -w '%{http_code}' \
+        --user "${MARKLOGIC_MANAGEMENT_USERNAME}:${MARKLOGIC_MANAGEMENT_PASSWORD}" \
+        "http://localhost:8002/manage/v2/hosts/${HOST_FQDN}/properties?format=xml")
+    if [[ "$response_code" != "200" ]]; then
+        return 1
+    fi
+    current_group=$(grep "<group>" /tmp/current-host-group.xml | sed 's%^.*<group.*>\(.*\)</group>.*$%\1%')
+    if [[ -z "$current_group" ]]; then
+        return 1
+    fi
+    printf '%s' "$current_group"
+}
+
 function configure_tls {
-    local protocol local_manage_protocol local_manage_host
+    local protocol local_manage_protocol local_manage_host tls_group response_code
     local -a local_manage_https_option=()
+    tls_group="$MARKLOGIC_GROUP"
     if [[ "$IS_BOOTSTRAP_HOST" == "true" ]] && [[ $MARKLOGIC_CLUSTER_TYPE == "bootstrap" ]]; then
         protocol=$(get_current_host_protocol)
         log "Info:  Current host protocol: $protocol"
@@ -675,6 +691,11 @@ function configure_tls {
             log "Info: MarkLogic server has already configured HTTPS for bootstrap host."
             return 0
         fi
+        if ! tls_group=$(current_host_group); then
+            error "Failed to resolve the bootstrap host's current group before TLS configuration."
+            return 1
+        fi
+        info "Configuring bootstrap TLS for current group ${tls_group}"
     fi
 
     info "Configuring TLS for App Servers"
@@ -813,11 +834,15 @@ EOF
             # Manage need be put in the last in the array to make sure http works for all the requests
             appServers=("App-Services" "Admin" "Manage")
             for appServer in ${appServers[@]}; do
-            log "configuring SSL for App Server $appServer"
-            "${AUTH_CURL[@]}" \
-                -X PUT -H "Content-type: application/json" -d '{"ssl-certificate-template":"defaultTemplate"}' \
-            http://localhost:8002/manage/v2/servers/${appServer}/properties?group-id=${MARKLOGIC_GROUP}
-            sleep 5s
+                log "configuring SSL for App Server $appServer"
+                response_code=$("${AUTH_CURL[@]}" -o /dev/null -w '%{http_code}' \
+                    -X PUT -H "Content-type: application/json" -d '{"ssl-certificate-template":"defaultTemplate"}' \
+                    "http://localhost:8002/manage/v2/servers/${appServer}/properties?group-id=${tls_group}")
+                if [[ "$response_code" != "200" && "$response_code" != "202" && "$response_code" != "204" ]]; then
+                    error "Failed to configure TLS for App Server ${appServer} in group ${tls_group} (HTTP ${response_code})."
+                    return 1
+                fi
+                sleep 5s
             done
             log "Info:  Configure HTTPS in App Server finished"
 
@@ -835,15 +860,32 @@ EOF
 }
 
 function configure_bootstrap_tls_before_operator_handoff {
+    local response_code
+    local -a verify_tls_options=()
     if [[ "$MARKLOGIC_JOIN_TLS_ENABLED" != "true" ]] || [[ "$TLS_CONFIGURATION_CURRENT" == "true" ]]; then
         return 0
     fi
     info "Configuring bootstrap TLS before operator credential handoff"
     MARKLOGIC_MANAGEMENT_USERNAME="$MARKLOGIC_ADMIN_USERNAME"
     MARKLOGIC_MANAGEMENT_PASSWORD="$MARKLOGIC_ADMIN_PASSWORD"
-    configure_tls
+    if ! configure_tls; then
+        MARKLOGIC_MANAGEMENT_USERNAME="marklogic-kubernetes-operator"
+        MARKLOGIC_MANAGEMENT_PASSWORD=""
+        error "Bootstrap TLS configuration failed before operator credential handoff." exit
+    fi
+    if [[ -s "/run/secrets/marklogic-certs/cacert.pem" ]]; then
+        verify_tls_options=(--cacert /run/secrets/marklogic-certs/cacert.pem)
+    else
+        verify_tls_options=(-k)
+    fi
+    response_code=$(curl -s --anyauth -m 20 -o /dev/null -w '%{http_code}' \
+        --user "${MARKLOGIC_ADMIN_USERNAME}:${MARKLOGIC_ADMIN_PASSWORD}" "${verify_tls_options[@]}" \
+        "https://${HOST_FQDN}:8002/manage/v2/hosts/${HOST_FQDN}/properties?format=xml")
     MARKLOGIC_MANAGEMENT_USERNAME="marklogic-kubernetes-operator"
     MARKLOGIC_MANAGEMENT_PASSWORD=""
+    if [[ "$response_code" != "200" ]]; then
+        error "Bootstrap TLS verification failed before operator credential handoff (HTTP ${response_code})." exit
+    fi
     TLS_CONFIGURATION_CURRENT=true
 }
 

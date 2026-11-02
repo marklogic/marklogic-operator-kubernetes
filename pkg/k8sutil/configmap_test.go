@@ -95,6 +95,10 @@ func TestScriptsSelectCredentialsWithoutPodTemplateSwitch(t *testing.T) {
 		`BOOTSTRAP_HTTPS_OPTION="--cacert /run/secrets/marklogic-bootstrap-certs/cacert.pem"`,
 		`function configure_bootstrap_tls_before_operator_handoff`,
 		`MARKLOGIC_MANAGEMENT_USERNAME="$MARKLOGIC_ADMIN_USERNAME"`,
+		`function current_host_group`,
+		`tls_group=$(current_host_group)`,
+		`group-id=${tls_group}`,
+		`Bootstrap TLS verification failed before operator credential handoff`,
 	} {
 		if !strings.Contains(clusterContents, expected) {
 			t.Fatalf("cluster configuration script is missing %q", expected)
@@ -105,6 +109,16 @@ func TestScriptsSelectCredentialsWithoutPodTemplateSwitch(t *testing.T) {
 	preHandoffFunction := strings.Index(clusterContents, `function configure_bootstrap_tls_before_operator_handoff`)
 	if preHandoffFunction < 0 || tlsCleanup < 0 || tlsFunctionEnd < 0 || preHandoffFunction < tlsCleanup || preHandoffFunction > tlsFunctionEnd {
 		t.Fatal("bootstrap pre-handoff TLS helper must be defined after configure_tls and before its first call")
+	}
+	tlsFunction := clusterContents[strings.Index(clusterContents, `function configure_tls`):preHandoffFunction]
+	if strings.Contains(tlsFunction, `group-id=${MARKLOGIC_GROUP}`) || !strings.Contains(tlsFunction, `group-id=${tls_group}`) {
+		t.Fatal("configure_tls must target the host's resolved current group")
+	}
+	preHandoffBody := clusterContents[preHandoffFunction:tlsFunctionEnd]
+	verification := strings.Index(preHandoffBody, `Bootstrap TLS verification failed before operator credential handoff`)
+	markCurrent := strings.Index(preHandoffBody, `TLS_CONFIGURATION_CURRENT=true`)
+	if verification < 0 || markCurrent < verification {
+		t.Fatal("bootstrap TLS must be verified before it is marked current")
 	}
 	if strings.Contains(clusterContents, "MARKLOGIC_OPERATOR_CREDENTIALS_ACTIVE") {
 		t.Fatal("cluster configuration must not depend on a pod-template credential switch")

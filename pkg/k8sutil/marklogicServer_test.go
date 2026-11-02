@@ -202,6 +202,26 @@ func TestStatefulSetMountsBootstrapCASeparatelyFromLocalCA(t *testing.T) {
 	}
 }
 
+func TestBootstrapGroupUsesLocalCAForBootstrapRequests(t *testing.T) {
+	group := &marklogicv1.MarklogicGroup{
+		Spec: marklogicv1.MarklogicGroupSpec{
+			Tls: &marklogicv1.Tls{
+				EnableOnDefaultAppServers: true,
+				CaSecretName:              "bootstrap-ca",
+			},
+		},
+	}
+	oc := &OperatorContext{MarklogicGroup: group}
+
+	caSecretName, err := oc.bootstrapCASecretName(group)
+	if err != nil {
+		t.Fatalf("select bootstrap CA Secret: %v", err)
+	}
+	if caSecretName != "bootstrap-ca" {
+		t.Fatalf("bootstrap CA Secret = %q, want local TLS CA", caSecretName)
+	}
+}
+
 func TestMissingActiveOperatorSecretDoesNotFallBackToAdminSecret(t *testing.T) {
 	scheme := runtime.NewScheme()
 	if err := marklogicv1.AddToScheme(scheme); err != nil {

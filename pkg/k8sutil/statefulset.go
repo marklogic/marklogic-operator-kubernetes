@@ -97,15 +97,11 @@ func (oc *OperatorContext) ReconcileStatefulset() (reconcile.Result, error) {
 	objectMeta := generateObjectMeta(cr.Spec.Name, cr.Namespace, groupLabels, groupAnnotations)
 	currentSts, err := oc.GetStatefulSet(cr.Namespace, objectMeta.Name)
 	containerParams := generateContainerParams(cr)
-	if cr.Spec.BootstrapHost != "" {
-		bootstrapTLS, tlsErr := oc.managementTLSConfigForEndpoint(cr.Spec.BootstrapHost)
-		if tlsErr != nil {
-			return result.Error(tlsErr).Output()
-		}
-		if bootstrapTLS != nil && bootstrapTLS.EnableOnDefaultAppServers {
-			containerParams.BootstrapCASecretName = strings.TrimSpace(bootstrapTLS.CaSecretName)
-		}
+	bootstrapCASecretName, tlsErr := oc.bootstrapCASecretName(cr)
+	if tlsErr != nil {
+		return result.Error(tlsErr).Output()
 	}
+	containerParams.BootstrapCASecretName = bootstrapCASecretName
 	if containerParams.SecretName != "" {
 		activeSecret, secretErr := oc.getStatefulSetCredentialSecret(&containerParams)
 		if secretErr != nil {
@@ -209,6 +205,21 @@ func (oc *OperatorContext) ReconcileStatefulset() (reconcile.Result, error) {
 	}
 
 	return result.Done().Output()
+}
+
+func (oc *OperatorContext) bootstrapCASecretName(group *marklogicv1.MarklogicGroup) (string, error) {
+	bootstrapTLS := group.Spec.Tls
+	if strings.TrimSpace(group.Spec.BootstrapHost) != "" {
+		var err error
+		bootstrapTLS, err = oc.managementTLSConfigForEndpoint(group.Spec.BootstrapHost)
+		if err != nil {
+			return "", err
+		}
+	}
+	if bootstrapTLS == nil || !bootstrapTLS.EnableOnDefaultAppServers {
+		return "", nil
+	}
+	return strings.TrimSpace(bootstrapTLS.CaSecretName), nil
 }
 
 func (oc *OperatorContext) getStatefulSetCredentialSecret(containerParams *containerParameters) (*corev1.Secret, error) {
