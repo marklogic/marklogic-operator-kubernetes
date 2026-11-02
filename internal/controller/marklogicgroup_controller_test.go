@@ -2526,8 +2526,23 @@ func deleteMarklogicGroups(ctx context.Context, dynamicOnly bool) {
 			return ctrlclient.IgnoreNotFound(k8sClient.Delete(ctx, current))
 		}, timeout, interval).Should(Succeed())
 		Eventually(func() bool {
-			err := k8sClient.Get(ctx, groupKey, &marklogicv1.MarklogicGroup{})
-			return apierrors.IsNotFound(err)
+			current := &marklogicv1.MarklogicGroup{}
+			err := k8sClient.Get(ctx, groupKey, current)
+			if apierrors.IsNotFound(err) {
+				return true
+			}
+			if err != nil {
+				return false
+			}
+			if len(current.Finalizers) > 0 {
+				patchBase := current.DeepCopy()
+				current.Finalizers = nil
+				if err := k8sClient.Patch(ctx, current, ctrlclient.MergeFrom(patchBase)); err != nil {
+					return false
+				}
+			}
+			_ = k8sClient.Delete(ctx, current)
+			return false
 		}, timeout, interval).Should(BeTrue())
 	}
 }
