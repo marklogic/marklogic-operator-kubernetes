@@ -392,6 +392,28 @@ function local_host_uses_shared_security {
     [[ "$response_code" == "200" ]]
 }
 
+################################################################
+# A successful cluster join restarts MarkLogic before the local Management API
+# is necessarily ready to authenticate against the shared Security database.
+# Retry only after the bootstrap has confirmed this host is registered.
+################################################################
+function wait_for_local_shared_security {
+    local retry_count=12
+
+    while ((retry_count > 0)); do
+        if local_host_uses_shared_security; then
+            return 0
+        fi
+        ((retry_count--))
+        if ((retry_count > 0)); then
+            info "Waiting for local shared Security authentication (${retry_count} retries remaining)"
+            sleep 5s
+        fi
+    done
+
+    return 1
+}
+
 function bootstrap_host_registration_status {
     local hostname=$1
 
@@ -461,7 +483,7 @@ function join_cluster {
         response_code=$(bootstrap_host_registration_status "$hostname")
 
         if [ "${response_code}" = "200" ]; then
-            if local_host_uses_shared_security; then
+            if wait_for_local_shared_security; then
                 info "host registration and local shared Security authentication confirm the host has already joined the cluster"
                 return 0
             fi
@@ -820,33 +842,35 @@ EOF
 
     if [[ "$IS_BOOTSTRAP_HOST" == "true" ]]; then
         if [[ $MARKLOGIC_CLUSTER_TYPE == "bootstrap" ]]; then
-            log "Info:  Generating Temporary CA Certificate"
-            "${AUTH_CURL[@]}" -X POST -i -d @generateCA.xqy \
-            -H "Content-type: application/x-www-form-urlencoded" \
-            -H "Accept: multipart/mixed; boundary=BOUNDARY" \
-            http://localhost:8000/v1/eval
-            resp_code=$?
-            info "response code for Generating Temporary CA Certificate is $resp_code"
-            sleep 5s
-            fi
-        
-            log "Info:  enabling app-servers for HTTPS"
-            # Manage need be put in the last in the array to make sure http works for all the requests
-            appServers=("App-Services" "Admin" "Manage")
-            for appServer in ${appServers[@]}; do
-                log "configuring SSL for App Server $appServer"
-                response_code=$("${AUTH_CURL[@]}" -o /dev/null -w '%{http_code}' \
-                    -X PUT -H "Content-type: application/json" -d '{"ssl-certificate-template":"defaultTemplate"}' \
-                    "http://localhost:8002/manage/v2/servers/${appServer}/properties?group-id=${tls_group}")
-                if [[ "$response_code" != "200" && "$response_code" != "202" && "$response_code" != "204" ]]; then
-                    error "Failed to configure TLS for App Server ${appServer} in group ${tls_group} (HTTP ${response_code})."
-                    return 1
-                fi
-                sleep 5s
-            done
-            log "Info:  Configure HTTPS in App Server finished"
-
             if [[ "$certType" == "self-signed" ]]; then
+                log "Info:  Generating Temporary CA Certificate"
+                "${AUTH_CURL[@]}" -X POST -i -d @generateCA.xqy \
+                -H "Content-type: application/x-www-form-urlencoded" \
+                -H "Accept: multipart/mixed; boundary=BOUNDARY" \
+                http://localhost:8000/v1/eval
+                resp_code=$?
+                info "response code for Generating Temporary CA Certificate is $resp_code"
+                sleep 5s
+            fi
+        fi
+        
+        log "Info:  enabling app-servers for HTTPS"
+        # Manage need be put in the last in the array to make sure http works for all the requests
+        appServers=("App-Services" "Admin" "Manage")
+        for appServer in ${appServers[@]}; do
+            log "configuring SSL for App Server $appServer"
+            response_code=$("${AUTH_CURL[@]}" -o /dev/null -w '%{http_code}' \
+                -X PUT -H "Content-type: application/json" -d '{"ssl-certificate-template":"defaultTemplate"}' \
+                "http://localhost:8002/manage/v2/servers/${appServer}/properties?group-id=${tls_group}")
+            if [[ "$response_code" != "200" && "$response_code" != "202" && "$response_code" != "204" ]]; then
+                error "Failed to configure TLS for App Server ${appServer} in group ${tls_group} (HTTP ${response_code})."
+                return 1
+            fi
+            sleep 5s
+        done
+        log "Info:  Configure HTTPS in App Server finished"
+
+        if [[ "$certType" == "self-signed" ]]; then
             log "Info:  Generate temporary certificate if necessary"
             "${AUTH_CURL[@]}" $HTTPS_OPTION -X POST -i -d @createTempCert.xqy -H "Content-type: application/x-www-form-urlencoded" \
             -H "Accept: multipart/mixed; boundary=BOUNDARY" "https://${HOST_FQDN}:8000/v1/eval"
@@ -1042,7 +1066,11 @@ else
                 init_marklogic "$HOST_FQDN"
                 ;;
             200)
-                error "Bootstrap already contains ${HOST_FQDN}, but the local host does not use shared Security. Refusing to reinitialize the static host and change its identity; recover or remove the stale host registration before retrying." exit
+                if wait_for_local_shared_security; then
+                    info "Local shared Security authentication succeeded after the registered host became ready. Skipping host initialization."
+                else
+                    error "Bootstrap already contains ${HOST_FQDN}, but the local host does not use shared Security. Refusing to reinitialize the static host and change its identity; recover or remove the stale host registration before retrying." exit
+                fi
                 ;;
             401)
                 error "Failed to inspect the bootstrap host registration: credential rejected. Exit." exit

@@ -37,8 +37,11 @@ func TestClusterConfigRejectsStaleStaticHostRegistration(t *testing.T) {
 	contents := string(script)
 	for _, expected := range []string{
 		`function local_host_uses_shared_security`,
+		`function wait_for_local_shared_security`,
 		`function bootstrap_host_registration_status`,
 		`if local_host_uses_shared_security; then`,
+		`if wait_for_local_shared_security; then`,
+		`local retry_count=12`,
 		`Refusing to create a duplicate static host registration`,
 		`Refusing to reinitialize the static host and change its identity`,
 		`Local shared Security authentication succeeded. Skipping host initialization.`,
@@ -53,6 +56,21 @@ func TestClusterConfigRejectsStaleStaticHostRegistration(t *testing.T) {
 	initialization := strings.Index(nonBootstrapBranch, `init_marklogic "$HOST_FQDN"`)
 	if registrationCheck < 0 || initialization < 0 || registrationCheck > initialization {
 		t.Fatal("non-bootstrap host registration must be checked before host initialization")
+	}
+}
+
+func TestClusterConfigUsesInsertedNamedCertificate(t *testing.T) {
+	t.Parallel()
+
+	script, err := scriptsFolder.ReadFile("scripts/cluster-config.sh")
+	if err != nil {
+		t.Fatalf("read cluster configuration script: %v", err)
+	}
+	contents := string(script)
+	expected := `if [[ "$certType" == "self-signed" ]]; then
+                log "Info:  Generating Temporary CA Certificate"`
+	if !strings.Contains(contents, expected) {
+		t.Fatal("template CA generation must be limited to self-signed certificate mode")
 	}
 }
 
