@@ -1632,6 +1632,12 @@ var _ = Describe("MarkLogicGroup controller", func() {
 				return err == nil && createdCR.Status.Dynamic != nil && createdCR.Status.Dynamic.ReadyReplicas == 1
 			}, cleanupTimeout, interval).Should(BeTrue())
 
+			Eventually(func() bool {
+				pod := &corev1.Pod{}
+				err := k8sClient.Get(ctx, types.NamespacedName{Name: dynamicName + "-0", Namespace: dynamicNamespace}, pod)
+				return err == nil && containsString(pod.Finalizers, "marklogic.progress.com/dynamic-host-cleanup")
+			}, cleanupTimeout, interval).Should(BeTrue())
+
 			behavior.mu.Lock()
 			behavior.listGroupHostsErr = errors.New("connection refused")
 			behavior.mu.Unlock()
