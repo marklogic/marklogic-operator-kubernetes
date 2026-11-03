@@ -142,7 +142,7 @@ func TestScriptsSelectCredentialsWithoutPodTemplateSwitch(t *testing.T) {
 		t.Fatal("cluster join must not use admin credentials")
 	}
 	for _, expectedSequence := range []string{
-		"init_security_db\n        configure_bootstrap_tls_before_operator_handoff\n        activate_operator_credentials\n        retry 5 configure_group",
+		"init_security_db\n    configure_bootstrap_tls_before_operator_handoff\n    activate_operator_credentials\n    retry 5 configure_group",
 		"wait_bootstrap_ready\n    activate_operator_credentials",
 	} {
 		if !strings.Contains(clusterContents, expectedSequence) {
