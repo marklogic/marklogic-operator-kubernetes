@@ -112,6 +112,9 @@ func markLogicGroupCreateUpdateDeletePredicate() predicate.Predicate {
 		UpdateFunc: func(e event.UpdateEvent) bool {
 			switch e.ObjectNew.(type) {
 			case *marklogicv1.MarklogicGroup:
+				if !reflect.DeepEqual(e.ObjectOld.GetDeletionTimestamp(), e.ObjectNew.GetDeletionTimestamp()) {
+					return true // Reconcile when finalizer-backed deletion starts
+				}
 				oldAnnotations := e.ObjectOld.GetAnnotations()
 				newAnnotations := e.ObjectNew.GetAnnotations()
 				delete(newAnnotations, "banzaicloud.com/last-applied")

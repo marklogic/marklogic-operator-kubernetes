@@ -128,6 +128,17 @@ func TestOperatorSecretRotationEnqueuesOwningGroups(t *testing.T) {
 	}
 }
 
+func TestMarkLogicGroupDeletionEnqueuesReconcile(t *testing.T) {
+	oldGroup := &marklogicv1.MarklogicGroup{ObjectMeta: metav1.ObjectMeta{Name: "dynamic", Namespace: "database"}}
+	newGroup := oldGroup.DeepCopy()
+	deletionTimestamp := metav1.Now()
+	newGroup.DeletionTimestamp = &deletionTimestamp
+
+	if !markLogicGroupCreateUpdateDeletePredicate().Update(event.UpdateEvent{ObjectOld: oldGroup, ObjectNew: newGroup}) {
+		t.Fatal("deletion timestamp updates should pass the controller predicate")
+	}
+}
+
 // 100Mi
 const resourceHugepageValue = int64(104857600)
 
