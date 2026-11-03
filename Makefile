@@ -766,11 +766,11 @@ $(ENVTEST): $(LOCALBIN)
 	test -s $(LOCALBIN)/setup-envtest || GOBIN=$(LOCALBIN) go install sigs.k8s.io/controller-runtime/tools/setup-envtest@latest
 
 .PHONY: istioctl
-istioctl: $(ISTIOCTL) ## Download istioctl locally if necessary.
-$(ISTIOCTL): $(LOCALBIN)
-ifeq (,$(wildcard $(ISTIOCTL)))
-ifeq (, $(shell which istioctl 2>/dev/null))
-	@{ \
+istioctl: $(LOCALBIN) ## Download istioctl locally if necessary.
+	@if [ -x "$(ISTIOCTL)" ] && "$(ISTIOCTL)" version --remote=false 2>/dev/null | grep -q "$(ISTIO_VERSION)"; then \
+		echo "istioctl $(ISTIO_VERSION) already at $(ISTIOCTL)"; \
+	else \
+	{ \
 	set -e ;\
 	mkdir -p $(dir $(ISTIOCTL)) ;\
 	OS=$$(uname | tr '[:upper:]' '[:lower:]') ;\
@@ -794,11 +794,8 @@ ifeq (, $(shell which istioctl 2>/dev/null))
 	rm -rf "$$TMP_DIR" ;\
 	chmod +x "$(ISTIOCTL)" ;\
 	echo "istioctl successfully installed to $(ISTIOCTL)" ;\
-	}
-else
-ISTIOCTL = $(shell which istioctl)
-endif
-endif
+	} ; \
+	fi
 
 .PHONY: operator-sdk
 OPERATOR_SDK ?= $(LOCALBIN)/operator-sdk

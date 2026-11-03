@@ -242,8 +242,9 @@ void publishTestResults() {
 
 void ensureGotestsum() {
     sh '''
-        command -v gotestsum >/dev/null 2>&1 || \
+        if ! command -v gotestsum >/dev/null 2>&1 || ! gotestsum --version 2>/dev/null | grep -q 'v1.13.0'; then
           GO111MODULE=on GOBIN=/space/go/bin go install gotest.tools/gotestsum@v1.13.0
+        fi
     '''
 }
 
