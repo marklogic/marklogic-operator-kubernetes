@@ -27,7 +27,7 @@ func TestClusterConfigSetsBasicAuthForPathBasedAppServers(t *testing.T) {
 	}
 }
 
-func TestClusterConfigValidatesStaticHostIdentityBeforeRecovery(t *testing.T) {
+func TestClusterConfigPersistsStaticHostJoinForRestartRecovery(t *testing.T) {
 	t.Parallel()
 
 	script, err := scriptsFolder.ReadFile("scripts/cluster-config.sh")
@@ -42,8 +42,10 @@ func TestClusterConfigValidatesStaticHostIdentityBeforeRecovery(t *testing.T) {
 		`if local_host_uses_shared_security; then`,
 		`if wait_for_local_shared_security; then`,
 		`local retry_count=12`,
-		`Resuming the join so bootstrap can validate the local host identity.`,
-		`Skipping host initialization; join recovery will validate the local host identity.`,
+		`local cluster_config_file="$ML_KUBERNETES_FILE_PATH/cluster-config.zip"`,
+		`Resuming the interrupted join with the persisted cluster configuration.`,
+		`Skipping host initialization; join recovery will use persisted cluster configuration.`,
+		`Refusing duplicate registration; remove the stale host registration before retrying.`,
 		`Local shared Security authentication succeeded. Skipping host initialization.`,
 	} {
 		if !strings.Contains(contents, expected) {
@@ -59,10 +61,11 @@ func TestClusterConfigValidatesStaticHostIdentityBeforeRecovery(t *testing.T) {
 	}
 
 	joinBranch := contents[strings.Index(contents, `function join_cluster`):strings.Index(contents, `function configure_group`)]
-	recovery := strings.Index(joinBranch, `Resuming the join so bootstrap can validate the local host identity.`)
-	identityValidation := strings.Index(joinBranch, `"server-config@/tmp/host.xml"`)
-	if recovery < 0 || identityValidation < 0 || recovery > identityValidation {
-		t.Fatal("partial static host recovery must submit local server-config for bootstrap identity validation")
+	persistConfig := strings.Index(joinBranch, `"-o" "$cluster_config_file"`)
+	applyConfig := strings.Index(joinBranch, `"--data-binary" "@${cluster_config_file}"`)
+	removeConfig := strings.LastIndex(joinBranch, `rm -f "$cluster_config_file"`)
+	if persistConfig < 0 || applyConfig < 0 || removeConfig < 0 || persistConfig > applyConfig || applyConfig > removeConfig {
+		t.Fatal("static host join must persist, apply, and remove cluster configuration in order")
 	}
 }
 

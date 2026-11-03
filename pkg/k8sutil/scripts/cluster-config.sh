@@ -470,7 +470,10 @@ function init_security_db {
 # return values: 0 - admin user successfully initialized
 ################################################################
 function join_cluster {
-    hostname=$1
+    local hostname=$1
+    local cluster_config_file="$ML_KUBERNETES_FILE_PATH/cluster-config.zip"
+    local cluster_signature=""
+    local use_cached_config=false
     retry_count=5
 
     while [ $retry_count -gt 0 ]; do
@@ -485,9 +488,18 @@ function join_cluster {
         if [ "${response_code}" = "200" ]; then
             if wait_for_local_shared_security; then
                 info "host registration and local shared Security authentication confirm the host has already joined the cluster"
+                rm -f "$cluster_config_file"
                 return 0
             fi
-            info "Bootstrap already contains ${hostname}, but the local host does not use shared Security. Resuming the join so bootstrap can validate the local host identity."
+            if [[ -s "$cluster_config_file" ]]; then
+                IFS= read -r -N 2 cluster_signature < "$cluster_config_file"
+            fi
+            if [[ "$cluster_signature" != "PK" ]]; then
+                rm -f "$cluster_config_file"
+                error "Bootstrap already contains ${hostname}, but no valid persisted cluster configuration is available. Refusing duplicate registration; remove the stale host registration before retrying." exit
+            fi
+            info "Bootstrap already contains ${hostname}, but the local host does not use shared Security. Resuming the interrupted join with the persisted cluster configuration."
+            use_cached_config=true
             break
         elif [ "${response_code}" = "401" ]; then
             error "Failed to join the cluster: Security DB not set or credential not correct. Exit."
@@ -502,6 +514,7 @@ function join_cluster {
             fi
         else
             info "Proceed to joining bootstrap host"
+            rm -f "$cluster_config_file"
             break
         fi
     done
@@ -529,25 +542,30 @@ function join_cluster {
         fi
     done
 
-    info "joining cluster of group ${MARKLOGIC_GROUP}"
-    MARKLOGIC_GROUP_PAYLOAD="group=${MARKLOGIC_GROUP}"
-    curl_retry_validate false "http://localhost:8001/admin/v1/server-config" 200 \
-        "-o" "/tmp/host.xml" "-X" "GET" "-H" "Accept: application/xml"
-    
-    info "getting cluster-config from bootstrap host"
-    curl_retry_validate false "$HTTP_PROTOCOL://${MARKLOGIC_BOOTSTRAP_HOST}:8001/admin/v1/cluster-config" 200 \
-        "--anyauth" "--user" "${MARKLOGIC_MANAGEMENT_USERNAME}:${MARKLOGIC_MANAGEMENT_PASSWORD}" \
-        "-X" "POST" "-d" "${MARKLOGIC_GROUP_PAYLOAD}" \
-        "--data-urlencode" "server-config@/tmp/host.xml" \
-        "-H" "Content-type: application/x-www-form-urlencoded" \
-        "-o" "/tmp/cluster.zip" $BOOTSTRAP_HTTPS_OPTION
+    if [[ "$use_cached_config" != "true" ]]; then
+        info "joining cluster of group ${MARKLOGIC_GROUP}"
+        MARKLOGIC_GROUP_PAYLOAD="group=${MARKLOGIC_GROUP}"
+        curl_retry_validate false "http://localhost:8001/admin/v1/server-config" 200 \
+            "-o" "/tmp/host.xml" "-X" "GET" "-H" "Accept: application/xml"
 
-    response_code=${CURL_RESPONSE_CODE:-0}
-    cluster_signature=""
-    IFS= read -r -N 2 cluster_signature < /tmp/cluster.zip
-    if [[ "${response_code}" != "200" ]] || [[ "${cluster_signature}" != "PK" ]]; then
-        rm -f /tmp/cluster.zip
-        error "Bootstrap host returned an invalid cluster configuration (HTTP ${response_code})." exit
+        mkdir -p "$ML_KUBERNETES_FILE_PATH"
+        info "getting cluster-config from bootstrap host"
+        curl_retry_validate false "$HTTP_PROTOCOL://${MARKLOGIC_BOOTSTRAP_HOST}:8001/admin/v1/cluster-config" 200 \
+            "--anyauth" "--user" "${MARKLOGIC_MANAGEMENT_USERNAME}:${MARKLOGIC_MANAGEMENT_PASSWORD}" \
+            "-X" "POST" "-d" "${MARKLOGIC_GROUP_PAYLOAD}" \
+            "--data-urlencode" "server-config@/tmp/host.xml" \
+            "-H" "Content-type: application/x-www-form-urlencoded" \
+            "-o" "$cluster_config_file" $BOOTSTRAP_HTTPS_OPTION
+
+        response_code=${CURL_RESPONSE_CODE:-0}
+        cluster_signature=""
+        if [[ -s "$cluster_config_file" ]]; then
+            IFS= read -r -N 2 cluster_signature < "$cluster_config_file"
+        fi
+        if [[ "${response_code}" != "200" ]] || [[ "${cluster_signature}" != "PK" ]]; then
+            rm -f "$cluster_config_file"
+            error "Bootstrap host returned an invalid cluster configuration (HTTP ${response_code})." exit
+        fi
     fi
 
     timestamp=$(curl -s "http://localhost:8001/admin/v1/timestamp")
@@ -556,7 +574,7 @@ function join_cluster {
     curl_retry_validate false "http://localhost:8001/admin/v1/cluster-config" 202 \
             "-o" "/dev/null" \
             "-X" "POST" "-H" "Content-type: application/zip" \
-            "--data-binary" "@/tmp/cluster.zip"
+            "--data-binary" "@${cluster_config_file}"
 
     response_code=${CURL_RESPONSE_CODE:-0}
     if [[ "${response_code}" != "202" ]]; then
@@ -567,6 +585,7 @@ function join_cluster {
     info "restart triggered"
     restart_check "localhost" "${timestamp}" "${MARKLOGIC_MANAGEMENT_USERNAME}" "${MARKLOGIC_MANAGEMENT_PASSWORD}"
     join_check "${hostname}"
+    rm -f "$cluster_config_file"
 
     info "joined group ${MARKLOGIC_GROUP}"
 }
@@ -1060,7 +1079,7 @@ else
                 init_marklogic "$HOST_FQDN"
                 ;;
             200)
-                info "Bootstrap already contains ${HOST_FQDN}. Skipping host initialization; join recovery will validate the local host identity."
+                info "Bootstrap already contains ${HOST_FQDN}. Skipping host initialization; join recovery will use persisted cluster configuration."
                 ;;
             401)
                 error "Failed to inspect the bootstrap host registration: credential rejected. Exit." exit
