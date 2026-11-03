@@ -487,7 +487,8 @@ function join_cluster {
                 info "host registration and local shared Security authentication confirm the host has already joined the cluster"
                 return 0
             fi
-            error "Bootstrap already contains ${hostname}, but the local host does not use shared Security. Refusing to create a duplicate static host registration; remove or recover the stale host registration before retrying." exit
+            info "Bootstrap already contains ${hostname}, but the local host does not use shared Security. Resuming the join so bootstrap can validate the local host identity."
+            break
         elif [ "${response_code}" = "401" ]; then
             error "Failed to join the cluster: Security DB not set or credential not correct. Exit."
             exit 1
@@ -1036,22 +1037,15 @@ function check_status_file_for_boostrap {
 info "Start configuring MarkLogic for $HOST_FQDN"
 info "Bootstrap host: $MARKLOGIC_BOOTSTRAP_HOST"
 
-# Only do this if the bootstrap host is in the statefulset we are configuring
-if [[ "$IS_BOOTSTRAP_HOST" == "true" ]]; then
+# Only the designated bootstrap group's first host may initialize cluster Security.
+if [[ "$IS_BOOTSTRAP_HOST" == "true" ]] && [[ "$MARKLOGIC_CLUSTER_TYPE" == "bootstrap" ]]; then
     check_status_file_for_boostrap
     init_marklogic $HOST_FQDN
-    if [[ "${MARKLOGIC_CLUSTER_TYPE}" == "bootstrap" ]]; then
-        log "Info:  bootstrap host is ready"
-        init_security_db
-        configure_bootstrap_tls_before_operator_handoff
-        activate_operator_credentials
-        retry 5 configure_group
-    else 
-        log "Info:  bootstrap host is ready"
-        activate_operator_credentials
-        retry 5 configure_group
-        join_cluster $HOST_FQDN
-    fi
+    log "Info:  bootstrap host is ready"
+    init_security_db
+    configure_bootstrap_tls_before_operator_handoff
+    activate_operator_credentials
+    retry 5 configure_group
     configure_path_based_routing
 else 
     check_status_file_for_nonbootstrap
@@ -1066,11 +1060,7 @@ else
                 init_marklogic "$HOST_FQDN"
                 ;;
             200)
-                if wait_for_local_shared_security; then
-                    info "Local shared Security authentication succeeded after the registered host became ready. Skipping host initialization."
-                else
-                    error "Bootstrap already contains ${HOST_FQDN}, but the local host does not use shared Security. Refusing to reinitialize the static host and change its identity; recover or remove the stale host registration before retrying." exit
-                fi
+                info "Bootstrap already contains ${HOST_FQDN}. Skipping host initialization; join recovery will validate the local host identity."
                 ;;
             401)
                 error "Failed to inspect the bootstrap host registration: credential rejected. Exit." exit
@@ -1080,7 +1070,13 @@ else
                 ;;
         esac
     fi
+    if [[ "$IS_BOOTSTRAP_HOST" == "true" ]]; then
+        retry 5 configure_group
+    fi
     join_cluster $HOST_FQDN
+    if [[ "$IS_BOOTSTRAP_HOST" == "true" ]]; then
+        configure_path_based_routing
+    fi
 fi
 
 if [[ $MARKLOGIC_JOIN_TLS_ENABLED == "true" ]]; then

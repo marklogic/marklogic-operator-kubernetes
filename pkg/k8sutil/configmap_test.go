@@ -27,7 +27,7 @@ func TestClusterConfigSetsBasicAuthForPathBasedAppServers(t *testing.T) {
 	}
 }
 
-func TestClusterConfigRejectsStaleStaticHostRegistration(t *testing.T) {
+func TestClusterConfigValidatesStaticHostIdentityBeforeRecovery(t *testing.T) {
 	t.Parallel()
 
 	script, err := scriptsFolder.ReadFile("scripts/cluster-config.sh")
@@ -42,8 +42,8 @@ func TestClusterConfigRejectsStaleStaticHostRegistration(t *testing.T) {
 		`if local_host_uses_shared_security; then`,
 		`if wait_for_local_shared_security; then`,
 		`local retry_count=12`,
-		`Refusing to create a duplicate static host registration`,
-		`Refusing to reinitialize the static host and change its identity`,
+		`Resuming the join so bootstrap can validate the local host identity.`,
+		`Skipping host initialization; join recovery will validate the local host identity.`,
 		`Local shared Security authentication succeeded. Skipping host initialization.`,
 	} {
 		if !strings.Contains(contents, expected) {
@@ -56,6 +56,48 @@ func TestClusterConfigRejectsStaleStaticHostRegistration(t *testing.T) {
 	initialization := strings.Index(nonBootstrapBranch, `init_marklogic "$HOST_FQDN"`)
 	if registrationCheck < 0 || initialization < 0 || registrationCheck > initialization {
 		t.Fatal("non-bootstrap host registration must be checked before host initialization")
+	}
+
+	joinBranch := contents[strings.Index(contents, `function join_cluster`):strings.Index(contents, `function configure_group`)]
+	recovery := strings.Index(joinBranch, `Resuming the join so bootstrap can validate the local host identity.`)
+	identityValidation := strings.Index(joinBranch, `"server-config@/tmp/host.xml"`)
+	if recovery < 0 || identityValidation < 0 || recovery > identityValidation {
+		t.Fatal("partial static host recovery must submit local server-config for bootstrap identity validation")
+	}
+}
+
+func TestClusterConfigWaitsForBootstrapBeforeInitializingJoiningHosts(t *testing.T) {
+	t.Parallel()
+
+	script, err := scriptsFolder.ReadFile("scripts/cluster-config.sh")
+	if err != nil {
+		t.Fatalf("read cluster configuration script: %v", err)
+	}
+	contents := string(script)
+	mainStart := strings.Index(contents, `# Only the designated bootstrap group's first host`)
+	mainEnd := strings.Index(contents, `if [[ $MARKLOGIC_JOIN_TLS_ENABLED == "true" ]]`)
+	if mainStart < 0 || mainEnd < 0 || mainStart >= mainEnd {
+		t.Fatal("cluster configuration script is missing its bootstrap decision block")
+	}
+	main := contents[mainStart:mainEnd]
+	if !strings.Contains(main, `if [[ "$IS_BOOTSTRAP_HOST" == "true" ]] && [[ "$MARKLOGIC_CLUSTER_TYPE" == "bootstrap" ]]; then`) {
+		t.Fatal("cluster Security initialization must be restricted to the designated bootstrap host")
+	}
+
+	joiningStart := strings.Index(main, "else \n    check_status_file_for_nonbootstrap")
+	if joiningStart < 0 {
+		t.Fatal("cluster configuration script is missing the joining-host branch")
+	}
+	joining := main[joiningStart:]
+	waitForBootstrap := strings.Index(joining, `wait_bootstrap_ready`)
+	initializeHost := strings.Index(joining, `init_marklogic "$HOST_FQDN"`)
+	configureGroup := strings.Index(joining, `retry 5 configure_group`)
+	joinCluster := strings.Index(joining, `join_cluster $HOST_FQDN`)
+	if waitForBootstrap < 0 || initializeHost < 0 || waitForBootstrap > initializeHost {
+		t.Fatal("joining hosts must wait for the designated bootstrap host before initialization")
+	}
+	if configureGroup < 0 || joinCluster < 0 || configureGroup > joinCluster {
+		t.Fatal("a joining group's first host must configure its group before joining")
 	}
 }
 
