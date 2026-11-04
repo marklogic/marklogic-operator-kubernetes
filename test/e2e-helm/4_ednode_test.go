@@ -75,7 +75,7 @@ var (
 // leftover cluster registration data from previous runs.
 func cleanupStaleClusterData(ctx context.Context, t *testing.T, c *envconf.Config, namespace string) error {
 	client := c.Client()
-	
+
 	// Check if namespace exists; if not, skip cleanup
 	ns := &corev1.Namespace{}
 	err := client.Resources().Get(ctx, namespace, "", ns)
@@ -87,7 +87,7 @@ func cleanupStaleClusterData(ctx context.Context, t *testing.T, c *envconf.Confi
 		t.Logf("Warning: failed to check namespace %s: %v", namespace, err)
 		return nil
 	}
-	
+
 	// Delete any existing MarklogicCluster resources FIRST to allow PVCs to be cleaned
 	mlCluster := &marklogicv1.MarklogicCluster{
 		ObjectMeta: metav1.ObjectMeta{
@@ -100,11 +100,11 @@ func cleanupStaleClusterData(ctx context.Context, t *testing.T, c *envconf.Confi
 			t.Logf("Warning: failed to delete MarklogicCluster during cleanup: %v", err)
 		}
 	}
-	
+
 	// Wait for cluster to be deleted before deleting PVCs
 	// This allows StatefulSet to clean up properly
 	time.Sleep(3 * time.Second)
-	
+
 	// Delete PVCs explicitly to remove stale data
 	// This is CRITICAL to prevent "stale host registration" errors
 	// when the same pod name is reused in the next test run
@@ -113,10 +113,10 @@ func cleanupStaleClusterData(ctx context.Context, t *testing.T, c *envconf.Confi
 	if output, err := cmd.CombinedOutput(); err != nil {
 		t.Logf("Warning: failed to delete PVCs: %v, output: %s", err, string(output))
 	}
-	
+
 	// Wait for PVCs to be deleted
 	time.Sleep(2 * time.Second)
-	
+
 	return nil
 }
 
@@ -218,8 +218,19 @@ func TestMlClusterWithEdnode(t *testing.T) {
 	})
 
 	feature.Assess("MarkLogic groups created", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
+		// Retrieve operator credentials for post-initialization API calls.
+		operatorSecret := &corev1.Secret{}
+		if err := c.Client().Resources(edNodeNS).Get(ctx, "mlclusterednode-operator", edNodeNS, operatorSecret); err != nil {
+			t.Fatalf("Failed to read operator Secret: %v", err)
+		}
+		operatorUsername := "marklogic-kubernetes-operator"
+		operatorPassword := string(operatorSecret.Data["password"])
+		if operatorPassword == "" {
+			t.Fatalf("Operator Secret has empty password")
+		}
+
 		url := "http://localhost:8002/manage/v2/groups"
-		cmd := fmt.Sprintf("curl %s --anyauth -u %s:%s", url, adminUsername, adminPassword)
+		cmd := fmt.Sprintf("curl %s --anyauth -u %s:%s", url, operatorUsername, operatorPassword)
 		output, err := utils.ExecCmdInPod("dnode-0", edNodeNS, mlContainerName, cmd)
 		if err != nil {
 			t.Fatalf("Failed to query groups: %v", err)
@@ -281,13 +292,13 @@ func TestMlClusterWithEdnode(t *testing.T) {
 		if err := client.Resources(edNodeNS).Delete(ctx, edCluster); err != nil && !apierrors.IsNotFound(err) {
 			t.Logf("Warning: failed to delete MarklogicCluster: %v", err)
 		}
-		
+
 		// Clean up stale cluster data and PVCs to ensure test isolation
 		cleanupStaleClusterData(ctx, t, c, edNodeNS)
-		
+
 		// Wait for resources to be fully cleaned up
 		time.Sleep(5 * time.Second)
-		
+
 		return ctx
 	})
 

@@ -134,7 +134,18 @@ func TestTlsWithSelfSigned(t *testing.T) {
 	})
 
 	feature.Assess("HTTPS connection enabled on /manage/v2/groups", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
-		cmd := fmt.Sprintf("curl -k --anyauth -u %s:%s https://localhost:8002/manage/v2/groups", adminUsername, adminPassword)
+		// Retrieve operator credentials for post-initialization API calls.
+		operatorSecret := &corev1.Secret{}
+		if err := c.Client().Resources(tlsNamespace).Get(ctx, cr.Name+"-operator", tlsNamespace, operatorSecret); err != nil {
+			t.Fatalf("Failed to read operator Secret: %v", err)
+		}
+		operatorUsername := "marklogic-kubernetes-operator"
+		operatorPassword := string(operatorSecret.Data["password"])
+		if operatorPassword == "" {
+			t.Fatalf("Operator Secret has empty password")
+		}
+
+		cmd := fmt.Sprintf("curl -k --anyauth -u %s:%s https://localhost:8002/manage/v2/groups", operatorUsername, operatorPassword)
 		if _, err := utils.ExecCmdInPod("ml-0", tlsNamespace, mlContainerName, cmd); err != nil {
 			t.Fatalf("HTTPS request to /manage/v2/groups failed: %v", err)
 		}
@@ -142,7 +153,18 @@ func TestTlsWithSelfSigned(t *testing.T) {
 	})
 
 	feature.Assess("HTTPS connection enabled on /manage/v2/hosts", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
-		cmd := fmt.Sprintf("curl -k --anyauth -u %s:%s https://localhost:8002/manage/v2/hosts?view=status&format=json", adminUsername, adminPassword)
+		// Retrieve operator credentials for post-initialization API calls.
+		operatorSecret := &corev1.Secret{}
+		if err := c.Client().Resources(tlsNamespace).Get(ctx, cr.Name+"-operator", tlsNamespace, operatorSecret); err != nil {
+			t.Fatalf("Failed to read operator Secret: %v", err)
+		}
+		operatorUsername := "marklogic-kubernetes-operator"
+		operatorPassword := string(operatorSecret.Data["password"])
+		if operatorPassword == "" {
+			t.Fatalf("Operator Secret has empty password")
+		}
+
+		cmd := fmt.Sprintf("curl -k --anyauth -u %s:%s https://localhost:8002/manage/v2/hosts?view=status&format=json", operatorUsername, operatorPassword)
 		if _, err := utils.ExecCmdInPod("ml-0", tlsNamespace, mlContainerName, cmd); err != nil {
 			t.Fatalf("HTTPS request to /manage/v2/hosts failed: %v", err)
 		}
@@ -323,8 +345,20 @@ func TestTlsWithNamedCert(t *testing.T) {
 			fmt.Sprintf("marklogic-0.marklogic.%s.svc.cluster.local", namedNS),
 			fmt.Sprintf("marklogic-1.marklogic.%s.svc.cluster.local", namedNS),
 		}
+
+		// Retrieve operator credentials for post-initialization API calls.
+		operatorSecret := &corev1.Secret{}
+		if err := c.Client().Resources(namedNS).Get(ctx, cr.Name+"-operator", namedNS, operatorSecret); err != nil {
+			t.Fatalf("Failed to read operator Secret: %v", err)
+		}
+		operatorUsername := "marklogic-kubernetes-operator"
+		operatorPassword := string(operatorSecret.Data["password"])
+		if operatorPassword == "" {
+			t.Fatalf("Operator Secret has empty password")
+		}
+
 		time.Sleep(5 * time.Second)
-		cmd := fmt.Sprintf("curl -k --anyauth -u %s:%s https://localhost:8002/manage/v2/certificates?format=json", adminUsername, adminPassword)
+		cmd := fmt.Sprintf("curl -k --anyauth -u %s:%s https://localhost:8002/manage/v2/certificates?format=json", operatorUsername, operatorPassword)
 		certs, err := utils.ExecCmdInPod(podName, namedNS, mlContainerName, cmd)
 		if err != nil {
 			t.Fatalf("Failed to get certificates list: %v", err)
@@ -336,7 +370,7 @@ func TestTlsWithNamedCert(t *testing.T) {
 		for i, uri := range certURIs[:2] {
 			certURL := fmt.Sprintf("https://localhost:8002%s?format=json", uri)
 			detail, err := utils.ExecCmdInPod(podName, namedNS, mlContainerName,
-				fmt.Sprintf("curl -k --anyauth -u %s:%s %s", adminUsername, adminPassword, certURL))
+				fmt.Sprintf("curl -k --anyauth -u %s:%s %s", operatorUsername, operatorPassword, certURL))
 			if err != nil {
 				t.Fatalf("Failed to get certificate %d: %v", i, err)
 			}
@@ -552,6 +586,10 @@ func TestTlsWithMultiNode(t *testing.T) {
 		); err != nil {
 			t.Fatal(err)
 		}
+		// Wait for operator to process CR and activate credentials.
+		// This ensures that when pods start, the operator user is ready for authentication.
+		t.Log("Waiting for operator to activate credentials...")
+		time.Sleep(15 * time.Second)
 		return ctx
 	})
 
@@ -575,6 +613,18 @@ func TestTlsWithMultiNode(t *testing.T) {
 			fmt.Sprintf("enode-0.enode.%s.svc.cluster.local", tlsEdNS),
 			fmt.Sprintf("dnode-0.dnode.%s.svc.cluster.local", tlsEdNS),
 		}
+
+		// Retrieve operator credentials for post-initialization API calls.
+		operatorSecret := &corev1.Secret{}
+		if err := c.Client().Resources(tlsEdNS).Get(ctx, cr.Name+"-operator", tlsEdNS, operatorSecret); err != nil {
+			t.Fatalf("Failed to read operator Secret: %v", err)
+		}
+		operatorUsername := "marklogic-kubernetes-operator"
+		operatorPassword := string(operatorSecret.Data["password"])
+		if operatorPassword == "" {
+			t.Fatalf("Operator Secret has empty password")
+		}
+
 		t.Log("Waiting for TLS configuration on port 8002...")
 		time.Sleep(30 * time.Second)
 
@@ -591,7 +641,7 @@ func TestTlsWithMultiNode(t *testing.T) {
 		}
 
 		url := "https://localhost:8002/manage/v2/certificates?format=json"
-		cmd := fmt.Sprintf("curl -k --anyauth -u %s:%s %s", adminUsername, adminPassword, url)
+		cmd := fmt.Sprintf("curl -k --anyauth -u %s:%s %s", operatorUsername, operatorPassword, url)
 		var certs string
 		var err error
 		converged := false
@@ -626,7 +676,7 @@ func TestTlsWithMultiNode(t *testing.T) {
 		for i, uri := range certURIs[:2] {
 			certURL := fmt.Sprintf("https://localhost:8002%s?format=json", uri)
 			detail, err := utils.ExecCmdInPod(podName, tlsEdNS, mlContainerName,
-				fmt.Sprintf("curl -k --anyauth -u %s:%s %s", adminUsername, adminPassword, certURL))
+				fmt.Sprintf("curl -k --anyauth -u %s:%s %s", operatorUsername, operatorPassword, certURL))
 			if err != nil {
 				t.Fatalf("Failed to get certificate %d: %v", i, err)
 			}

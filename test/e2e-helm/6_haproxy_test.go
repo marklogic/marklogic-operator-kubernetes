@@ -228,8 +228,19 @@ func TestHAProxyPathBasedEnabled(t *testing.T) {
 	})
 
 	feature.Assess("HAProxy with path-based routing is working", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
+		// Retrieve operator credentials for post-initialization API calls.
+		operatorSecret := &corev1.Secret{}
+		if err := c.Client().Resources(haProxyPathNS).Get(ctx, cr.Name+"-operator", haProxyPathNS, operatorSecret); err != nil {
+			t.Fatalf("Failed to read operator Secret: %v", err)
+		}
+		operatorUsername := "marklogic-kubernetes-operator"
+		operatorPassword := string(operatorSecret.Data["password"])
+		if operatorPassword == "" {
+			t.Fatalf("Operator Secret has empty password")
+		}
+
 		time.Sleep(5 * time.Second)
-		verifyPathBasedHAProxyRoutes(t, haProxyPathNS, "ml-0", mlContainerName, adminUsername, adminPassword, cr.Spec.HAProxy.FrontendPort, cr.Spec.HAProxy.AppServers)
+		verifyPathBasedHAProxyRoutes(t, haProxyPathNS, "ml-0", mlContainerName, operatorUsername, operatorPassword, cr.Spec.HAProxy.FrontendPort, cr.Spec.HAProxy.AppServers)
 		return ctx
 	})
 
@@ -401,9 +412,20 @@ func TestHAProxyPathBasedDisabled(t *testing.T) {
 	})
 
 	feature.Assess("HAProxy with path-based routing disabled is working", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
+		// Retrieve operator credentials for post-initialization API calls.
+		operatorSecret := &corev1.Secret{}
+		if err := c.Client().Resources(haProxyNS).Get(ctx, cr.Name+"-operator", haProxyNS, operatorSecret); err != nil {
+			t.Fatalf("Failed to read operator Secret: %v", err)
+		}
+		operatorUsername := "marklogic-kubernetes-operator"
+		operatorPassword := string(operatorSecret.Data["password"])
+		if operatorPassword == "" {
+			t.Fatalf("Operator Secret has empty password")
+		}
+
 		fqdn := fmt.Sprintf("marklogic-haproxy.%s.svc.cluster.local", haProxyNS)
 		url := "http://" + fqdn + ":8001"
-		cmd := fmt.Sprintf("curl --anyauth -u %s:%s %s", adminUsername, adminPassword, url)
+		cmd := fmt.Sprintf("curl --anyauth -u %s:%s %s", operatorUsername, operatorPassword, url)
 		time.Sleep(5 * time.Second)
 		if _, err := utils.ExecCmdInPod("ml-0", haProxyNS, mlContainerName, cmd); err != nil {
 			t.Fatalf("HAProxy request failed: %v", err)
