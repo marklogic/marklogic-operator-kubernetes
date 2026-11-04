@@ -161,19 +161,24 @@ var hugePages = marklogicv1.HugePages{
 
 var _ = Describe("MarkLogicGroup controller", func() {
 	Context("When creating an MarklogicGroup", Ordered, func() {
-		ctx := context.Background()
-
 		AfterEach(func() {
+			ctx, cancel := context.WithTimeout(context.Background(), timeout)
+			defer cancel()
 			deleteMarklogicClusters(ctx)
 			deleteMarklogicGroups(ctx, true)
 		})
 
 		AfterAll(func() {
+			ctx, cancel := context.WithTimeout(context.Background(), timeout)
+			defer cancel()
 			deleteMarklogicClusters(ctx)
 			deleteMarklogicGroups(ctx, false)
 		})
 
 		It("Should create a MarklogicGroup CR, StatefulSet and Service", func() {
+			ctx, cancel := context.WithTimeout(context.Background(), timeout)
+			defer cancel()
+
 			// Create the namespace
 			ns := corev1.Namespace{
 				ObjectMeta: metav1.ObjectMeta{Name: Namespace},
@@ -300,6 +305,9 @@ var _ = Describe("MarkLogicGroup controller", func() {
 		})
 
 		It("Should render dynamic group StatefulSet and Services with dynamic-host identity", func() {
+			ctx, cancel := context.WithTimeout(context.Background(), timeout)
+			defer cancel()
+
 			dynamicNamespace := "testns-dynamic"
 			dynamicName := "dynamic-group"
 			dynamicTypeNamespaceName := types.NamespacedName{Name: dynamicName, Namespace: dynamicNamespace}
@@ -369,6 +377,9 @@ var _ = Describe("MarkLogicGroup controller", func() {
 		})
 
 		It("Should keep static groups on static reconcile path", func() {
+			ctx, cancel := context.WithTimeout(context.Background(), timeout)
+			defer cancel()
+
 			staticNamespace := "testns-static-branch"
 			staticName := "static-branch-group"
 			staticNsName := types.NamespacedName{Name: staticName, Namespace: staticNamespace}
@@ -408,6 +419,9 @@ var _ = Describe("MarkLogicGroup controller", func() {
 		})
 
 		It("Should transition dynamic group to degraded when bootstrap is not ready", func() {
+			ctx, cancel := context.WithTimeout(context.Background(), timeout)
+			defer cancel()
+
 			dynamicNamespace := "testns-dynamic-bootstrap-degraded"
 			dynamicName := "dynamic-bootstrap-degraded"
 			clusterName := "cluster-bootstrap-degraded"
@@ -463,6 +477,9 @@ var _ = Describe("MarkLogicGroup controller", func() {
 		})
 
 		It("Should transition dynamic group to failed for unsupported bootstrap version", func() {
+			ctx, cancel := context.WithTimeout(context.Background(), timeout)
+			defer cancel()
+
 			dynamicNamespace := "testns-dynamic-version-failed"
 			dynamicName := "dynamic-version-failed"
 			clusterName := "cluster-version-failed"
@@ -521,6 +538,9 @@ var _ = Describe("MarkLogicGroup controller", func() {
 		})
 
 		It("Should fail early when dynamic tokenDuration is invalid", func() {
+			ctx, cancel := context.WithTimeout(context.Background(), timeout)
+			defer cancel()
+
 			dynamicNamespace := "testns-dynamic-invalid-token-duration"
 			dynamicName := "dynamic-invalid-token-duration"
 			clusterName := "cluster-invalid-token-duration"
@@ -572,6 +592,9 @@ var _ = Describe("MarkLogicGroup controller", func() {
 		})
 
 		It("Should configure dynamic group and record management call order", func() {
+			ctx, cancel := context.WithTimeout(context.Background(), timeout)
+			defer cancel()
+
 			dynamicNamespace := "testns-dynamic-configured"
 			dynamicName := "dynamic-configured"
 			clusterName := "cluster-configured"
@@ -694,6 +717,9 @@ var _ = Describe("MarkLogicGroup controller", func() {
 		})
 
 		It("Should preserve cluster ownership of the shared operator Secret", func() {
+			ctx, cancel := context.WithTimeout(context.Background(), timeout)
+			defer cancel()
+
 			dynamicNamespace := "testns-dynamic-secret-owner"
 			dynamicName := "dynamic-secret-owner"
 			clusterName := "cluster-secret-owner"
@@ -788,6 +814,9 @@ var _ = Describe("MarkLogicGroup controller", func() {
 		})
 
 		It("Should sequentially join local-ready dynamic pods and persist host IDs", func() {
+			ctx, cancel := context.WithTimeout(context.Background(), timeout)
+			defer cancel()
+
 			dynamicNamespace := "testns-dynamic-join-seq"
 			dynamicName := "dynamic-join-seq"
 			clusterName := "cluster-join-seq"
@@ -877,6 +906,9 @@ var _ = Describe("MarkLogicGroup controller", func() {
 		})
 
 		It("Should retry transient token request failures and eventually join", func() {
+			ctx, cancel := context.WithTimeout(context.Background(), timeout)
+			defer cancel()
+
 			joinFlowTimeout := 35 * time.Second
 			dynamicNamespace := "testns-dynamic-token-retry"
 			dynamicName := "dynamic-token-retry"
@@ -946,6 +978,9 @@ var _ = Describe("MarkLogicGroup controller", func() {
 		})
 
 		It("Should mark dynamic group failed on permanent token auth failure", func() {
+			ctx, cancel := context.WithTimeout(context.Background(), timeout)
+			defer cancel()
+
 			dynamicNamespace := "testns-dynamic-token-auth-failed"
 			dynamicName := "dynamic-token-auth-failed"
 			clusterName := "cluster-token-auth-failed"
@@ -1009,6 +1044,9 @@ var _ = Describe("MarkLogicGroup controller", func() {
 		})
 
 		It("Should keep partially joined group degraded when one host exhausts retries", func() {
+			ctx, cancel := context.WithTimeout(context.Background(), timeout)
+			defer cancel()
+
 			joinFlowTimeout := 35 * time.Second
 			dynamicNamespace := "testns-dynamic-partial-join"
 			dynamicName := "dynamic-partial-join"
@@ -1077,6 +1115,9 @@ var _ = Describe("MarkLogicGroup controller", func() {
 		})
 
 		It("Should add dynamic cleanup finalizers only for dynamic groups", func() {
+			ctx, cancel := context.WithTimeout(context.Background(), timeout)
+			defer cancel()
+
 			cleanupTimeout := 35 * time.Second
 			dynamicNamespace := "testns-dynamic-finalizers"
 			dynamicName := "dynamic-finalizers"
@@ -1173,6 +1214,9 @@ var _ = Describe("MarkLogicGroup controller", func() {
 		})
 
 		It("Should mark dynamic group degraded when pod startup exceeds local readiness timeout", func() {
+			ctx, cancel := context.WithTimeout(context.Background(), timeout)
+			defer cancel()
+
 			cleanupTimeout := 45 * time.Second
 			dynamicNamespace := "testns-dynamic-pod-startup-timeout"
 			dynamicName := "dynamic-pod-startup-timeout"
@@ -1262,6 +1306,9 @@ var _ = Describe("MarkLogicGroup controller", func() {
 		})
 
 		It("Should remove EmptyDir-backed host before pod deletion on scale-down", func() {
+			ctx, cancel := context.WithTimeout(context.Background(), timeout)
+			defer cancel()
+
 			cleanupTimeout := 45 * time.Second
 			dynamicNamespace := "testns-dynamic-scale-down-emptydir"
 			dynamicName := "dynamic-scale-down-emptydir"
@@ -1348,6 +1395,9 @@ var _ = Describe("MarkLogicGroup controller", func() {
 		})
 
 		It("Should retain PVC-backed host on ordinary scale-down without remove API", func() {
+			ctx, cancel := context.WithTimeout(context.Background(), timeout)
+			defer cancel()
+
 			cleanupTimeout := 45 * time.Second
 			dynamicNamespace := "testns-dynamic-scale-down-pvc"
 			dynamicName := "dynamic-scale-down-pvc"
@@ -1419,6 +1469,9 @@ var _ = Describe("MarkLogicGroup controller", func() {
 		})
 
 		It("Should apply storage-aware scale-to-zero behavior", func() {
+			ctx, cancel := context.WithTimeout(context.Background(), timeout)
+			defer cancel()
+
 			cleanupTimeout := 45 * time.Second
 
 			emptyDirNamespace := "testns-dynamic-zero-emptydir"
@@ -1518,6 +1571,9 @@ var _ = Describe("MarkLogicGroup controller", func() {
 		})
 
 		It("Should remove retained PVC hosts during dynamic group deletion", func() {
+			ctx, cancel := context.WithTimeout(context.Background(), timeout)
+			defer cancel()
+
 			cleanupTimeout := 45 * time.Second
 			dynamicNamespace := "testns-dynamic-delete-cleanup"
 			dynamicName := "dynamic-delete-cleanup"
@@ -1599,6 +1655,9 @@ var _ = Describe("MarkLogicGroup controller", func() {
 		})
 
 		It("Should block EmptyDir cleanup when bootstrap is unavailable", func() {
+			ctx, cancel := context.WithTimeout(context.Background(), timeout)
+			defer cancel()
+
 			cleanupTimeout := 45 * time.Second
 			dynamicNamespace := "testns-dynamic-remove-bootstrap-unavailable"
 			dynamicName := "dynamic-remove-bootstrap-unavailable"
@@ -1670,6 +1729,9 @@ var _ = Describe("MarkLogicGroup controller", func() {
 		})
 
 		It("Should mark remove retry budget exhaustion and keep pod finalizer", func() {
+			ctx, cancel := context.WithTimeout(context.Background(), timeout)
+			defer cancel()
+
 			cleanupTimeout := 45 * time.Second
 			dynamicNamespace := "testns-dynamic-remove-retry-budget"
 			dynamicName := "dynamic-remove-retry-budget"
@@ -1772,6 +1834,9 @@ var _ = Describe("MarkLogicGroup controller", func() {
 		})
 
 		It("Should rejoin EmptyDir-backed dynamic pod after restart membership loss", func() {
+			ctx, cancel := context.WithTimeout(context.Background(), timeout)
+			defer cancel()
+
 			cleanupTimeout := 45 * time.Second
 			dynamicNamespace := "testns-dynamic-restart-emptydir-rejoin"
 			dynamicName := "dynamic-restart-emptydir-rejoin"
@@ -1855,6 +1920,9 @@ var _ = Describe("MarkLogicGroup controller", func() {
 		})
 
 		It("Should expose restart recovery status while rejoin is in progress", func() {
+			ctx, cancel := context.WithTimeout(context.Background(), timeout)
+			defer cancel()
+
 			cleanupTimeout := 45 * time.Second
 			dynamicNamespace := "testns-dynamic-restart-status"
 			dynamicName := "dynamic-restart-status"
@@ -1945,6 +2013,9 @@ var _ = Describe("MarkLogicGroup controller", func() {
 		})
 
 		It("Should remove stale EmptyDir host entry before rejoining a recreated pod", func() {
+			ctx, cancel := context.WithTimeout(context.Background(), timeout)
+			defer cancel()
+
 			cleanupTimeout := 45 * time.Second
 			dynamicNamespace := "testns-dynamic-emptydir-recreate"
 			dynamicName := "dynamic-emptydir-recreate"
@@ -2101,6 +2172,9 @@ var _ = Describe("MarkLogicGroup controller", func() {
 		})
 
 		It("Should clear retained PVC state before restart recovery rejoin", func() {
+			ctx, cancel := context.WithTimeout(context.Background(), timeout)
+			defer cancel()
+
 			cleanupTimeout := 45 * time.Second
 			dynamicNamespace := "testns-dynamic-restart-pvc-cleanup"
 			dynamicName := "dynamic-restart-pvc-cleanup"
@@ -2243,6 +2317,9 @@ var _ = Describe("MarkLogicGroup controller", func() {
 		})
 
 		It("Should keep dynamic group degraded when restart recovery is partial", func() {
+			ctx, cancel := context.WithTimeout(context.Background(), timeout)
+			defer cancel()
+
 			cleanupTimeout := 45 * time.Second
 			dynamicNamespace := "testns-dynamic-restart-partial"
 			dynamicName := "dynamic-restart-partial"
@@ -2330,6 +2407,9 @@ var _ = Describe("MarkLogicGroup controller", func() {
 		})
 
 		It("Should stay degraded when bootstrap is unavailable during restart recovery", func() {
+			ctx, cancel := context.WithTimeout(context.Background(), timeout)
+			defer cancel()
+
 			cleanupTimeout := 45 * time.Second
 			dynamicNamespace := "testns-dynamic-restart-bootstrap-unavailable"
 			dynamicName := "dynamic-restart-bootstrap-unavailable"
@@ -2394,6 +2474,9 @@ var _ = Describe("MarkLogicGroup controller", func() {
 		})
 
 		It("Should create configmap for MarkLogic scripts", func() {
+			ctx, cancel := context.WithTimeout(context.Background(), timeout)
+			defer cancel()
+
 			// Validating if ConfigMap is created successfully
 			configMap := &corev1.ConfigMap{}
 			configMapName := Name + "-scripts"
@@ -2404,6 +2487,9 @@ var _ = Describe("MarkLogicGroup controller", func() {
 		})
 
 		It("Should update the MarklogicGroup CR", func() {
+			ctx, cancel := context.WithTimeout(context.Background(), timeout)
+			defer cancel()
+
 			// Update the MarklogicGroup CR
 			createdCR := &marklogicv1.MarklogicGroup{}
 
@@ -2422,14 +2508,18 @@ var _ = Describe("MarkLogicGroup controller", func() {
 	})
 
 	Context("When validating volume resize requests", func() {
-		ctx := context.Background()
 		resizeTimeout := time.Second * 60
 
 		AfterEach(func() {
+			ctx, cancel := context.WithTimeout(context.Background(), timeout)
+			defer cancel()
 			deleteMarklogicGroups(ctx, false)
 		})
 
 		It("Should initialize resize operation status for growth request", func() {
+			ctx, cancel := context.WithTimeout(context.Background(), resizeTimeout)
+			defer cancel()
+
 			nsName := "resize-init-ns"
 			groupName := "resize-init"
 			nn := types.NamespacedName{Name: groupName, Namespace: nsName}
@@ -2474,6 +2564,9 @@ var _ = Describe("MarkLogicGroup controller", func() {
 		})
 
 		It("Should reject shrink resize requests", func() {
+			ctx, cancel := context.WithTimeout(context.Background(), resizeTimeout)
+			defer cancel()
+
 			nsName := "resize-shrink-ns"
 			groupName := "resize-shrink"
 			nn := types.NamespacedName{Name: groupName, Namespace: nsName}
