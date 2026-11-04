@@ -180,6 +180,12 @@ func TestMlClusterWithEdnode(t *testing.T) {
 		if err := client.Resources(edNodeNS).Create(ctx, edCluster); err != nil {
 			t.Fatalf("Failed to create MarklogicCluster: %v", err)
 		}
+
+		// Wait for operator to process CR and activate credentials.
+		// This ensures that when pods start, the operator user is ready for authentication.
+		t.Log("Waiting for operator to activate credentials...")
+		time.Sleep(15 * time.Second)
+
 		if err := wait.For(
 			conditions.New(client.Resources()).ResourceMatch(edCluster, func(object k8s.Object) bool {
 				return true
