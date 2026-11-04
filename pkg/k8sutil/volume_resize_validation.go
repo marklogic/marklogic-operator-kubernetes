@@ -129,7 +129,8 @@ func (oc *OperatorContext) ReconcileVolumeResizeValidation() result.ReconcileRes
 		if isResizeOperationActive(oc.MarklogicGroup.Status.VolumeResizeStatus) {
 			return oc.reconcileActiveResizeOperation(oc.MarklogicGroup.Status.VolumeResizeStatus, primaryTarget, currentSts)
 		}
-		return result.Continue()
+		oc.ReqLogger.Info("Resize status claim was not acquired; requeuing validation")
+		return result.RequeueSoon(1)
 	}
 
 	if comparison < 0 {
@@ -222,7 +223,8 @@ func (oc *OperatorContext) failResizeValidation(reason marklogicv1.VolumeResizeR
 			return result.Error(err)
 		}
 		if !claimed {
-			return result.Continue()
+			oc.ReqLogger.Info("Resize status claim was not acquired; requeuing validation")
+			return result.RequeueSoon(1)
 		}
 		oc.emitResizeEvent(corev1.EventTypeWarning, "VolumeResizeFailed", message)
 		return result.Done()

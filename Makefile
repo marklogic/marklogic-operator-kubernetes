@@ -28,7 +28,7 @@ export FLUENT_BIT_IMAGE ?= fluent/fluent-bit:5.1.3
 export E2E_KUBERNETES_VERSION ?= v1.31.13
 export E2E_ISTIO_AMBIENT ?= false
 export E2E_TEST_TIMEOUT ?= 60m
-export E2E_HELM_TEST_TIMEOUT ?= 45m
+export E2E_HELM_TEST_TIMEOUT ?= 60m
 export E2E_SETUP_ISTIO ?= true
 # Enables t.Parallel() for top-level tests in ./test/e2e. Set false to force sequential execution.
 export E2E_TOP_LEVEL_PARALLEL ?= true
@@ -91,7 +91,7 @@ MINIKUBE_START_PROFILE_WITH_RETRIES = start_minikube_profile() { \
 # Namespace-scoped (Helm, scope.type=namespace) is the default going forward; set
 # E2E_SCOPE=cluster to run the cluster-scoped (kustomize/ClusterRole) suite instead.
 E2E_SCOPE ?= namespace
-E2E_UPGRADE_SOURCE_VERSION ?= 1.2.0
+E2E_UPGRADE_SOURCE_VERSION ?= 1.3.1
 E2E_UPGRADE_CLUSTER_TEST_TIMEOUT ?= 90m
 E2E_UPGRADE_HELM_NAMESPACE_TEST_TIMEOUT ?= 75m
 E2E_UPGRADE_CLEANUP_TIMEOUT ?= 15m
@@ -158,6 +158,7 @@ endif
 # Image for dev: ml-marklogic-operator-dev.bed-artifactory.bedford.progress.com/marklogic-operator-kubernetes
 IMG ?= progressofficial/marklogic-operator-kubernetes:$(VERSION)
 LOCAL_E2E_IMG ?= marklogic-operator-kubernetes:e2e-local
+E2E_UPGRADE_TARGET_IMAGE ?= $(LOCAL_E2E_IMG)
 
 
 # Get the currently used golang install path (in GOPATH/bin, unless GOBIN is set)
@@ -321,7 +322,7 @@ e2e-test-upgrade:
 # MINIKUBE_PROFILE clusters from the same shell.
 e2e-test-upgrade-cluster:
 	@echo "=====Running cluster-scoped upgrade validation (minikube profile: $(MINIKUBE_PROFILE))====="
-	@TARGET_IMG='$(IMG)'; \
+	@TARGET_IMG='$(E2E_UPGRADE_TARGET_IMAGE)'; \
 	if minikube -p $(MINIKUBE_PROFILE) status >/dev/null 2>&1; then \
 		if ! docker image inspect "$$TARGET_IMG" >/dev/null 2>&1; then \
 			if docker image inspect '$(LOCAL_E2E_IMG)' >/dev/null 2>&1; then \
@@ -348,7 +349,7 @@ e2e-test-upgrade-cluster:
 # MINIKUBE_PROFILE clusters from the same shell.
 e2e-test-upgrade-helm-namespace:
 	@echo "=====Running namespace-scoped upgrade validation (minikube profile: $(MINIKUBE_PROFILE))====="
-	@TARGET_IMG='$(IMG)'; \
+	@TARGET_IMG='$(E2E_UPGRADE_TARGET_IMAGE)'; \
 	if minikube -p $(MINIKUBE_PROFILE) status >/dev/null 2>&1; then \
 		if ! docker image inspect "$$TARGET_IMG" >/dev/null 2>&1; then \
 			if docker image inspect '$(LOCAL_E2E_IMG)' >/dev/null 2>&1; then \
@@ -523,6 +524,8 @@ ecr-login: ## Authenticate Docker to ECR.
 # Scale EKS worker nodes up to EKS_NODE_COUNT and wait for them to be Ready.
 .PHONY: eks-scale-up
 eks-scale-up: ## Scale EKS worker nodes to EKS_NODE_COUNT.
+	@echo "=====Waiting for nodegroup $(EKS_NODEGROUP_NAME) to be ACTIVE====="
+	aws eks wait nodegroup-active --cluster-name $(EKS_CLUSTER_NAME) --nodegroup-name $(EKS_NODEGROUP_NAME) --region $(EKS_REGION)
 	@echo "=====Scaling EKS worker nodes to $(EKS_NODE_COUNT)====="
 	eksctl scale nodegroup \
 	  --cluster $(EKS_CLUSTER_NAME) \
@@ -547,6 +550,8 @@ eks-scale-up: ## Scale EKS worker nodes to EKS_NODE_COUNT.
 # Scale EKS worker nodes to 0 to minimise cost when the cluster is idle.
 .PHONY: eks-scale-down
 eks-scale-down: ## Scale EKS worker nodes to 0.
+	@echo "=====Waiting for nodegroup $(EKS_NODEGROUP_NAME) to be ACTIVE====="
+	aws eks wait nodegroup-active --cluster-name $(EKS_CLUSTER_NAME) --nodegroup-name $(EKS_NODEGROUP_NAME) --region $(EKS_REGION)
 	@echo "=====Scaling EKS worker nodes to 0====="
 	eksctl scale nodegroup \
 	  --cluster $(EKS_CLUSTER_NAME) \
@@ -614,6 +619,21 @@ e2e-test-eks: ## Run e2e tests on EKS.
 	PATH=$(LOCALBIN):$$PATH IMG=$(ECR_OPERATOR_IMAGE) E2E_DOCKER_IMAGE=$(ECR_OPERATOR_IMAGE) \
 	  $(GO_TEST) -v -count=1 -parallel $(E2E_TEST_PARALLELISM) -timeout 60m ./test/e2e
 
+E2E_VAC_STORAGE_CLASS ?= ml-e2e-vac-gp3
+E2E_VAC_STANDARD_CLASS ?= ml-e2e-vac-standard
+E2E_VAC_PERFORMANCE_CLASS ?= ml-e2e-vac-performance
+E2E_VAC_TEST_TIMEOUT ?= 90m
+
+# Run the opt-in VolumeAttributesClass e2e suite on EKS (Kubernetes 1.34+ with the EBS CSI driver).
+.PHONY: e2e-test-eks-vac
+e2e-test-eks-vac: ## Run VolumeAttributesClass e2e tests on EKS.
+	@echo "=====Applying VAC e2e storage profiles====="
+	$(LOCALBIN)/kubectl apply -f test/eks-config/vac-profiles.yaml
+	@echo "=====Running VAC e2e tests on EKS====="
+	PATH=$(LOCALBIN):$$PATH IMG=$(ECR_OPERATOR_IMAGE) E2E_DOCKER_IMAGE=$(ECR_OPERATOR_IMAGE) AWS_REGION=$(EKS_REGION) \
+	  E2E_VAC_ENABLED=true E2E_VAC_STORAGE_CLASS=$(E2E_VAC_STORAGE_CLASS) \
+	  E2E_VAC_STANDARD_CLASS=$(E2E_VAC_STANDARD_CLASS) E2E_VAC_PERFORMANCE_CLASS=$(E2E_VAC_PERFORMANCE_CLASS) \
+	  $(GO_TEST) -v -count=1 -timeout $(E2E_VAC_TEST_TIMEOUT) ./test/e2e -run '^TestVolumeAttributesClassClusterScoped$$'
 # Scale EKS worker nodes back to 0 after a test run.
 # Note: Kubernetes resources (operator, test namespaces) are removed by the
 # test framework's teardown during the test run itself. This target only scales

@@ -405,8 +405,7 @@ describe the separate destructive harness: use an exclusive disposable cluster,
 not an existing demo or shared cluster. Opt-out transitions, restart during an
 active modification, and fault/platform lanes need separate qualification.
 
-See the [Operator 1.4 release-note entry](release-notes-1.4.md) for upgrade
-requirements and remaining publication gates.
+See the Operator 1.4 release notes for upgrade requirements.
 
 ## References
 

@@ -51,6 +51,8 @@ const (
 	resizeNSInitialSize  = "2Gi"
 	resizeNSTargetSize   = "3Gi"
 	resizeNSWaitTimeout  = 15 * time.Minute
+
+	resizeNSDiagnosticsReserve = 2 * time.Minute
 )
 
 type resizeNSOutcome struct {
@@ -321,6 +323,10 @@ func triggerNSResizeAndWait(ctx context.Context, t *testing.T, client klient.Cli
 	t.Logf("[%s] patched MarklogicCluster persistence.size + additionalVolumeClaimTemplates[%s].storage → %s", ns, resizeNSExtraPVCName, resizeNSTargetSize)
 
 	deadline := time.Now().Add(resizeNSWaitTimeout)
+	// Leave room for diagnostics and teardown before the package -timeout panics.
+	if testDeadline, ok := t.Deadline(); ok && testDeadline.Add(-resizeNSDiagnosticsReserve).Before(deadline) {
+		deadline = testDeadline.Add(-resizeNSDiagnosticsReserve)
+	}
 	for time.Now().Before(deadline) {
 		grp := &marklogicv1.MarklogicGroup{}
 		if err := client.Resources(ns).Get(ctx, resizeNSGroupName, ns, grp); err != nil {
