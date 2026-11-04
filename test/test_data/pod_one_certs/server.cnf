@@ -13,4 +13,4 @@ OU=MarkLogic
 [v3_ext]
 keyUsage = critical,digitalSignature,keyEncipherment
 extendedKeyUsage = critical,serverAuth,clientAuth
-subjectAltName = DNS:localhost, DNS:marklogic-1.marklogic.marklogic-tlsnamed.svc.cluster.local
+subjectAltName = DNS:localhost,DNS:127.0.0.1,DNS:marklogic-1,DNS:marklogic-1.marklogic,DNS:marklogic-1.marklogic.marklogic-tlsnamed,DNS:marklogic-1.marklogic.marklogic-tlsnamed.svc,DNS:marklogic-1.marklogic.marklogic-tlsnamed.svc.cluster.local,DNS:marklogic.marklogic-tlsnamed.svc.cluster.local

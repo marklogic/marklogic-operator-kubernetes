@@ -5,6 +5,7 @@ package e2ehelm
 import (
 	"context"
 	"fmt"
+	"os/exec"
 	"strings"
 	"testing"
 	"time"
@@ -69,6 +70,38 @@ var (
 	}
 )
 
+// cleanupStaleClusterData removes stale MarkLogic cluster data from PVCs that could
+// interfere with test isolation. This ensures that consecutive test runs don't see
+// leftover cluster registration data from previous runs.
+func cleanupStaleClusterData(ctx context.Context, t *testing.T, c *envconf.Config, namespace string) error {
+	client := c.Client()
+	
+	// Delete any existing MarklogicCluster resources
+	mlCluster := &marklogicv1.MarklogicCluster{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "mlclusterednode",
+			Namespace: namespace,
+		},
+	}
+	if err := client.Resources(namespace).Delete(ctx, mlCluster); err != nil {
+		if !apierrors.IsNotFound(err) {
+			t.Logf("Warning: failed to delete MarklogicCluster during cleanup: %v", err)
+		}
+	}
+	
+	// Wait for cluster to terminate
+	time.Sleep(3 * time.Second)
+	
+	// Delete PVCs explicitly to remove stale data
+	// This ensures the next test run starts with a clean state
+	cmd := exec.CommandContext(ctx, "kubectl", "delete", "pvc", "--all", "-n", namespace, "--ignore-not-found=true", "--wait=true")
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Logf("Warning: failed to delete PVCs: %v, output: %s", err, string(output))
+	}
+	
+	return nil
+}
+
 // TestMlClusterWithEdnode verifies a two-group (dnode + enode) cluster is reconciled
 // correctly in a watched namespace using only Role/RoleBinding RBAC from the Helm chart.
 func TestMlClusterWithEdnode(t *testing.T) {
@@ -79,6 +112,9 @@ func TestMlClusterWithEdnode(t *testing.T) {
 	// Create namespace and admin secret, then deploy the CR.
 	feature.Setup(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 		client := c.Client()
+
+		// Clean up any stale data from previous test runs
+		cleanupStaleClusterData(ctx, t, c, edNodeNS)
 
 		// Wait for any previous terminating namespace to finish before creating a new one.
 		ns := &corev1.Namespace{}
@@ -224,6 +260,13 @@ func TestMlClusterWithEdnode(t *testing.T) {
 		if err := client.Resources(edNodeNS).Delete(ctx, edCluster); err != nil && !apierrors.IsNotFound(err) {
 			t.Logf("Warning: failed to delete MarklogicCluster: %v", err)
 		}
+		
+		// Clean up stale cluster data and PVCs to ensure test isolation
+		cleanupStaleClusterData(ctx, t, c, edNodeNS)
+		
+		// Wait for resources to be fully cleaned up
+		time.Sleep(5 * time.Second)
+		
 		return ctx
 	})
 
