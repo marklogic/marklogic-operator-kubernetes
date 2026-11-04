@@ -76,7 +76,19 @@ var (
 func cleanupStaleClusterData(ctx context.Context, t *testing.T, c *envconf.Config, namespace string) error {
 	client := c.Client()
 	
-	// Delete any existing MarklogicCluster resources
+	// Check if namespace exists; if not, skip cleanup
+	ns := &corev1.Namespace{}
+	err := client.Resources().Get(ctx, namespace, "", ns)
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			t.Logf("Namespace %s not found, skipping cleanup", namespace)
+			return nil
+		}
+		t.Logf("Warning: failed to check namespace %s: %v", namespace, err)
+		return nil
+	}
+	
+	// Delete any existing MarklogicCluster resources FIRST to allow PVCs to be cleaned
 	mlCluster := &marklogicv1.MarklogicCluster{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "mlclusterednode",
@@ -89,15 +101,21 @@ func cleanupStaleClusterData(ctx context.Context, t *testing.T, c *envconf.Confi
 		}
 	}
 	
-	// Wait for cluster to terminate
+	// Wait for cluster to be deleted before deleting PVCs
+	// This allows StatefulSet to clean up properly
 	time.Sleep(3 * time.Second)
 	
 	// Delete PVCs explicitly to remove stale data
-	// This ensures the next test run starts with a clean state
-	cmd := exec.CommandContext(ctx, "kubectl", "delete", "pvc", "--all", "-n", namespace, "--ignore-not-found=true", "--wait=true")
+	// This is CRITICAL to prevent "stale host registration" errors
+	// when the same pod name is reused in the next test run
+	t.Logf("Deleting PVCs in namespace %s to remove stale cluster data", namespace)
+	cmd := exec.CommandContext(ctx, "kubectl", "delete", "pvc", "--all", "-n", namespace, "--ignore-not-found=true")
 	if output, err := cmd.CombinedOutput(); err != nil {
 		t.Logf("Warning: failed to delete PVCs: %v, output: %s", err, string(output))
 	}
+	
+	// Wait for PVCs to be deleted
+	time.Sleep(2 * time.Second)
 	
 	return nil
 }
@@ -113,8 +131,11 @@ func TestMlClusterWithEdnode(t *testing.T) {
 	feature.Setup(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 		client := c.Client()
 
-		// Clean up any stale data from previous test runs
+		// Clean up any stale data from previous test runs BEFORE checking namespace state
 		cleanupStaleClusterData(ctx, t, c, edNodeNS)
+
+		// Wait a bit to allow cleanup to take effect
+		time.Sleep(3 * time.Second)
 
 		// Wait for any previous terminating namespace to finish before creating a new one.
 		ns := &corev1.Namespace{}
