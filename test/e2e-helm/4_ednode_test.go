@@ -158,6 +158,18 @@ func TestMlClusterWithEdnode(t *testing.T) {
 			break
 		}
 
+		// After namespace is deleted, force-delete any lingering PVCs that may have stale MarkLogic data.
+		// This prevents "duplicate registration" errors when the same pod names are reused.
+		t.Logf("Force-deleting any lingering PVCs in namespace %s", edNodeNS)
+		cmd := exec.CommandContext(ctx, "kubectl", "delete", "pvc", "--all", "-n", edNodeNS,
+			"--ignore-not-found=true", "--force", "--grace-period=0")
+		if output, err := cmd.CombinedOutput(); err != nil {
+			t.Logf("Note: kubectl delete pvc output: %s (may be expected if namespace doesn't exist)", string(output))
+		}
+
+		// Wait to ensure PVCs are actually deleted
+		time.Sleep(2 * time.Second)
+
 		if err := client.Resources().Create(ctx, &corev1.Namespace{
 			ObjectMeta: metav1.ObjectMeta{Name: edNodeNS},
 		}); err != nil && !apierrors.IsAlreadyExists(err) {

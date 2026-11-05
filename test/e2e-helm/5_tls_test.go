@@ -85,6 +85,10 @@ func TestTlsWithSelfSigned(t *testing.T) {
 			break
 		}
 
+		// Force-delete any lingering PVCs that may have stale MarkLogic data
+		e2eutils.RunCommand(fmt.Sprintf("kubectl -n %s delete pvc --all --ignore-not-found=true --force --grace-period=0", tlsNamespace))
+		time.Sleep(2 * time.Second) // Ensure PVC deletion completes before creating namespace
+
 		if err := client.Resources().Create(ctx, &corev1.Namespace{
 			ObjectMeta: metav1.ObjectMeta{Name: tlsNamespace, Labels: namespaceLabels()},
 		}); err != nil && !apierrors.IsAlreadyExists(err) {
@@ -279,7 +283,9 @@ func TestTlsWithNamedCert(t *testing.T) {
 		e2eutils.RunCommand(fmt.Sprintf("kubectl -n %s delete statefulset marklogic --ignore-not-found=true", namedNS))
 		e2eutils.RunCommand(fmt.Sprintf("kubectl -n %s delete service marklogic marklogic-cluster --ignore-not-found=true", namedNS))
 		e2eutils.RunCommand(fmt.Sprintf("kubectl -n %s delete pod --all --ignore-not-found=true", namedNS))
-		e2eutils.RunCommand(fmt.Sprintf("kubectl -n %s delete pvc --all --ignore-not-found=true", namedNS))
+		// Force-delete PVCs with immediate termination to prevent stale data from persisting
+		e2eutils.RunCommand(fmt.Sprintf("kubectl -n %s delete pvc --all --ignore-not-found=true --force --grace-period=0", namedNS))
+		time.Sleep(2 * time.Second) // Ensure PVC deletion completes before proceeding
 
 		if err := utils.GenerateCACertificate("test/test_data/ca_cert"); err != nil {
 			t.Fatalf("Failed to generate CA certificate: %v", err)
@@ -530,7 +536,9 @@ func TestTlsWithMultiNode(t *testing.T) {
 		e2eutils.RunCommand(fmt.Sprintf("kubectl -n %s delete statefulset dnode enode --ignore-not-found=true", tlsEdNS))
 		e2eutils.RunCommand(fmt.Sprintf("kubectl -n %s delete service dnode dnode-cluster enode enode-cluster --ignore-not-found=true", tlsEdNS))
 		e2eutils.RunCommand(fmt.Sprintf("kubectl -n %s delete pod --all --ignore-not-found=true", tlsEdNS))
-		e2eutils.RunCommand(fmt.Sprintf("kubectl -n %s delete pvc --all --ignore-not-found=true", tlsEdNS))
+		// Force-delete PVCs with immediate termination to prevent stale data from persisting
+		e2eutils.RunCommand(fmt.Sprintf("kubectl -n %s delete pvc --all --ignore-not-found=true --force --grace-period=0", tlsEdNS))
+		time.Sleep(2 * time.Second) // Ensure PVC deletion completes before proceeding
 
 		// Generate and populate TLS secrets before creating the CR so the operator
 		// never reconciles against missing secrets.

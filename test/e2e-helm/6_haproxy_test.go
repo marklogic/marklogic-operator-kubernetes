@@ -96,7 +96,8 @@ func cleanupHAProxyNamespaceArtifacts(ns string) {
 	e2eutils.RunCommand(fmt.Sprintf("kubectl --request-timeout=20s -n %s delete deployment marklogic-haproxy --ignore-not-found=true --wait=false", ns))
 	e2eutils.RunCommand(fmt.Sprintf("kubectl --request-timeout=20s -n %s delete service marklogic-haproxy ml ml-cluster --ignore-not-found=true --wait=false", ns))
 	e2eutils.RunCommand(fmt.Sprintf("kubectl --request-timeout=20s -n %s delete pod --all --ignore-not-found=true --wait=false", ns))
-	e2eutils.RunCommand(fmt.Sprintf("kubectl --request-timeout=20s -n %s delete pvc --all --ignore-not-found=true --wait=false", ns))
+	// Force-delete PVCs with immediate termination to prevent stale data from persisting
+	e2eutils.RunCommand(fmt.Sprintf("kubectl --request-timeout=20s -n %s delete pvc --all --ignore-not-found=true --force --grace-period=0", ns))
 
 	deadline := time.Now().Add(3 * time.Minute)
 	for time.Now().Before(deadline) {

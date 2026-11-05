@@ -4,6 +4,7 @@ package e2ehelm
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -17,6 +18,7 @@ import (
 	"sigs.k8s.io/e2e-framework/klient/wait/conditions"
 	"sigs.k8s.io/e2e-framework/pkg/envconf"
 	"sigs.k8s.io/e2e-framework/pkg/features"
+	e2eutils "sigs.k8s.io/e2e-framework/pkg/utils"
 )
 
 // mlNsTestNS is listed in watchedNamespaces so the namespace-scoped operator
@@ -78,6 +80,9 @@ func TestMarklogicClusterNamespaceScoped(t *testing.T) {
 			}
 			break
 		}
+		// Force-delete any lingering PVCs that may have stale MarkLogic data
+		e2eutils.RunCommand(fmt.Sprintf("kubectl -n %s delete pvc --all --ignore-not-found=true --force --grace-period=0", mlNsTestNS))
+		time.Sleep(2 * time.Second) // Ensure PVC deletion completes before creating namespace
 		if err := client.Resources().Create(ctx, &corev1.Namespace{
 			ObjectMeta: metav1.ObjectMeta{Name: mlNsTestNS, Labels: namespaceLabels()},
 		}); err != nil && !apierrors.IsAlreadyExists(err) {
