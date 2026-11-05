@@ -108,13 +108,15 @@ func cleanupStaleClusterData(ctx context.Context, t *testing.T, c *envconf.Confi
 	// Delete PVCs explicitly to remove stale data
 	// This is CRITICAL to prevent "stale host registration" errors
 	// when the same pod name is reused in the next test run
-	t.Logf("Deleting PVCs in namespace %s to remove stale cluster data", namespace)
-	cmd := exec.CommandContext(ctx, "kubectl", "delete", "pvc", "--all", "-n", namespace, "--ignore-not-found=true")
+	// Use --force --grace-period=0 to ensure immediate deletion instead of waiting for finalizers
+	t.Logf("Force-deleting PVCs in namespace %s to remove stale cluster data", namespace)
+	cmd := exec.CommandContext(ctx, "kubectl", "delete", "pvc", "--all", "-n", namespace,
+		"--ignore-not-found=true", "--force", "--grace-period=0")
 	if output, err := cmd.CombinedOutput(); err != nil {
 		t.Logf("Warning: failed to delete PVCs: %v, output: %s", err, string(output))
 	}
 
-	// Wait for PVCs to be deleted
+	// Wait for PVCs to be actually deleted
 	time.Sleep(2 * time.Second)
 
 	return nil

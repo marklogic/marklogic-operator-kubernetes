@@ -715,7 +715,7 @@ func TestTlsWithMultiNode(t *testing.T) {
 		e2eutils.RunCommand(fmt.Sprintf("kubectl -n %s delete statefulset dnode enode --ignore-not-found=true", tlsEdNS))
 		e2eutils.RunCommand(fmt.Sprintf("kubectl -n %s delete service dnode dnode-cluster enode enode-cluster --ignore-not-found=true", tlsEdNS))
 		e2eutils.RunCommand(fmt.Sprintf("kubectl -n %s delete pod --all --ignore-not-found=true", tlsEdNS))
-		e2eutils.RunCommand(fmt.Sprintf("kubectl -n %s delete pvc --all --ignore-not-found=true", tlsEdNS))
+		e2eutils.RunCommand(fmt.Sprintf("kubectl -n %s delete pvc --all --ignore-not-found=true --force --grace-period=0", tlsEdNS))
 		e2eutils.RunCommand(fmt.Sprintf("kubectl -n %s delete secret ca-cert dnode-0-cert enode-0-cert --ignore-not-found=true", tlsEdNS))
 		return ctx
 	})
