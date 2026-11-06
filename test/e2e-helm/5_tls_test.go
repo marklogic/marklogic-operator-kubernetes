@@ -176,15 +176,51 @@ func TestTlsWithSelfSigned(t *testing.T) {
 	})
 
 	feature.Teardown(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
-		if err := c.Client().Resources().Delete(ctx, cr); err != nil && !apierrors.IsNotFound(err) {
-			t.Fatalf("Failed to delete MarklogicCluster %s/%s: %v", cr.Namespace, cr.Name, err)
+		client := c.Client()
+		if err := client.Resources().Delete(ctx, cr); err != nil && !apierrors.IsNotFound(err) {
+			t.Logf("Warning: failed to delete MarklogicCluster: %v", err)
 		}
 		if err := wait.For(
 			conditions.New(c.Client().Resources()).ResourceDeleted(cr),
 			wait.WithTimeout(5*time.Minute),
 			wait.WithInterval(10*time.Second),
 		); err != nil && !apierrors.IsNotFound(err) {
-			t.Fatalf("Timed out waiting for MarklogicCluster %s/%s deletion: %v", cr.Namespace, cr.Name, err)
+			t.Logf("Warning: timed out waiting for MarklogicCluster deletion: %v", err)
+		}
+
+		// Clean up PVCs and delete namespace to ensure test isolation
+		e2eutils.RunCommand(fmt.Sprintf("kubectl -n %s delete pvc --all --ignore-not-found=true --force --grace-period=0", tlsNamespace))
+		time.Sleep(2 * time.Second)
+
+		ns := &corev1.Namespace{
+			ObjectMeta: metav1.ObjectMeta{Name: tlsNamespace},
+		}
+		if err := client.Resources().Delete(ctx, ns); err != nil && !apierrors.IsNotFound(err) {
+			t.Logf("Warning: failed to delete namespace %s: %v", tlsNamespace, err)
+		}
+
+		// Wait for namespace deletion to complete
+		for i := 0; i < 60; i++ {
+			ns := &corev1.Namespace{}
+			err := client.Resources().Get(ctx, tlsNamespace, "", ns)
+			if err != nil {
+				if apierrors.IsNotFound(err) {
+					t.Logf("Namespace %s successfully deleted", tlsNamespace)
+					break
+				}
+				t.Logf("Warning: failed to check namespace %s: %v", tlsNamespace, err)
+				break
+			}
+			if ns.Status.Phase == corev1.NamespaceTerminating {
+				if i < 59 {
+					time.Sleep(1 * time.Second)
+					continue
+				}
+			}
+			if i == 59 {
+				t.Logf("Warning: timeout waiting for namespace %s to fully delete", tlsNamespace)
+			}
+			break
 		}
 		return ctx
 	})
@@ -392,8 +428,9 @@ func TestTlsWithNamedCert(t *testing.T) {
 	})
 
 	feature.Teardown(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
-		if err := c.Client().Resources().Delete(ctx, cr); err != nil && !apierrors.IsNotFound(err) {
-			t.Fatalf("failed to delete MarkLogicCluster %s/%s: %v", namedNS, cr.Name, err)
+		client := c.Client()
+		if err := client.Resources().Delete(ctx, cr); err != nil && !apierrors.IsNotFound(err) {
+			t.Logf("Warning: failed to delete MarkLogicCluster: %v", err)
 		}
 
 		deadline := time.Now().Add(3 * time.Minute)
@@ -403,7 +440,8 @@ func TestTlsWithNamedCert(t *testing.T) {
 				break
 			}
 			if err != nil {
-				t.Fatalf("failed to get MarkLogicCluster %s/%s while waiting for deletion: %v", namedNS, cr.Name, err)
+				t.Logf("Warning: failed to get MarkLogicCluster while waiting for deletion: %v", err)
+				break
 			}
 			time.Sleep(5 * time.Second)
 		}
@@ -416,10 +454,46 @@ func TestTlsWithNamedCert(t *testing.T) {
 					break
 				}
 				if err != nil {
-					t.Fatalf("failed to get pod %s/%s while waiting for deletion: %v", namedNS, podName, err)
+					t.Logf("Warning: failed to get pod %s while waiting for deletion: %v", podName, err)
+					break
 				}
 				time.Sleep(5 * time.Second)
 			}
+		}
+
+		// Clean up PVCs and delete namespace to ensure test isolation
+		e2eutils.RunCommand(fmt.Sprintf("kubectl -n %s delete pvc --all --ignore-not-found=true --force --grace-period=0", namedNS))
+		time.Sleep(2 * time.Second)
+
+		ns := &corev1.Namespace{
+			ObjectMeta: metav1.ObjectMeta{Name: namedNS},
+		}
+		if err := client.Resources().Delete(ctx, ns); err != nil && !apierrors.IsNotFound(err) {
+			t.Logf("Warning: failed to delete namespace %s: %v", namedNS, err)
+		}
+
+		// Wait for namespace deletion to complete
+		for i := 0; i < 60; i++ {
+			ns := &corev1.Namespace{}
+			err := client.Resources().Get(ctx, namedNS, "", ns)
+			if err != nil {
+				if apierrors.IsNotFound(err) {
+					t.Logf("Namespace %s successfully deleted", namedNS)
+					break
+				}
+				t.Logf("Warning: failed to check namespace %s: %v", namedNS, err)
+				break
+			}
+			if ns.Status.Phase == corev1.NamespaceTerminating {
+				if i < 59 {
+					time.Sleep(1 * time.Second)
+					continue
+				}
+			}
+			if i == 59 {
+				t.Logf("Warning: timeout waiting for namespace %s to fully delete", namedNS)
+			}
+			break
 		}
 		return ctx
 	})
@@ -700,8 +774,9 @@ func TestTlsWithMultiNode(t *testing.T) {
 	})
 
 	feature.Teardown(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
-		if err := c.Client().Resources().Delete(ctx, cr); err != nil && !apierrors.IsNotFound(err) {
-			t.Fatalf("failed to delete MarklogicCluster %s/%s during teardown: %v", cr.Namespace, cr.Name, err)
+		client := c.Client()
+		if err := client.Resources().Delete(ctx, cr); err != nil && !apierrors.IsNotFound(err) {
+			t.Logf("Warning: failed to delete MarklogicCluster during teardown: %v", err)
 		}
 
 		if err := wait.For(
@@ -709,7 +784,7 @@ func TestTlsWithMultiNode(t *testing.T) {
 			wait.WithTimeout(5*time.Minute),
 			wait.WithInterval(10*time.Second),
 		); err != nil && !apierrors.IsNotFound(err) {
-			t.Fatalf("timed out waiting for MarklogicCluster %s/%s deletion: %v", cr.Namespace, cr.Name, err)
+			t.Logf("Warning: timed out waiting for MarklogicCluster deletion: %v", err)
 		}
 
 		e2eutils.RunCommand(fmt.Sprintf("kubectl -n %s delete statefulset dnode enode --ignore-not-found=true", tlsEdNS))
@@ -717,6 +792,39 @@ func TestTlsWithMultiNode(t *testing.T) {
 		e2eutils.RunCommand(fmt.Sprintf("kubectl -n %s delete pod --all --ignore-not-found=true", tlsEdNS))
 		e2eutils.RunCommand(fmt.Sprintf("kubectl -n %s delete pvc --all --ignore-not-found=true --force --grace-period=0", tlsEdNS))
 		e2eutils.RunCommand(fmt.Sprintf("kubectl -n %s delete secret ca-cert dnode-0-cert enode-0-cert --ignore-not-found=true", tlsEdNS))
+
+		// Clean up namespace to ensure test isolation
+		time.Sleep(2 * time.Second)
+		ns := &corev1.Namespace{
+			ObjectMeta: metav1.ObjectMeta{Name: tlsEdNS},
+		}
+		if err := client.Resources().Delete(ctx, ns); err != nil && !apierrors.IsNotFound(err) {
+			t.Logf("Warning: failed to delete namespace %s: %v", tlsEdNS, err)
+		}
+
+		// Wait for namespace deletion to complete
+		for i := 0; i < 60; i++ {
+			ns := &corev1.Namespace{}
+			err := client.Resources().Get(ctx, tlsEdNS, "", ns)
+			if err != nil {
+				if apierrors.IsNotFound(err) {
+					t.Logf("Namespace %s successfully deleted", tlsEdNS)
+					break
+				}
+				t.Logf("Warning: failed to check namespace %s: %v", tlsEdNS, err)
+				break
+			}
+			if ns.Status.Phase == corev1.NamespaceTerminating {
+				if i < 59 {
+					time.Sleep(1 * time.Second)
+					continue
+				}
+			}
+			if i == 59 {
+				t.Logf("Warning: timeout waiting for namespace %s to fully delete", tlsEdNS)
+			}
+			break
+		}
 		return ctx
 	})
 

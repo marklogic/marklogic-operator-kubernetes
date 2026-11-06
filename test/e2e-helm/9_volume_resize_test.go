@@ -173,6 +173,41 @@ func TestVolumeResizeNamespaceScoped(t *testing.T) {
 			if err := client.Resources(ns).Delete(ctx, cluster); err != nil && !apierrors.IsNotFound(err) {
 				t.Logf("Warning: failed to delete cluster in %s: %v", ns, err)
 			}
+
+			// Clean up PVCs and delete namespace to ensure test isolation
+			frameworkutils.RunCommand(fmt.Sprintf("kubectl -n %s delete pvc --all --ignore-not-found=true --force --grace-period=0", ns))
+			time.Sleep(2 * time.Second)
+
+			nsObj := &corev1.Namespace{
+				ObjectMeta: metav1.ObjectMeta{Name: ns},
+			}
+			if err := client.Resources().Delete(ctx, nsObj); err != nil && !apierrors.IsNotFound(err) {
+				t.Logf("Warning: failed to delete namespace %s: %v", ns, err)
+			}
+
+			// Wait for namespace deletion to complete
+			for i := 0; i < 60; i++ {
+				nsObj := &corev1.Namespace{}
+				err := client.Resources().Get(ctx, ns, "", nsObj)
+				if err != nil {
+					if apierrors.IsNotFound(err) {
+						t.Logf("Namespace %s successfully deleted", ns)
+						break
+					}
+					t.Logf("Warning: failed to check namespace %s: %v", ns, err)
+					break
+				}
+				if nsObj.Status.Phase == corev1.NamespaceTerminating {
+					if i < 59 {
+						time.Sleep(1 * time.Second)
+						continue
+					}
+				}
+				if i == 59 {
+					t.Logf("Warning: timeout waiting for namespace %s to fully delete", ns)
+				}
+				break
+			}
 		}
 		return ctx
 	})

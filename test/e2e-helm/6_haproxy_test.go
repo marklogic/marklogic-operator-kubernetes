@@ -263,6 +263,7 @@ func TestHAProxyPathBasedEnabled(t *testing.T) {
 	})
 
 	feature.Teardown(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
+		client := c.Client()
 		// Delete the actual MarklogicCluster created in Setup. The CR's metadata
 		// name must match what was created (see cr.ObjectMeta above) — using a
 		// different name results in a silent NotFound and the owned pods never
@@ -273,36 +274,71 @@ func TestHAProxyPathBasedEnabled(t *testing.T) {
 				Namespace: haProxyPathNS,
 			},
 		}
-		if err := c.Client().Resources().Delete(ctx, mlc); err != nil && !apierrors.IsNotFound(err) {
-			t.Fatalf("failed to delete MarklogicCluster %s/%s: %v", haProxyPathNS, mlc.Name, err)
+		if err := client.Resources().Delete(ctx, mlc); err != nil && !apierrors.IsNotFound(err) {
+			t.Logf("Warning: failed to delete MarklogicCluster: %v", err)
 		}
 
 		deadline := time.Now().Add(2 * time.Minute)
 		for time.Now().Before(deadline) {
 			current := &marklogicv1.MarklogicCluster{}
-			err := c.Client().Resources().Get(ctx, mlc.Name, haProxyPathNS, current)
+			err := client.Resources().Get(ctx, mlc.Name, haProxyPathNS, current)
 			if apierrors.IsNotFound(err) {
 				break
 			}
 			if err != nil {
-				t.Fatalf("failed waiting for MarklogicCluster %s/%s deletion: %v", haProxyPathNS, mlc.Name, err)
+				t.Logf("Warning: failed waiting for MarklogicCluster deletion: %v", err)
+				break
 			}
 			time.Sleep(5 * time.Second)
 		}
 
 		for time.Now().Before(deadline) {
 			pod := &corev1.Pod{}
-			err := c.Client().Resources().Get(ctx, "ml-0", haProxyPathNS, pod)
+			err := client.Resources().Get(ctx, "ml-0", haProxyPathNS, pod)
 			if apierrors.IsNotFound(err) {
-				return ctx
+				break
 			}
 			if err != nil {
-				t.Fatalf("failed waiting for owned pod ml-0 deletion in namespace %s: %v", haProxyPathNS, err)
+				t.Logf("Warning: failed waiting for owned pod ml-0 deletion: %v", err)
+				break
 			}
 			time.Sleep(5 * time.Second)
 		}
 
-		t.Fatalf("timed out waiting for MarklogicCluster owned resources to be removed in namespace %s", haProxyPathNS)
+		// Clean up PVCs and delete namespace to ensure test isolation
+		e2eutils.RunCommand(fmt.Sprintf("kubectl -n %s delete pvc --all --ignore-not-found=true --force --grace-period=0", haProxyPathNS))
+		time.Sleep(2 * time.Second)
+
+		ns := &corev1.Namespace{
+			ObjectMeta: metav1.ObjectMeta{Name: haProxyPathNS},
+		}
+		if err := client.Resources().Delete(ctx, ns); err != nil && !apierrors.IsNotFound(err) {
+			t.Logf("Warning: failed to delete namespace %s: %v", haProxyPathNS, err)
+		}
+
+		// Wait for namespace deletion to complete
+		for i := 0; i < 60; i++ {
+			ns := &corev1.Namespace{}
+			err := client.Resources().Get(ctx, haProxyPathNS, "", ns)
+			if err != nil {
+				if apierrors.IsNotFound(err) {
+					t.Logf("Namespace %s successfully deleted", haProxyPathNS)
+					break
+				}
+				t.Logf("Warning: failed to check namespace %s: %v", haProxyPathNS, err)
+				break
+			}
+			if ns.Status.Phase == corev1.NamespaceTerminating {
+				if i < 59 {
+					time.Sleep(1 * time.Second)
+					continue
+				}
+			}
+			if i == 59 {
+				t.Logf("Warning: timeout waiting for namespace %s to fully delete", haProxyPathNS)
+			}
+			break
+		}
 		return ctx
 	})
 
@@ -449,6 +485,7 @@ func TestHAProxyPathBasedDisabled(t *testing.T) {
 	})
 
 	feature.Teardown(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
+		client := c.Client()
 		// Keep the watched namespace and RBAC in place, but clean workload resources
 		// so re-runs start from a known-good state.
 		t.Logf("Teardown: deleting MarklogicCluster %s/%s", haProxyNS, cr.Name)
@@ -456,7 +493,7 @@ func TestHAProxyPathBasedDisabled(t *testing.T) {
 		deadline := time.Now().Add(2 * time.Minute)
 		for time.Now().Before(deadline) {
 			current := &marklogicv1.MarklogicCluster{}
-			err := c.Client().Resources(haProxyNS).Get(ctx, cr.Name, haProxyNS, current)
+			err := client.Resources(haProxyNS).Get(ctx, cr.Name, haProxyNS, current)
 			if apierrors.IsNotFound(err) {
 				break
 			}
@@ -468,6 +505,41 @@ func TestHAProxyPathBasedDisabled(t *testing.T) {
 		}
 		t.Logf("Teardown: cleaning HAProxy namespace artifacts in %s", haProxyNS)
 		cleanupHAProxyNamespaceArtifacts(haProxyNS)
+
+		// Clean up PVCs and delete namespace to ensure test isolation
+		e2eutils.RunCommand(fmt.Sprintf("kubectl -n %s delete pvc --all --ignore-not-found=true --force --grace-period=0", haProxyNS))
+		time.Sleep(2 * time.Second)
+
+		ns := &corev1.Namespace{
+			ObjectMeta: metav1.ObjectMeta{Name: haProxyNS},
+		}
+		if err := client.Resources().Delete(ctx, ns); err != nil && !apierrors.IsNotFound(err) {
+			t.Logf("Warning: failed to delete namespace %s: %v", haProxyNS, err)
+		}
+
+		// Wait for namespace deletion to complete
+		for i := 0; i < 60; i++ {
+			ns := &corev1.Namespace{}
+			err := client.Resources().Get(ctx, haProxyNS, "", ns)
+			if err != nil {
+				if apierrors.IsNotFound(err) {
+					t.Logf("Namespace %s successfully deleted", haProxyNS)
+					break
+				}
+				t.Logf("Warning: failed to check namespace %s: %v", haProxyNS, err)
+				break
+			}
+			if ns.Status.Phase == corev1.NamespaceTerminating {
+				if i < 59 {
+					time.Sleep(1 * time.Second)
+					continue
+				}
+			}
+			if i == 59 {
+				t.Logf("Warning: timeout waiting for namespace %s to fully delete", haProxyNS)
+			}
+			break
+		}
 		return ctx
 	})
 

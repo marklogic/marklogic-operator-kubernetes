@@ -166,8 +166,44 @@ func TestLogCollectionDisabled(t *testing.T) {
 	})
 
 	feature.Teardown(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
-		if err := c.Client().Resources(logNS).Delete(ctx, cr); err != nil {
+		client := c.Client()
+		if err := client.Resources(logNS).Delete(ctx, cr); err != nil {
 			t.Logf("Warning: failed to delete MarklogicCluster: %v", err)
+		}
+
+		// Clean up PVCs and delete namespace to ensure test isolation
+		e2eutils.RunCommand(fmt.Sprintf("kubectl -n %s delete pvc --all --ignore-not-found=true --force --grace-period=0", logNS))
+		time.Sleep(2 * time.Second)
+
+		ns := &corev1.Namespace{
+			ObjectMeta: metav1.ObjectMeta{Name: logNS},
+		}
+		if err := client.Resources().Delete(ctx, ns); err != nil && !apierrors.IsNotFound(err) {
+			t.Logf("Warning: failed to delete namespace %s: %v", logNS, err)
+		}
+
+		// Wait for namespace deletion to complete
+		for i := 0; i < 60; i++ {
+			ns := &corev1.Namespace{}
+			err := client.Resources().Get(ctx, logNS, "", ns)
+			if err != nil {
+				if apierrors.IsNotFound(err) {
+					t.Logf("Namespace %s successfully deleted", logNS)
+					break
+				}
+				t.Logf("Warning: failed to check namespace %s: %v", logNS, err)
+				break
+			}
+			if ns.Status.Phase == corev1.NamespaceTerminating {
+				if i < 59 {
+					time.Sleep(1 * time.Second)
+					continue
+				}
+			}
+			if i == 59 {
+				t.Logf("Warning: timeout waiting for namespace %s to fully delete", logNS)
+			}
+			break
 		}
 		return ctx
 	})
@@ -247,8 +283,44 @@ func TestLogCollectionPartialLogs(t *testing.T) {
 	})
 
 	feature.Teardown(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
-		if err := c.Client().Resources(logNS).Delete(ctx, cr); err != nil {
+		client := c.Client()
+		if err := client.Resources(logNS).Delete(ctx, cr); err != nil {
 			t.Logf("Warning: failed to delete MarklogicCluster: %v", err)
+		}
+
+		// Clean up PVCs and delete namespace to ensure test isolation
+		e2eutils.RunCommand(fmt.Sprintf("kubectl -n %s delete pvc --all --ignore-not-found=true --force --grace-period=0", logNS))
+		time.Sleep(2 * time.Second)
+
+		ns := &corev1.Namespace{
+			ObjectMeta: metav1.ObjectMeta{Name: logNS},
+		}
+		if err := client.Resources().Delete(ctx, ns); err != nil && !apierrors.IsNotFound(err) {
+			t.Logf("Warning: failed to delete namespace %s: %v", logNS, err)
+		}
+
+		// Wait for namespace deletion to complete
+		for i := 0; i < 60; i++ {
+			ns := &corev1.Namespace{}
+			err := client.Resources().Get(ctx, logNS, "", ns)
+			if err != nil {
+				if apierrors.IsNotFound(err) {
+					t.Logf("Namespace %s successfully deleted", logNS)
+					break
+				}
+				t.Logf("Warning: failed to check namespace %s: %v", logNS, err)
+				break
+			}
+			if ns.Status.Phase == corev1.NamespaceTerminating {
+				if i < 59 {
+					time.Sleep(1 * time.Second)
+					continue
+				}
+			}
+			if i == 59 {
+				t.Logf("Warning: timeout waiting for namespace %s to fully delete", logNS)
+			}
+			break
 		}
 		return ctx
 	})
@@ -335,8 +407,44 @@ func TestLogCollectionCustomResources(t *testing.T) {
 	})
 
 	feature.Teardown(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
-		if err := c.Client().Resources(logNS).Delete(ctx, cr); err != nil {
+		client := c.Client()
+		if err := client.Resources(logNS).Delete(ctx, cr); err != nil {
 			t.Logf("Warning: failed to delete MarklogicCluster: %v", err)
+		}
+
+		// Clean up PVCs and delete namespace to ensure test isolation
+		e2eutils.RunCommand(fmt.Sprintf("kubectl -n %s delete pvc --all --ignore-not-found=true --force --grace-period=0", logNS))
+		time.Sleep(2 * time.Second)
+
+		ns := &corev1.Namespace{
+			ObjectMeta: metav1.ObjectMeta{Name: logNS},
+		}
+		if err := client.Resources().Delete(ctx, ns); err != nil && !apierrors.IsNotFound(err) {
+			t.Logf("Warning: failed to delete namespace %s: %v", logNS, err)
+		}
+
+		// Wait for namespace deletion to complete
+		for i := 0; i < 60; i++ {
+			ns := &corev1.Namespace{}
+			err := client.Resources().Get(ctx, logNS, "", ns)
+			if err != nil {
+				if apierrors.IsNotFound(err) {
+					t.Logf("Namespace %s successfully deleted", logNS)
+					break
+				}
+				t.Logf("Warning: failed to check namespace %s: %v", logNS, err)
+				break
+			}
+			if ns.Status.Phase == corev1.NamespaceTerminating {
+				if i < 59 {
+					time.Sleep(1 * time.Second)
+					continue
+				}
+			}
+			if i == 59 {
+				t.Logf("Warning: timeout waiting for namespace %s to fully delete", logNS)
+			}
+			break
 		}
 		return ctx
 	})
@@ -407,8 +515,44 @@ func TestLogCollectionCustomFilters(t *testing.T) {
 	})
 
 	feature.Teardown(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
-		if err := c.Client().Resources(logNS).Delete(ctx, cr); err != nil {
+		client := c.Client()
+		if err := client.Resources(logNS).Delete(ctx, cr); err != nil {
 			t.Logf("Warning: failed to delete MarklogicCluster: %v", err)
+		}
+
+		// Clean up PVCs and delete namespace to ensure test isolation
+		e2eutils.RunCommand(fmt.Sprintf("kubectl -n %s delete pvc --all --ignore-not-found=true --force --grace-period=0", logNS))
+		time.Sleep(2 * time.Second)
+
+		ns := &corev1.Namespace{
+			ObjectMeta: metav1.ObjectMeta{Name: logNS},
+		}
+		if err := client.Resources().Delete(ctx, ns); err != nil && !apierrors.IsNotFound(err) {
+			t.Logf("Warning: failed to delete namespace %s: %v", logNS, err)
+		}
+
+		// Wait for namespace deletion to complete
+		for i := 0; i < 60; i++ {
+			ns := &corev1.Namespace{}
+			err := client.Resources().Get(ctx, logNS, "", ns)
+			if err != nil {
+				if apierrors.IsNotFound(err) {
+					t.Logf("Namespace %s successfully deleted", logNS)
+					break
+				}
+				t.Logf("Warning: failed to check namespace %s: %v", logNS, err)
+				break
+			}
+			if ns.Status.Phase == corev1.NamespaceTerminating {
+				if i < 59 {
+					time.Sleep(1 * time.Second)
+					continue
+				}
+			}
+			if i == 59 {
+				t.Logf("Warning: timeout waiting for namespace %s to fully delete", logNS)
+			}
+			break
 		}
 		return ctx
 	})

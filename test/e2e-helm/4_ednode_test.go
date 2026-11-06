@@ -319,6 +319,38 @@ func TestMlClusterWithEdnode(t *testing.T) {
 		// Wait for resources to be fully cleaned up
 		time.Sleep(5 * time.Second)
 
+		// Delete the namespace itself to ensure complete cleanup for next test run
+		ns := &corev1.Namespace{
+			ObjectMeta: metav1.ObjectMeta{Name: edNodeNS},
+		}
+		if err := client.Resources().Delete(ctx, ns); err != nil && !apierrors.IsNotFound(err) {
+			t.Logf("Warning: failed to delete namespace %s: %v", edNodeNS, err)
+		}
+
+		// Wait for namespace deletion to complete
+		for i := 0; i < 60; i++ {
+			ns := &corev1.Namespace{}
+			err := client.Resources().Get(ctx, edNodeNS, "", ns)
+			if err != nil {
+				if apierrors.IsNotFound(err) {
+					t.Logf("Namespace %s successfully deleted", edNodeNS)
+					break
+				}
+				t.Logf("Warning: failed to check namespace %s: %v", edNodeNS, err)
+				break
+			}
+			if ns.Status.Phase == corev1.NamespaceTerminating {
+				if i < 59 {
+					time.Sleep(1 * time.Second)
+					continue
+				}
+			}
+			if i == 59 {
+				t.Logf("Warning: timeout waiting for namespace %s to fully delete", edNodeNS)
+			}
+			break
+		}
+
 		return ctx
 	})
 
