@@ -14,7 +14,6 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
@@ -185,9 +184,6 @@ func TestClusterHandlerAdminSecretFailureStillPersistsResolutionFailures(t *test
 	failure := errors.New("admin secret create failed")
 	h := newOSHarness(t, nil)
 	// No bootstrap admin Secret exists and its creation fails; the provider Secrets are missing.
-	if err := h.c.Delete(context.Background(), &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: osCluster + "-admin", Namespace: osNamespace}}); err != nil {
-		t.Fatalf("delete admin secret: %v", err)
-	}
 	h.createErr = failCreateOf[*corev1.Secret](failure)
 
 	_, err := h.context().ReconsileMarklogicClusterHandler()

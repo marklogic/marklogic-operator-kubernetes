@@ -56,6 +56,7 @@ const (
 //+kubebuilder:rbac:groups=marklogic.progress.com,resources=marklogicgroups/status,verbs=get;update;patch
 //+kubebuilder:rbac:groups=marklogic.progress.com,resources=marklogicgroups/finalizers,verbs=update
 //+kubebuilder:rbac:groups=apps,resources=statefulsets;replicasets;deployments;daemonsets,verbs=get;list;watch;create;update;patch;delete
+//+kubebuilder:rbac:groups=batch,resources=jobs,verbs=get;list;watch;create;delete
 //+kubebuilder:rbac:groups=core,resources=pods;services;secrets;configmaps,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups=core,resources=persistentvolumeclaims,verbs=get;list;watch;patch;update
 //+kubebuilder:rbac:groups=core,resources=persistentvolumeclaims/status,verbs=get
@@ -111,6 +112,9 @@ func markLogicGroupCreateUpdateDeletePredicate() predicate.Predicate {
 		UpdateFunc: func(e event.UpdateEvent) bool {
 			switch e.ObjectNew.(type) {
 			case *marklogicv1.MarklogicGroup:
+				if !reflect.DeepEqual(e.ObjectOld.GetDeletionTimestamp(), e.ObjectNew.GetDeletionTimestamp()) {
+					return true // Reconcile when finalizer-backed deletion starts
+				}
 				oldAnnotations := e.ObjectOld.GetAnnotations()
 				newAnnotations := e.ObjectNew.GetAnnotations()
 				delete(newAnnotations, "banzaicloud.com/last-applied")

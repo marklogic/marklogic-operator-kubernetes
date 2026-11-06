@@ -10,6 +10,7 @@ import (
 	"maps"
 	"sort"
 	"strconv"
+	"strings"
 
 	"github.com/cisco-open/k8s-objectmatcher/patch"
 	marklogicv1 "github.com/marklogic/marklogic-operator-kubernetes/api/v1"
@@ -25,9 +26,10 @@ import (
 )
 
 const (
-	credentialRevisionAnnotation    = "marklogic.progress.com/credential-revision"
-	credentialRotationPodAnnotation = "marklogic.progress.com/credential-rotation-pod"
-	credentialRotationUIDAnnotation = "marklogic.progress.com/credential-rotation-uid"
+	credentialRevisionAnnotation          = "marklogic.progress.com/credential-revision"
+	validatedCredentialRevisionAnnotation = "marklogic.progress.com/validated-credential-revision"
+	credentialRotationPodAnnotation       = "marklogic.progress.com/credential-rotation-pod"
+	credentialRotationUIDAnnotation       = "marklogic.progress.com/credential-rotation-uid"
 )
 
 type statefulSetParameters struct {
@@ -75,6 +77,7 @@ type containerParameters struct {
 	AdditionalVolumeMounts    *[]corev1.VolumeMount
 	SecretName                string
 	OperatorSecretName        string
+	BootstrapCASecretName     string
 	CredentialRevision        string
 	OperatorCredentialsActive bool
 	IsDynamic                 bool
@@ -94,12 +97,17 @@ func (oc *OperatorContext) ReconcileStatefulset() (reconcile.Result, error) {
 	objectMeta := generateObjectMeta(cr.Spec.Name, cr.Namespace, groupLabels, groupAnnotations)
 	currentSts, err := oc.GetStatefulSet(cr.Namespace, objectMeta.Name)
 	containerParams := generateContainerParams(cr)
+	bootstrapCASecretName, tlsErr := oc.bootstrapCASecretName(cr)
+	if tlsErr != nil {
+		return result.Error(tlsErr).Output()
+	}
+	containerParams.BootstrapCASecretName = bootstrapCASecretName
 	if containerParams.SecretName != "" {
 		activeSecret, secretErr := oc.getStatefulSetCredentialSecret(&containerParams)
 		if secretErr != nil {
 			return result.Error(secretErr).Output()
 		}
-		secretHash := sha256.Sum256(secretDataForCredentialRevision(activeSecret.Data))
+		secretHash := sha256.Sum256(append([]byte(activeSecret.Name+"\x00"), secretDataForCredentialRevision(activeSecret.Data)...))
 		containerParams.CredentialRevision = hex.EncodeToString(secretHash[:])
 	}
 	statefulSetParams := generateStatefulSetsParams(cr)
@@ -118,6 +126,7 @@ func (oc *OperatorContext) ReconcileStatefulset() (reconcile.Result, error) {
 		return result.Error(err).Output()
 	}
 	preserveCredentialRotationState(currentSts, statefulSetDef)
+	preserveInitialOperatorCredentialRevision(currentSts, statefulSetDef, containerParams)
 
 	patchDiff, err := patch.DefaultPatchMaker.Calculate(currentSts, statefulSetDef,
 		patch.IgnoreStatusFields(),
@@ -198,28 +207,28 @@ func (oc *OperatorContext) ReconcileStatefulset() (reconcile.Result, error) {
 	return result.Done().Output()
 }
 
+func (oc *OperatorContext) bootstrapCASecretName(group *marklogicv1.MarklogicGroup) (string, error) {
+	bootstrapTLS := group.Spec.Tls
+	if strings.TrimSpace(group.Spec.BootstrapHost) != "" {
+		var err error
+		bootstrapTLS, err = oc.managementTLSConfigForEndpoint(group.Spec.BootstrapHost)
+		if err != nil {
+			return "", err
+		}
+	}
+	if bootstrapTLS == nil || !bootstrapTLS.EnableOnDefaultAppServers {
+		return "", nil
+	}
+	return strings.TrimSpace(bootstrapTLS.CaSecretName), nil
+}
+
 func (oc *OperatorContext) getStatefulSetCredentialSecret(containerParams *containerParameters) (*corev1.Secret, error) {
+	secret := &corev1.Secret{}
 	secretName := containerParams.SecretName
 	if containerParams.OperatorCredentialsActive {
 		secretName = containerParams.OperatorSecretName
 	}
-	secret := &corev1.Secret{}
-	err := oc.Client.Get(oc.Ctx, client.ObjectKey{Namespace: oc.MarklogicGroup.Namespace, Name: secretName}, secret)
-	if err == nil || !apierrors.IsNotFound(err) || !containerParams.OperatorCredentialsActive {
-		return secret, err
-	}
-
-	containerParams.OperatorCredentialsActive = false
-	secret = &corev1.Secret{}
-	err = oc.Client.Get(oc.Ctx, client.ObjectKey{Namespace: oc.MarklogicGroup.Namespace, Name: containerParams.SecretName}, secret)
-	if err == nil && oc.MarklogicGroup.Status.CredentialSecretName != "" {
-		patch := client.MergeFrom(oc.MarklogicGroup.DeepCopy())
-		oc.MarklogicGroup.Status.CredentialSecretName = ""
-		if err := oc.Client.Status().Patch(oc.Ctx, oc.MarklogicGroup, patch); err != nil {
-			return nil, err
-		}
-	}
-	return secret, err
+	return secret, oc.Client.Get(oc.Ctx, client.ObjectKey{Namespace: oc.MarklogicGroup.Namespace, Name: secretName}, secret)
 }
 
 func (oc *OperatorContext) rotateCredentialPodsIfNeeded() (bool, error) {
@@ -333,6 +342,20 @@ func preserveCredentialRotationState(current, desired *appsv1.StatefulSet) {
 	}
 }
 
+func preserveInitialOperatorCredentialRevision(current, desired *appsv1.StatefulSet, params containerParameters) {
+	if !params.OperatorCredentialsActive || params.CredentialRevision == "" {
+		return
+	}
+	if desired.Annotations == nil {
+		desired.Annotations = map[string]string{}
+	}
+	validatedRevision := current.Annotations[validatedCredentialRevisionAnnotation]
+	if validatedRevision == "" || validatedRevision == params.CredentialRevision {
+		desired.Spec.Template.Annotations[credentialRevisionAnnotation] = current.Spec.Template.Annotations[credentialRevisionAnnotation]
+	}
+	desired.Annotations[validatedCredentialRevisionAnnotation] = params.CredentialRevision
+}
+
 func (oc *OperatorContext) updateCredentialRotationState(statefulSet *appsv1.StatefulSet, podName, podUID string) error {
 	patchBase := statefulSet.DeepCopy()
 	if statefulSet.Annotations == nil {
@@ -410,7 +433,7 @@ func (oc *OperatorContext) createStatefulSet(statefulset *appsv1.StatefulSet, cr
 }
 
 func generateStatefulSetsDef(stsMeta metav1.ObjectMeta, params statefulSetParameters, ownerDef metav1.OwnerReference, containerParams containerParameters) *appsv1.StatefulSet {
-	templateAnnotations := stsMeta.GetAnnotations()
+	templateAnnotations := maps.Clone(stsMeta.GetAnnotations())
 	if templateAnnotations == nil {
 		templateAnnotations = make(map[string]string)
 	}
@@ -419,9 +442,13 @@ func generateStatefulSetsDef(stsMeta metav1.ObjectMeta, params statefulSetParame
 		TypeMeta:   generateTypeMeta("StatefulSet", "apps/v1"),
 		ObjectMeta: stsMeta,
 		Spec: appsv1.StatefulSetSpec{
-			Selector:            LabelSelectors(getSelectorLabelsByComponent(params.Name, params.IsDynamic)),
-			ServiceName:         stsMeta.Name,
-			Replicas:            params.Replicas,
+			Selector:    LabelSelectors(getSelectorLabelsByComponent(params.Name, params.IsDynamic)),
+			ServiceName: stsMeta.Name,
+			Replicas:    params.Replicas,
+			PersistentVolumeClaimRetentionPolicy: &appsv1.StatefulSetPersistentVolumeClaimRetentionPolicy{
+				WhenDeleted: appsv1.RetainPersistentVolumeClaimRetentionPolicyType,
+				WhenScaled:  appsv1.RetainPersistentVolumeClaimRetentionPolicyType,
+			},
 			PodManagementPolicy: appsv1.ParallelPodManagement,
 			UpdateStrategy:      appsv1.StatefulSetUpdateStrategy{Type: params.UpdateStrategy},
 			Template: corev1.PodTemplateSpec{
@@ -508,10 +535,6 @@ func generateStatefulSetsDef(stsMeta metav1.ObjectMeta, params statefulSetParame
 						Value: "ml-secrets/password",
 					},
 					{
-						Name:  "MARKLOGIC_OPERATOR_CREDENTIALS_ACTIVE",
-						Value: strconv.FormatBool(containerParams.OperatorCredentialsActive),
-					},
-					{
 						Name:  "MARKLOGIC_FQDN_SUFFIX",
 						Value: fmt.Sprintf("%s.%s.svc.%s", containerParams.Name, containerParams.Namespace, containerParams.ClusterDomain),
 					},
@@ -519,7 +542,6 @@ func generateStatefulSetsDef(stsMeta metav1.ObjectMeta, params statefulSetParame
 			},
 		}
 	}
-
 	AddOwnerRefToObject(statefulSet, ownerDef)
 	return statefulSet
 }
@@ -805,6 +827,14 @@ func generateVolumes(stsName string, containerParams containerParameters) []core
 			})
 		}
 	}
+	if containerParams.BootstrapCASecretName != "" {
+		volumes = append(volumes, corev1.Volume{
+			Name: "bootstrap-ca-cert-secret",
+			VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{
+				SecretName: containerParams.BootstrapCASecretName,
+			}},
+		})
+	}
 
 	return volumes
 }
@@ -845,9 +875,6 @@ func getEnvironmentVariables(containerParams containerParameters) []corev1.EnvVa
 	}, corev1.EnvVar{
 		Name:  "MARKLOGIC_ADMIN_PASSWORD_FILE",
 		Value: "ml-secrets/password",
-	}, corev1.EnvVar{
-		Name:  "MARKLOGIC_OPERATOR_CREDENTIALS_ACTIVE",
-		Value: strconv.FormatBool(containerParams.OperatorCredentialsActive),
 	}, corev1.EnvVar{
 		Name:  "MARKLOGIC_FQDN_SUFFIX",
 		Value: fmt.Sprintf("%s.%s.svc.%s", containerParams.Name, containerParams.Namespace, containerParams.ClusterDomain),
@@ -979,6 +1006,13 @@ func getVolumeMount(containerParams containerParameters) []corev1.VolumeMount {
 				Name:      "certs",
 				MountPath: "/run/secrets/marklogic-certs/",
 			})
+	}
+	if containerParams.BootstrapCASecretName != "" {
+		VolumeMounts = append(VolumeMounts, corev1.VolumeMount{
+			Name:      "bootstrap-ca-cert-secret",
+			MountPath: "/run/secrets/marklogic-bootstrap-certs/",
+			ReadOnly:  true,
+		})
 	}
 	if containerParams.AdditionalVolumeMounts != nil {
 		VolumeMounts = append(VolumeMounts, *containerParams.AdditionalVolumeMounts...)

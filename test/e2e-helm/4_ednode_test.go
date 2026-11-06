@@ -5,6 +5,7 @@ package e2ehelm
 import (
 	"context"
 	"fmt"
+	"os/exec"
 	"strings"
 	"testing"
 	"time"
@@ -69,6 +70,58 @@ var (
 	}
 )
 
+// cleanupStaleClusterData removes stale MarkLogic cluster data from PVCs that could
+// interfere with test isolation. This ensures that consecutive test runs don't see
+// leftover cluster registration data from previous runs.
+func cleanupStaleClusterData(ctx context.Context, t *testing.T, c *envconf.Config, namespace string) error {
+	client := c.Client()
+
+	// Check if namespace exists; if not, skip cleanup
+	ns := &corev1.Namespace{}
+	err := client.Resources().Get(ctx, namespace, "", ns)
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			t.Logf("Namespace %s not found, skipping cleanup", namespace)
+			return nil
+		}
+		t.Logf("Warning: failed to check namespace %s: %v", namespace, err)
+		return nil
+	}
+
+	// Delete any existing MarklogicCluster resources FIRST to allow PVCs to be cleaned
+	mlCluster := &marklogicv1.MarklogicCluster{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "mlclusterednode",
+			Namespace: namespace,
+		},
+	}
+	if err := client.Resources(namespace).Delete(ctx, mlCluster); err != nil {
+		if !apierrors.IsNotFound(err) {
+			t.Logf("Warning: failed to delete MarklogicCluster during cleanup: %v", err)
+		}
+	}
+
+	// Wait for cluster to be deleted before deleting PVCs
+	// This allows StatefulSet to clean up properly
+	time.Sleep(3 * time.Second)
+
+	// Delete PVCs explicitly to remove stale data
+	// This is CRITICAL to prevent "stale host registration" errors
+	// when the same pod name is reused in the next test run
+	// Use --force --grace-period=0 to ensure immediate deletion instead of waiting for finalizers
+	t.Logf("Force-deleting PVCs in namespace %s to remove stale cluster data", namespace)
+	cmd := exec.CommandContext(ctx, "kubectl", "delete", "pvc", "--all", "-n", namespace,
+		"--ignore-not-found=true", "--force", "--grace-period=0")
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Logf("Warning: failed to delete PVCs: %v, output: %s", err, string(output))
+	}
+
+	// Wait for PVCs to be actually deleted
+	time.Sleep(2 * time.Second)
+
+	return nil
+}
+
 // TestMlClusterWithEdnode verifies a two-group (dnode + enode) cluster is reconciled
 // correctly in a watched namespace using only Role/RoleBinding RBAC from the Helm chart.
 func TestMlClusterWithEdnode(t *testing.T) {
@@ -79,6 +132,12 @@ func TestMlClusterWithEdnode(t *testing.T) {
 	// Create namespace and admin secret, then deploy the CR.
 	feature.Setup(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 		client := c.Client()
+
+		// Clean up any stale data from previous test runs BEFORE checking namespace state
+		cleanupStaleClusterData(ctx, t, c, edNodeNS)
+
+		// Wait a bit to allow cleanup to take effect
+		time.Sleep(3 * time.Second)
 
 		// Wait for any previous terminating namespace to finish before creating a new one.
 		ns := &corev1.Namespace{}
@@ -100,6 +159,18 @@ func TestMlClusterWithEdnode(t *testing.T) {
 			}
 			break
 		}
+
+		// After namespace is deleted, force-delete any lingering PVCs that may have stale MarkLogic data.
+		// This prevents "duplicate registration" errors when the same pod names are reused.
+		t.Logf("Force-deleting any lingering PVCs in namespace %s", edNodeNS)
+		cmd := exec.CommandContext(ctx, "kubectl", "delete", "pvc", "--all", "-n", edNodeNS,
+			"--ignore-not-found=true", "--force", "--grace-period=0")
+		if output, err := cmd.CombinedOutput(); err != nil {
+			t.Logf("Note: kubectl delete pvc output: %s (may be expected if namespace doesn't exist)", string(output))
+		}
+
+		// Wait to ensure PVCs are actually deleted
+		time.Sleep(2 * time.Second)
 
 		if err := client.Resources().Create(ctx, &corev1.Namespace{
 			ObjectMeta: metav1.ObjectMeta{Name: edNodeNS},
@@ -123,6 +194,12 @@ func TestMlClusterWithEdnode(t *testing.T) {
 		if err := client.Resources(edNodeNS).Create(ctx, edCluster); err != nil {
 			t.Fatalf("Failed to create MarklogicCluster: %v", err)
 		}
+
+		// Wait for operator to process CR and activate credentials.
+		// This ensures that when pods start, the operator user is ready for authentication.
+		t.Log("Waiting for operator to activate credentials...")
+		time.Sleep(15 * time.Second)
+
 		if err := wait.For(
 			conditions.New(client.Resources()).ResourceMatch(edCluster, func(object k8s.Object) bool {
 				return true
@@ -161,8 +238,19 @@ func TestMlClusterWithEdnode(t *testing.T) {
 	})
 
 	feature.Assess("MarkLogic groups created", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
+		// Retrieve operator credentials for post-initialization API calls.
+		operatorSecret := &corev1.Secret{}
+		if err := c.Client().Resources(edNodeNS).Get(ctx, "mlclusterednode-operator", edNodeNS, operatorSecret); err != nil {
+			t.Fatalf("Failed to read operator Secret: %v", err)
+		}
+		operatorUsername := "marklogic-kubernetes-operator"
+		operatorPassword := string(operatorSecret.Data["password"])
+		if operatorPassword == "" {
+			t.Fatalf("Operator Secret has empty password")
+		}
+
 		url := "http://localhost:8002/manage/v2/groups"
-		cmd := fmt.Sprintf("curl %s --anyauth -u %s:%s", url, adminUsername, adminPassword)
+		cmd := fmt.Sprintf("curl %s --anyauth -u %s:%s", url, operatorUsername, operatorPassword)
 		output, err := utils.ExecCmdInPod("dnode-0", edNodeNS, mlContainerName, cmd)
 		if err != nil {
 			t.Fatalf("Failed to query groups: %v", err)
@@ -224,6 +312,45 @@ func TestMlClusterWithEdnode(t *testing.T) {
 		if err := client.Resources(edNodeNS).Delete(ctx, edCluster); err != nil && !apierrors.IsNotFound(err) {
 			t.Logf("Warning: failed to delete MarklogicCluster: %v", err)
 		}
+
+		// Clean up stale cluster data and PVCs to ensure test isolation
+		cleanupStaleClusterData(ctx, t, c, edNodeNS)
+
+		// Wait for resources to be fully cleaned up
+		time.Sleep(5 * time.Second)
+
+		// Delete the namespace itself to ensure complete cleanup for next test run
+		ns := &corev1.Namespace{
+			ObjectMeta: metav1.ObjectMeta{Name: edNodeNS},
+		}
+		if err := client.Resources().Delete(ctx, ns); err != nil && !apierrors.IsNotFound(err) {
+			t.Logf("Warning: failed to delete namespace %s: %v", edNodeNS, err)
+		}
+
+		// Wait for namespace deletion to complete
+		for i := 0; i < 60; i++ {
+			ns := &corev1.Namespace{}
+			err := client.Resources().Get(ctx, edNodeNS, "", ns)
+			if err != nil {
+				if apierrors.IsNotFound(err) {
+					t.Logf("Namespace %s successfully deleted", edNodeNS)
+					break
+				}
+				t.Logf("Warning: failed to check namespace %s: %v", edNodeNS, err)
+				break
+			}
+			if ns.Status.Phase == corev1.NamespaceTerminating {
+				if i < 59 {
+					time.Sleep(1 * time.Second)
+					continue
+				}
+			}
+			if i == 59 {
+				t.Logf("Warning: timeout waiting for namespace %s to fully delete", edNodeNS)
+			}
+			break
+		}
+
 		return ctx
 	})
 

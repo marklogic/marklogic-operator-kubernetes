@@ -43,7 +43,7 @@ func GenerateCertificates(path string, caPath string) error {
 	commands := [][]string{
 		{"openssl", "genpkey", "-algorithm", "RSA", "-out", filepath.Join(path, "tls.key")},
 		{"openssl", "req", "-new", "-key", filepath.Join(path, "tls.key"), "-config", filepath.Join(path, "server.cnf"), "-out", filepath.Join(path, "tls.csr")},
-		{"openssl", "x509", "-req", "-CA", filepath.Join(caPath, "cacert.pem"), "-CAkey", filepath.Join(caPath, "ca-private-key.pem"), "-CAcreateserial", "-CAserial", filepath.Join(path, "cacert.srl"), "-in", filepath.Join(path, "tls.csr"), "-out", filepath.Join(path, "tls.crt"), "-days", "365"},
+		{"openssl", "x509", "-req", "-CA", filepath.Join(caPath, "cacert.pem"), "-CAkey", filepath.Join(caPath, "ca-private-key.pem"), "-CAcreateserial", "-CAserial", filepath.Join(path, "cacert.srl"), "-in", filepath.Join(path, "tls.csr"), "-out", filepath.Join(path, "tls.crt"), "-days", "365", "-extfile", filepath.Join(path, "server.cnf"), "-extensions", "v3_ext"},
 	}
 
 	for _, cmdArgs := range commands {

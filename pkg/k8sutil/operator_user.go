@@ -16,13 +16,21 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
-const operatorCredentialsReadyCondition = "OperatorCredentialsReady"
+const (
+	operatorCredentialsReadyCondition = "OperatorCredentialsReady"
+	operatorIdentityReadyCondition    = "OperatorIdentityReady"
+)
 
 func (oc *OperatorContext) ReconcileOperatorUser() result.ReconcileResult {
 	clusterName, err := oc.getOwningClusterName()
 	if err != nil {
 		return result.Continue()
 	}
+	cluster, identityCondition, err := oc.clusterOperatorIdentityCondition(clusterName)
+	if err != nil {
+		return oc.operatorUserPending("OperatorIdentityStateUnavailable", fmt.Sprintf("Cannot read cluster-scoped operator identity state: %v", err))
+	}
+	identityProvisioned := identityCondition != nil && (identityCondition.Status == metav1.ConditionTrue || identityCondition.Reason == "OperatorIdentityProvisioned")
 
 	bootstrapHost := strings.TrimSpace(oc.MarklogicGroup.Spec.BootstrapHost)
 	if bootstrapHost == "" {
@@ -43,13 +51,17 @@ func (oc *OperatorContext) ReconcileOperatorUser() result.ReconcileResult {
 		))
 	}
 
-	useTLS := oc.MarklogicGroup.Spec.Tls != nil && oc.MarklogicGroup.Spec.Tls.EnableOnDefaultAppServers
+	useTLS, insecureSkipVerify, caCertificate, err := oc.managementTLSOptionsForEndpoint(bootstrapHost)
+	if err != nil {
+		return oc.operatorUserPending("OperatorTLSConfigurationInvalid", err.Error())
+	}
 	operatorClient := NewDynamicManagementClient(mlmanage.ClientOptions{
 		Host:               bootstrapHost,
 		Username:           operatorUsername,
 		Password:           operatorPassword,
 		UseTLS:             useTLS,
-		InsecureSkipVerify: useTLS,
+		InsecureSkipVerify: insecureSkipVerify,
+		CACertificate:      caCertificate,
 	})
 	hosts, err := operatorClient.ListHostsStatus(oc.Ctx)
 	if err == nil {
@@ -61,6 +73,14 @@ func (oc *OperatorContext) ReconcileOperatorUser() result.ReconcileResult {
 					return oc.operatorUserPending("BootstrapHostNotReady", fmt.Sprintf(
 						"Bootstrap host %q is not online yet; check the MarkLogic pod and server startup status.", bootstrapHost,
 					))
+				}
+				if !identityProvisioned {
+					return oc.reconcileOperatorIdentityWithAdmin(cluster, bootstrapHost, operatorPassword, useTLS, insecureSkipVerify, caCertificate, true)
+				}
+				if identityCondition.Status != metav1.ConditionTrue {
+					if err := oc.updateClusterOperatorIdentityCondition(cluster, metav1.ConditionTrue, "OperatorIdentityVerified", "The shared operator identity authenticated successfully."); err != nil {
+						return result.Error(err)
+					}
 				}
 				return oc.markOperatorCredentialActive(clusterName)
 			}
@@ -76,7 +96,17 @@ func (oc *OperatorContext) ReconcileOperatorUser() result.ReconcileResult {
 			"Could not validate the operator user against bootstrap host %q: %v. Check host readiness and Management API connectivity.", bootstrapHost, err,
 		))
 	}
+	if oc.MarklogicGroup.Status.CredentialSecretName != "" || identityProvisioned {
+		return oc.operatorUserPending("OperatorAuthenticationRejected", fmt.Sprintf(
+			"MarkLogic rejected the shared operator credentials from Secret %q. The Operator will not modify the MarkLogic user; update the Secret to match the password configured in MarkLogic.",
+			operatorCredentialSecretNameForGroup(oc.MarklogicGroup),
+		))
+	}
 
+	return oc.reconcileOperatorIdentityWithAdmin(cluster, bootstrapHost, operatorPassword, useTLS, insecureSkipVerify, caCertificate, false)
+}
+
+func (oc *OperatorContext) reconcileOperatorIdentityWithAdmin(cluster *marklogicv1.MarklogicCluster, bootstrapHost, operatorPassword string, useTLS, insecureSkipVerify bool, caCertificate []byte, operatorVerified bool) result.ReconcileResult {
 	adminSecretName := adminCredentialSecretNameForGroup(oc.MarklogicGroup)
 	adminUsername, adminPassword, err := oc.readCredentialSecret(adminSecretName)
 	if err != nil {
@@ -89,9 +119,10 @@ func (oc *OperatorContext) ReconcileOperatorUser() result.ReconcileResult {
 		Username:           adminUsername,
 		Password:           adminPassword,
 		UseTLS:             useTLS,
-		InsecureSkipVerify: useTLS,
+		InsecureSkipVerify: insecureSkipVerify,
+		CACertificate:      caCertificate,
 	})
-	hosts, err = adminClient.ListHostsStatus(oc.Ctx)
+	hosts, err := adminClient.ListHostsStatus(oc.Ctx)
 	if err != nil {
 		return oc.operatorUserPending("BootstrapAdminAccessFailed", fmt.Sprintf(
 			"Operator authentication failed and the bootstrap admin credentials could not access the Management API on %q: %v. Verify the admin credentials and host availability.", bootstrapHost, err,
@@ -110,21 +141,44 @@ func (oc *OperatorContext) ReconcileOperatorUser() result.ReconcileResult {
 		))
 	}
 
-	if oc.MarklogicGroup.Status.CredentialSecretName != "" {
-		if err := adminClient.UpdateOperatorPassword(oc.Ctx, operatorUsername, operatorPassword); err != nil {
-			return oc.operatorUserPending("OperatorPasswordRotationFailed", fmt.Sprintf(
-				"Could not rotate the operator password using bootstrap admin credentials: %v. Verify the admin Secret and MarkLogic Management API access.", err,
-			))
-		}
-		return oc.operatorUserPending("OperatorPasswordRotated", "The operator password was updated from the configured Secret; waiting for the next reconciliation to verify operator authentication.")
-	}
-
 	if err := oc.ensureOperatorIdentityWithClient(adminClient, operatorPassword); err != nil {
 		return oc.operatorUserPending("OperatorIdentityReconciliationFailed", fmt.Sprintf(
 			"Could not create the operator role and user using bootstrap admin credentials: %v. Verify the admin Secret and MarkLogic Management API access.", err,
 		))
 	}
+	if operatorVerified {
+		if err := oc.updateClusterOperatorIdentityCondition(cluster, metav1.ConditionTrue, "OperatorIdentityVerified", "The shared operator identity was migrated and authenticated successfully."); err != nil {
+			return result.Error(err)
+		}
+		return oc.markOperatorCredentialActive(cluster.Name)
+	}
+	if err := oc.updateClusterOperatorIdentityCondition(cluster, metav1.ConditionFalse, "OperatorIdentityProvisioned", "The shared operator identity was provisioned and is waiting for authentication verification."); err != nil {
+		return result.Error(err)
+	}
 	return oc.operatorUserPending("OperatorIdentityReconciled", "The bootstrap admin credentials created the operator role and user; waiting for the next reconciliation to verify operator authentication.")
+}
+
+func (oc *OperatorContext) clusterOperatorIdentityCondition(clusterName string) (*marklogicv1.MarklogicCluster, *metav1.Condition, error) {
+	cluster := &marklogicv1.MarklogicCluster{}
+	if err := oc.Client.Get(oc.Ctx, types.NamespacedName{Name: clusterName, Namespace: oc.MarklogicGroup.Namespace}, cluster); err != nil {
+		return nil, nil, err
+	}
+	return cluster, apiMeta.FindStatusCondition(cluster.Status.Conditions, operatorIdentityReadyCondition), nil
+}
+
+func (oc *OperatorContext) updateClusterOperatorIdentityCondition(cluster *marklogicv1.MarklogicCluster, status metav1.ConditionStatus, reason, message string) error {
+	patch := client.MergeFrom(cluster.DeepCopy())
+	changed := apiMeta.SetStatusCondition(&cluster.Status.Conditions, metav1.Condition{
+		Type:               operatorIdentityReadyCondition,
+		Status:             status,
+		Reason:             reason,
+		Message:            message,
+		ObservedGeneration: cluster.Generation,
+	})
+	if !changed {
+		return nil
+	}
+	return oc.Client.Status().Patch(oc.Ctx, cluster, patch)
 }
 
 func (oc *OperatorContext) ensureOperatorIdentityWithClient(adminClient mlmanage.Client, operatorPassword string) error {

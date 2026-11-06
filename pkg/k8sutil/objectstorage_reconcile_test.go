@@ -587,16 +587,16 @@ func TestObjectStorageBootstrapFailureMessagesAreSafe(t *testing.T) {
 	}
 }
 
-func TestObjectStorageBootstrapAdminSecretMissingIsPending(t *testing.T) {
+func TestObjectStorageOperatorSecretMissingIsPending(t *testing.T) {
 	t.Parallel()
 	h := newOSHarness(t, nil)
 	h.seedBothSecrets()
-	h.secretGetErr[osCluster+"-admin"] = apierrors.NewNotFound(schema.GroupResource{Resource: "secrets"}, osCluster+"-admin")
+	h.secretGetErr[osCluster+"-operator"] = apierrors.NewNotFound(schema.GroupResource{Resource: "secrets"}, osCluster+"-operator")
 
 	h.mustReconcile()
 	pending := h.entry(providerAWS)
 	assertPhase(t, pending, marklogicv1.ObjectStoragePhasePending, marklogicv1.ObjectStorageReasonBootstrapNotReady)
-	if !strings.Contains(pending.Message, "admin Secret") {
+	if !strings.Contains(pending.Message, "operator credential Secret") {
 		t.Fatalf("message should identify the failed prerequisite: %q", pending.Message)
 	}
 	if h.creds.probes != 0 {
@@ -965,18 +965,22 @@ func TestBootstrapManagementEndpoint(t *testing.T) {
 	}
 }
 
-func TestObjectStorageAdminSecretFromAuthSecretName(t *testing.T) {
+func TestObjectStorageOperatorSecretFromAuthSecretName(t *testing.T) {
 	t.Parallel()
-	custom := "custom-admin"
+	custom := "custom-operator"
 	h := newOSHarness(t, func(c *marklogicv1.MarklogicCluster) {
-		c.Spec.Auth = &marklogicv1.AdminAuth{SecretName: &custom}
+		c.Spec.Auth = &marklogicv1.AdminAuth{OperatorSecretName: &custom}
 		c.Spec.ObjectStorage.Azure = nil
 	})
 	h.setSecret("aws-creds", "aws-uid-1", awsMaterial("1"))
 	h.mustReconcile()
 	assertPhase(t, h.entry(providerAWS), marklogicv1.ObjectStoragePhasePending, marklogicv1.ObjectStorageReasonBootstrapNotReady)
 
-	h.setSecret(custom, "custom-uid", map[string]string{"username": "admin", "password": secretMarker})
+	h.setSecret(custom, "custom-uid", map[string]string{"password": secretMarker})
 	h.mustReconcile()
 	assertPhase(t, h.entry(providerAWS), marklogicv1.ObjectStoragePhaseApplied, "")
+	options := h.clientOptions[len(h.clientOptions)-1]
+	if options.Username != operatorUsername || options.Password != secretMarker {
+		t.Fatalf("management credentials = (%q, %q), want fixed operator username and Secret password", options.Username, options.Password)
+	}
 }

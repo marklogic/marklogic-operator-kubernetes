@@ -52,7 +52,6 @@ func TestOperatorCredentialHandoff(t *testing.T) {
 	feature := features.New("Operator Credential Handoff").WithLabel("type", "credential-handoff")
 	feature.Setup(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 		client := c.Client()
-		ensureMarklogicSchemeRegistered(t, c)
 		if err := client.Resources().Create(ctx, &corev1.Namespace{
 			ObjectMeta: metav1.ObjectMeta{Name: namespaceName, Labels: namespaceLabels()},
 		}); err != nil && !apierrors.IsAlreadyExists(err) {

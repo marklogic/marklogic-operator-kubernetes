@@ -22,6 +22,26 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
 
+func TestOperatorUsernameIsFixed(t *testing.T) {
+	t.Parallel()
+
+	if operatorUsername != "marklogic-kubernetes-operator" {
+		t.Fatalf("operator username = %q, want marklogic-kubernetes-operator", operatorUsername)
+	}
+}
+
+func operatorIdentityTestCluster(verified bool) *marklogicv1.MarklogicCluster {
+	cluster := &marklogicv1.MarklogicCluster{ObjectMeta: metav1.ObjectMeta{Name: "search", Namespace: "database"}}
+	if verified {
+		cluster.Status.Conditions = []metav1.Condition{{
+			Type:   operatorIdentityReadyCondition,
+			Status: metav1.ConditionTrue,
+			Reason: "OperatorIdentityVerified",
+		}}
+	}
+	return cluster
+}
+
 func TestReconcileSecretCreatesAndReusesOperatorCredentials(t *testing.T) {
 	t.Parallel()
 
@@ -174,7 +194,8 @@ func TestReconcileOperatorUserUsesConfiguredSecretAndBootstrapCredentials(t *tes
 	operatorSecret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "custom-operator-auth", Namespace: "database"}, Data: map[string][]byte{
 		"password": []byte("user-provided-password"),
 	}}
-	fakeClient := fake.NewClientBuilder().WithScheme(scheme).WithStatusSubresource(&marklogicv1.MarklogicGroup{}).WithObjects(group, adminSecret, operatorSecret).Build()
+	cluster := operatorIdentityTestCluster(false)
+	fakeClient := fake.NewClientBuilder().WithScheme(scheme).WithStatusSubresource(&marklogicv1.MarklogicGroup{}, &marklogicv1.MarklogicCluster{}).WithObjects(group, cluster, adminSecret, operatorSecret).Build()
 	listCalls := 0
 	roleCalls := 0
 	operatorUserCalls := 0
@@ -238,7 +259,7 @@ func TestReconcileOperatorUserUsesConfiguredSecretAndBootstrapCredentials(t *tes
 	}
 }
 
-func TestReconcileOperatorUserRotatesOnlyPasswordForActiveCredentials(t *testing.T) {
+func TestReconcileOperatorUserDoesNotRepairActiveCredentials(t *testing.T) {
 	scheme := runtime.NewScheme()
 	if err := marklogicv1.AddToScheme(scheme); err != nil {
 		t.Fatalf("add Marklogic scheme: %v", err)
@@ -262,55 +283,116 @@ func TestReconcileOperatorUserRotatesOnlyPasswordForActiveCredentials(t *testing
 		ObjectMeta: metav1.ObjectMeta{Name: "search-operator", Namespace: "database"},
 		Data:       map[string][]byte{"password": []byte("rotated-password")},
 	}
-	adminSecret := &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{Name: "bootstrap-admin", Namespace: "database"},
-		Data:       map[string][]byte{"username": []byte("bootstrap-admin"), "password": []byte("bootstrap-password")},
-	}
-	fakeClient := fake.NewClientBuilder().WithScheme(scheme).WithStatusSubresource(&marklogicv1.MarklogicGroup{}).WithObjects(group, operatorSecret, adminSecret).Build()
-	listCalls := 0
-	roleCalls := 0
-	userCalls := 0
-	passwordCalls := 0
+	cluster := operatorIdentityTestCluster(false)
+	fakeClient := fake.NewClientBuilder().WithScheme(scheme).WithStatusSubresource(&marklogicv1.MarklogicGroup{}, &marklogicv1.MarklogicCluster{}).WithObjects(group, cluster, operatorSecret).Build()
 	stub := &stubDynamicManagementClient{
 		listHostStatusesFn: func() ([]mlmanage.HostStatus, error) {
-			listCalls++
-			if listCalls == 1 {
-				return nil, fmt.Errorf("management api GET /manage/v2/hosts returned status 401")
-			}
-			return []mlmanage.HostStatus{{Name: bootstrapHost, Online: true}}, nil
-		},
-		ensureOperatorRoleFn: func() error { roleCalls++; return nil },
-		ensureOperatorUser: func(username, password string) error {
-			userCalls++
-			return nil
-		},
-		updateOperatorPass: func(username, password string) error {
-			passwordCalls++
-			if username != operatorUsername || password != "rotated-password" {
-				t.Fatalf("UpdateOperatorPassword got (%q, %q)", username, password)
-			}
-			return nil
+			return nil, fmt.Errorf("management api GET /manage/v2/hosts returned status 401")
 		},
 	}
 	originalFactory := NewDynamicManagementClient
-	NewDynamicManagementClient = func(mlmanage.ClientOptions) mlmanage.Client { return stub }
+	factoryCalls := 0
+	NewDynamicManagementClient = func(mlmanage.ClientOptions) mlmanage.Client {
+		factoryCalls++
+		return stub
+	}
 	defer func() { NewDynamicManagementClient = originalFactory }()
 
 	recorder := record.NewFakeRecorder(1)
 	oc := &OperatorContext{Ctx: context.Background(), Client: fakeClient, MarklogicGroup: group, Recorder: recorder}
 	if result := oc.ReconcileOperatorUser(); !result.Completed() {
-		t.Fatal("expected password rotation to requeue for credential verification")
+		t.Fatal("expected rejected active credentials to requeue")
 	}
-	if roleCalls != 0 || userCalls != 0 || passwordCalls != 1 {
-		t.Fatalf("role/user/password calls = %d/%d/%d, want 0/0/1", roleCalls, userCalls, passwordCalls)
+	if factoryCalls != 1 {
+		t.Fatalf("management clients created = %d, want operator client only", factoryCalls)
 	}
 	select {
 	case event := <-recorder.Events:
-		if !strings.Contains(event, "Normal OperatorPasswordRotated") {
-			t.Fatalf("password rotation event = %q, want Normal OperatorPasswordRotated", event)
+		if !strings.Contains(event, "Warning OperatorAuthenticationRejected") {
+			t.Fatalf("authentication event = %q, want Warning OperatorAuthenticationRejected", event)
 		}
 	case <-time.After(time.Second):
-		t.Fatal("password rotation did not emit a Normal event")
+		t.Fatal("authentication rejection did not emit a Warning event")
+	}
+}
+
+func TestReconcileOperatorUserRepairsLegacyIdentityBeforeHandoff(t *testing.T) {
+	scheme := runtime.NewScheme()
+	if err := marklogicv1.AddToScheme(scheme); err != nil {
+		t.Fatalf("add Marklogic scheme: %v", err)
+	}
+	if err := corev1.AddToScheme(scheme); err != nil {
+		t.Fatalf("add core scheme: %v", err)
+	}
+
+	const bootstrapHost = "bootstrap-0.bootstrap.database.svc.cluster.local"
+	group := &marklogicv1.MarklogicGroup{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "bootstrap", Namespace: "database",
+			OwnerReferences: []metav1.OwnerReference{{Kind: "MarklogicCluster", Name: "search"}},
+		},
+		Spec: marklogicv1.MarklogicGroupSpec{
+			Name: "bootstrap", BootstrapHost: bootstrapHost, SecretName: "bootstrap-admin",
+		},
+	}
+	operatorSecret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "search-operator", Namespace: "database"},
+		Data:       map[string][]byte{"password": []byte("operator-password")},
+	}
+	adminSecret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "bootstrap-admin", Namespace: "database"},
+		Data:       map[string][]byte{"username": []byte("admin"), "password": []byte("admin-password")},
+	}
+	cluster := operatorIdentityTestCluster(false)
+	fakeClient := fake.NewClientBuilder().WithScheme(scheme).WithStatusSubresource(&marklogicv1.MarklogicGroup{}, &marklogicv1.MarklogicCluster{}).WithObjects(group, cluster, operatorSecret, adminSecret).Build()
+	roleCalls := 0
+	userCalls := 0
+	stub := &stubDynamicManagementClient{
+		hostStatuses:         []mlmanage.HostStatus{{Name: bootstrapHost, Online: true}},
+		ensureOperatorRoleFn: func() error { roleCalls++; return nil },
+		ensureOperatorUser: func(username, password string) error {
+			userCalls++
+			if username != operatorUsername || password != "operator-password" {
+				t.Fatalf("EnsureOperatorUser got (%q, %q)", username, password)
+			}
+			return nil
+		},
+	}
+	originalFactory := NewDynamicManagementClient
+	factoryCalls := 0
+	NewDynamicManagementClient = func(options mlmanage.ClientOptions) mlmanage.Client {
+		factoryCalls++
+		if factoryCalls == 1 && options.Username != operatorUsername {
+			t.Fatalf("first client should use operator credentials: %+v", options)
+		}
+		if factoryCalls == 2 && (options.Username != "admin" || options.Password != "admin-password") {
+			t.Fatalf("migration client should use admin credentials: %+v", options)
+		}
+		return stub
+	}
+	defer func() { NewDynamicManagementClient = originalFactory }()
+
+	oc := &OperatorContext{Ctx: context.Background(), Client: fakeClient, MarklogicGroup: group, Recorder: record.NewFakeRecorder(2)}
+	if result := oc.ReconcileOperatorUser(); !result.Completed() {
+		t.Fatal("expected migrated credentials to persist handoff status")
+	}
+	if factoryCalls != 2 || roleCalls != 1 || userCalls != 1 {
+		t.Fatalf("management clients/role/user calls = %d/%d/%d, want 2/1/1", factoryCalls, roleCalls, userCalls)
+	}
+	updated := &marklogicv1.MarklogicGroup{}
+	if err := fakeClient.Get(context.Background(), client.ObjectKeyFromObject(group), updated); err != nil {
+		t.Fatalf("get migrated group: %v", err)
+	}
+	if updated.Status.CredentialSecretName != "search-operator" {
+		t.Fatalf("active credential Secret = %q, want search-operator", updated.Status.CredentialSecretName)
+	}
+	updatedCluster := &marklogicv1.MarklogicCluster{}
+	if err := fakeClient.Get(context.Background(), client.ObjectKeyFromObject(cluster), updatedCluster); err != nil {
+		t.Fatalf("get migrated cluster: %v", err)
+	}
+	identityCondition := apiMeta.FindStatusCondition(updatedCluster.Status.Conditions, operatorIdentityReadyCondition)
+	if identityCondition == nil || identityCondition.Status != metav1.ConditionTrue {
+		t.Fatalf("cluster identity condition = %+v, want verified", identityCondition)
 	}
 }
 
@@ -335,10 +417,11 @@ func TestReconcileOperatorUserReportsMissingSecret(t *testing.T) {
 		},
 		Spec: marklogicv1.MarklogicGroupSpec{Name: "bootstrap"},
 	}
+	cluster := operatorIdentityTestCluster(false)
 	fakeClient := fake.NewClientBuilder().
 		WithScheme(scheme).
-		WithStatusSubresource(&marklogicv1.MarklogicGroup{}).
-		WithObjects(group).
+		WithStatusSubresource(&marklogicv1.MarklogicGroup{}, &marklogicv1.MarklogicCluster{}).
+		WithObjects(group, cluster).
 		Build()
 	recorder := record.NewFakeRecorder(1)
 	oc := &OperatorContext{
@@ -412,7 +495,8 @@ func TestReconcileOperatorUserDoesNotUseAdminForManagementAPIAvailabilityFailure
 		ObjectMeta: metav1.ObjectMeta{Name: "bootstrap-admin", Namespace: "database"},
 		Data:       map[string][]byte{"username": []byte("bootstrap-admin"), "password": []byte("bootstrap-password")},
 	}
-	fakeClient := fake.NewClientBuilder().WithScheme(scheme).WithStatusSubresource(&marklogicv1.MarklogicGroup{}).WithObjects(group, operatorSecret, adminSecret).Build()
+	cluster := operatorIdentityTestCluster(false)
+	fakeClient := fake.NewClientBuilder().WithScheme(scheme).WithStatusSubresource(&marklogicv1.MarklogicGroup{}, &marklogicv1.MarklogicCluster{}).WithObjects(group, cluster, operatorSecret, adminSecret).Build()
 	stub := &stubDynamicManagementClient{listHostStatusesFn: func() ([]mlmanage.HostStatus, error) {
 		return nil, fmt.Errorf("TLS handshake timeout")
 	}}
@@ -444,7 +528,7 @@ func TestReconcileOperatorUserDoesNotUseAdminForManagementAPIAvailabilityFailure
 	}
 }
 
-func TestReconcileOperatorUserDoesNotRequireAdminWhenOperatorCredentialsWork(t *testing.T) {
+func TestReconcileOperatorUserAdoptsClusterVerifiedIdentityWithoutAdmin(t *testing.T) {
 	scheme := runtime.NewScheme()
 	if err := marklogicv1.AddToScheme(scheme); err != nil {
 		t.Fatalf("add Marklogic scheme: %v", err)
@@ -459,14 +543,14 @@ func TestReconcileOperatorUserDoesNotRequireAdminWhenOperatorCredentialsWork(t *
 			Name: "bootstrap", Namespace: "database",
 			OwnerReferences: []metav1.OwnerReference{{Kind: "MarklogicCluster", Name: "search"}},
 		},
-		Spec:   marklogicv1.MarklogicGroupSpec{Name: "bootstrap", BootstrapHost: bootstrapHost},
-		Status: marklogicv1.MarklogicGroupStatus{CredentialSecretName: "search-operator"},
+		Spec: marklogicv1.MarklogicGroupSpec{Name: "bootstrap", BootstrapHost: bootstrapHost},
 	}
 	operatorSecret := &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{Name: "search-operator", Namespace: "database"},
 		Data:       map[string][]byte{"password": []byte("generated-operator-password")},
 	}
-	fakeClient := fake.NewClientBuilder().WithScheme(scheme).WithStatusSubresource(&marklogicv1.MarklogicGroup{}).WithObjects(group, operatorSecret).Build()
+	cluster := operatorIdentityTestCluster(true)
+	fakeClient := fake.NewClientBuilder().WithScheme(scheme).WithStatusSubresource(&marklogicv1.MarklogicGroup{}, &marklogicv1.MarklogicCluster{}).WithObjects(group, cluster, operatorSecret).Build()
 	roleCalls := 0
 	userCalls := 0
 	stub := &stubDynamicManagementClient{

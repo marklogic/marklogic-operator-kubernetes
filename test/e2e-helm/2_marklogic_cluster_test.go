@@ -4,6 +4,7 @@ package e2ehelm
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -17,6 +18,7 @@ import (
 	"sigs.k8s.io/e2e-framework/klient/wait/conditions"
 	"sigs.k8s.io/e2e-framework/pkg/envconf"
 	"sigs.k8s.io/e2e-framework/pkg/features"
+	e2eutils "sigs.k8s.io/e2e-framework/pkg/utils"
 )
 
 // mlNsTestNS is listed in watchedNamespaces so the namespace-scoped operator
@@ -78,6 +80,9 @@ func TestMarklogicClusterNamespaceScoped(t *testing.T) {
 			}
 			break
 		}
+		// Force-delete any lingering PVCs that may have stale MarkLogic data
+		e2eutils.RunCommand(fmt.Sprintf("kubectl -n %s delete pvc --all --ignore-not-found=true --force --grace-period=0", mlNsTestNS))
+		time.Sleep(2 * time.Second) // Ensure PVC deletion completes before creating namespace
 		if err := client.Resources().Create(ctx, &corev1.Namespace{
 			ObjectMeta: metav1.ObjectMeta{Name: mlNsTestNS, Labels: namespaceLabels()},
 		}); err != nil && !apierrors.IsAlreadyExists(err) {
@@ -158,6 +163,41 @@ func TestMarklogicClusterNamespaceScoped(t *testing.T) {
 				t.Logf("Warning: failed to verify pod deletion: %v", err)
 			}
 			time.Sleep(5 * time.Second)
+		}
+
+		// Clean up PVCs and delete namespace to ensure test isolation
+		e2eutils.RunCommand(fmt.Sprintf("kubectl -n %s delete pvc --all --ignore-not-found=true --force --grace-period=0", mlNsTestNS))
+		time.Sleep(2 * time.Second)
+
+		ns := &corev1.Namespace{
+			ObjectMeta: metav1.ObjectMeta{Name: mlNsTestNS},
+		}
+		if err := client.Resources().Delete(ctx, ns); err != nil && !apierrors.IsNotFound(err) {
+			t.Logf("Warning: failed to delete namespace %s: %v", mlNsTestNS, err)
+		}
+
+		// Wait for namespace deletion to complete
+		for i := 0; i < 60; i++ {
+			ns := &corev1.Namespace{}
+			err := client.Resources().Get(ctx, mlNsTestNS, "", ns)
+			if err != nil {
+				if apierrors.IsNotFound(err) {
+					t.Logf("Namespace %s successfully deleted", mlNsTestNS)
+					break
+				}
+				t.Logf("Warning: failed to check namespace %s: %v", mlNsTestNS, err)
+				break
+			}
+			if ns.Status.Phase == corev1.NamespaceTerminating {
+				if i < 59 {
+					time.Sleep(1 * time.Second)
+					continue
+				}
+			}
+			if i == 59 {
+				t.Logf("Warning: timeout waiting for namespace %s to fully delete", mlNsTestNS)
+			}
+			break
 		}
 		return ctx
 	})

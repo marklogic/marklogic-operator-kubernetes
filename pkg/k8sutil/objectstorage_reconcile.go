@@ -167,7 +167,11 @@ func (cc *ClusterContext) newBootstrapCredentialClient(ctx context.Context, clus
 	if err != nil {
 		return nil, err
 	}
-	username, password, err := cc.readBootstrapAdminCredentials(ctx, cluster)
+	_, insecureSkipVerify, caCertificate, err := managementTLSOptionsForConfig(ctx, cc.Client, cluster.Namespace, bootstrapManagementTLSConfig(cluster))
+	if err != nil {
+		return nil, err
+	}
+	password, err := cc.readOperatorCredential(ctx, cluster)
 	if err != nil {
 		return nil, err
 	}
@@ -176,17 +180,30 @@ func (cc *ClusterContext) newBootstrapCredentialClient(ctx context.Context, clus
 		factory = defaultCredentialClientFactory
 	}
 	credentialClient := factory(mlmanage.ClientOptions{
-		Host:     host,
-		Username: username,
-		Password: password,
-		UseTLS:   useTLS,
-		// Follows the existing Management API transport behavior for operator-managed certificates.
-		InsecureSkipVerify: useTLS,
+		Host:               host,
+		Username:           operatorUsername,
+		Password:           password,
+		UseTLS:             useTLS,
+		InsecureSkipVerify: insecureSkipVerify,
+		CACertificate:      caCertificate,
 	})
 	if err := credentialClient.CheckBootstrapReady(ctx, host); err != nil {
 		return nil, err
 	}
 	return credentialClient, nil
+}
+
+func bootstrapManagementTLSConfig(cluster *marklogicv1.MarklogicCluster) *marklogicv1.Tls {
+	for _, group := range cluster.Spec.MarkLogicGroups {
+		if group == nil || !group.IsBootstrap {
+			continue
+		}
+		if group.Tls != nil {
+			return group.Tls
+		}
+		return cluster.Spec.Tls
+	}
+	return nil
 }
 
 func bootstrapManagementEndpoint(cluster *marklogicv1.MarklogicCluster) (string, bool, error) {
@@ -199,30 +216,27 @@ func bootstrapManagementEndpoint(cluster *marklogicv1.MarklogicCluster) (string,
 		if domain == "" {
 			domain = "cluster.local"
 		}
-		tls := cluster.Spec.Tls
-		if group.Tls != nil {
-			tls = group.Tls
-		}
+		tls := bootstrapManagementTLSConfig(cluster)
 		useTLS := tls != nil && tls.EnableOnDefaultAppServers
 		return fmt.Sprintf("%s-0.%s.%s.svc.%s", name, name, cluster.Namespace, domain), useTLS, nil
 	}
 	return "", false, &bootstrapPrerequisiteError{message: "the bootstrap group is not defined."}
 }
 
-func (cc *ClusterContext) readBootstrapAdminCredentials(ctx context.Context, cluster *marklogicv1.MarklogicCluster) (string, string, error) {
-	secretName := cluster.Name + "-admin"
-	if cluster.Spec.Auth != nil && cluster.Spec.Auth.SecretName != nil && strings.TrimSpace(*cluster.Spec.Auth.SecretName) != "" {
-		secretName = strings.TrimSpace(*cluster.Spec.Auth.SecretName)
+func (cc *ClusterContext) readOperatorCredential(ctx context.Context, cluster *marklogicv1.MarklogicCluster) (string, error) {
+	secretName := operatorCredentialSecretName(cluster.Name)
+	if cluster.Spec.Auth != nil && cluster.Spec.Auth.OperatorSecretName != nil && strings.TrimSpace(*cluster.Spec.Auth.OperatorSecretName) != "" {
+		secretName = strings.TrimSpace(*cluster.Spec.Auth.OperatorSecretName)
 	}
 	secret := &corev1.Secret{}
 	if err := cc.Client.Get(ctx, types.NamespacedName{Namespace: cluster.Namespace, Name: secretName}, secret); err != nil {
-		return "", "", &bootstrapPrerequisiteError{message: "the bootstrap admin Secret could not be read."}
+		return "", &bootstrapPrerequisiteError{message: "the operator credential Secret could not be read."}
 	}
-	username, password := secret.Data["username"], secret.Data["password"]
-	if len(username) == 0 || len(password) == 0 {
-		return "", "", &bootstrapPrerequisiteError{message: "the bootstrap admin Secret is missing username or password."}
+	password := secret.Data["password"]
+	if len(password) == 0 {
+		return "", &bootstrapPrerequisiteError{message: "the operator credential Secret is missing password."}
 	}
-	return string(username), string(password), nil
+	return string(password), nil
 }
 
 // persistObjectStorageCheckpoints durably clears eligibility, and nothing else, before a required PUT.

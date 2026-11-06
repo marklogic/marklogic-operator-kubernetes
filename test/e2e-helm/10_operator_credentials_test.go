@@ -77,8 +77,44 @@ func TestOperatorCredentialHandoff(t *testing.T) {
 	})
 
 	feature.Teardown(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
-		if err := c.Client().Resources(namespaceName).Delete(ctx, cluster); err != nil && !apierrors.IsNotFound(err) {
+		client := c.Client()
+		if err := client.Resources(namespaceName).Delete(ctx, cluster); err != nil && !apierrors.IsNotFound(err) {
 			t.Errorf("Failed to delete MarklogicCluster: %v", err)
+		}
+
+		// Clean up PVCs and delete namespace to ensure test isolation
+		frameworkutils.RunCommand(fmt.Sprintf("kubectl -n %s delete pvc --all --ignore-not-found=true --force --grace-period=0", namespaceName))
+		time.Sleep(2 * time.Second)
+
+		ns := &corev1.Namespace{
+			ObjectMeta: metav1.ObjectMeta{Name: namespaceName},
+		}
+		if err := client.Resources().Delete(ctx, ns); err != nil && !apierrors.IsNotFound(err) {
+			t.Logf("Warning: failed to delete namespace %s: %v", namespaceName, err)
+		}
+
+		// Wait for namespace deletion to complete
+		for i := 0; i < 60; i++ {
+			ns := &corev1.Namespace{}
+			err := client.Resources().Get(ctx, namespaceName, "", ns)
+			if err != nil {
+				if apierrors.IsNotFound(err) {
+					t.Logf("Namespace %s successfully deleted", namespaceName)
+					break
+				}
+				t.Logf("Warning: failed to check namespace %s: %v", namespaceName, err)
+				break
+			}
+			if ns.Status.Phase == corev1.NamespaceTerminating {
+				if i < 59 {
+					time.Sleep(1 * time.Second)
+					continue
+				}
+			}
+			if i == 59 {
+				t.Logf("Warning: timeout waiting for namespace %s to fully delete", namespaceName)
+			}
+			break
 		}
 		return ctx
 	})

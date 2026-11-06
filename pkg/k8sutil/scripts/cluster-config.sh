@@ -20,9 +20,19 @@ fi
 # HTTP_PROTOCOL could be http or https 
 HTTP_PROTOCOL="http"
 HTTPS_OPTION=""
+BOOTSTRAP_HTTPS_OPTION=""
 if [[ "$MARKLOGIC_JOIN_TLS_ENABLED" == "true" ]]; then
     HTTP_PROTOCOL="https"
-    HTTPS_OPTION="-k"
+    if [[ -s "/run/secrets/marklogic-certs/cacert.pem" ]]; then
+        HTTPS_OPTION="--cacert /run/secrets/marklogic-certs/cacert.pem"
+    else
+        HTTPS_OPTION="-k"
+    fi
+    if [[ -s "/run/secrets/marklogic-bootstrap-certs/cacert.pem" ]]; then
+        BOOTSTRAP_HTTPS_OPTION="--cacert /run/secrets/marklogic-bootstrap-certs/cacert.pem"
+    else
+        BOOTSTRAP_HTTPS_OPTION="-k"
+    fi
 fi
 
 IS_BOOTSTRAP_HOST=false
@@ -84,7 +94,7 @@ get_current_host_protocol() {
     hostname="${1:-localhost}"
     port="${2:-8001}"
     protocol="http"
-    resp_code=$(curl -s --retry 5 -o /dev/null -w '%{http_code}' http://$hostname:$port)
+    resp_code=$(curl -s --retry 5 -m 5 -o /dev/null -w '%{http_code}' http://$hostname:$port)
     if [[ $resp_code -eq 403 ]]; then
         protocol="https"
     fi
@@ -96,19 +106,61 @@ get_current_host_protocol() {
 ###############################################################
 MARKLOGIC_ADMIN_USERNAME="$(< /run/secrets/ml-secrets/username)"
 MARKLOGIC_ADMIN_PASSWORD="$(< /run/secrets/ml-secrets/password)"
-if [[ "${MARKLOGIC_OPERATOR_CREDENTIALS_ACTIVE:-false}" == "true" ]]; then
-    MARKLOGIC_MANAGEMENT_USERNAME="marklogic-kubernetes-operator"
-    MARKLOGIC_MANAGEMENT_PASSWORD="$(< /run/secrets/ml-operator-secrets/password)"
-else
-    MARKLOGIC_MANAGEMENT_USERNAME="${MARKLOGIC_ADMIN_USERNAME}"
-    MARKLOGIC_MANAGEMENT_PASSWORD="${MARKLOGIC_ADMIN_PASSWORD}"
-fi
+MARKLOGIC_MANAGEMENT_USERNAME="marklogic-kubernetes-operator"
+MARKLOGIC_MANAGEMENT_PASSWORD=""
 
 # Make sure username and password variables are not empty
-if [[ -z "${MARKLOGIC_ADMIN_USERNAME}" ]] || [[ -z "${MARKLOGIC_ADMIN_PASSWORD}" ]] || \
-    [[ -z "${MARKLOGIC_MANAGEMENT_USERNAME}" ]] || [[ -z "${MARKLOGIC_MANAGEMENT_PASSWORD}" ]]; then
-    error "MarkLogic admin and management credentials must be set." exit
+if [[ -z "${MARKLOGIC_ADMIN_USERNAME}" ]] || [[ -z "${MARKLOGIC_ADMIN_PASSWORD}" ]]; then
+	 error "MarkLogic admin credentials must be set." exit
 fi
+
+################################################################
+# Wait for the controller to create and verify the dedicated operator user,
+# then use it for every operation after host and Security initialization.
+################################################################
+function activate_operator_credentials {
+    local manage_protocol manage_host response_code max_wait_seconds=300
+    local deadline=$((SECONDS + max_wait_seconds))
+    local -a manage_tls_options=()
+
+    info "Waiting for dedicated operator credentials (up to ${max_wait_seconds} seconds)"
+    while ((SECONDS < deadline)); do
+        if [[ ! -s /run/secrets/ml-operator-secrets/password ]]; then
+            if ((SECONDS < deadline)); then
+                sleep "${RETRY_INTERVAL}"
+            fi
+            continue
+        fi
+
+        MARKLOGIC_MANAGEMENT_PASSWORD="$(< /run/secrets/ml-operator-secrets/password)"
+        manage_protocol=$(get_current_host_protocol "${MARKLOGIC_BOOTSTRAP_HOST}" 8002)
+        manage_host="${MARKLOGIC_BOOTSTRAP_HOST}"
+        manage_tls_options=()
+        if [[ "${manage_protocol}" == "https" ]]; then
+            if [[ -s /run/secrets/marklogic-bootstrap-certs/cacert.pem ]]; then
+                manage_tls_options=(--cacert /run/secrets/marklogic-bootstrap-certs/cacert.pem)
+            else
+                manage_tls_options=(-k)
+            fi
+        fi
+
+        response_code=$(curl -s -m 20 --anyauth -o /dev/null -w '%{http_code}' \
+            --user "${MARKLOGIC_MANAGEMENT_USERNAME}:${MARKLOGIC_MANAGEMENT_PASSWORD}" \
+            "${manage_tls_options[@]}" \
+            "${manage_protocol}://${manage_host}:8002/manage/v2/hosts?view=status&format=json")
+        if [[ "${response_code}" == "200" ]]; then
+            info "Dedicated operator credentials are active"
+            return 0
+        fi
+
+        info "Dedicated operator credentials are not active yet (HTTP ${response_code}). Retry in ${RETRY_INTERVAL}s."
+        if ((SECONDS < deadline)); then
+            sleep "${RETRY_INTERVAL}"
+        fi
+    done
+
+    error "Dedicated operator credentials did not become active after ${max_wait_seconds} seconds." exit
+}
 
 # generate JSON payload conditionally with license details.
 if [[ -z "${LICENSE_KEY}" ]] || [[ -z "${LICENSEE}" ]]; then
@@ -146,12 +198,14 @@ fi
 ################################################################
 function restart_check {
     info "Waiting for MarkLogic to restart."
-    local retry_count LAST_START
-    LAST_START=$(curl -s -m 5 --anyauth --user "${MARKLOGIC_ADMIN_USERNAME}":"${MARKLOGIC_ADMIN_PASSWORD}" "http://$1:8001/admin/v1/timestamp")
+    local retry_count LAST_START username password
+    username=${3:-$MARKLOGIC_ADMIN_USERNAME}
+    password=${4:-$MARKLOGIC_ADMIN_PASSWORD}
+    LAST_START=$(curl -s -m 5 --anyauth --user "${username}:${password}" "http://$1:8001/admin/v1/timestamp")
     for ((retry_count = 0; retry_count < N_RETRY; retry_count = retry_count + 1)); do
         if [ "$2" == "${LAST_START}" ] || [ -z "${LAST_START}" ]; then
             sleep ${RETRY_INTERVAL}
-            LAST_START=$(curl -s -m 5 --anyauth --user "${MARKLOGIC_ADMIN_USERNAME}":"${MARKLOGIC_ADMIN_PASSWORD}" "http://$1:8001/admin/v1/timestamp")
+            LAST_START=$(curl -s -m 5 --anyauth --user "${username}:${password}" "http://$1:8001/admin/v1/timestamp")
         else
             info "MarkLogic has restarted."
             return 0
@@ -169,7 +223,7 @@ function join_check {
     for ((retry_count = 0; retry_count < N_RETRY; retry_count = retry_count + 1)); do
         response_code=$(curl -s -m 20 --anyauth \
             --user "${MARKLOGIC_MANAGEMENT_USERNAME}:${MARKLOGIC_MANAGEMENT_PASSWORD}" \
-            -o /tmp/marklogic-joining-host-status.json -w '%{http_code}' $HTTPS_OPTION \
+            -o /tmp/marklogic-joining-host-status.json -w '%{http_code}' $BOOTSTRAP_HTTPS_OPTION \
             "${HTTP_PROTOCOL}://${MARKLOGIC_BOOTSTRAP_HOST}:8002/manage/v2/hosts/${hostname}?view=status&format=json")
         if [[ "${response_code}" == "200" ]] && \
             grep -Eq '"online"[[:space:]]*:[[:space:]]*(true|\{[^}]*"value"[[:space:]]*:[[:space:]]*true)' /tmp/marklogic-joining-host-status.json; then
@@ -260,7 +314,7 @@ function init_marklogic {
                 sed 's%^.*<last-startup.*>\(.*\)</last-startup>.*$%\1%' \
             )
 
-            restart_check "${host}" "${last_startup}"
+            restart_check "${host}" "${last_startup}" "${MARKLOGIC_ADMIN_USERNAME}" "${MARKLOGIC_ADMIN_PASSWORD}"
             info "${host} - restarted"
             info "${host} - init complete"
         elif [ "${response_code}" -eq "204" ]; then
@@ -312,6 +366,63 @@ function wait_bootstrap_ready {
 }
 
 ################################################################
+# Return success only when this local host authenticates against
+# the shared cluster Security database with active management credentials.
+################################################################
+function local_host_uses_shared_security {
+    local manage_protocol manage_host response_code
+    local -a manage_tls_options=()
+
+    manage_protocol=$(get_current_host_protocol "$HOST_FQDN" 8002)
+    manage_host="localhost"
+    if [[ "$manage_protocol" == "https" ]]; then
+        manage_host="$HOST_FQDN"
+        if [[ -s "/run/secrets/marklogic-certs/cacert.pem" ]]; then
+            manage_tls_options=(--cacert /run/secrets/marklogic-certs/cacert.pem)
+        else
+            manage_tls_options=(-k)
+        fi
+    fi
+
+    response_code=$(curl -s -m 20 --anyauth -o /dev/null -w '%{http_code}' \
+        --user "${MARKLOGIC_MANAGEMENT_USERNAME}:${MARKLOGIC_MANAGEMENT_PASSWORD}" \
+        "${manage_tls_options[@]}" \
+        "${manage_protocol}://${manage_host}:8002/manage/v2/hosts/${HOST_FQDN}/properties?format=xml")
+
+    [[ "$response_code" == "200" ]]
+}
+
+################################################################
+# A successful cluster join restarts MarkLogic before the local Management API
+# is necessarily ready to authenticate against the shared Security database.
+# Retry only after the bootstrap has confirmed this host is registered.
+################################################################
+function wait_for_local_shared_security {
+    local retry_count=12
+
+    while ((retry_count > 0)); do
+        if local_host_uses_shared_security; then
+            return 0
+        fi
+        ((retry_count--))
+        if ((retry_count > 0)); then
+            info "Waiting for local shared Security authentication (${retry_count} retries remaining)"
+            sleep 5s
+        fi
+    done
+
+    return 1
+}
+
+function bootstrap_host_registration_status {
+    local hostname=$1
+
+    curl -s --anyauth -o /dev/null -w '%{http_code}' \
+        --user "${MARKLOGIC_MANAGEMENT_USERNAME}:${MARKLOGIC_MANAGEMENT_PASSWORD}" $BOOTSTRAP_HTTPS_OPTION \
+        "$HTTP_PROTOCOL://${MARKLOGIC_BOOTSTRAP_HOST}:8002/manage/v2/hosts/${hostname}/properties?format=xml"
+}
+
+################################################################
 # Function to initialize admin user and security DB
 # 
 # return values: 0 - admin user successfully initialized
@@ -323,7 +434,7 @@ function init_security_db {
     response_code=$( \
         curl -s --anyauth \
         -w '%{http_code}' -o "/tmp/${MARKLOGIC_BOOTSTRAP_HOST}.out" \
-        --user "${MARKLOGIC_MANAGEMENT_USERNAME}:${MARKLOGIC_MANAGEMENT_PASSWORD}" $HTTPS_OPTION \
+        --user "${MARKLOGIC_ADMIN_USERNAME}:${MARKLOGIC_ADMIN_PASSWORD}" $BOOTSTRAP_HTTPS_OPTION \
         $HTTP_PROTOCOL://$MARKLOGIC_BOOTSTRAP_HOST:8002/manage/v2/hosts/$MARKLOGIC_BOOTSTRAP_HOST/properties
     )
 
@@ -359,7 +470,10 @@ function init_security_db {
 # return values: 0 - admin user successfully initialized
 ################################################################
 function join_cluster {
-    hostname=$1
+    local hostname=$1
+    local cluster_config_file="$ML_KUBERNETES_FILE_PATH/cluster-config.zip"
+    local cluster_signature=""
+    local use_cached_config=false
     retry_count=5
 
     while [ $retry_count -gt 0 ]; do
@@ -369,14 +483,24 @@ function join_cluster {
         # if bootstrap host not init, return 403
         # if Security DB not set or credential not correct return 401
         # if host is already in cluster, return 200
-        response_code=$(curl -s --anyauth -o /dev/null -w '%{http_code}' \
-            --user "${MARKLOGIC_MANAGEMENT_USERNAME}:${MARKLOGIC_MANAGEMENT_PASSWORD}" $HTTPS_OPTION \
-            $HTTP_PROTOCOL://${MARKLOGIC_BOOTSTRAP_HOST}:8002/manage/v2/hosts/${hostname}/properties?format=xml \
-        )
+        response_code=$(bootstrap_host_registration_status "$hostname")
 
         if [ "${response_code}" = "200" ]; then
-            info "host has already joined the cluster"
-            return 0
+            if wait_for_local_shared_security; then
+                info "host registration and local shared Security authentication confirm the host has already joined the cluster"
+                rm -f "$cluster_config_file"
+                return 0
+            fi
+            if [[ -s "$cluster_config_file" ]]; then
+                IFS= read -r -N 2 cluster_signature < "$cluster_config_file"
+            fi
+            if [[ "$cluster_signature" != "PK" ]]; then
+                rm -f "$cluster_config_file"
+                error "Bootstrap already contains ${hostname}, but no valid persisted cluster configuration is available. Refusing duplicate registration; remove the stale host registration before retrying." exit
+            fi
+            info "Bootstrap already contains ${hostname}, but the local host does not use shared Security. Resuming the interrupted join with the persisted cluster configuration."
+            use_cached_config=true
+            break
         elif [ "${response_code}" = "401" ]; then
             error "Failed to join the cluster: Security DB not set or credential not correct. Exit."
             exit 1
@@ -390,6 +514,7 @@ function join_cluster {
             fi
         else
             info "Proceed to joining bootstrap host"
+            rm -f "$cluster_config_file"
             break
         fi
     done
@@ -398,7 +523,7 @@ function join_cluster {
     # Wait until the group is ready
     retry_count=10
     while [ $retry_count -gt 0 ]; do
-        GROUP_RESP_CODE=$( curl --anyauth -m 20 -s -o /dev/null -w "%{http_code}" $HTTPS_OPTION -X GET $HTTP_PROTOCOL://${MARKLOGIC_BOOTSTRAP_HOST}:8002/manage/v2/groups/${MARKLOGIC_GROUP} --anyauth --user "${MARKLOGIC_MANAGEMENT_USERNAME}:${MARKLOGIC_MANAGEMENT_PASSWORD}" )
+        GROUP_RESP_CODE=$( curl --anyauth -m 20 -s -o /dev/null -w "%{http_code}" $BOOTSTRAP_HTTPS_OPTION -X GET $HTTP_PROTOCOL://${MARKLOGIC_BOOTSTRAP_HOST}:8002/manage/v2/groups/${MARKLOGIC_GROUP} --anyauth --user "${MARKLOGIC_MANAGEMENT_USERNAME}:${MARKLOGIC_MANAGEMENT_PASSWORD}" )
         info "MARKLOGIC_BOOTSTRAP_HOST: $MARKLOGIC_BOOTSTRAP_HOST"
         info "MARKLOGIC_GROUP: $MARKLOGIC_GROUP"
         info "GROUP_RESP_CODE: $GROUP_RESP_CODE"
@@ -417,34 +542,39 @@ function join_cluster {
         fi
     done
 
-    info "joining cluster of group ${MARKLOGIC_GROUP}"
-    MARKLOGIC_GROUP_PAYLOAD="group=${MARKLOGIC_GROUP}"
-    curl_retry_validate false "http://localhost:8001/admin/v1/server-config" 200 \
-        "-o" "/tmp/host.xml" "-X" "GET" "-H" "Accept: application/xml"
-    
-    info "getting cluster-config from bootstrap host"
-    curl_retry_validate false "$HTTP_PROTOCOL://${MARKLOGIC_BOOTSTRAP_HOST}:8001/admin/v1/cluster-config" 200 \
-        "--anyauth" "--user" "${MARKLOGIC_ADMIN_USERNAME}:${MARKLOGIC_ADMIN_PASSWORD}" \
-        "-X" "POST" "-d" "${MARKLOGIC_GROUP_PAYLOAD}" \
-        "--data-urlencode" "server-config@/tmp/host.xml" \
-        "-H" "Content-type: application/x-www-form-urlencoded" \
-        "-o" "/tmp/cluster.zip" $HTTPS_OPTION
+    if [[ "$use_cached_config" != "true" ]]; then
+        info "joining cluster of group ${MARKLOGIC_GROUP}"
+        MARKLOGIC_GROUP_PAYLOAD="group=${MARKLOGIC_GROUP}"
+        curl_retry_validate false "http://localhost:8001/admin/v1/server-config" 200 \
+            "-o" "/tmp/host.xml" "-X" "GET" "-H" "Accept: application/xml"
 
-    response_code=${CURL_RESPONSE_CODE:-0}
-    cluster_signature=""
-    IFS= read -r -N 2 cluster_signature < /tmp/cluster.zip
-    if [[ "${response_code}" != "200" ]] || [[ "${cluster_signature}" != "PK" ]]; then
-        rm -f /tmp/cluster.zip
-        error "Bootstrap host returned an invalid cluster configuration (HTTP ${response_code})." exit
+        mkdir -p "$ML_KUBERNETES_FILE_PATH"
+        info "getting cluster-config from bootstrap host"
+        curl_retry_validate false "$HTTP_PROTOCOL://${MARKLOGIC_BOOTSTRAP_HOST}:8001/admin/v1/cluster-config" 200 \
+            "--anyauth" "--user" "${MARKLOGIC_MANAGEMENT_USERNAME}:${MARKLOGIC_MANAGEMENT_PASSWORD}" \
+            "-X" "POST" "-d" "${MARKLOGIC_GROUP_PAYLOAD}" \
+            "--data-urlencode" "server-config@/tmp/host.xml" \
+            "-H" "Content-type: application/x-www-form-urlencoded" \
+            "-o" "$cluster_config_file" $BOOTSTRAP_HTTPS_OPTION
+
+        response_code=${CURL_RESPONSE_CODE:-0}
+        cluster_signature=""
+        if [[ -s "$cluster_config_file" ]]; then
+            IFS= read -r -N 2 cluster_signature < "$cluster_config_file"
+        fi
+        if [[ "${response_code}" != "200" ]] || [[ "${cluster_signature}" != "PK" ]]; then
+            rm -f "$cluster_config_file"
+            error "Bootstrap host returned an invalid cluster configuration (HTTP ${response_code})." exit
+        fi
     fi
 
-    timestamp=$(curl -s --anyauth --user "${MARKLOGIC_ADMIN_USERNAME}:${MARKLOGIC_ADMIN_PASSWORD}" "http://localhost:8001/admin/v1/timestamp" )
+    timestamp=$(curl -s "http://localhost:8001/admin/v1/timestamp")
 
     info "joining cluster of group ${MARKLOGIC_GROUP}"
     curl_retry_validate false "http://localhost:8001/admin/v1/cluster-config" 202 \
             "-o" "/dev/null" \
             "-X" "POST" "-H" "Content-type: application/zip" \
-            "--data-binary" "@/tmp/cluster.zip"
+            "--data-binary" "@${cluster_config_file}"
 
     response_code=${CURL_RESPONSE_CODE:-0}
     if [[ "${response_code}" != "202" ]]; then
@@ -453,8 +583,9 @@ function join_cluster {
     
     # 202 causes restart
     info "restart triggered"
-    restart_check "localhost" "${timestamp}"
+    restart_check "localhost" "${timestamp}" "${MARKLOGIC_MANAGEMENT_USERNAME}" "${MARKLOGIC_MANAGEMENT_PASSWORD}"
     join_check "${hostname}"
+    rm -f "$cluster_config_file"
 
     info "joined group ${MARKLOGIC_GROUP}"
 }
@@ -471,7 +602,11 @@ function configure_group {
     bootstrap_protocol=$(get_current_host_protocol $MARKLOGIC_BOOTSTRAP_HOST)
     if [[ $bootstrap_protocol == "https" ]]; then
         LOCAL_HTTP_PROTOCOL="https"
-        LOCAL_HTTPS_OPTION="-k"
+        if [[ -s "/run/secrets/marklogic-bootstrap-certs/cacert.pem" ]]; then
+            LOCAL_HTTPS_OPTION="--cacert /run/secrets/marklogic-bootstrap-certs/cacert.pem"
+        else
+            LOCAL_HTTPS_OPTION="-k"
+        fi
     fi  
     log "configuring group"
     if [[ "$IS_BOOTSTRAP_HOST" == "true" ]]; then
@@ -529,7 +664,11 @@ function configure_group {
             group_bootstrap_protocol=$(get_current_host_protocol $MARKLOGIC_BOOTSTRAP_HOST 8002)
             if [[ $group_bootstrap_protocol == "https" ]]; then
                 GROUP_HTTP_PROTOCOL="https"
-                GROUP_HTTPS_OPTION="-k"
+                if [[ -s "/run/secrets/marklogic-bootstrap-certs/cacert.pem" ]]; then
+                    GROUP_HTTPS_OPTION="--cacert /run/secrets/marklogic-bootstrap-certs/cacert.pem"
+                else
+                    GROUP_HTTPS_OPTION="-k"
+                fi
                 info "Bootstrap host is using HTTPS on port 8002"
             else
                 info "Bootstrap host is using HTTP on port 8002"
@@ -548,11 +687,17 @@ function configure_group {
                 fi
             fi
             log "Info: Group $MARKLOGIC_GROUP has been created, configuring App-server App-Services in group $MARKLOGIC_GROUP on the MarkLogic cluster."
-            res_code=`curl --retry 5 --retry-max-time 60 --anyauth --user "${MARKLOGIC_MANAGEMENT_USERNAME}:${MARKLOGIC_MANAGEMENT_PASSWORD}" -m 20 -s ${GROUP_HTTPS_OPTION} -w '%{http_code}' -X POST -d '{"server-name":"App-Services", "root":"/", "port":8000,"modules-database":"Modules", "content-database":"Documents", "error-handler":"/MarkLogic/rest-api/8000-error-handler.xqy", "url-rewriter":"/MarkLogic/rest-api/8000-rewriter.xml"}' -H "Content-type: application/json" "${GROUP_HTTP_PROTOCOL}://${MARKLOGIC_BOOTSTRAP_HOST}:8002/manage/v2/servers?group-id=${MARKLOGIC_GROUP}&server-type=http"`
+            app_services_authentication=""
+            if [[ "$PATH_BASED_ROUTING" == "true" ]]; then
+                app_services_authentication='"authentication":"basic", '
+            fi
+            app_services_payload="{\"server-name\":\"App-Services\", ${app_services_authentication}\"root\":\"/\", \"port\":8000,\"modules-database\":\"Modules\", \"content-database\":\"Documents\", \"error-handler\":\"/MarkLogic/rest-api/8000-error-handler.xqy\", \"url-rewriter\":\"/MarkLogic/rest-api/8000-rewriter.xml\"}"
+            res_code=`curl --retry 5 --retry-max-time 60 --anyauth --user "${MARKLOGIC_MANAGEMENT_USERNAME}:${MARKLOGIC_MANAGEMENT_PASSWORD}" -m 20 -s ${GROUP_HTTPS_OPTION} -o /tmp/create-app-services-response.json -w '%{http_code}' -X POST -d "${app_services_payload}" -H "Content-type: application/json" "${GROUP_HTTP_PROTOCOL}://${MARKLOGIC_BOOTSTRAP_HOST}:8002/manage/v2/servers?group-id=${MARKLOGIC_GROUP}&server-type=http"`
             if [[ ${res_code} -eq 201 ]]; then
               log "Info: Successfully configured App-server App-Services into group $MARKLOGIC_GROUP on the MarkLogic cluster."
             else
               log "Info: Expected response code 201, got $res_code for App-Services configuration"
+                            cat /tmp/create-app-services-response.json
               exit 1
             fi        
         fi
@@ -562,9 +707,25 @@ function configure_group {
 
 }
 
+function current_host_group {
+    local response_code current_group
+    response_code=$(curl -s --anyauth -m 20 -o /tmp/current-host-group.xml -w '%{http_code}' \
+        --user "${MARKLOGIC_MANAGEMENT_USERNAME}:${MARKLOGIC_MANAGEMENT_PASSWORD}" \
+        "http://localhost:8002/manage/v2/hosts/${HOST_FQDN}/properties?format=xml")
+    if [[ "$response_code" != "200" ]]; then
+        return 1
+    fi
+    current_group=$(grep "<group>" /tmp/current-host-group.xml | sed 's%^.*<group.*>\(.*\)</group>.*$%\1%')
+    if [[ -z "$current_group" ]]; then
+        return 1
+    fi
+    printf '%s' "$current_group"
+}
+
 function configure_tls {
-    local protocol local_manage_protocol
+    local protocol local_manage_protocol local_manage_host tls_group response_code
     local -a local_manage_https_option=()
+    tls_group="$MARKLOGIC_GROUP"
     if [[ "$IS_BOOTSTRAP_HOST" == "true" ]] && [[ $MARKLOGIC_CLUSTER_TYPE == "bootstrap" ]]; then
         protocol=$(get_current_host_protocol)
         log "Info:  Current host protocol: $protocol"
@@ -572,11 +733,16 @@ function configure_tls {
             log "Info: MarkLogic server has already configured HTTPS for bootstrap host."
             return 0
         fi
+        if ! tls_group=$(current_host_group); then
+            error "Failed to resolve the bootstrap host's current group before TLS configuration."
+            return 1
+        fi
+        info "Configuring bootstrap TLS for current group ${tls_group}"
     fi
 
     info "Configuring TLS for App Servers"
 
-    AUTH_CURL=(curl --anyauth --user "${MARKLOGIC_ADMIN_USERNAME}:${MARKLOGIC_ADMIN_PASSWORD}" -m 20 -sS)
+    AUTH_CURL=(curl --anyauth --user "${MARKLOGIC_MANAGEMENT_USERNAME}:${MARKLOGIC_MANAGEMENT_PASSWORD}" -m 20 -sS)
 
     cd /tmp/
     if [[ -e "/run/secrets/marklogic-certs/tls.crt" ]]; then
@@ -675,13 +841,19 @@ EOF
         log "Info:  inserting following certificates for $cert_path for $MARKLOGIC_CLUSTER_TYPE"
 
         local_manage_protocol=$(get_current_host_protocol localhost 8002)
+        local_manage_host="localhost"
         if [[ "$local_manage_protocol" == "https" ]]; then
-            local_manage_https_option=(-k)
+            if [[ -s "/run/secrets/marklogic-certs/cacert.pem" ]]; then
+                local_manage_https_option=(--cacert /run/secrets/marklogic-certs/cacert.pem)
+                local_manage_host="$HOST_FQDN"
+            else
+                local_manage_https_option=(-k)
+            fi
         fi
         log "Info:  Local Manage protocol for certificate insertion: $local_manage_protocol"
         if ! res=$("${AUTH_CURL[@]}" --fail -w ' HTTP %{http_code}' "${local_manage_https_option[@]}" \
             -X POST --header "Content-Type:application/json" -d @insert_cert_payload.json \
-            "${local_manage_protocol}://localhost:8002/manage/v2/certificate-templates/defaultTemplate" 2>&1); then
+            "${local_manage_protocol}://${local_manage_host}:8002/manage/v2/certificate-templates/defaultTemplate" 2>&1); then
             error "Failed to insert named certificate: $res" exit
         fi
         log "Info:  $res"
@@ -690,32 +862,38 @@ EOF
 
     if [[ "$IS_BOOTSTRAP_HOST" == "true" ]]; then
         if [[ $MARKLOGIC_CLUSTER_TYPE == "bootstrap" ]]; then
-            log "Info:  Generating Temporary CA Certificate"
-            "${AUTH_CURL[@]}" -X POST -i -d @generateCA.xqy \
-            -H "Content-type: application/x-www-form-urlencoded" \
-            -H "Accept: multipart/mixed; boundary=BOUNDARY" \
-            http://localhost:8000/v1/eval
-            resp_code=$?
-            info "response code for Generating Temporary CA Certificate is $resp_code"
-            sleep 5s
-            fi
-        
-            log "Info:  enabling app-servers for HTTPS"
-            # Manage need be put in the last in the array to make sure http works for all the requests
-            appServers=("App-Services" "Admin" "Manage")
-            for appServer in ${appServers[@]}; do
-            log "configuring SSL for App Server $appServer"
-            curl --anyauth --user "${MARKLOGIC_ADMIN_USERNAME}:${MARKLOGIC_ADMIN_PASSWORD}" \
-                -X PUT -H "Content-type: application/json" -d '{"ssl-certificate-template":"defaultTemplate"}' \
-            http://localhost:8002/manage/v2/servers/${appServer}/properties?group-id=${MARKLOGIC_GROUP}
-            sleep 5s
-            done
-            log "Info:  Configure HTTPS in App Server finished"
-
             if [[ "$certType" == "self-signed" ]]; then
+                log "Info:  Generating Temporary CA Certificate"
+                "${AUTH_CURL[@]}" -X POST -i -d @generateCA.xqy \
+                -H "Content-type: application/x-www-form-urlencoded" \
+                -H "Accept: multipart/mixed; boundary=BOUNDARY" \
+                http://localhost:8000/v1/eval
+                resp_code=$?
+                info "response code for Generating Temporary CA Certificate is $resp_code"
+                sleep 5s
+            fi
+        fi
+        
+        log "Info:  enabling app-servers for HTTPS"
+        # Manage need be put in the last in the array to make sure http works for all the requests
+        appServers=("App-Services" "Admin" "Manage")
+        for appServer in ${appServers[@]}; do
+            log "configuring SSL for App Server $appServer"
+            response_code=$("${AUTH_CURL[@]}" -o /dev/null -w '%{http_code}' \
+                -X PUT -H "Content-type: application/json" -d '{"ssl-certificate-template":"defaultTemplate"}' \
+                "http://localhost:8002/manage/v2/servers/${appServer}/properties?group-id=${tls_group}")
+            if [[ "$response_code" != "200" && "$response_code" != "202" && "$response_code" != "204" ]]; then
+                error "Failed to configure TLS for App Server ${appServer} in group ${tls_group} (HTTP ${response_code})."
+                return 1
+            fi
+            sleep 5s
+        done
+        log "Info:  Configure HTTPS in App Server finished"
+
+        if [[ "$certType" == "self-signed" ]]; then
             log "Info:  Generate temporary certificate if necessary"
-            "${AUTH_CURL[@]}" -k -X POST -i -d @createTempCert.xqy -H "Content-type: application/x-www-form-urlencoded" \
-            -H "Accept: multipart/mixed; boundary=BOUNDARY" https://localhost:8000/v1/eval
+            "${AUTH_CURL[@]}" $HTTPS_OPTION -X POST -i -d @createTempCert.xqy -H "Content-type: application/x-www-form-urlencoded" \
+            -H "Accept: multipart/mixed; boundary=BOUNDARY" "https://${HOST_FQDN}:8000/v1/eval"
             resp_code=$?
             info "response code for Generate temporary certificate is $resp_code"
         fi
@@ -725,23 +903,85 @@ EOF
     rm -f /run/secrets/marklogic-certs/*.key
 }
 
+function configure_bootstrap_tls_before_operator_handoff {
+    local response_code
+    local -a verify_tls_options=()
+    if [[ "$MARKLOGIC_JOIN_TLS_ENABLED" != "true" ]] || [[ "$TLS_CONFIGURATION_CURRENT" == "true" ]]; then
+        return 0
+    fi
+    info "Configuring bootstrap TLS before operator credential handoff"
+    MARKLOGIC_MANAGEMENT_USERNAME="$MARKLOGIC_ADMIN_USERNAME"
+    MARKLOGIC_MANAGEMENT_PASSWORD="$MARKLOGIC_ADMIN_PASSWORD"
+    if ! configure_tls; then
+        MARKLOGIC_MANAGEMENT_USERNAME="marklogic-kubernetes-operator"
+        MARKLOGIC_MANAGEMENT_PASSWORD=""
+        error "Bootstrap TLS configuration failed before operator credential handoff." exit
+    fi
+    if [[ -s "/run/secrets/marklogic-certs/cacert.pem" ]]; then
+        verify_tls_options=(--cacert /run/secrets/marklogic-certs/cacert.pem)
+    else
+        verify_tls_options=(-k)
+    fi
+    response_code=$(curl -s --anyauth -m 20 -o /dev/null -w '%{http_code}' \
+        --user "${MARKLOGIC_ADMIN_USERNAME}:${MARKLOGIC_ADMIN_PASSWORD}" "${verify_tls_options[@]}" \
+        "https://${HOST_FQDN}:8002/manage/v2/hosts/${HOST_FQDN}/properties?format=xml")
+    MARKLOGIC_MANAGEMENT_USERNAME="marklogic-kubernetes-operator"
+    MARKLOGIC_MANAGEMENT_PASSWORD=""
+    if [[ "$response_code" != "200" ]]; then
+        error "Bootstrap TLS verification failed before operator credential handoff (HTTP ${response_code})." exit
+    fi
+    TLS_CONFIGURATION_CURRENT=true
+}
+
+
+function configure_app_server_basic_auth {
+    local app_server=$1
+    local manage_protocol manage_host response_code response_file
+    local -a manage_tls_options=()
+
+    manage_protocol=$(get_current_host_protocol localhost 8002)
+    manage_host="localhost"
+    if [[ "$manage_protocol" == "https" ]]; then
+        manage_host="$HOST_FQDN"
+        if [[ -s "/run/secrets/marklogic-certs/cacert.pem" ]]; then
+            manage_tls_options=(--cacert /run/secrets/marklogic-certs/cacert.pem)
+        else
+            manage_tls_options=(-k)
+        fi
+    fi
+
+    response_file="/tmp/configure-${app_server}-basic-auth-response.json"
+    response_code=$(curl --anyauth --retry 5 --retry-max-time 60 \
+        --user "${MARKLOGIC_MANAGEMENT_USERNAME}:${MARKLOGIC_MANAGEMENT_PASSWORD}" \
+        -m 20 -s -o "$response_file" -w '%{http_code}' "${manage_tls_options[@]}" \
+        -X PUT -H "Content-type: application/json" -d '{"authentication":"basic"}' \
+        "${manage_protocol}://${manage_host}:8002/manage/v2/servers/${app_server}/properties?group-id=${MARKLOGIC_GROUP}")
+
+    case "$response_code" in
+        200|202|204)
+            log "Info: App Server ${app_server} authentication set to basic (HTTP ${response_code})"
+            return 0
+            ;;
+        *)
+            log "Error: Failed to set App Server ${app_server} authentication to basic (HTTP ${response_code})"
+            [[ -s "$response_file" ]] && cat "$response_file"
+            return 1
+            ;;
+    esac
+}
 
 function configure_path_based_routing {
-    # Authentication configuration when path based is used
     info "Path based routing: $PATH_BASED_ROUTING"
-    if [[ $PATH_BASED_ROUTING == "true" ]]; then                    
+    if [[ $PATH_BASED_ROUTING == "true" ]]; then
         log "Info:  path based routing is set. Adapting authentication method"
-        resp=$(curl --anyauth -w "%{http_code}" --user "${MARKLOGIC_MANAGEMENT_USERNAME}:${MARKLOGIC_MANAGEMENT_PASSWORD}" -m 20 -s -X PUT -H "Content-type: application/json" -d '{"authentication":"basic"}' http://localhost:8002/manage/v2/servers/Admin/properties?group-id=${MARKLOGIC_GROUP})
-        log "Info:  Admin-Servers response code: $resp"
-        resp=$(curl --anyauth -w "%{http_code}" --user "${MARKLOGIC_MANAGEMENT_USERNAME}:${MARKLOGIC_MANAGEMENT_PASSWORD}" -m 20 -s -X PUT -H "Content-type: application/json" -d '{"authentication":"basic"}' http://localhost:8002/manage/v2/servers/App-Services/properties?group-id=${MARKLOGIC_GROUP})
-        log "Info:  App Service response code: $resp"
-        resp=$(curl --anyauth -w "%{http_code}" --user "${MARKLOGIC_MANAGEMENT_USERNAME}:${MARKLOGIC_MANAGEMENT_PASSWORD}" -m 20 -s -X PUT -H "Content-type: application/json" -d '{"authentication":"basic"}' http://localhost:8002/manage/v2/servers/Manage/properties?group-id=${MARKLOGIC_GROUP})
-        log "Info:  Manage response code: $resp"
+        for app_server in Admin App-Services Manage; do
+            retry 5 configure_app_server_basic_auth "$app_server" || \
+                error "Failed to configure basic authentication for App Server ${app_server}." exit
+        done
         log "Info:  Default App-Servers authentication set to basic auth"
     else
-        log "Info:  This is not the boostrap host or path based routing is not set. Skipping authentication configuration"
+        log "Info:  Path based routing is not set. Skipping authentication configuration"
     fi
-    #End of authentication configuration
 }
 
 function set_status_file {
@@ -816,25 +1056,46 @@ function check_status_file_for_boostrap {
 info "Start configuring MarkLogic for $HOST_FQDN"
 info "Bootstrap host: $MARKLOGIC_BOOTSTRAP_HOST"
 
-# Only do this if the bootstrap host is in the statefulset we are configuring
-if [[ "$IS_BOOTSTRAP_HOST" == "true" ]]; then
+# Only the designated bootstrap group's first host may initialize cluster Security.
+if [[ "$IS_BOOTSTRAP_HOST" == "true" ]] && [[ "$MARKLOGIC_CLUSTER_TYPE" == "bootstrap" ]]; then
     check_status_file_for_boostrap
     init_marklogic $HOST_FQDN
-    if [[ "${MARKLOGIC_CLUSTER_TYPE}" == "bootstrap" ]]; then
-        log "Info:  bootstrap host is ready"
-        init_security_db
-        retry 5 configure_group
-    else 
-        log "Info:  bootstrap host is ready"
-        retry 5 configure_group
-        join_cluster $HOST_FQDN
-    fi
+    log "Info:  bootstrap host is ready"
+    init_security_db
+    configure_bootstrap_tls_before_operator_handoff
+    activate_operator_credentials
+    retry 5 configure_group
     configure_path_based_routing
 else 
     check_status_file_for_nonbootstrap
-    init_marklogic $HOST_FQDN
     wait_bootstrap_ready
+    activate_operator_credentials
+    if local_host_uses_shared_security; then
+        info "Local shared Security authentication succeeded. Skipping host initialization."
+    else
+        response_code=$(bootstrap_host_registration_status "$HOST_FQDN")
+        case "$response_code" in
+            404)
+                init_marklogic "$HOST_FQDN"
+                ;;
+            200)
+                info "Bootstrap already contains ${HOST_FQDN}. Skipping host initialization; join recovery will use persisted cluster configuration."
+                ;;
+            401)
+                error "Failed to inspect the bootstrap host registration: credential rejected. Exit." exit
+                ;;
+            *)
+                error "Failed to inspect the bootstrap host registration: HTTP ${response_code}. Exit." exit
+                ;;
+        esac
+    fi
+    if [[ "$IS_BOOTSTRAP_HOST" == "true" ]]; then
+        retry 5 configure_group
+    fi
     join_cluster $HOST_FQDN
+    if [[ "$IS_BOOTSTRAP_HOST" == "true" ]]; then
+        configure_path_based_routing
+    fi
 fi
 
 if [[ $MARKLOGIC_JOIN_TLS_ENABLED == "true" ]]; then
