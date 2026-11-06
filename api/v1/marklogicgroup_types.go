@@ -87,6 +87,7 @@ type MarklogicGroupSpec struct {
 	AdditionalVolumeClaimTemplates *[]corev1.PersistentVolumeClaim `json:"additionalVolumeClaimTemplates,omitempty"`
 	SecretName                     string                          `json:"secretName,omitempty"`
 	Tls                            *Tls                            `json:"tls,omitempty"`
+	Tolerations                    []corev1.Toleration             `json:"tolerations,omitempty"`
 }
 
 // InternalState defines the observed state of MarklogicGroup

@@ -205,6 +205,125 @@ kubectl delete crd marklogicclusters.marklogic.progress.com
 kubectl delete crd marklogicgroups.marklogic.progress.com
 ```
 
+## Pod Scheduling with Taints and Tolerations
+
+The MarkLogic Operator supports Kubernetes taints and tolerations for advanced pod scheduling control. This feature enables:
+
+- **Dedicated Node Pools**: Reserve nodes exclusively for MarkLogic workloads
+- **Multi-Tenant Isolation**: Isolate different customer or department workloads
+- **Cost Optimization**: Use spot instances or preemptible nodes with graceful handling
+- **Performance Optimization**: Run on specialized hardware (high-memory, GPU nodes, etc.)
+- **Compliance**: Enforce workload segregation and zone isolation
+
+### Quick Start
+
+1. Taint nodes for MarkLogic workloads:
+```sh
+kubectl taint nodes node-1 node-2 node-3 marklogic-pool=true:NoSchedule
+kubectl label nodes node-1 node-2 node-3 marklogic-pool=true
+```
+
+2. Configure tolerations in your MarkLogic resource:
+```yaml
+apiVersion: marklogic.progress.com/v1
+kind: MarklogicGroup
+metadata:
+  name: my-ml-cluster
+spec:
+  name: MarkLogic
+  image: progressofficial/marklogic-db:12.0.3-ubi9-rootless-2.2.6
+  replicas: 3
+  
+  nodeSelector:
+    marklogic-pool: "true"
+  
+  tolerations:
+  - key: marklogic-pool
+    operator: Equal
+    value: "true"
+    effect: NoSchedule
+```
+
+### Configuration Reference
+
+| Field | Description | Required |
+|-------|-------------|----------|
+| `key` | Taint key to match | Yes |
+| `operator` | `Equal` or `Exists` | Yes |
+| `value` | Taint value (required for `Equal`) | For `Equal` operator |
+| `effect` | `NoSchedule`, `NoExecute`, or `PreferNoSchedule` | Yes |
+| `tolerationSeconds` | Grace period before eviction (for `NoExecute` only) | Optional |
+
+### Examples
+
+**Multiple tolerations:**
+```yaml
+tolerations:
+- key: performance-tier
+  operator: Equal
+  value: premium
+  effect: NoSchedule
+- key: workload-type
+  operator: Equal
+  value: database
+  effect: NoExecute
+  tolerationSeconds: 600
+```
+
+**Spot instances with graceful eviction:**
+```yaml
+tolerations:
+- key: spot-instance
+  operator: Equal
+  value: "true"
+  effect: NoExecute
+  tolerationSeconds: 1800
+```
+
+**Flexible matching (any value):**
+```yaml
+tolerations:
+- key: environment
+  operator: Exists
+  effect: NoSchedule
+```
+
+### Combining with Other Scheduling Features
+
+Tolerations work with `nodeSelector`, `affinity`, and `topologySpreadConstraints`:
+
+```yaml
+spec:
+  nodeSelector:
+    workload: database
+  
+  tolerations:
+  - key: database-pool
+    operator: Equal
+    value: "true"
+    effect: NoSchedule
+  
+  affinity:
+    podAntiAffinity:
+      preferredDuringSchedulingIgnoredDuringExecution:
+      - weight: 100
+        podAffinityTerm:
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/instance: MarkLogic
+          topologyKey: kubernetes.io/hostname
+  
+  topologySpreadConstraints:
+  - maxSkew: 1
+    topologyKey: topology.kubernetes.io/zone
+    whenUnsatisfiable: DoNotSchedule
+    labelSelector:
+      matchLabels:
+        app.kubernetes.io/instance: MarkLogic
+```
+
+For more information, see the [Kubernetes Taints and Tolerations documentation](https://kubernetes.io/docs/concepts/scheduling-eviction/taint-and-toleration/).
+
 ## Known Issues and Limitations
 
 1. The `fluent/fluent-bit:5.1.0` image has high security vulnerabilities. The default image is `fluent/fluent-bit:5.1.3`; review its security status and select an approved Fluent Bit or alternate image that meets your requirements before enabling log collection.
