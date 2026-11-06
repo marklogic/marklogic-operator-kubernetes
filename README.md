@@ -8,11 +8,11 @@ The MarkLogic Operator for Kubernetes is an operator that allows you to deploy a
 
 ### Prerequisites
 
-[Helm](https://helm.sh/docs/intro/install/) v3.0.0 or later and [Kubectl](https://kubernetes.io/docs/tasks/tools/) v1.30 or same as your Kubernetes version must be installed locally in order to use MarkLogic operator helm chart. 
+[Helm](https://helm.sh/docs/intro/install/) v3.0.0 or later and [Kubectl](https://kubernetes.io/docs/tasks/tools/) v1.36 or same as your Kubernetes version must be installed locally in order to use MarkLogic operator helm chart.
 
 ### Kubernetes Version
 
-This operator supports Kubernetes 1.30 or later.
+This operator supports Kubernetes 1.36 or later.
 
 VolumeAttributesClass (VAC) requires **Kubernetes 1.34 or later** for GA support;
 see [Change Disk Performance](#change-disk-performance).
