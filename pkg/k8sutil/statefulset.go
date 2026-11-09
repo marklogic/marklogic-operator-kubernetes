@@ -198,13 +198,13 @@ func (oc *OperatorContext) ReconcileStatefulset() (reconcile.Result, error) {
 
 	patchClient := client.MergeFrom(oc.MarklogicGroup.DeepCopy())
 	updated := false
-	if currentSts.Status.ReadyReplicas == 0 || currentSts.Status.ReadyReplicas != currentSts.Status.Replicas {
+	if ready, reason, message := statefulSetReadiness(currentSts, cr.Spec.Replicas); !ready {
 		logger.Info("MarkLogic statefulSet is not ready, setting condition and requeue")
 		condition := metav1.Condition{
 			Type:    "Ready",
 			Status:  metav1.ConditionFalse,
-			Reason:  "MarkLogicGroupStatefulSetNotReady",
-			Message: "MarkLogicGroup statefulSet is not ready",
+			Reason:  reason,
+			Message: message,
 		}
 		updated = oc.setCondition(&condition)
 		if updated {
@@ -219,8 +219,8 @@ func (oc *OperatorContext) ReconcileStatefulset() (reconcile.Result, error) {
 		condition := metav1.Condition{
 			Type:    "Ready",
 			Status:  metav1.ConditionTrue,
-			Reason:  "MarkLogicGroupStatefulSetReady",
-			Message: "MarkLogicGroup statefulSet is ready",
+			Reason:  reason,
+			Message: message,
 		}
 		updated = oc.setCondition(&condition)
 	}
@@ -235,6 +235,32 @@ func (oc *OperatorContext) ReconcileStatefulset() (reconcile.Result, error) {
 }
 
 const dataPVCGroupUIDAnnotation = "marklogic.progress.com/storage-group-uid"
+
+// statefulSetReadiness reports whether the StatefulSet has converged on its desired replica count.
+// A group scaled to zero is Ready once all pods are gone, matching Deployment availability semantics.
+// groupReplicas is the replica count requested on the group; a scale-up held back below it is not Ready.
+func statefulSetReadiness(sts *appsv1.StatefulSet, groupReplicas *int32) (ready bool, reason, message string) {
+	const (
+		notReadyReason = "MarkLogicGroupStatefulSetNotReady"
+		notReadyMsg    = "MarkLogicGroup statefulSet is not ready"
+	)
+	desired := int32(1)
+	if sts.Spec.Replicas != nil {
+		desired = *sts.Spec.Replicas
+	}
+	status := sts.Status
+	switch {
+	case status.ObservedGeneration < sts.Generation:
+		return false, notReadyReason, notReadyMsg
+	case groupReplicas != nil && *groupReplicas > desired:
+		return false, notReadyReason, notReadyMsg
+	case desired == 0 && status.Replicas == 0:
+		return true, "MarkLogicGroupScaledToZero", "MarkLogicGroup statefulSet is scaled to zero"
+	case desired == 0, status.Replicas != desired, status.ReadyReplicas != desired:
+		return false, notReadyReason, notReadyMsg
+	}
+	return true, "MarkLogicGroupStatefulSetReady", "MarkLogicGroup statefulSet is ready"
+}
 
 func validateClaimTemplateChanges(current, desired []corev1.PersistentVolumeClaim) error {
 	if len(current) != len(desired) {
@@ -464,13 +490,20 @@ func shouldDelayDynamicEmptyDirScaleDown(cr *marklogicv1.MarklogicGroup, current
 
 func (oc *OperatorContext) setCondition(condition *metav1.Condition) bool {
 	group := oc.MarklogicGroup
-	if group.Status.GetConditionStatus(condition.Type) != condition.Status {
-		// We are changing the status, so record the transition time
-		condition.LastTransitionTime = metav1.Now()
-		group.SetCondition(*condition)
-		return true
+	condition.LastTransitionTime = metav1.Now()
+	for _, existing := range group.Status.Conditions {
+		if existing.Type != condition.Type {
+			continue
+		}
+		if existing.Status == condition.Status && existing.Reason == condition.Reason && existing.Message == condition.Message {
+			return false
+		}
+		if existing.Status == condition.Status {
+			condition.LastTransitionTime = existing.LastTransitionTime
+		}
 	}
-	return false
+	group.SetCondition(*condition)
+	return true
 }
 
 func (oc *OperatorContext) GetStatefulSet(namespace string, stateful string) (*appsv1.StatefulSet, error) {
