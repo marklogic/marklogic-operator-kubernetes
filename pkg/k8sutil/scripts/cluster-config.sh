@@ -159,10 +159,12 @@ function restart_check {
 # Validate that response code is the same as expected response
 # code or exit with an error.
 #
-#   $1 :  Flag indicating if the script should exit if the given response code is not received ("true" to exit, "false" to return the response code")
+#   $1 :  Flag indicating if the script should exit if the given response code is not received ("true" to exit, "false" to return 1)
 #   $2 :  The target url to test against
 #   $3 :  The expected response code
 #   $4+:  Additional options to pass to curl
+# Returns 0 only when the expected response code was received; any other
+# outcome (including transport failure, code 000) returns 1.
 ################################################################
 function curl_retry_validate {
     local retry_count response response_code response_content
@@ -175,8 +177,8 @@ function curl_retry_validate {
         response=$(curl -s -m 30 -w '%{http_code}' "${curl_options[@]}" "$endpoint")
         response_code=$(tail -n1 <<< "$response")
         response_content=$(sed '$ d' <<< "$response")
-        if [[ ${response_code} -eq ${expected_response_code} ]]; then
-            return ${response_code}
+        if [[ "${response_code}" == "${expected_response_code}" ]]; then
+            return 0
         else
             echo "${response_content}" > /tmp/start-marklogic_curl_retry_validate.log
         fi
@@ -185,10 +187,10 @@ function curl_retry_validate {
     done
 
     if [[ "${return_error}" = "false" ]] ; then
-        return ${response_code}
+        return 1
     fi
-    [ -f "/tmp/start-marklogic_curl_retry_validate.log" ] && cat start-marklogic_curl_retry_validate.log
-    error "Expected response code ${expected_response_code}, got ${response_code} from ${endpoint}." exit
+    [ -f "/tmp/start-marklogic_curl_retry_validate.log" ] && cat /tmp/start-marklogic_curl_retry_validate.log
+    error "Expected response code ${expected_response_code}, got ${response_code:-000} from ${endpoint}." exit
 }
 
 ################################################################
@@ -312,7 +314,8 @@ function init_security_db {
             "-o" "/dev/null" \
             "-H" "Content-type:application/x-www-form-urlencoded; charset=utf-8" \
             "--data-urlencode" "admin-username=${MARKLOGIC_ADMIN_USERNAME}" "--data-urlencode" "admin-password=${MARKLOGIC_ADMIN_PASSWORD}" \
-            "--data-urlencode" "realm=${ML_REALM}" "--data-urlencode" "${MARKLOGIC_WALLET_PASSWORD_PAYLOAD}"
+            "--data-urlencode" "realm=${ML_REALM}" "--data-urlencode" "${MARKLOGIC_WALLET_PASSWORD_PAYLOAD}" \
+            || error "Failed to initialize bootstrap security: instance-admin did not return 202" exit
 
         restart_check "${MARKLOGIC_BOOTSTRAP_HOST}" "${timestamp}"
 
@@ -327,90 +330,10 @@ function init_security_db {
 # return values: 0 - admin user successfully initialized
 ################################################################
 function join_cluster {
-    hostname=$1
-    retry_count=5
-
-    while [ $retry_count -gt 0 ]; do
-        # check if host is already in the cluster
-        # if server could not be reached, response_code == 000
-        # if host has not join cluster, return 404
-        # if bootstrap host not init, return 403
-        # if Security DB not set or credential not correct return 401
-        # if host is already in cluster, return 200
-        response_code=$(curl -s --anyauth -o /dev/null -w '%{http_code}' \
-            --user "${MARKLOGIC_ADMIN_USERNAME}":"${MARKLOGIC_ADMIN_PASSWORD}" $HTTPS_OPTION \
-            $HTTP_PROTOCOL://${MARKLOGIC_BOOTSTRAP_HOST}:8002/manage/v2/hosts/${hostname}/properties?format=xml \
-        )
-
-        if [ "${response_code}" = "200" ]; then
-            info "host has already joined the cluster"
-            return 0
-        elif [ "${response_code}" = "401" ]; then
-            error "Failed to join the cluster: Security DB not set or credential not correct. Exit."
-            exit 1
-        elif [ "${response_code}" != "404" ]; then
-            info "Response code from bootstrap host: ${response_code}. Retry again in 10s"
-            sleep 10s
-            ((retry_count--))
-            if [ $retry_count -le 0 ]; then
-                error "Failed to get the expected response form bootstrap host after 5 times retry. Exit."
-                exit 1
-            fi
-        else
-            info "Proceed to joining bootstrap host"
-            break
-        fi
-    done
-
-    # process to join the host
-    # Wait until the group is ready
-    retry_count=10
-    while [ $retry_count -gt 0 ]; do
-        GROUP_RESP_CODE=$( curl --anyauth -m 20 -s -o /dev/null -w "%{http_code}" $HTTPS_OPTION -X GET $HTTP_PROTOCOL://${MARKLOGIC_BOOTSTRAP_HOST}:8002/manage/v2/groups/${MARKLOGIC_GROUP} --anyauth --user ${MARKLOGIC_ADMIN_USERNAME}:${MARKLOGIC_ADMIN_PASSWORD} )
-        info "MARKLOGIC_BOOTSTRAP_HOST: $MARKLOGIC_BOOTSTRAP_HOST"
-        info "MARKLOGIC_GROUP: $MARKLOGIC_GROUP"
-        info "GROUP_RESP_CODE: $GROUP_RESP_CODE"
-        if [[ ${GROUP_RESP_CODE} -eq 200 ]]; then
-            info "Found the group, process to join the group"
-            break
-        else 
-            info "GROUP_RESP_CODE: $GROUP_RESP_CODE , retry $retry_count times to joining ${MARKLOGIC_GROUP} group in marklogic cluster"
-            sleep 10s
-            ((retry_count--))
-            if [[ $retry_count -le 0 ]]; then
-                info "retry_count: $retry_count"
-                error "pass timeout to wait for the group ready"
-                exit 1
-            fi
-        fi
-    done
-
-    info "joining cluster of group ${MARKLOGIC_GROUP}"
-    MARKLOGIC_GROUP_PAYLOAD="group=${MARKLOGIC_GROUP}"
-    curl_retry_validate false "http://localhost:8001/admin/v1/server-config" 200 \
-        "-o" "/tmp/host.xml" "-X" "GET" "-H" "Accept: application/xml"
-    
-    info "getting cluster-config from bootstrap host"
-    curl_retry_validate false "$HTTP_PROTOCOL://${MARKLOGIC_BOOTSTRAP_HOST}:8001/admin/v1/cluster-config" 200 \
-        "--anyauth" "--user" "${MARKLOGIC_ADMIN_USERNAME}:${MARKLOGIC_ADMIN_PASSWORD}" \
-        "-X" "POST" "-d" "${MARKLOGIC_GROUP_PAYLOAD}" \
-        "--data-urlencode" "server-config@/tmp/host.xml" \
-        "-H" "Content-type: application/x-www-form-urlencoded" \
-        "-o" "/tmp/cluster.zip" $HTTPS_OPTION
-
-    timestamp=$(curl -s --anyauth --user "${MARKLOGIC_ADMIN_USERNAME}:${MARKLOGIC_ADMIN_PASSWORD}" "http://localhost:8001/admin/v1/timestamp" )
-
-    info "joining cluster of group ${MARKLOGIC_GROUP}"
-    curl_retry_validate false "http://localhost:8001/admin/v1/cluster-config" 202 \
-            "-o" "/dev/null" \
-            "-X" "POST" "-H" "Content-type: application/zip" \
-            "--data-binary" "@/tmp/cluster.zip"
-    
-    # 202 causes restart
-    info "restart triggered"
-    restart_check "localhost" "${timestamp}"
-
-    info "joined group ${MARKLOGIC_GROUP}"
+    # Keep the join protocol independently testable without sourcing credentials
+    # or running the top-level bootstrap sequence.
+    source "$(dirname "${BASH_SOURCE[0]}")/cluster-join.sh"
+    join_cluster_checked "$1" || error "Cluster join failed; configuration is incomplete" exit
 }
 
 ################################################################
@@ -433,13 +356,10 @@ function configure_group {
         group_cfg=$(printf "$group_cfg_template" "$MARKLOGIC_GROUP" "$XDQP_SSL_ENABLED") 
 
         # check if host is already in and get the current cluster
-        curl_retry_validate false "$LOCAL_HTTP_PROTOCOL://${MARKLOGIC_BOOTSTRAP_HOST}:8002/manage/v2/hosts/${HOST_FQDN}/properties?format=xml" 200 \
+        if curl_retry_validate false "$LOCAL_HTTP_PROTOCOL://${MARKLOGIC_BOOTSTRAP_HOST}:8002/manage/v2/hosts/${HOST_FQDN}/properties?format=xml" 200 \
             "--anyauth" "--user" "${MARKLOGIC_ADMIN_USERNAME}:${MARKLOGIC_ADMIN_PASSWORD}" \
-            "-o" "/tmp/groups.out" $LOCAL_HTTPS_OPTION
-
-        response_code=$?
-        info "response_code: $response_code"
-        if [ "${response_code}" = "200" ]; then
+            "-o" "/tmp/groups.out" $LOCAL_HTTPS_OPTION; then
+            info "host ${HOST_FQDN} is registered on the bootstrap host"
             current_group=$( \
                 cat "/tmp/groups.out" | 
                 grep "<group>" |
@@ -471,7 +391,7 @@ function configure_group {
                 return 1
             fi
         else
-            info "failed to get current group, response code: ${response_code}"
+            info "host ${HOST_FQDN} is not registered on the bootstrap host yet; skipping group property update"
         fi
 
         if [[ "$MARKLOGIC_CLUSTER_TYPE" == "non-bootstrap" ]]; then
