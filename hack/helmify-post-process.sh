@@ -21,6 +21,7 @@ METRICS_READER_RBAC_FILE="${TEMPLATES_DIR}/metrics-reader-rbac.yaml"
 METRICS_SERVICE_FILE="${TEMPLATES_DIR}/metrics-service.yaml"
 PROXY_RBAC_FILE="${TEMPLATES_DIR}/proxy-rbac.yaml"
 MARKLOGICCLUSTER_CRD_FILE="${TEMPLATES_DIR}/marklogiccluster-crd.yaml"
+MARKLOGICGROUP_CRD_FILE="${TEMPLATES_DIR}/marklogicgroup-crd.yaml"
 
 echo "=== helmify post-process: restoring scope + metrics-security support ==="
 
@@ -112,6 +113,103 @@ PYEOF
     fi
 else
     echo "  WARNING: ${MARKLOGICCLUSTER_CRD_FILE} not found – skipping CRD fix."
+fi
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 0.6. marklogicgroup-crd.yaml – add missing tolerations field after tls
+#      Helmify excludes the tolerations property from the spec schema,
+#      breaking the new per-group toleration override feature.
+# ──────────────────────────────────────────────────────────────────────────────
+if [ -f "${MARKLOGICGROUP_CRD_FILE}" ]; then
+    if ! grep -q "tolerations:" "${MARKLOGICGROUP_CRD_FILE}"; then
+        echo "  [marklogicgroup-crd.yaml] Adding missing tolerations field..."
+        python3 - "${MARKLOGICGROUP_CRD_FILE}" << 'PYEOF'
+import sys
+
+crd_file = sys.argv[1]
+with open(crd_file, 'r') as f:
+    lines = f.readlines()
+
+# Find the tls property close (type: object) and topologySpreadConstraints start
+tls_close_idx = None
+topology_start_idx = None
+
+for i, line in enumerate(lines):
+    # Find where tls block ends (look for "type: object" after tls property)
+    if 'tls:' in line and not tls_close_idx:
+        tls_start = i
+        # Find the corresponding close for tls object
+        for j in range(i + 1, len(lines)):
+            if lines[j].strip() == 'type: object' and 'tls' in ''.join(lines[i:j]):
+                tls_close_idx = j
+                break
+    
+    # Find where topologySpreadConstraints starts
+    if 'topologySpreadConstraints:' in line and not topology_start_idx:
+        topology_start_idx = i
+        break
+
+if tls_close_idx is None or topology_start_idx is None:
+    print("  ERROR: Could not find tls and/or topologySpreadConstraints in marklogicgroup-crd.yaml")
+    sys.exit(1)
+
+# Get indentation from topologySpreadConstraints to match it for tolerations
+topo_line = lines[topology_start_idx]
+topo_indent = len(topo_line) - len(topo_line.lstrip())
+
+# Extract the tolerations definition from base CRD
+# Since we don't have access to base CRD here, we'll construct it based on Kubernetes Toleration spec
+tolerations_yaml = f'''              tolerations:
+                description: |-
+                  The pod this Toleration is attached to tolerates any taint that matches
+                  the triple <key,value,effect> using the matching operator <operator>.
+                items:
+                  description: |-
+                    A toleration is a way for a pod to "tolerate" (or "forgive") a taint.
+                  properties:
+                    effect:
+                      description: Effect indicates the taint effect to match. Empty means match all taint effects.
+                      enum:
+                      - NoSchedule
+                      - NoExecute
+                      - PreferNoSchedule
+                      type: string
+                    key:
+                      description: Key is the taint key that the toleration applies to.
+                      type: string
+                    operator:
+                      description: Operator represents a key's relationship to the value. Valid operators are Exists and Equal.
+                      enum:
+                      - Exists
+                      - Equal
+                      type: string
+                    tolerationSeconds:
+                      description: TolerationSeconds represents the period of time the toleration (which must be of effect NoExecute, otherwise this field is ignored) tolerates the taint.
+                      format: int64
+                      type: integer
+                    value:
+                      description: Value is the taint value the toleration matches to.
+                      type: string
+                  type: object
+                type: array
+'''
+
+# Insert tolerations right before topologySpreadConstraints
+result = []
+result.extend(lines[:topology_start_idx])
+result.append(tolerations_yaml)
+result.extend(lines[topology_start_idx:])
+
+with open(crd_file, 'w') as f:
+    f.writelines(result)
+
+print(f"  Done: Added tolerations field before topologySpreadConstraints (line {topology_start_idx + 1}).")
+PYEOF
+    else
+        echo "  [marklogicgroup-crd.yaml] tolerations field already present – skipping."
+    fi
+else
+    echo "  WARNING: ${MARKLOGICGROUP_CRD_FILE} not found – skipping MarklogicGroup CRD fix."
 fi
 
 # ──────────────────────────────────────────────────────────────────────────────

@@ -5062,6 +5062,39 @@ spec:
                     default: false
                     type: boolean
                 type: object
+              tolerations:
+                description: |-
+                  The pod this Toleration is attached to tolerates any taint that matches
+                  the triple <key,value,effect> using the matching operator <operator>.
+                items:
+                  description: |-
+                    A toleration is a way for a pod to "tolerate" (or "forgive") a taint.
+                  properties:
+                    effect:
+                      description: Effect indicates the taint effect to match. Empty means match all taint effects.
+                      enum:
+                      - NoSchedule
+                      - NoExecute
+                      - PreferNoSchedule
+                      type: string
+                    key:
+                      description: Key is the taint key that the toleration applies to.
+                      type: string
+                    operator:
+                      description: Operator represents a key's relationship to the value. Valid operators are Exists and Equal.
+                      enum:
+                      - Exists
+                      - Equal
+                      type: string
+                    tolerationSeconds:
+                      description: TolerationSeconds represents the period of time the toleration (which must be of effect NoExecute, otherwise this field is ignored) tolerates the taint.
+                      format: int64
+                      type: integer
+                    value:
+                      description: Value is the taint value the toleration matches to.
+                      type: string
+                  type: object
+                type: array
               topologySpreadConstraints:
                 items:
                   description: TopologySpreadConstraint specifies how to spread matching
