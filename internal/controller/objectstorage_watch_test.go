@@ -102,6 +102,32 @@ func TestClusterPredicateKeepsOwnedGroupFiltering(t *testing.T) {
 	}
 }
 
+func TestGroupPredicateDoesNotMutateInformerObjects(t *testing.T) {
+	annotations := func(extra string) map[string]string {
+		return map[string]string{
+			"banzaicloud.com/last-applied":                     "patch-" + extra,
+			"kubectl.kubernetes.io/last-applied-configuration": "{}",
+			"team": "storage",
+		}
+	}
+	old := &marklogicv1.MarklogicGroup{ObjectMeta: metav1.ObjectMeta{Name: "dnode", Namespace: "ns", Annotations: annotations("1")}}
+	changed := old.DeepCopy()
+	changed.Annotations = annotations("2")
+	oldBefore, newBefore := old.DeepCopy(), changed.DeepCopy()
+
+	predicate := markLogicGroupCreateUpdateDeletePredicate()
+	if predicate.Update(event.UpdateEvent{ObjectOld: old, ObjectNew: changed}) {
+		t.Fatal("tracking-annotation-only changes must not trigger reconciliation")
+	}
+	if !reflect.DeepEqual(old, oldBefore) || !reflect.DeepEqual(changed, newBefore) {
+		t.Fatal("predicates receive shared informer objects and must not modify them")
+	}
+	changed.Annotations["team"] = "database"
+	if !predicate.Update(event.UpdateEvent{ObjectOld: old, ObjectNew: changed}) {
+		t.Fatal("user annotation changes must trigger reconciliation")
+	}
+}
+
 func TestSecretRevisionPredicate(t *testing.T) {
 	t.Parallel()
 	predicate := secretRevisionPredicate()

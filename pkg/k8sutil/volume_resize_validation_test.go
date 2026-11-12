@@ -19,7 +19,112 @@ import (
 	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 )
+
+func TestResizeValidationRetriesUnclaimedStatus(t *testing.T) {
+	for _, invalid := range []bool{false, true} {
+		for _, staleGeneration := range []bool{false, true} {
+			t.Run(fmt.Sprintf("invalid=%t/staleGeneration=%t", invalid, staleGeneration), func(t *testing.T) {
+				size := "3Gi"
+				wantPhase := marklogicv1.VolumeResizePhaseResizingPVCs
+				if invalid {
+					size = "invalid"
+					wantPhase = marklogicv1.VolumeResizePhaseFailed
+				}
+				oc := newResizeTestContext(t, resizeTestInput{
+					desiredSize: size, currentSize: "2Gi",
+					updateStrategy: appsv1.OnDeleteStatefulSetStrategyType, replicas: 1,
+				})
+				underlying := oc.Client
+				oc.APIReader = underlying
+				attempts := 0
+				oc.Client = interceptor.NewClient(underlying.(client.WithWatch), interceptor.Funcs{
+					SubResourceUpdate: func(ctx context.Context, next client.Client, sub string, obj client.Object, opts ...client.SubResourceUpdateOption) error {
+						if group, ok := obj.(*marklogicv1.MarklogicGroup); ok && sub == "status" && group.Status.VolumeResizeStatus != nil {
+							attempts++
+							if !staleGeneration && attempts == 1 {
+								return apierrors.NewConflict(schema.GroupResource{Group: "marklogic.progress.com", Resource: "marklogicgroups"}, obj.GetName(), fmt.Errorf("concurrent status update"))
+							}
+						}
+						return next.SubResource(sub).Update(ctx, obj, opts...)
+					},
+				})
+				if staleGeneration {
+					latest := getUpdatedGroup(t, oc)
+					latest.Generation++
+					if err := underlying.Update(oc.Ctx, latest); err != nil {
+						t.Fatal(err)
+					}
+				}
+
+				step := oc.ReconcileVolumeResizeValidation()
+				if !step.Completed() {
+					t.Fatal("an unsuccessful status claim must schedule a retry")
+				}
+				outcome, err := step.Output()
+				if err != nil || outcome.RequeueAfter != time.Second {
+					t.Fatalf("expected a one-second retry, got %+v, %v", outcome, err)
+				}
+				saved := getUpdatedGroup(t, oc)
+				if saved.Status.VolumeResizeStatus != nil {
+					t.Fatal("an unsuccessful claim must not persist resize status")
+				}
+				for ordinal := int32(0); ordinal < *saved.Spec.Replicas; ordinal++ {
+					pvc := &corev1.PersistentVolumeClaim{}
+					if err := underlying.Get(oc.Ctx, client.ObjectKey{Namespace: saved.Namespace, Name: fmt.Sprintf("datadir-dnode-%d", ordinal)}, pvc); err != nil {
+						t.Fatal(err)
+					}
+					if request := pvc.Spec.Resources.Requests[corev1.ResourceStorage]; request.Cmp(resourceMustParse("2Gi")) != 0 {
+						t.Fatal("an unsuccessful claim must not resize PVCs")
+					}
+				}
+				oc.MarklogicGroup = saved
+				step = oc.ReconcileVolumeResizeValidation()
+				if !step.Completed() {
+					t.Fatal("the retry must claim resize status")
+				}
+				if _, err := step.Output(); err != nil {
+					t.Fatal(err)
+				}
+				saved = getUpdatedGroup(t, oc)
+				if saved.Status.VolumeResizeStatus == nil || saved.Status.VolumeResizeStatus.Phase != wantPhase {
+					t.Fatalf("expected phase %s after retry, got %+v", wantPhase, saved.Status.VolumeResizeStatus)
+				}
+				wantAttempts := 2
+				if staleGeneration {
+					wantAttempts = 1
+				}
+				if attempts != wantAttempts {
+					t.Fatalf("expected %d claim attempts, got %d", wantAttempts, attempts)
+				}
+			})
+		}
+	}
+}
+
+func TestResizeValidationClaimErrorsPropagate(t *testing.T) {
+	for _, size := range []string{"3Gi", "invalid"} {
+		t.Run(size, func(t *testing.T) {
+			oc := newResizeTestContext(t, resizeTestInput{
+				desiredSize: size, currentSize: "2Gi",
+				updateStrategy: appsv1.OnDeleteStatefulSetStrategyType, replicas: 1,
+			})
+			oc.Client = interceptor.NewClient(oc.Client.(client.WithWatch), interceptor.Funcs{
+				SubResourceUpdate: func(ctx context.Context, next client.Client, sub string, obj client.Object, opts ...client.SubResourceUpdateOption) error {
+					return apierrors.NewForbidden(schema.GroupResource{Group: "marklogic.progress.com", Resource: "marklogicgroups"}, obj.GetName(), fmt.Errorf("status update denied"))
+				},
+			})
+			step := oc.ReconcileVolumeResizeValidation()
+			if !step.Completed() {
+				t.Fatal("expected a status update error")
+			}
+			if _, err := step.Output(); !apierrors.IsForbidden(err) {
+				t.Fatalf("expected Forbidden to propagate, got %v", err)
+			}
+		})
+	}
+}
 
 func TestResizeValidationSuccessInitializesStatus(t *testing.T) {
 	oc := newResizeTestContext(t, resizeTestInput{desiredSize: "50Gi", currentSize: "20Gi", updateStrategy: appsv1.OnDeleteStatefulSetStrategyType})

@@ -242,8 +242,9 @@ void publishTestResults() {
 
 void ensureGotestsum() {
     sh '''
-        command -v gotestsum >/dev/null 2>&1 || \
-          GO111MODULE=on GOBIN=/space/go/bin go install gotest.tools/gotestsum@v1.12.3
+        if ! command -v gotestsum >/dev/null 2>&1 || ! gotestsum --version 2>/dev/null | grep -q 'v1.13.0'; then
+          GO111MODULE=on GOBIN=/space/go/bin go install gotest.tools/gotestsum@v1.13.0
+        fi
     '''
 }
 
@@ -276,8 +277,9 @@ void runE2eTests(String scope = 'cluster', String installMode = 'fresh', String 
             error "Upgrade e2e flow only supports the cluster suite target."
         }
         ensureGotestsum()
+        def candidateOperatorImage = "${operatorRepo}:${VERSION}-candidate"
         sh """
-            make e2e-test-upgrade-cluster IMG=${operatorRepo}:${VERSION} MINIKUBE_PROFILE=${profile} ${goTestOverride("test/test_results/e2e-upgrade-cluster-${profile}.xml")}
+            make e2e-test-upgrade-cluster IMG=${operatorRepo}:${VERSION} E2E_UPGRADE_TARGET_IMAGE=${candidateOperatorImage} MINIKUBE_PROFILE=${profile} ${goTestOverride("test/test_results/e2e-upgrade-cluster-${profile}.xml")}
         """
         return
     }
@@ -352,6 +354,17 @@ void runEKSE2eTests(String parallelism = '1') {
 void runEKSCleanup() {
     withEksCredentials {
         sh 'make e2e-cleanup-eks'
+    }
+}
+
+void runEKSVacE2eTests() {
+    withEksCredentials {
+        ensureGotestsum()
+        sh """
+            make e2e-test-eks-vac \\
+              E2E_MARKLOGIC_IMAGE_VERSION=${env.EKS_MARKLOGIC_IMAGE_VERSION} \\
+              ${goTestOverride('test/test_results/e2e-eks-vac.xml')}
+        """
     }
 }
 
@@ -487,11 +500,13 @@ pipeline {
         choice(name: 'E2E_INSTALL_MODE', choices: ['fresh', 'upgrade'], description: 'Run the standard fresh-install e2e flow or the upgrade validation flow. Default is fresh.')
         choice(name: 'E2E_SCOPE', choices: ['namespace-only', 'cluster', 'both', 'dynamic-host', 'volume-resize'], description: 'Combined test selector: namespace-only runs Helm namespace suite, cluster runs full cluster suite, both runs cluster+namespace in parallel minikube shards, dynamic-host and volume-resize run focused cluster tests.')
         choice(name: 'E2E_RUNTIME', choices: ['minikube', 'eks'], description: 'Execution runtime for e2e tests. minikube runs profile-parallel shards; eks runs the EKS suite only.')
+        choice(name: 'E2E_KUBERNETES_VERSION', choices: ['v1.36.6', 'v1.37.2', 'v1.35.10'], description: 'Kubernetes version for minikube e2e clusters. Not used when E2E_RUNTIME=eks, which runs against the existing EKS cluster.')
         booleanParam(name: 'PUBLISH_IMAGE', defaultValue: false, description: 'Publish image to internal registry')
         string(name: 'emailList', defaultValue: emailList, description: 'List of email for build notification', trim: true)
         booleanParam(name: 'VERIFY_ISTIO_AMBIENT', defaultValue: true, description: 'Run Istio ambient mode e2e tests. For Minikube, Istio is installed only when this test path is selected; no dedicated cluster is created.')
         string(name: 'E2E_TOP_LEVEL_PARALLELISM', defaultValue: '', description: 'Max e2e test parallelism (integer 1-4). Defaults to 4 for EKS and 1 for minikube, because minikube profiles already run as parallel shards.', trim: true)
         string(name: 'EKS_MARKLOGIC_IMAGE_TAG', defaultValue: 'latest-12', description: 'MarkLogic image tag to pull from the EKS ECR registry when E2E_RUNTIME=eks. The full ECR URL is constructed at runtime from the AWS account ID resolved via STS.', trim: true)
+        booleanParam(name: 'VERIFY_VAC', defaultValue: false, description: 'Run VolumeAttributesClass e2e tests after the EKS suite. Requires E2E_RUNTIME=eks, E2E_INSTALL_MODE=fresh, and an EKS cluster on Kubernetes 1.34+ with the EBS CSI driver; creates billable gp3 volumes.')
     }
 
     stages {
@@ -553,6 +568,10 @@ pipeline {
                         }
                     }
 
+                    if (params.VERIFY_VAC && (!runOnEks || params.E2E_INSTALL_MODE != 'fresh')) {
+                        error "VERIFY_VAC=true requires E2E_RUNTIME='eks' and E2E_INSTALL_MODE='fresh'; Minikube has no VAC-capable CSI driver."
+                    }
+
                     if (runOnEks) {
                         if (!runClusterScoped) {
                             error "E2E_RUNTIME='eks' requires E2E_SCOPE to include cluster tests."
@@ -567,15 +586,26 @@ pipeline {
                         def runIstioOnEKS = params.E2E_INSTALL_MODE == 'fresh' && params.VERIFY_ISTIO_AMBIENT
                         try {
                             lock(resource: 'jenkinsKubeNinjasEksCluster', inversePrecedence: true) {
-                                timeout(time: 3, unit: 'HOURS') {
+                                timeout(time: params.VERIFY_VAC ? 6 : 3, unit: 'HOURS') {
                                     stage('Setup') {
                                         if (runIstioOnEKS) { runEKSIstioSetup() }
                                         else               { runEKSSetup() }
                                     }
-                                    stage('Run e2e Tests') { runEKSE2eTests(topLevelParallelism) }
+                                    // Each suite runs even if an earlier one fails; failures still fail the build.
+                                    stage('Run e2e Tests') {
+                                        catchError(buildResult: 'FAILURE', stageResult: 'FAILURE', catchInterruptions: false) { runEKSE2eTests(topLevelParallelism) }
+                                    }
                                     stage('Run Istio e2e Tests') {
-                                        if (runIstioOnEKS) { runEKSIstioE2eTests(topLevelParallelism) }
+                                        if (runIstioOnEKS) {
+                                            catchError(buildResult: 'FAILURE', stageResult: 'FAILURE', catchInterruptions: false) { runEKSIstioE2eTests(topLevelParallelism) }
+                                        }
                                         else { echo "Istio tests skipped (E2E_INSTALL_MODE=${params.E2E_INSTALL_MODE}, VERIFY_ISTIO_AMBIENT=${params.VERIFY_ISTIO_AMBIENT})" }
+                                    }
+                                    stage('Run VAC e2e Tests') {
+                                        if (params.VERIFY_VAC) {
+                                            catchError(buildResult: 'FAILURE', stageResult: 'FAILURE', catchInterruptions: false) { runEKSVacE2eTests() }
+                                        }
+                                        else { echo 'VAC tests skipped (VERIFY_VAC=false)' }
                                     }
                                 }
                             }
@@ -600,11 +630,13 @@ pipeline {
                     def namespaceGoTestOverride = goTestOverride("test/test_results/e2e-helm-${namespaceMinikubeProfile}.xml")
                     def namespaceUpgradeGoTestOverride = goTestOverride("test/test_results/e2e-upgrade-helm-${namespaceMinikubeProfile}.xml")
                     def istioGoTestOverride = goTestOverride("test/test_results/e2e-istio-${clusterMinikubeProfile}.xml")
+                    def candidateOperatorImage = "${operatorRepo}:${VERSION}-candidate"
+                    def operatorImage = params.E2E_INSTALL_MODE == 'upgrade' ? candidateOperatorImage : "${operatorRepo}:${VERSION}"
                     def clusterTestCommand = params.E2E_INSTALL_MODE == 'upgrade'
-                        ? "make e2e-test-upgrade-cluster IMG=${operatorRepo}:${VERSION} MINIKUBE_PROFILE=${clusterMinikubeProfile} ${clusterUpgradeGoTestOverride}"
+                        ? "make e2e-test-upgrade-cluster IMG=${operatorRepo}:${VERSION} E2E_UPGRADE_TARGET_IMAGE=${candidateOperatorImage} MINIKUBE_PROFILE=${clusterMinikubeProfile} ${clusterUpgradeGoTestOverride}"
                         : "make e2e-test-${clusterScope} IMG=${operatorRepo}:${VERSION} MINIKUBE_PROFILE=${clusterMinikubeProfile} ${clusterGoTestOverride}"
                     def namespaceTestCommand = params.E2E_INSTALL_MODE == 'upgrade'
-                        ? "make e2e-test-upgrade-helm-namespace IMG=${operatorRepo}:${VERSION} MINIKUBE_PROFILE=${namespaceMinikubeProfile} ${namespaceUpgradeGoTestOverride}"
+                        ? "make e2e-test-upgrade-helm-namespace IMG=${operatorRepo}:${VERSION} E2E_UPGRADE_TARGET_IMAGE=${candidateOperatorImage} MINIKUBE_PROFILE=${namespaceMinikubeProfile} ${namespaceUpgradeGoTestOverride}"
                         : "make e2e-test-helm-namespace IMG=${operatorRepo}:${VERSION} MINIKUBE_PROFILE=${namespaceMinikubeProfile} ${namespaceGoTestOverride}"
 
                     sh """
@@ -620,7 +652,7 @@ pipeline {
                             export E2E_TEST_PARALLELISM='${topLevelParallelism}'
 
                             echo '=====Starting cluster-scoped shard====='
-                            make e2e-setup-minikube IMG=${operatorRepo}:${VERSION} MINIKUBE_PROFILE=${clusterMinikubeProfile} MINIKUBE_REUSE=false E2E_SETUP_ISTIO=${clusterSetupIstio}
+                            make e2e-setup-minikube IMG=${operatorImage} MINIKUBE_PROFILE=${clusterMinikubeProfile} MINIKUBE_REUSE=false E2E_SETUP_ISTIO=${clusterSetupIstio}
                             ${clusterTestCommand}
                             if [ '${runIstio}' = 'true' ]; then
                                 make e2e-test-istio IMG=${operatorRepo}:${VERSION} E2E_ISTIO_AMBIENT=true MINIKUBE_PROFILE=${clusterMinikubeProfile} ${istioGoTestOverride}
@@ -639,7 +671,7 @@ pipeline {
                             export E2E_TEST_PARALLELISM='${topLevelParallelism}'
 
                             echo '=====Starting namespace-scoped shard====='
-                            make e2e-setup-minikube IMG=${operatorRepo}:${VERSION} MINIKUBE_PROFILE=${namespaceMinikubeProfile} MINIKUBE_REUSE=false E2E_SETUP_ISTIO=false
+                            make e2e-setup-minikube IMG=${operatorImage} MINIKUBE_PROFILE=${namespaceMinikubeProfile} MINIKUBE_REUSE=false E2E_SETUP_ISTIO=false
                             ${namespaceTestCommand}
                             echo '=====Namespace-scoped shard complete====='
                         }

@@ -47,6 +47,7 @@ spec:
   - name: Marklogic Kubernetes Operator
     url: https://marklogic-operator-kubernetes.domain
   maturity: alpha
+  minKubeVersion: 1.36.0
   provider:
     name: Progress Software Corp
     url: https://www.progress.com/
