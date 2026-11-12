@@ -154,6 +154,7 @@ func (cc *ClusterContext) GenerateMarkLogicGroupDef(cr *marklogicv1.MarklogicClu
 			UpdateStrategy:                 params.UpdateStrategy,
 			Affinity:                       params.Affinity,
 			NodeSelector:                   params.NodeSelector,
+			Tolerations:                    params.Tolerations,
 			Persistence:                    params.Persistence.DeepCopy(),
 			Service:                        params.Service,
 			LivenessProbe:                  params.LivenessProbe,
