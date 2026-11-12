@@ -10,12 +10,12 @@ VERSION ?= 1.3.1
 # Tool Versions
 KUSTOMIZE_VERSION ?= v5.5.0
 CONTROLLER_TOOLS_VERSION ?= v0.19.0
-ISTIO_VERSION ?= 1.28.3
+ISTIO_VERSION ?= 1.31.3
 OPERATOR_SDK_VERSION ?= v1.34.2
 GOLANGCI_LINT_VERSION ?= v1.62.2
 
 # ENVTEST_K8S_VERSION refers to the version of kubebuilder assets to be downloaded by envtest binary.
-ENVTEST_K8S_VERSION = 1.31.0
+ENVTEST_K8S_VERSION = 1.36.2
 
 # VERIFY_HUGE_PAGES defines if hugepages test is enabled or not for e2e test
 VERIFY_HUGE_PAGES ?= false
@@ -25,10 +25,10 @@ export E2E_KUSTOMIZE_VERSION ?= $(KUSTOMIZE_VERSION)
 export E2E_CONTROLLER_TOOLS_VERSION ?= $(CONTROLLER_TOOLS_VERSION)
 export E2E_MARKLOGIC_IMAGE_VERSION ?= progressofficial/marklogic-db:12.0.3-ubi9-rootless-2.2.6
 export FLUENT_BIT_IMAGE ?= fluent/fluent-bit:5.1.3
-export E2E_KUBERNETES_VERSION ?= v1.31.13
+export E2E_KUBERNETES_VERSION ?= v1.36.6
 export E2E_ISTIO_AMBIENT ?= false
 export E2E_TEST_TIMEOUT ?= 60m
-export E2E_HELM_TEST_TIMEOUT ?= 45m
+export E2E_HELM_TEST_TIMEOUT ?= 60m
 export E2E_SETUP_ISTIO ?= true
 # Enables t.Parallel() for top-level tests in ./test/e2e. Set false to force sequential execution.
 export E2E_TOP_LEVEL_PARALLEL ?= true
@@ -91,7 +91,7 @@ MINIKUBE_START_PROFILE_WITH_RETRIES = start_minikube_profile() { \
 # Namespace-scoped (Helm, scope.type=namespace) is the default going forward; set
 # E2E_SCOPE=cluster to run the cluster-scoped (kustomize/ClusterRole) suite instead.
 E2E_SCOPE ?= namespace
-E2E_UPGRADE_SOURCE_VERSION ?= 1.2.0
+E2E_UPGRADE_SOURCE_VERSION ?= 1.3.1
 E2E_UPGRADE_CLUSTER_TEST_TIMEOUT ?= 90m
 E2E_UPGRADE_HELM_NAMESPACE_TEST_TIMEOUT ?= 75m
 E2E_UPGRADE_CLEANUP_TIMEOUT ?= 15m
@@ -158,6 +158,7 @@ endif
 # Image for dev: ml-marklogic-operator-dev.bed-artifactory.bedford.progress.com/marklogic-operator-kubernetes
 IMG ?= progressofficial/marklogic-operator-kubernetes:$(VERSION)
 LOCAL_E2E_IMG ?= marklogic-operator-kubernetes:e2e-local
+E2E_UPGRADE_TARGET_IMAGE ?= $(LOCAL_E2E_IMG)
 
 
 # Get the currently used golang install path (in GOPATH/bin, unless GOBIN is set)
@@ -321,7 +322,7 @@ e2e-test-upgrade:
 # MINIKUBE_PROFILE clusters from the same shell.
 e2e-test-upgrade-cluster:
 	@echo "=====Running cluster-scoped upgrade validation (minikube profile: $(MINIKUBE_PROFILE))====="
-	@TARGET_IMG='$(IMG)'; \
+	@TARGET_IMG='$(E2E_UPGRADE_TARGET_IMAGE)'; \
 	if minikube -p $(MINIKUBE_PROFILE) status >/dev/null 2>&1; then \
 		if ! docker image inspect "$$TARGET_IMG" >/dev/null 2>&1; then \
 			if docker image inspect '$(LOCAL_E2E_IMG)' >/dev/null 2>&1; then \
@@ -348,7 +349,7 @@ e2e-test-upgrade-cluster:
 # MINIKUBE_PROFILE clusters from the same shell.
 e2e-test-upgrade-helm-namespace:
 	@echo "=====Running namespace-scoped upgrade validation (minikube profile: $(MINIKUBE_PROFILE))====="
-	@TARGET_IMG='$(IMG)'; \
+	@TARGET_IMG='$(E2E_UPGRADE_TARGET_IMAGE)'; \
 	if minikube -p $(MINIKUBE_PROFILE) status >/dev/null 2>&1; then \
 		if ! docker image inspect "$$TARGET_IMG" >/dev/null 2>&1; then \
 			if docker image inspect '$(LOCAL_E2E_IMG)' >/dev/null 2>&1; then \
@@ -494,7 +495,7 @@ else
 endif
 	minikube -p $(MINIKUBE_PROFILE) image load $(IMG)
 	minikube -p $(MINIKUBE_PROFILE) image load $(E2E_MARKLOGIC_IMAGE_VERSION)
-	minikube -p $(MINIKUBE_PROFILE) image load "docker.io/haproxytech/haproxy:alpine-3.4.6"
+	minikube -p $(MINIKUBE_PROFILE) image load "docker.io/haproxytech/haproxy:alpine-3.4.7"
 	minikube -p $(MINIKUBE_PROFILE) image load $(FLUENT_BIT_IMAGE)
 	minikube -p $(MINIKUBE_PROFILE) image ls
 
@@ -523,6 +524,8 @@ ecr-login: ## Authenticate Docker to ECR.
 # Scale EKS worker nodes up to EKS_NODE_COUNT and wait for them to be Ready.
 .PHONY: eks-scale-up
 eks-scale-up: ## Scale EKS worker nodes to EKS_NODE_COUNT.
+	@echo "=====Waiting for nodegroup $(EKS_NODEGROUP_NAME) to be ACTIVE====="
+	aws eks wait nodegroup-active --cluster-name $(EKS_CLUSTER_NAME) --nodegroup-name $(EKS_NODEGROUP_NAME) --region $(EKS_REGION)
 	@echo "=====Scaling EKS worker nodes to $(EKS_NODE_COUNT)====="
 	eksctl scale nodegroup \
 	  --cluster $(EKS_CLUSTER_NAME) \
@@ -547,6 +550,8 @@ eks-scale-up: ## Scale EKS worker nodes to EKS_NODE_COUNT.
 # Scale EKS worker nodes to 0 to minimise cost when the cluster is idle.
 .PHONY: eks-scale-down
 eks-scale-down: ## Scale EKS worker nodes to 0.
+	@echo "=====Waiting for nodegroup $(EKS_NODEGROUP_NAME) to be ACTIVE====="
+	aws eks wait nodegroup-active --cluster-name $(EKS_CLUSTER_NAME) --nodegroup-name $(EKS_NODEGROUP_NAME) --region $(EKS_REGION)
 	@echo "=====Scaling EKS worker nodes to 0====="
 	eksctl scale nodegroup \
 	  --cluster $(EKS_CLUSTER_NAME) \
@@ -614,6 +619,21 @@ e2e-test-eks: ## Run e2e tests on EKS.
 	PATH=$(LOCALBIN):$$PATH IMG=$(ECR_OPERATOR_IMAGE) E2E_DOCKER_IMAGE=$(ECR_OPERATOR_IMAGE) \
 	  $(GO_TEST) -v -count=1 -parallel $(E2E_TEST_PARALLELISM) -timeout 60m ./test/e2e
 
+E2E_VAC_STORAGE_CLASS ?= ml-e2e-vac-gp3
+E2E_VAC_STANDARD_CLASS ?= ml-e2e-vac-standard
+E2E_VAC_PERFORMANCE_CLASS ?= ml-e2e-vac-performance
+E2E_VAC_TEST_TIMEOUT ?= 90m
+
+# Run the opt-in VolumeAttributesClass e2e suite on EKS (Kubernetes 1.34+ with the EBS CSI driver).
+.PHONY: e2e-test-eks-vac
+e2e-test-eks-vac: ## Run VolumeAttributesClass e2e tests on EKS.
+	@echo "=====Applying VAC e2e storage profiles====="
+	$(LOCALBIN)/kubectl apply -f test/eks-config/vac-profiles.yaml
+	@echo "=====Running VAC e2e tests on EKS====="
+	PATH=$(LOCALBIN):$$PATH IMG=$(ECR_OPERATOR_IMAGE) E2E_DOCKER_IMAGE=$(ECR_OPERATOR_IMAGE) AWS_REGION=$(EKS_REGION) \
+	  E2E_VAC_ENABLED=true E2E_VAC_STORAGE_CLASS=$(E2E_VAC_STORAGE_CLASS) \
+	  E2E_VAC_STANDARD_CLASS=$(E2E_VAC_STANDARD_CLASS) E2E_VAC_PERFORMANCE_CLASS=$(E2E_VAC_PERFORMANCE_CLASS) \
+	  $(GO_TEST) -v -count=1 -timeout $(E2E_VAC_TEST_TIMEOUT) ./test/e2e -run '^TestVolumeAttributesClassClusterScoped$$'
 # Scale EKS worker nodes back to 0 after a test run.
 # Note: Kubernetes resources (operator, test namespaces) are removed by the
 # test framework's teardown during the test run itself. This target only scales
@@ -766,11 +786,11 @@ $(ENVTEST): $(LOCALBIN)
 	test -s $(LOCALBIN)/setup-envtest || GOBIN=$(LOCALBIN) go install sigs.k8s.io/controller-runtime/tools/setup-envtest@latest
 
 .PHONY: istioctl
-istioctl: $(ISTIOCTL) ## Download istioctl locally if necessary.
-$(ISTIOCTL): $(LOCALBIN)
-ifeq (,$(wildcard $(ISTIOCTL)))
-ifeq (, $(shell which istioctl 2>/dev/null))
-	@{ \
+istioctl: $(LOCALBIN) ## Download istioctl locally if necessary.
+	@if [ -x "$(ISTIOCTL)" ] && "$(ISTIOCTL)" version --remote=false 2>/dev/null | grep -q "$(ISTIO_VERSION)"; then \
+		echo "istioctl $(ISTIO_VERSION) already at $(ISTIOCTL)"; \
+	else \
+	{ \
 	set -e ;\
 	mkdir -p $(dir $(ISTIOCTL)) ;\
 	OS=$$(uname | tr '[:upper:]' '[:lower:]') ;\
@@ -794,11 +814,8 @@ ifeq (, $(shell which istioctl 2>/dev/null))
 	rm -rf "$$TMP_DIR" ;\
 	chmod +x "$(ISTIOCTL)" ;\
 	echo "istioctl successfully installed to $(ISTIOCTL)" ;\
-	}
-else
-ISTIOCTL = $(shell which istioctl)
-endif
-endif
+	} ; \
+	fi
 
 .PHONY: operator-sdk
 OPERATOR_SDK ?= $(LOCALBIN)/operator-sdk

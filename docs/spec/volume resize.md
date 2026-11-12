@@ -103,6 +103,8 @@ Acceptance criteria:
 4.  The operator fails safely and surfaces a reason if expansion is rejected by the Kubernetes API or storage provider.
     
 5.  The operator rejects or stalls conflicting resize operations for the same target group.
+
+6.  If the initial resize status cannot be claimed because of a concurrent status update or a stale group snapshot, the operator schedules reconciliation again after one second. This retry also applies when recording an invalid request, and does not depend on another resource event.
     
 
 #### **Status & Observability Reporting**

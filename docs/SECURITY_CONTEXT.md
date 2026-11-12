@@ -56,7 +56,7 @@ Configure HAProxy security at the cluster level in `spec.haproxy`:
 ```yaml
 haproxy:
   enabled: true
-  image: "haproxytech/haproxy:alpine-3.4.6"
+  image: "haproxytech/haproxy:alpine-3.4.7"
 
   # Pod-level security context
   # Applies to the entire HAProxy Deployment pod
