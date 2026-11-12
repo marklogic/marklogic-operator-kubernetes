@@ -20,6 +20,7 @@ METRICS_AUTH_RBAC_FILE="${TEMPLATES_DIR}/metrics-auth-rbac.yaml"
 METRICS_READER_RBAC_FILE="${TEMPLATES_DIR}/metrics-reader-rbac.yaml"
 METRICS_SERVICE_FILE="${TEMPLATES_DIR}/metrics-service.yaml"
 PROXY_RBAC_FILE="${TEMPLATES_DIR}/proxy-rbac.yaml"
+MARKLOGICCLUSTER_CRD_FILE="${TEMPLATES_DIR}/marklogiccluster-crd.yaml"
 
 echo "=== helmify post-process: restoring scope + metrics-security support ==="
 
@@ -36,6 +37,81 @@ elif [ -f "${PROXY_RBAC_FILE}" ] && [ -f "${METRICS_AUTH_RBAC_FILE}" ]; then
     echo "  [proxy-rbac.yaml] Removed stale file (metrics-auth-rbac.yaml already present)."
 else
     echo "  [metrics-auth-rbac.yaml] Already correctly named."
+fi
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 0.5. marklogiccluster-crd.yaml – restore top-level spec: after labels template
+#      Helmify places CRD properties (group, names, scope, versions) under
+#      metadata instead of under spec. This fix re-parents them to spec.
+# ──────────────────────────────────────────────────────────────────────────────
+if [ -f "${MARKLOGICCLUSTER_CRD_FILE}" ]; then
+    if ! grep -q '^spec:' "${MARKLOGICCLUSTER_CRD_FILE}"; then
+        echo "  [marklogiccluster-crd.yaml] Fixing CRD structure: restoring top-level spec:..."
+        python3 - "${MARKLOGICCLUSTER_CRD_FILE}" << 'PYEOF'
+import sys
+
+crd_file = sys.argv[1]
+with open(crd_file, 'r') as f:
+    lines = f.readlines()
+
+# Find the labels template line
+labels_template_idx = None
+for i, line in enumerate(lines):
+    if '{{- include "marklogic-operator-kubernetes.labels"' in line:
+        labels_template_idx = i
+        break
+
+if labels_template_idx is None:
+    print("  ERROR: Could not find labels template in marklogiccluster-crd.yaml")
+    sys.exit(1)
+
+# Find the first property after labels that should be under spec (group, names, scope, versions)
+first_spec_prop_idx = None
+for i in range(labels_template_idx + 1, len(lines)):
+    line = lines[i]
+    if line.lstrip().startswith(('group:', 'names:', 'scope:', 'versions:')):
+        first_spec_prop_idx = i
+        break
+
+if first_spec_prop_idx is None:
+    print("  ERROR: Could not find CRD spec properties after labels template")
+    sys.exit(1)
+
+# Verify that first_spec_prop is at indent 2 (currently child of metadata)
+first_prop_indent = len(lines[first_spec_prop_idx]) - len(lines[first_spec_prop_idx].lstrip())
+if first_prop_indent != 2:
+    print(f"  INFO: First spec property is at indent {first_prop_indent}, not the expected 2. Skipping fix.")
+    sys.exit(0)
+
+# Find the end of spec properties (first line at indent < 2 after first_spec_prop_idx, or end of file)
+last_spec_prop_idx = len(lines) - 1
+for i in range(first_spec_prop_idx, len(lines)):
+    line = lines[i]
+    if line.strip():  # Non-empty line
+        current_indent = len(line) - len(line.lstrip())
+        if current_indent < 2:
+            last_spec_prop_idx = i - 1
+            break
+    else:  # Empty line, might be followed by non-spec content
+        pass
+
+# Insert "spec:\n" right before the first spec property
+# Remove the indentation from the original line to insert at proper place
+result = []
+result.extend(lines[:first_spec_prop_idx])
+result.append('spec:\n')
+result.extend(lines[first_spec_prop_idx:])
+
+with open(crd_file, 'w') as f:
+    f.writelines(result)
+
+print(f"  Done: Added spec: before line {first_spec_prop_idx + 1}.")
+PYEOF
+    else
+        echo "  [marklogiccluster-crd.yaml] spec: already at root level – skipping."
+    fi
+else
+    echo "  WARNING: ${MARKLOGICCLUSTER_CRD_FILE} not found – skipping CRD fix."
 fi
 
 # ──────────────────────────────────────────────────────────────────────────────
