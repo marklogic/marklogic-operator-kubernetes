@@ -576,6 +576,13 @@ func (in *MarklogicClusterSpec) DeepCopyInto(out *MarklogicClusterSpec) {
 			(*out)[key] = val
 		}
 	}
+	if in.Tolerations != nil {
+		in, out := &in.Tolerations, &out.Tolerations
+		*out = make([]corev1.Toleration, len(*in))
+		for i := range *in {
+			(*in)[i].DeepCopyInto(&(*out)[i])
+		}
+	}
 	if in.TopologySpreadConstraints != nil {
 		in, out := &in.TopologySpreadConstraints, &out.TopologySpreadConstraints
 		*out = make([]corev1.TopologySpreadConstraint, len(*in))
@@ -1021,6 +1028,13 @@ func (in *MarklogicGroups) DeepCopyInto(out *MarklogicGroups) {
 		in, out := &in.Affinity, &out.Affinity
 		*out = new(corev1.Affinity)
 		(*in).DeepCopyInto(*out)
+	}
+	if in.Tolerations != nil {
+		in, out := &in.Tolerations, &out.Tolerations
+		*out = make([]corev1.Toleration, len(*in))
+		for i := range *in {
+			(*in)[i].DeepCopyInto(&(*out)[i])
+		}
 	}
 	if in.TopologySpreadConstraints != nil {
 		in, out := &in.TopologySpreadConstraints, &out.TopologySpreadConstraints
