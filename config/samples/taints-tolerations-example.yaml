@@ -99,13 +99,13 @@ spec:
       whenUnsatisfiable: DoNotSchedule
       labelSelector:
         matchLabels:
-          app.kubernetes.io/name: marklogiccluster
+          app.kubernetes.io/name: marklogic
     - maxSkew: 1
       topologyKey: topology.kubernetes.io/zone
       whenUnsatisfiable: ScheduleAnyway
       labelSelector:
         matchLabels:
-          app.kubernetes.io/name: marklogiccluster
+          app.kubernetes.io/name: marklogic
   
   markLogicGroups:
   - name: dnode
@@ -160,13 +160,13 @@ spec:
         whenUnsatisfiable: DoNotSchedule
         labelSelector:
           matchLabels:
-            app.kubernetes.io/name: marklogiccluster
+            app.kubernetes.io/name: marklogic
       - maxSkew: 1
         topologyKey: topology.kubernetes.io/zone
         whenUnsatisfiable: ScheduleAnyway
         labelSelector:
           matchLabels:
-            app.kubernetes.io/name: marklogiccluster
+            app.kubernetes.io/name: marklogic
   
   - name: enode
     replicas: 3
