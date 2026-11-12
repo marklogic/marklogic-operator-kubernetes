@@ -157,38 +157,71 @@ if tls_close_idx is None or topology_start_idx is None:
 topo_line = lines[topology_start_idx]
 topo_indent = len(topo_line) - len(topo_line.lstrip())
 
-# Extract the tolerations definition from base CRD
-# Since we don't have access to base CRD here, we'll construct it based on Kubernetes Toleration spec
-tolerations_yaml = f'''              tolerations:
-                description: |-
-                  The pod this Toleration is attached to tolerates any taint that matches
-                  the triple <key,value,effect> using the matching operator <operator>.
+# Extract the tolerations definition from base CRD to ensure consistency
+# Reading from config/crd/bases/ ensures we use the exact schema that was generated
+# by kubebuilder, including proper support for wildcard tolerations with empty effect.
+# The base CRD uses type: string (no enum) to allow empty strings per Kubernetes spec.
+base_crd_path = 'config/crd/bases/marklogic.progress.com_marklogicgroups.yaml'
+tolerations_yaml = None
+try:
+    with open(base_crd_path, 'r') as f:
+        lines = f.readlines()
+    
+    # Extract tolerations block from base CRD (lines ~5080-5122)
+    tol_start = None
+    tol_end = None
+    for i, line in enumerate(lines):
+        if '              tolerations:' in line:
+            tol_start = i
+        if tol_start is not None and '              topologySpreadConstraints:' in line:
+            tol_end = i
+            break
+    
+    if tol_start is not None and tol_end is not None:
+        # Extract and preserve exact indentation from base CRD
+        tolerations_yaml = ''.join(lines[tol_start:tol_end])
+    else:
+        print("  WARNING: Could not extract tolerations from base CRD, using fallback schema")
+except Exception as e:
+    print(f"  WARNING: Error reading base CRD ({e}), using fallback schema")
+
+# Fallback schema if base CRD is not available (replicates generated CRD schema without enums)
+if tolerations_yaml is None:
+    tolerations_yaml = '''              tolerations:
                 items:
                   description: |-
-                    A toleration is a way for a pod to "tolerate" (or "forgive") a taint.
+                    The pod this Toleration is attached to tolerates any taint that matches
+                    the triple <key,value,effect> using the matching operator <operator>.
                   properties:
                     effect:
-                      description: Effect indicates the taint effect to match. Empty means match all taint effects.
-                      enum:
-                      - NoSchedule
-                      - NoExecute
-                      - PreferNoSchedule
+                      description: |-
+                        Effect indicates the taint effect to match. Empty means match all taint effects.
+                        When specified, allowed values are NoSchedule, PreferNoSchedule and NoExecute.
                       type: string
                     key:
-                      description: Key is the taint key that the toleration applies to.
+                      description: |-
+                        Key is the taint key that the toleration applies to. Empty means match all taint keys.
+                        If the key is empty, operator must be Exists; this combination means to match all values and all keys.
                       type: string
                     operator:
-                      description: Operator represents a key's relationship to the value. Valid operators are Exists and Equal.
-                      enum:
-                      - Exists
-                      - Equal
+                      description: |-
+                        Operator represents a key's relationship to the value.
+                        Valid operators are Exists and Equal. Defaults to Equal.
+                        Exists is equivalent to wildcard for value, so that a pod can
+                        tolerate all taints of a particular category.
                       type: string
                     tolerationSeconds:
-                      description: TolerationSeconds represents the period of time the toleration (which must be of effect NoExecute, otherwise this field is ignored) tolerates the taint.
+                      description: |-
+                        TolerationSeconds represents the period of time the toleration (which must be
+                        of effect NoExecute, otherwise this field is ignored) tolerates the taint. By default,
+                        it is not set, which means tolerate the taint forever (do not evict). Zero and
+                        negative values will be treated as 0 (evict immediately) by the system.
                       format: int64
                       type: integer
                     value:
-                      description: Value is the taint value the toleration matches to.
+                      description: |-
+                        Value is the taint value the toleration matches to.
+                        If the operator is Exists, the value should be empty, otherwise just a regular string.
                       type: string
                   type: object
                 type: array
