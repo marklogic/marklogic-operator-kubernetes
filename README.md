@@ -315,7 +315,7 @@ spec:
         podAffinityTerm:
           labelSelector:
             matchLabels:
-              app.kubernetes.io/instance: MarkLogic
+              app.kubernetes.io/instance: dnode  # Must match group name
           topologyKey: kubernetes.io/hostname
   
   topologySpreadConstraints:
@@ -324,7 +324,7 @@ spec:
     whenUnsatisfiable: DoNotSchedule
     labelSelector:
       matchLabels:
-        app.kubernetes.io/instance: MarkLogic
+        app.kubernetes.io/instance: dnode  # Must match group name
 ```
 
 For more information, see the [Kubernetes Taints and Tolerations documentation](https://kubernetes.io/docs/concepts/scheduling-eviction/taint-and-toleration/).
