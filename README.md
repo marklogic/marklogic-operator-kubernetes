@@ -228,7 +228,7 @@ kind: MarklogicGroup
 metadata:
   name: my-ml-cluster
 spec:
-  name: MarkLogic
+  name: marklogic  # Must be lowercase - used as StatefulSet name (DNS-1123 compatible)
   image: progressofficial/marklogic-db:12.0.3-ubi9-rootless-2.2.6
   replicas: 3
   
