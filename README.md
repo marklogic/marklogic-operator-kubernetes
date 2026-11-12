@@ -223,26 +223,31 @@ kubectl taint nodes node-1 node-2 node-3 marklogic-pool=true:NoSchedule
 kubectl label nodes node-1 node-2 node-3 marklogic-pool=true
 ```
 
-2. Configure tolerations in your MarkLogic resource:
+2. Configure tolerations in your MarkLogic cluster:
 ```yaml
 apiVersion: marklogic.progress.com/v1
-kind: MarklogicGroup
+kind: MarklogicCluster
 metadata:
   name: my-ml-cluster
 spec:
-  name: marklogic  # Must be lowercase - used as StatefulSet name (DNS-1123 compatible)
   image: progressofficial/marklogic-db:12.0.3-ubi9-rootless-2.2.6
-  replicas: 3
   
-  nodeSelector:
-    marklogic-pool: "true"
-  
-  tolerations:
-  - key: marklogic-pool
-    operator: Equal
-    value: "true"
-    effect: NoSchedule
+  markLogicGroups:
+  - name: dnode
+    replicas: 3
+    isBootstrap: true  # Must have at least one bootstrap group for cluster initialization
+    
+    nodeSelector:
+      marklogic-pool: "true"
+    
+    tolerations:
+    - key: marklogic-pool
+      operator: Equal
+      value: "true"
+      effect: NoSchedule
 ```
+
+**Important**: Use a `MarklogicCluster` (not standalone `MarklogicGroup`) with a bootstrap group. The cluster reconciler generates required admin Secrets (`<cluster-name>-admin`) that pods need for startup. Standalone groups without a cluster won't have these credentials and will fail to start.
 
 ### Configuration Reference
 
