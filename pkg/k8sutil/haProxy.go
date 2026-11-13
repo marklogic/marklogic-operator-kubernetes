@@ -305,6 +305,9 @@ func (cc *ClusterContext) createHAProxyDeploymentDef(meta metav1.ObjectMeta) *ap
 			},
 		)
 	}
+	if cr.Spec.HAProxy.Tolerations != nil && len(cr.Spec.HAProxy.Tolerations) > 0 {
+		deploymentDef.Spec.Template.Spec.Tolerations = cr.Spec.HAProxy.Tolerations
+	}
 	AddOwnerRefToObject(deploymentDef, ownerDef)
 	return deploymentDef
 }

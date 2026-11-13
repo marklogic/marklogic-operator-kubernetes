@@ -20,6 +20,8 @@ METRICS_AUTH_RBAC_FILE="${TEMPLATES_DIR}/metrics-auth-rbac.yaml"
 METRICS_READER_RBAC_FILE="${TEMPLATES_DIR}/metrics-reader-rbac.yaml"
 METRICS_SERVICE_FILE="${TEMPLATES_DIR}/metrics-service.yaml"
 PROXY_RBAC_FILE="${TEMPLATES_DIR}/proxy-rbac.yaml"
+MARKLOGICCLUSTER_CRD_FILE="${TEMPLATES_DIR}/marklogiccluster-crd.yaml"
+MARKLOGICGROUP_CRD_FILE="${TEMPLATES_DIR}/marklogicgroup-crd.yaml"
 
 echo "=== helmify post-process: restoring scope + metrics-security support ==="
 
@@ -36,6 +38,211 @@ elif [ -f "${PROXY_RBAC_FILE}" ] && [ -f "${METRICS_AUTH_RBAC_FILE}" ]; then
     echo "  [proxy-rbac.yaml] Removed stale file (metrics-auth-rbac.yaml already present)."
 else
     echo "  [metrics-auth-rbac.yaml] Already correctly named."
+fi
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 0.5. marklogiccluster-crd.yaml – restore top-level spec: after labels template
+#      Helmify places CRD properties (group, names, scope, versions) under
+#      metadata instead of under spec. This fix re-parents them to spec.
+# ──────────────────────────────────────────────────────────────────────────────
+if [ -f "${MARKLOGICCLUSTER_CRD_FILE}" ]; then
+    if ! grep -q '^spec:' "${MARKLOGICCLUSTER_CRD_FILE}"; then
+        echo "  [marklogiccluster-crd.yaml] Fixing CRD structure: restoring top-level spec:..."
+        python3 - "${MARKLOGICCLUSTER_CRD_FILE}" << 'PYEOF'
+import sys
+
+crd_file = sys.argv[1]
+with open(crd_file, 'r') as f:
+    lines = f.readlines()
+
+# Find the labels template line
+labels_template_idx = None
+for i, line in enumerate(lines):
+    if '{{- include "marklogic-operator-kubernetes.labels"' in line:
+        labels_template_idx = i
+        break
+
+if labels_template_idx is None:
+    print("  ERROR: Could not find labels template in marklogiccluster-crd.yaml")
+    sys.exit(1)
+
+# Find the first property after labels that should be under spec (group, names, scope, versions)
+first_spec_prop_idx = None
+for i in range(labels_template_idx + 1, len(lines)):
+    line = lines[i]
+    if line.lstrip().startswith(('group:', 'names:', 'scope:', 'versions:')):
+        first_spec_prop_idx = i
+        break
+
+if first_spec_prop_idx is None:
+    print("  ERROR: Could not find CRD spec properties after labels template")
+    sys.exit(1)
+
+# Verify that first_spec_prop is at indent 2 (currently child of metadata)
+first_prop_indent = len(lines[first_spec_prop_idx]) - len(lines[first_spec_prop_idx].lstrip())
+if first_prop_indent != 2:
+    print(f"  INFO: First spec property is at indent {first_prop_indent}, not the expected 2. Skipping fix.")
+    sys.exit(0)
+
+# Find the end of spec properties (first line at indent < 2 after first_spec_prop_idx, or end of file)
+last_spec_prop_idx = len(lines) - 1
+for i in range(first_spec_prop_idx, len(lines)):
+    line = lines[i]
+    if line.strip():  # Non-empty line
+        current_indent = len(line) - len(line.lstrip())
+        if current_indent < 2:
+            last_spec_prop_idx = i - 1
+            break
+    else:  # Empty line, might be followed by non-spec content
+        pass
+
+# Insert "spec:\n" right before the first spec property
+# Remove the indentation from the original line to insert at proper place
+result = []
+result.extend(lines[:first_spec_prop_idx])
+result.append('spec:\n')
+result.extend(lines[first_spec_prop_idx:])
+
+with open(crd_file, 'w') as f:
+    f.writelines(result)
+
+print(f"  Done: Added spec: before line {first_spec_prop_idx + 1}.")
+PYEOF
+    else
+        echo "  [marklogiccluster-crd.yaml] spec: already at root level – skipping."
+    fi
+else
+    echo "  WARNING: ${MARKLOGICCLUSTER_CRD_FILE} not found – skipping CRD fix."
+fi
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 0.6. marklogicgroup-crd.yaml – add missing tolerations field after tls
+#      Helmify excludes the tolerations property from the spec schema,
+#      breaking the new per-group toleration override feature.
+# ──────────────────────────────────────────────────────────────────────────────
+if [ -f "${MARKLOGICGROUP_CRD_FILE}" ]; then
+    if ! grep -q "tolerations:" "${MARKLOGICGROUP_CRD_FILE}"; then
+        echo "  [marklogicgroup-crd.yaml] Adding missing tolerations field..."
+        python3 - "${MARKLOGICGROUP_CRD_FILE}" << 'PYEOF'
+import sys
+
+crd_file = sys.argv[1]
+with open(crd_file, 'r') as f:
+    lines = f.readlines()
+
+# Find the tls property close (type: object) and topologySpreadConstraints start
+tls_close_idx = None
+topology_start_idx = None
+
+for i, line in enumerate(lines):
+    # Find where tls block ends (look for "type: object" after tls property)
+    if 'tls:' in line and not tls_close_idx:
+        tls_start = i
+        # Find the corresponding close for tls object
+        for j in range(i + 1, len(lines)):
+            if lines[j].strip() == 'type: object' and 'tls' in ''.join(lines[i:j]):
+                tls_close_idx = j
+                break
+    
+    # Find where topologySpreadConstraints starts
+    if 'topologySpreadConstraints:' in line and not topology_start_idx:
+        topology_start_idx = i
+        break
+
+if tls_close_idx is None or topology_start_idx is None:
+    print("  ERROR: Could not find tls and/or topologySpreadConstraints in marklogicgroup-crd.yaml")
+    sys.exit(1)
+
+# Get indentation from topologySpreadConstraints to match it for tolerations
+topo_line = lines[topology_start_idx]
+topo_indent = len(topo_line) - len(topo_line.lstrip())
+
+# Extract the tolerations definition from base CRD to ensure consistency
+# Reading from config/crd/bases/ ensures we use the exact schema that was generated
+# by kubebuilder, including proper support for wildcard tolerations with empty effect.
+# The base CRD uses type: string (no enum) to allow empty strings per Kubernetes spec.
+base_crd_path = 'config/crd/bases/marklogic.progress.com_marklogicgroups.yaml'
+tolerations_yaml = None
+try:
+    with open(base_crd_path, 'r') as f:
+        lines = f.readlines()
+    
+    # Extract tolerations block from base CRD (lines ~5080-5122)
+    tol_start = None
+    tol_end = None
+    for i, line in enumerate(lines):
+        if '              tolerations:' in line:
+            tol_start = i
+        if tol_start is not None and '              topologySpreadConstraints:' in line:
+            tol_end = i
+            break
+    
+    if tol_start is not None and tol_end is not None:
+        # Extract and preserve exact indentation from base CRD
+        tolerations_yaml = ''.join(lines[tol_start:tol_end])
+    else:
+        print("  WARNING: Could not extract tolerations from base CRD, using fallback schema")
+except Exception as e:
+    print(f"  WARNING: Error reading base CRD ({e}), using fallback schema")
+
+# Fallback schema if base CRD is not available (replicates generated CRD schema without enums)
+if tolerations_yaml is None:
+    tolerations_yaml = '''              tolerations:
+                items:
+                  description: |-
+                    The pod this Toleration is attached to tolerates any taint that matches
+                    the triple <key,value,effect> using the matching operator <operator>.
+                  properties:
+                    effect:
+                      description: |-
+                        Effect indicates the taint effect to match. Empty means match all taint effects.
+                        When specified, allowed values are NoSchedule, PreferNoSchedule and NoExecute.
+                      type: string
+                    key:
+                      description: |-
+                        Key is the taint key that the toleration applies to. Empty means match all taint keys.
+                        If the key is empty, operator must be Exists; this combination means to match all values and all keys.
+                      type: string
+                    operator:
+                      description: |-
+                        Operator represents a key's relationship to the value.
+                        Valid operators are Exists and Equal. Defaults to Equal.
+                        Exists is equivalent to wildcard for value, so that a pod can
+                        tolerate all taints of a particular category.
+                      type: string
+                    tolerationSeconds:
+                      description: |-
+                        TolerationSeconds represents the period of time the toleration (which must be
+                        of effect NoExecute, otherwise this field is ignored) tolerates the taint. By default,
+                        it is not set, which means tolerate the taint forever (do not evict). Zero and
+                        negative values will be treated as 0 (evict immediately) by the system.
+                      format: int64
+                      type: integer
+                    value:
+                      description: |-
+                        Value is the taint value the toleration matches to.
+                        If the operator is Exists, the value should be empty, otherwise just a regular string.
+                      type: string
+                  type: object
+                type: array
+'''
+
+# Insert tolerations right before topologySpreadConstraints
+result = []
+result.extend(lines[:topology_start_idx])
+result.append(tolerations_yaml)
+result.extend(lines[topology_start_idx:])
+
+with open(crd_file, 'w') as f:
+    f.writelines(result)
+
+print(f"  Done: Added tolerations field before topologySpreadConstraints (line {topology_start_idx + 1}).")
+PYEOF
+    else
+        echo "  [marklogicgroup-crd.yaml] tolerations field already present – skipping."
+    fi
+else
+    echo "  WARNING: ${MARKLOGICGROUP_CRD_FILE} not found – skipping MarklogicGroup CRD fix."
 fi
 
 # ──────────────────────────────────────────────────────────────────────────────
