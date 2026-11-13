@@ -34,6 +34,7 @@ func TestCurlRetryValidateReturnsShellStatus(t *testing.T) {
 		{"expected-200", "false", "200", "200", 0, "0"},
 		{"expected-202", "false", "202", "202", 0, "0"},
 		{"transport-failure", "false", "000", "200", 28, "1"},
+		{"expected-code-transport-failure", "false", "200", "200", 28, "1"},
 		{"unexpected-500", "false", "500", "200", 0, "1"},
 		{"unexpected-404", "false", "404", "200", 0, "1"},
 		{"success-code-for-other-expectation", "false", "200", "202", 0, "1"},

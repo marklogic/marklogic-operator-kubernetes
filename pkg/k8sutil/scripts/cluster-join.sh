@@ -34,11 +34,39 @@ cluster_join_xml_values() {
     return 0
 }
 
+# Require a complete hosts document and one complete identity record per host.
+cluster_join_hosts_valid() {
+    local file=$1 xml hosts_open hosts_close host_open host_close host_ids host_names record
+    local record_count record_hosts record_ids record_names
+    [[ -r "$file" ]] || return 1
+    xml=$(tr -d '\r\n' < "$file") || return 1
+    [[ "$xml" =~ ^[[:space:]]*\<([A-Za-z0-9_-]+:)?hosts([[:space:]][^>]*)?\>.*\</([A-Za-z0-9_-]+:)?hosts\>[[:space:]]*$ ]] || return 1
+    hosts_open=$(grep -oE '<([A-Za-z0-9_-]+:)?hosts([[:space:]][^>]*)?>' <<< "$xml" | wc -l | tr -d ' ')
+    hosts_close=$(grep -oE '</([A-Za-z0-9_-]+:)?hosts>' <<< "$xml" | wc -l | tr -d ' ')
+    host_open=$(grep -oE '<([A-Za-z0-9_-]+:)?host([[:space:]][^>]*)?>' <<< "$xml" | wc -l | tr -d ' ')
+    host_close=$(grep -oE '</([A-Za-z0-9_-]+:)?host>' <<< "$xml" | wc -l | tr -d ' ')
+    host_ids=$(cluster_join_xml_values host-id "$file" | wc -l | tr -d ' ')
+    host_names=$(cluster_join_xml_values host-name "$file" | wc -l | tr -d ' ')
+    [[ "$hosts_open" == 1 && "$hosts_close" == 1 && "$host_open" -gt 0 \
+        && "$host_open" == "$host_close" && "$host_open" == "$host_ids" \
+        && "$host_open" == "$host_names" ]] || return 1
+    record_count=0
+    while IFS= read -r record; do
+        [[ "$record" == *"</host>"* || "$record" == *":host>"* ]] || continue
+        record_hosts=$(grep -oE '<([A-Za-z0-9_-]+:)?host([[:space:]][^>]*)?>' <<< "$record" | wc -l | tr -d ' ')
+        record_ids=$(grep -oE '<([A-Za-z0-9_-]+:)?host-id>[^<]+</([A-Za-z0-9_-]+:)?host-id>' <<< "$record" | wc -l | tr -d ' ')
+        record_names=$(grep -oE '<([A-Za-z0-9_-]+:)?host-name>[^<]+</([A-Za-z0-9_-]+:)?host-name>' <<< "$record" | wc -l | tr -d ' ')
+        [[ "$record_hosts" == 1 && "$record_ids" == 1 && "$record_names" == 1 ]] || return 1
+        record_count=$((record_count + 1))
+    done <<< "$(printf '%s' "$xml" | sed -E 's#</([A-Za-z0-9_-]+:)?host>#&\n#g')"
+    [[ "$record_count" == "$host_open" ]]
+}
+
 # Classify only positive local configuration evidence. A failed HTTP request
 # does not imply an unjoined host and must never authorize a rejoin.
 cluster_join_local_state() {
     local bootstrap_id=$1 hostname=$2 hosts_file=$3 count own target
-    [[ -r "$hosts_file" ]] || return 1
+    cluster_join_hosts_valid "$hosts_file" || return 1
     count=$(cluster_join_xml_values host-id "$hosts_file" | wc -l | tr -d ' ')
     own=$(cluster_join_xml_values host-name "$hosts_file" | grep -Fxc -- "$hostname") || true
     target=$(cluster_join_xml_values host-id "$hosts_file" | grep -Fxc -- "$bootstrap_id") || true
@@ -91,8 +119,12 @@ join_cluster_checked() (
         error "Bootstrap registration/configuration download failed; local installation was not attempted"
         return 1
     }
-    if [[ "$(od -An -tx1 -N4 "$work/cluster.zip" | tr -d ' \n')" != "504b0304" ]]; then
-        error "Bootstrap did not return a ZIP configuration; refusing to install the response"
+    if ! command -v unzip >/dev/null 2>&1; then
+        error "ZIP validator (unzip) is unavailable; refusing to install the response"
+        return 1
+    fi
+    if ! unzip -tqq "$work/cluster.zip" >/dev/null 2>&1; then
+        error "Bootstrap did not return a valid ZIP configuration; refusing to install the response"
         return 1
     fi
     cluster_join_request 200 "$work/timestamp" "http://localhost:8001/admin/v1/timestamp" \

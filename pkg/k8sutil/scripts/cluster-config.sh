@@ -167,17 +167,21 @@ function restart_check {
 # outcome (including transport failure, code 000) returns 1.
 ################################################################
 function curl_retry_validate {
-    local retry_count response response_code response_content
+    local retry_count response response_code response_content curl_status
     local return_error=$1; shift
     local endpoint=$1; shift
     local expected_response_code=$1; shift
     local curl_options=("$@")
 
     for ((retry_count = 0; retry_count < N_RETRY; retry_count = retry_count + 1)); do
-        response=$(curl -s -m 30 -w '%{http_code}' "${curl_options[@]}" "$endpoint")
+        if response=$(curl -s -m 30 -w '%{http_code}' "${curl_options[@]}" "$endpoint"); then
+            curl_status=0
+        else
+            curl_status=$?
+        fi
         response_code=$(tail -n1 <<< "$response")
         response_content=$(sed '$ d' <<< "$response")
-        if [[ "${response_code}" == "${expected_response_code}" ]]; then
+        if [[ "$curl_status" -eq 0 && "${response_code}" == "${expected_response_code}" ]]; then
             return 0
         else
             echo "${response_content}" > /tmp/start-marklogic_curl_retry_validate.log

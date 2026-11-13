@@ -1,6 +1,7 @@
 package k8sutil
 
 import (
+	"archive/zip"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -36,12 +37,44 @@ func TestClusterJoinScript(t *testing.T) {
 		{"install-not-committed", "standalone", true, false, 1, 1, -1},
 		{"different-cluster", "foreign", true, false, 0, 0, -1},
 		{"invalid-local-xml", "invalid", true, false, 0, 0, -1},
+		{"truncated-local-xml", "truncated", true, false, 0, 0, -1},
 		{"group-creation-race", "standalone", false, false, 1, 1, -1},
 		{"tls-partial-join", "standalone", false, true, 1, 1, -1},
 		{"tls-joined", "joined", false, true, 0, 0, -1},
+		{"truncated-zip", "standalone", true, false, 0, 0, -1},
+		{"corrupt-zip", "standalone", true, false, 0, 0, -1},
+		{"incomplete-host-record", "incomplete", true, false, 0, 0, -1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
+			zipFile, err := os.Create(filepath.Join(dir, "cluster.zip"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			zipWriter := zip.NewWriter(zipFile)
+			zipEntry, err := zipWriter.Create("configuration.xml")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := zipEntry.Write([]byte("<configuration/>")); err != nil {
+				t.Fatal(err)
+			}
+			if err := zipWriter.Close(); err != nil {
+				t.Fatal(err)
+			}
+			if err := zipFile.Close(); err != nil {
+				t.Fatal(err)
+			}
+			if tc.name == "corrupt-zip" {
+				archive, err := os.ReadFile(filepath.Join(dir, "cluster.zip"))
+				if err != nil {
+					t.Fatal(err)
+				}
+				archive[30+len("configuration.xml")] ^= 0xff
+				if err := os.WriteFile(filepath.Join(dir, "cluster.zip"), archive, 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
 			self := `<host><host-id>200</host-id><host-name>joiner.example</host-name></host>`
 			bootstrap := `<host><host-id>100</host-id><host-name>bootstrap.example</host-name></host>`
 			body := self
@@ -55,11 +88,20 @@ func TestClusterJoinScript(t *testing.T) {
 			if tc.state == "invalid" {
 				xml = "not XML"
 			}
+			if tc.state == "truncated" {
+				xml = `<hosts xmlns="http://marklogic.com/xdmp/hosts">` + self +
+					`<host><host-id>100`
+			}
+			if tc.state == "incomplete" {
+				xml = `<hosts xmlns="http://marklogic.com/xdmp/hosts">` + self +
+					`<host><host-id>100</host-id></host></hosts>`
+			}
 			if err := os.WriteFile(filepath.Join(dir, "hosts.xml"), []byte(xml), 0600); err != nil {
 				t.Fatal(err)
 			}
 			cmd := exec.Command("bash", "-c", joinScriptHarness)
-			cmd.Env = append(os.Environ(), "HELPER="+helper, "CASE="+tc.name, "TEST_DIR="+dir)
+			cmd.Env = append(os.Environ(), "HELPER="+helper, "CASE="+tc.name, "TEST_DIR="+dir,
+				"ZIP_FIXTURE="+filepath.Join(dir, "cluster.zip"))
 			if tc.tls {
 				cmd.Env = append(cmd.Env, "TEST_PROTOCOL=https", "TEST_HTTPS_OPTION=-k")
 			}
@@ -132,7 +174,8 @@ curl() {
                 forbidden) code=403 ;;
                 transport-fails) printf 000; return 28 ;;
                 invalid-zip) body='<error/>' ;;
-                *) printf 'PK\003\004configuration' > "$output"; printf 200; return 0 ;;
+                truncated-zip) printf 'PK\003\004configuration' > "$output"; printf 200; return 0 ;;
+                *) cat "$ZIP_FIXTURE" > "$output"; printf 200; return 0 ;;
             esac ;;
         *localhost:8001/admin/v1/timestamp) body=before ;;
         *localhost:8001/admin/v1/cluster-config)
