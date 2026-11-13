@@ -5082,6 +5082,44 @@ spec:
                       secretName:
                         type: string
                     type: object
+                  tolerations:
+                    items:
+                      description: |-
+                        The pod this Toleration is attached to tolerates any taint that matches
+                        the triple <key,value,effect> using the matching operator <operator>.
+                      properties:
+                        effect:
+                          description: |-
+                            Effect indicates the taint effect to match. Empty means match all taint effects.
+                            When specified, allowed values are NoSchedule, PreferNoSchedule and NoExecute.
+                          type: string
+                        key:
+                          description: |-
+                            Key is the taint key that the toleration applies to. Empty means match all taint keys.
+                            If the key is empty, operator must be Exists; this combination means to match all values and all keys.
+                          type: string
+                        operator:
+                          description: |-
+                            Operator represents a key's relationship to the value.
+                            Valid operators are Exists and Equal. Defaults to Equal.
+                            Exists is equivalent to wildcard for value, so that a pod can
+                            tolerate all taints of a particular category.
+                          type: string
+                        tolerationSeconds:
+                          description: |-
+                            TolerationSeconds represents the period of time the toleration (which must be
+                            of effect NoExecute, otherwise this field is ignored) tolerates the taint. By default,
+                            it is not set, which means tolerate the taint forever (do not evict). Zero and
+                            negative values will be treated as 0 (evict immediately) by the system.
+                          format: int64
+                          type: integer
+                        value:
+                          description: |-
+                            Value is the taint value the toleration matches to.
+                            If the operator is Exists, the value should be empty, otherwise just a regular string.
+                          type: string
+                      type: object
+                    type: array
                 type: object
               hugePages:
                 default:
@@ -5133,7 +5171,7 @@ spec:
                     accessLogs: true
                     errorLogs: true
                     requestLogs: true
-                  image: fluent/fluent-bit:5.1.0
+                  image: fluent/fluent-bit:5.1.3
                   outputs: stdout
                   resources:
                     limits:
@@ -5324,7 +5362,7 @@ spec:
                   filters:
                     type: string
                   image:
-                    default: fluent/fluent-bit:5.1.0
+                    default: fluent/fluent-bit:5.1.3
                     type: string
                   imagePullSecrets:
                     items:
@@ -9270,7 +9308,7 @@ spec:
                         filters:
                           type: string
                         image:
-                          default: fluent/fluent-bit:5.1.0
+                          default: fluent/fluent-bit:5.1.3
                           type: string
                         imagePullSecrets:
                           items:
@@ -9794,6 +9832,44 @@ spec:
                           default: false
                           type: boolean
                       type: object
+                    tolerations:
+                      items:
+                        description: |-
+                          The pod this Toleration is attached to tolerates any taint that matches
+                          the triple <key,value,effect> using the matching operator <operator>.
+                        properties:
+                          effect:
+                            description: |-
+                              Effect indicates the taint effect to match. Empty means match all taint effects.
+                              When specified, allowed values are NoSchedule, PreferNoSchedule and NoExecute.
+                            type: string
+                          key:
+                            description: |-
+                              Key is the taint key that the toleration applies to. Empty means match all taint keys.
+                              If the key is empty, operator must be Exists; this combination means to match all values and all keys.
+                            type: string
+                          operator:
+                            description: |-
+                              Operator represents a key's relationship to the value.
+                              Valid operators are Exists and Equal. Defaults to Equal.
+                              Exists is equivalent to wildcard for value, so that a pod can
+                              tolerate all taints of a particular category.
+                            type: string
+                          tolerationSeconds:
+                            description: |-
+                              TolerationSeconds represents the period of time the toleration (which must be
+                              of effect NoExecute, otherwise this field is ignored) tolerates the taint. By default,
+                              it is not set, which means tolerate the taint forever (do not evict). Zero and
+                              negative values will be treated as 0 (evict immediately) by the system.
+                            format: int64
+                            type: integer
+                          value:
+                            description: |-
+                              Value is the taint value the toleration matches to.
+                              If the operator is Exists, the value should be empty, otherwise just a regular string.
+                            type: string
+                        type: object
+                      type: array
                     topologySpreadConstraints:
                       items:
                         description: TopologySpreadConstraint specifies how to spread
@@ -11055,6 +11131,44 @@ spec:
                     default: false
                     type: boolean
                 type: object
+              tolerations:
+                items:
+                  description: |-
+                    The pod this Toleration is attached to tolerates any taint that matches
+                    the triple <key,value,effect> using the matching operator <operator>.
+                  properties:
+                    effect:
+                      description: |-
+                        Effect indicates the taint effect to match. Empty means match all taint effects.
+                        When specified, allowed values are NoSchedule, PreferNoSchedule and NoExecute.
+                      type: string
+                    key:
+                      description: |-
+                        Key is the taint key that the toleration applies to. Empty means match all taint keys.
+                        If the key is empty, operator must be Exists; this combination means to match all values and all keys.
+                      type: string
+                    operator:
+                      description: |-
+                        Operator represents a key's relationship to the value.
+                        Valid operators are Exists and Equal. Defaults to Equal.
+                        Exists is equivalent to wildcard for value, so that a pod can
+                        tolerate all taints of a particular category.
+                      type: string
+                    tolerationSeconds:
+                      description: |-
+                        TolerationSeconds represents the period of time the toleration (which must be
+                        of effect NoExecute, otherwise this field is ignored) tolerates the taint. By default,
+                        it is not set, which means tolerate the taint forever (do not evict). Zero and
+                        negative values will be treated as 0 (evict immediately) by the system.
+                      format: int64
+                      type: integer
+                    value:
+                      description: |-
+                        Value is the taint value the toleration matches to.
+                        If the operator is Exists, the value should be empty, otherwise just a regular string.
+                      type: string
+                  type: object
+                type: array
               topologySpreadConstraints:
                 items:
                   description: TopologySpreadConstraint specifies how to spread matching
@@ -11313,6 +11427,159 @@ spec:
                   - type
                   type: object
                 type: array
+              objectStorage:
+                description: ObjectStorage reports the per-provider object storage credential
+                  results.
+                properties:
+                  aws:
+                    description: ObjectStorageProviderStatus is the observed state of
+                      one provider.
+                    properties:
+                      appliedFingerprint:
+                        description: AppliedFingerprint is an opaque, cluster-specific
+                          marker of the last applied material.
+                        maxLength: 128
+                        type: string
+                      appliedSecret:
+                        description: AppliedSecret identifies the Secret used for the
+                          last successful PUT.
+                        properties:
+                          name:
+                            type: string
+                          resourceVersion:
+                            type: string
+                          uid:
+                            type: string
+                        type: object
+                      authType:
+                        description: AuthType used for the last successful PUT.
+                        type: string
+                      detachEligible:
+                        description: DetachEligible is the durable eligibility for Secret
+                          deletion; absent means false.
+                        type: boolean
+                      lastAppliedTime:
+                        format: date-time
+                        type: string
+                      message:
+                        maxLength: 512
+                        type: string
+                      observedGeneration:
+                        description: ObservedGeneration is the cluster generation evaluated
+                          for the current result.
+                        format: int64
+                        type: integer
+                      observedSecret:
+                        description: ObservedSecret is the Secret reference, identity
+                          and revision most recently evaluated.
+                        properties:
+                          name:
+                            type: string
+                          resourceVersion:
+                            type: string
+                          uid:
+                            type: string
+                        type: object
+                      phase:
+                        description: ObjectStoragePhase is the per-provider result of
+                          the latest evaluation.
+                        enum:
+                        - Pending
+                        - Applied
+                        - Detached
+                        - Failed
+                        type: string
+                      reason:
+                        description: ObjectStorageReason is the machine-readable reason
+                          for non-Applied phases.
+                        enum:
+                        - BootstrapNotReady
+                        - SecretDeletedAfterApply
+                        - SecretNotFound
+                        - SecretReadFailed
+                        - SecretKeyMissing
+                        - InvalidPayload
+                        - AuthenticationFailed
+                        - InsufficientPrivilege
+                        - ManagementAPIUnreachable
+                        - ManagementAPIError
+                        type: string
+                    type: object
+                  azure:
+                    description: ObjectStorageProviderStatus is the observed state of
+                      one provider.
+                    properties:
+                      appliedFingerprint:
+                        description: AppliedFingerprint is an opaque, cluster-specific
+                          marker of the last applied material.
+                        maxLength: 128
+                        type: string
+                      appliedSecret:
+                        description: AppliedSecret identifies the Secret used for the
+                          last successful PUT.
+                        properties:
+                          name:
+                            type: string
+                          resourceVersion:
+                            type: string
+                          uid:
+                            type: string
+                        type: object
+                      authType:
+                        description: AuthType used for the last successful PUT.
+                        type: string
+                      detachEligible:
+                        description: DetachEligible is the durable eligibility for Secret
+                          deletion; absent means false.
+                        type: boolean
+                      lastAppliedTime:
+                        format: date-time
+                        type: string
+                      message:
+                        maxLength: 512
+                        type: string
+                      observedGeneration:
+                        description: ObservedGeneration is the cluster generation evaluated
+                          for the current result.
+                        format: int64
+                        type: integer
+                      observedSecret:
+                        description: ObservedSecret is the Secret reference, identity
+                          and revision most recently evaluated.
+                        properties:
+                          name:
+                            type: string
+                          resourceVersion:
+                            type: string
+                          uid:
+                            type: string
+                        type: object
+                      phase:
+                        description: ObjectStoragePhase is the per-provider result of
+                          the latest evaluation.
+                        enum:
+                        - Pending
+                        - Applied
+                        - Detached
+                        - Failed
+                        type: string
+                      reason:
+                        description: ObjectStorageReason is the machine-readable reason
+                          for non-Applied phases.
+                        enum:
+                        - BootstrapNotReady
+                        - SecretDeletedAfterApply
+                        - SecretNotFound
+                        - SecretReadFailed
+                        - SecretKeyMissing
+                        - InvalidPayload
+                        - AuthenticationFailed
+                        - InsufficientPrivilege
+                        - ManagementAPIUnreachable
+                        - ManagementAPIError
+                        type: string
+                    type: object
+                type: object
               storage:
                 properties:
                   operation:
@@ -11497,159 +11764,6 @@ spec:
                       - templateName
                       type: object
                     type: array
-                type: object
-              objectStorage:
-                description: ObjectStorage reports the per-provider object storage credential
-                  results.
-                properties:
-                  aws:
-                    description: ObjectStorageProviderStatus is the observed state of
-                      one provider.
-                    properties:
-                      appliedFingerprint:
-                        description: AppliedFingerprint is an opaque, cluster-specific
-                          marker of the last applied material.
-                        maxLength: 128
-                        type: string
-                      appliedSecret:
-                        description: AppliedSecret identifies the Secret used for the
-                          last successful PUT.
-                        properties:
-                          name:
-                            type: string
-                          resourceVersion:
-                            type: string
-                          uid:
-                            type: string
-                        type: object
-                      authType:
-                        description: AuthType used for the last successful PUT.
-                        type: string
-                      detachEligible:
-                        description: DetachEligible is the durable eligibility for Secret
-                          deletion; absent means false.
-                        type: boolean
-                      lastAppliedTime:
-                        format: date-time
-                        type: string
-                      message:
-                        maxLength: 512
-                        type: string
-                      observedGeneration:
-                        description: ObservedGeneration is the cluster generation evaluated
-                          for the current result.
-                        format: int64
-                        type: integer
-                      observedSecret:
-                        description: ObservedSecret is the Secret reference, identity
-                          and revision most recently evaluated.
-                        properties:
-                          name:
-                            type: string
-                          resourceVersion:
-                            type: string
-                          uid:
-                            type: string
-                        type: object
-                      phase:
-                        description: ObjectStoragePhase is the per-provider result of
-                          the latest evaluation.
-                        enum:
-                        - Pending
-                        - Applied
-                        - Detached
-                        - Failed
-                        type: string
-                      reason:
-                        description: ObjectStorageReason is the machine-readable reason
-                          for non-Applied phases.
-                        enum:
-                        - BootstrapNotReady
-                        - SecretDeletedAfterApply
-                        - SecretNotFound
-                        - SecretReadFailed
-                        - SecretKeyMissing
-                        - InvalidPayload
-                        - AuthenticationFailed
-                        - InsufficientPrivilege
-                        - ManagementAPIUnreachable
-                        - ManagementAPIError
-                        type: string
-                    type: object
-                  azure:
-                    description: ObjectStorageProviderStatus is the observed state of
-                      one provider.
-                    properties:
-                      appliedFingerprint:
-                        description: AppliedFingerprint is an opaque, cluster-specific
-                          marker of the last applied material.
-                        maxLength: 128
-                        type: string
-                      appliedSecret:
-                        description: AppliedSecret identifies the Secret used for the
-                          last successful PUT.
-                        properties:
-                          name:
-                            type: string
-                          resourceVersion:
-                            type: string
-                          uid:
-                            type: string
-                        type: object
-                      authType:
-                        description: AuthType used for the last successful PUT.
-                        type: string
-                      detachEligible:
-                        description: DetachEligible is the durable eligibility for Secret
-                          deletion; absent means false.
-                        type: boolean
-                      lastAppliedTime:
-                        format: date-time
-                        type: string
-                      message:
-                        maxLength: 512
-                        type: string
-                      observedGeneration:
-                        description: ObservedGeneration is the cluster generation evaluated
-                          for the current result.
-                        format: int64
-                        type: integer
-                      observedSecret:
-                        description: ObservedSecret is the Secret reference, identity
-                          and revision most recently evaluated.
-                        properties:
-                          name:
-                            type: string
-                          resourceVersion:
-                            type: string
-                          uid:
-                            type: string
-                        type: object
-                      phase:
-                        description: ObjectStoragePhase is the per-provider result of
-                          the latest evaluation.
-                        enum:
-                        - Pending
-                        - Applied
-                        - Detached
-                        - Failed
-                        type: string
-                      reason:
-                        description: ObjectStorageReason is the machine-readable reason
-                          for non-Applied phases.
-                        enum:
-                        - BootstrapNotReady
-                        - SecretDeletedAfterApply
-                        - SecretNotFound
-                        - SecretReadFailed
-                        - SecretKeyMissing
-                        - InvalidPayload
-                        - AuthenticationFailed
-                        - InsufficientPrivilege
-                        - ManagementAPIUnreachable
-                        - ManagementAPIError
-                        type: string
-                    type: object
                 type: object
             type: object
         type: object
