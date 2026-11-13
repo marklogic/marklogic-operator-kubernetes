@@ -366,7 +366,8 @@ type GroupConfig struct {
 	// +kubebuilder:default:="Default"
 	Name string `json:"name,omitempty"`
 	// +kubebuilder:default:=true
-	EnableXdqpSsl bool `json:"enableXdqpSsl,omitempty"`
+	// +optional
+	EnableXdqpSsl bool `json:"enableXdqpSsl"` // no omitempty: omitting false lets the CRD default re-enable SSL
 }
 
 type License struct {
