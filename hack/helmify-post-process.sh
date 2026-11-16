@@ -193,6 +193,10 @@ if ANCHOR not in content:
     sys.exit(1)
 
 INJECTION = """          value: {{ quote .Values.kubernetesClusterDomain }}
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
         - name: POD_NAMESPACE
           valueFrom:
             fieldRef:
@@ -208,6 +212,15 @@ INJECTION = """          value: {{ quote .Values.kubernetesClusterDomain }}
           value: {{ $ns | quote }}
         {{- end }}
 """
+
+for name, field in (("POD_NAME", "name"), ("POD_NAMESPACE", "namespace")):
+    block = f"""        - name: {name}
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.{field}
+"""
+    if f"- name: {name}\n" in content:
+        INJECTION = INJECTION.replace(block, "")
 
 with open(filename, 'w') as f:
     f.write(content.replace(ANCHOR, INJECTION, 1))
@@ -230,6 +243,12 @@ metadata:
   labels:
   {{- include "marklogic-operator-kubernetes.labels" . | nindent 4 }}
 rules:
+- apiGroups:
+  - ""
+  resources:
+  - pods/exec
+  verbs:
+  - create
 - apiGroups:
   - ""
   resources:
@@ -400,6 +419,12 @@ metadata:
   labels:
   {{- include "marklogic-operator-kubernetes.labels" $ | nindent 4 }}
 rules:
+- apiGroups:
+  - ""
+  resources:
+  - pods/exec
+  verbs:
+  - create
 - apiGroups:
   - ""
   resources:

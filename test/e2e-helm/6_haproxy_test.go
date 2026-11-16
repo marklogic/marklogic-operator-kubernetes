@@ -16,6 +16,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/e2e-framework/klient/k8s"
+	"sigs.k8s.io/e2e-framework/klient/k8s/resources"
 	"sigs.k8s.io/e2e-framework/klient/wait"
 	"sigs.k8s.io/e2e-framework/klient/wait/conditions"
 	"sigs.k8s.io/e2e-framework/pkg/envconf"
@@ -229,6 +230,97 @@ func TestHAProxyPathBasedEnabled(t *testing.T) {
 		if !strings.Contains(res, "WWW-Authenticate: Basic") {
 			t.Fatalf("Expected Basic auth header, got: %s", res)
 		}
+		return ctx
+	})
+
+	feature.Assess("default hot reload preserves pods and rejects invalid candidates", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
+		kube := c.Client().Resources(haProxyPathNS)
+		current := &marklogicv1.MarklogicCluster{}
+		if err := kube.Get(ctx, cr.Name, haProxyPathNS, current); err != nil {
+			t.Fatal(err)
+		}
+		waitPhase := func(phase string) {
+			t.Helper()
+			if err := wait.For(
+				conditions.New(kube).ResourceMatch(current, func(object k8s.Object) bool {
+					cluster := object.(*marklogicv1.MarklogicCluster)
+					status := cluster.Status.HAProxyReload
+					return status != nil && status.Phase == phase && status.ObservedGeneration == cluster.Generation
+				}),
+				wait.WithTimeout(3*time.Minute), wait.WithInterval(time.Second),
+			); err != nil {
+				t.Fatalf("HAProxy did not report %s: %v", phase, err)
+			}
+			if err := kube.Get(ctx, cr.Name, haProxyPathNS, current); err != nil {
+				t.Fatal(err)
+			}
+		}
+		waitPhase("Success")
+		pods := &corev1.PodList{}
+		selector := resources.WithLabelSelector("app.kubernetes.io/component=haproxy")
+		if err := kube.List(ctx, pods, selector); err != nil || len(pods.Items) == 0 {
+			t.Fatalf("cannot snapshot HAProxy pods: %v", err)
+		}
+		before := pods.DeepCopy()
+		if err := kube.Get(ctx, cr.Name, haProxyPathNS, current); err != nil {
+			t.Fatal(err)
+		}
+		current.Spec.HAProxy.Timeout.Client++
+		if err := kube.Update(ctx, current); err != nil {
+			t.Fatal(err)
+		}
+		waitPhase("Success")
+		cm := &corev1.ConfigMap{}
+		if err := kube.Get(ctx, "marklogic-haproxy", haProxyPathNS, cm); err != nil {
+			t.Fatal(err)
+		}
+		committed := cm.Data["haproxy.cfg"]
+		current.Spec.HAProxy.Stats.Enabled = true
+		current.Spec.HAProxy.Stats.Port = -1
+		if err := kube.Update(ctx, current); err != nil {
+			t.Fatal(err)
+		}
+		waitPhase("Failed")
+		if err := kube.Get(ctx, "marklogic-haproxy", haProxyPathNS, cm); err != nil {
+			t.Fatal(err)
+		}
+		if cm.Data["haproxy.cfg"] != committed {
+			t.Fatal("invalid configuration replaced the committed ConfigMap")
+		}
+		if err := kube.List(ctx, pods, selector); err != nil {
+			t.Fatal(err)
+		}
+		if len(before.Items) != len(pods.Items) {
+			t.Fatal("configuration-only updates changed the HAProxy pod count")
+		}
+		for _, oldPod := range before.Items {
+			found := false
+			for _, pod := range pods.Items {
+				if pod.UID != oldPod.UID {
+					continue
+				}
+				found = true
+				if len(pod.Status.ContainerStatuses) != len(oldPod.Status.ContainerStatuses) {
+					t.Fatal("container status changed unexpectedly")
+				}
+				for i, status := range pod.Status.ContainerStatuses {
+					old := oldPod.Status.ContainerStatuses[i]
+					if status.ContainerID != old.ContainerID || status.RestartCount != old.RestartCount {
+						t.Fatal("HAProxy container restarted during configuration reload")
+					}
+				}
+			}
+			if !found {
+				t.Fatal("HAProxy pod was replaced during configuration reload")
+			}
+		}
+		verifyPathBasedHAProxyRoutes(t, haProxyPathNS, "ml-0", mlContainerName, adminUsername, adminPassword, cr.Spec.HAProxy.FrontendPort, cr.Spec.HAProxy.AppServers)
+		current.Spec.HAProxy.Stats.Enabled = false
+		current.Spec.HAProxy.Stats.Port = 1024
+		if err := kube.Update(ctx, current); err != nil {
+			t.Fatal(err)
+		}
+		waitPhase("Success")
 		return ctx
 	})
 

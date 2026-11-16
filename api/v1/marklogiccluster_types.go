@@ -153,6 +153,17 @@ type MarklogicClusterStatus struct {
 	Storage    *StorageStatus     `json:"storage,omitempty"`
 	// ObjectStorage reports the per-provider object storage credential results.
 	ObjectStorage *ObjectStorageStatus `json:"objectStorage,omitempty"`
+	HAProxyReload *HAProxyReloadStatus `json:"haproxyReload,omitempty"`
+}
+
+// HAProxyReloadStatus describes the last observed configuration transaction.
+type HAProxyReloadStatus struct {
+	// +kubebuilder:validation:Enum=Pending;Success;Failed
+	Phase              string      `json:"phase"`
+	ObservedGeneration int64       `json:"observedGeneration"`
+	ConfigurationHash  string      `json:"configurationHash"`
+	LastAttemptTime    metav1.Time `json:"lastAttemptTime"`
+	Message            string      `json:"message,omitempty"`
 }
 
 //+kubebuilder:object:root=true

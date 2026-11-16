@@ -4,11 +4,13 @@ package k8sutil
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 	"time"
 
 	marklogicv1 "github.com/marklogic/marklogic-operator-kubernetes/api/v1"
+	"github.com/marklogic/marklogic-operator-kubernetes/pkg/haproxyreload"
 	"github.com/marklogic/marklogic-operator-kubernetes/pkg/mlmanage"
 	"github.com/marklogic/marklogic-operator-kubernetes/pkg/result"
 	corev1 "k8s.io/api/core/v1"
@@ -327,6 +329,33 @@ func withHAProxy(ingress bool) func(*marklogicv1.MarklogicCluster) {
 	}
 }
 
+func handlerHAProxyContext(t *testing.T, h *osHarness, ready bool) *ClusterContext {
+	t.Helper()
+	cc := h.context()
+	cc.HAProxyReloaderImage = "operator:test"
+	cc.HAProxyExec = func(_ context.Context, _ *corev1.Pod, _ string, _ []byte) ([]byte, error) {
+		data := generateHAProxyConfigMapData(cc.Ctx, cc.MarklogicCluster)
+		return json.Marshal(haproxyreload.Status{Hash: haproxyreload.Hash([]byte(data["haproxy.cfg"])), WorkerPID: 123})
+	}
+	if ready {
+		step := cc.ReconcileHAProxy()
+		if !step.Completed() {
+			t.Fatal("initial HAProxy deployment did not wait for rollout")
+		}
+		if _, err := step.Output(); err != nil {
+			t.Fatal(err)
+		}
+		pod := &corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{Name: "haproxy-1", Namespace: osNamespace, Labels: getHAProxySelectorLabels(osCluster)},
+			Status:     corev1.PodStatus{Conditions: []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionTrue}}},
+		}
+		if err := h.c.Create(cc.Ctx, pod); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return cc
+}
+
 func TestClusterHandlerScalesGroupsWhileCredentialApplicationFails(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
@@ -375,7 +404,7 @@ func TestClusterHandlerHAProxyFailureSkipsIngressButNotObjectStorage(t *testing.
 	h := handlerHarness(t, withHAProxy(true))
 	h.createErr = failCreateOf[*corev1.ConfigMap](failure)
 
-	_, err := h.context().ReconsileMarklogicClusterHandler()
+	_, err := handlerHAProxyContext(t, h, false).ReconsileMarklogicClusterHandler()
 	if !errors.Is(err, failure) {
 		t.Fatalf("expected the HAProxy error, got %v", err)
 	}
@@ -392,9 +421,10 @@ func TestClusterHandlerIngressFailureDoesNotSkipObjectStorage(t *testing.T) {
 	t.Parallel()
 	failure := errors.New("ingress create failed")
 	h := handlerHarness(t, withHAProxy(true))
+	cc := handlerHAProxyContext(t, h, true)
 	h.createErr = failCreateOf[*networkingv1.Ingress](failure)
 
-	_, err := h.context().ReconsileMarklogicClusterHandler()
+	_, err := cc.ReconsileMarklogicClusterHandler()
 	if !errors.Is(err, failure) {
 		t.Fatalf("expected the Ingress error, got %v", err)
 	}
@@ -407,7 +437,7 @@ func TestClusterHandlerIngressFailureDoesNotSkipObjectStorage(t *testing.T) {
 func TestClusterHandlerHAProxyAndIngressHappyPath(t *testing.T) {
 	t.Parallel()
 	h := handlerHarness(t, withHAProxy(true))
-	if _, err := h.context().ReconsileMarklogicClusterHandler(); err != nil {
+	if _, err := handlerHAProxyContext(t, h, true).ReconsileMarklogicClusterHandler(); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if !h.objectExists(&networkingv1.Ingress{}, osCluster) {

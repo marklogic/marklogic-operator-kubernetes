@@ -9,6 +9,12 @@ rules:
 - apiGroups:
   - ""
   resources:
+  - pods/exec
+  verbs:
+  - create
+- apiGroups:
+  - ""
+  resources:
   - persistentvolumes
   verbs:
   - get
@@ -176,6 +182,12 @@ metadata:
   labels:
   {{- include "marklogic-operator-kubernetes.labels" $ | nindent 4 }}
 rules:
+- apiGroups:
+  - ""
+  resources:
+  - pods/exec
+  verbs:
+  - create
 - apiGroups:
   - ""
   resources:

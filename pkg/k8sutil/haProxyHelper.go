@@ -6,6 +6,8 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"maps"
+	"slices"
 	"sort"
 	"strings"
 	"text/template"
@@ -220,7 +222,8 @@ frontend marklogic-pathbased-frontend
 		result += parseTemplateToString(`
   http-request set-header Host marklogic:{{ .PortNumber}}{{ if .ConsolePaths }} unless is_console{{ end }}
   http-request set-header Referer http://marklogic:{{ .PortNumber}}{{ if .ConsolePaths }} unless is_console{{ end }}`, data)
-		for _, backends := range config.BackendConfigMap {
+		for _, key := range slices.Sorted(maps.Keys(config.BackendConfigMap)) {
+			backends := config.BackendConfigMap[key]
 			for _, babackend := range backends {
 				if !babackend.IsPathBased {
 					continue
@@ -244,7 +247,8 @@ frontend {{ .FrontendName }}
   bind :{{ .PortNumber }} {{ .SslCert }}
   log-format "%ci:%cp [%tr] %ft %b/%s %TR/%Tw/%Tc/%Tr/%Ta %ST %B %CC %CS %tsc %ac/%fc/%bc/%sc/%rc %sq/%bq %hr %hs %{+Q}r"
   default_backend {{ .BackendName }}`
-	for _, frontend := range frontEndConfigs {
+	for _, key := range slices.Sorted(maps.Keys(frontEndConfigs)) {
+		frontend := frontEndConfigs[key]
 		data = &HAProxyTemplate{
 			FrontendName:     frontend.FrontendName,
 			BackendName:      frontend.BackendName,
@@ -292,17 +296,19 @@ backend {{ .BackendName }}
   stick match req.cook(HostId)
   stick match req.cook(SessionID)
   default-server check`
-	for _, backends := range backendConfigs {
+	for _, key := range slices.Sorted(maps.Keys(backendConfigs)) {
+		backends := backendConfigs[key]
 		data := &HAProxyTemplate{
 			BackendName: backends[0].BackendName,
 			PortNumber:  backends[0].Port,
 			Path:        backends[0].Path,
 		}
+		currentTemplate := backendTemplate
 		if backends[0].IsPathBased {
-			backendTemplate += `
+			currentTemplate += `
   http-request replace-path {{.Path}}(/)?(.*) /\2`
 		}
-		result += parseTemplateToString(backendTemplate, data)
+		result += parseTemplateToString(currentTemplate, data)
 		for _, backend := range backends {
 			name := backend.GroupName
 			groupReplicas := backend.Replicas
@@ -392,7 +398,8 @@ func generateTcpConfig(cr *marklogicv1.MarklogicCluster, config *HAProxyConfig) 
 	if len(tcpConfigs) == 0 {
 		return result
 	}
-	for _, tcpConfigSlice := range tcpConfigs {
+	for _, key := range slices.Sorted(maps.Keys(tcpConfigs)) {
+		tcpConfigSlice := tcpConfigs[key]
 		t := `
 listen marklogic-TCP-{{.TcpName}}
   bind :{{ .PortNumber }} {{ .SslCert }}

@@ -10,6 +10,9 @@ cleans CRDs and namespaces, which is unsafe on shared or demo clusters.
 
 ## Test suites
 
+For HAProxy hot-reload controller tests and real-HAProxy traffic/rollback tests,
+see [HAProxy hot reload](../docs/haproxy-hot-reload.md#tests).
+
 | Package | Description |
 |---|---|
 | `test/e2e-helm` | **Namespace-scoped tests (default).** Operator installed via `helm install` with `scope.type=namespace`. Validates that Role/RoleBinding per watched namespace is sufficient and no ClusterRole is present. |

@@ -70,6 +70,15 @@ kubectl get pods -n marklogic-operator-system
 kubectl get crd -n marklogic-operator-system | grep 'marklogic'
 ```
 
+### HAProxy configuration hot reload
+
+HAProxy uses validated master-worker reloads by default; no additional field is needed.
+Existing deployments receive a one-time rolling update to adopt the new runtime layout. Subsequent
+configuration-only changes preserve HAProxy pods, containers, and active connections.
+Image, security context, certificate volume, and other pod-template changes still
+require a rollout. See [HAProxy hot reload](./docs/haproxy-hot-reload.md) for
+requirements, failure handling, and status reporting.
+
 ### Install MarkLogic Cluster
 Once MarkLogic Operator Pod is running, use your custom manifests or choose from sample manifests from this repository located in the `./config/samples` directory.
 Optionally, create a dedicated namespace for new MarkLogic resources:
