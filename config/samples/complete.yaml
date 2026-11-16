@@ -85,6 +85,17 @@ spec:
       limits:
         cpu: 250m
         memory: 128Mi
+  ## Configure NodeSelector for HAProxy pods
+  ## ref: https://kubernetes.io/docs/tasks/configure-pod-container/assign-pods-nodes/
+    nodeSelector: {}
+      # haproxy-pool: "true"
+  ## Configure Tolerations for HAProxy pods to schedule on tainted nodes
+  ## ref: https://kubernetes.io/docs/concepts/scheduling-eviction/taint-and-toleration/
+    tolerations: []
+      # - key: haproxy-pool
+      #   operator: Equal
+      #   value: "true"
+      #   effect: NoSchedule
   ## Configure Ingress
   ## ref: https://kubernetes.io/docs/concepts/services-networking/ingress/
     ingress: 
@@ -135,6 +146,14 @@ spec:
 ## ref: https://kubernetes.io/docs/tasks/configure-pod-container/assign-pods-nodes/#create-a-pod-that-gets-scheduled-to-your-chosen-node
   nodeSelector: {}
     # disktype: ssd
+## Configure Tolerations for pod scheduling on tainted nodes
+## ref: https://kubernetes.io/docs/concepts/scheduling-eviction/taint-and-toleration/
+## Example: allow scheduling on nodes tainted with marklogic-pool=true:NoSchedule
+  tolerations: []
+    # - key: marklogic-pool
+    #   operator: Equal
+    #   value: "true"
+    #   effect: NoSchedule
 ## Configure POD Topology Spread Constraints to spread pods across cluster
 ## ref: https://kubernetes.io/docs/concepts/scheduling-eviction/topology-spread-constraints/
 ## Preferred Topology Spread Constraints rule to evenly distribute Marklogic pods across worker nodes and zones
@@ -240,6 +259,14 @@ spec:
     ## Configure Affinity property for scheduling pods to nodes
     ## ref: https://kubernetes.io/docs/concepts/configuration/assign-pod-node/#affinity-and-anti-affinity
     affinity: {}
+    ## Configure Tolerations for pod scheduling on tainted nodes
+    ## ref: https://kubernetes.io/docs/concepts/scheduling-eviction/taint-and-toleration/
+    ## Example: allow scheduling on nodes tainted with marklogic-pool=true:NoSchedule
+    tolerations: []
+      # - key: marklogic-pool
+      #   operator: Equal
+      #   value: "true"
+      #   effect: NoSchedule
     ## Configure POD Topology Spread Constraints to spread pods across cluster
     ## ref: https://kubernetes.io/docs/concepts/scheduling-eviction/topology-spread-constraints/
     ## Preferred Topology Spread Constraints rule to evenly distribute Marklogic pods across worker nodes and zones

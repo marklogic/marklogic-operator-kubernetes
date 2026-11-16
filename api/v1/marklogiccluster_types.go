@@ -62,6 +62,7 @@ type MarklogicClusterSpec struct {
 	ContainerSecurityContext  *corev1.SecurityContext              `json:"securityContext,omitempty"`
 	Affinity                  *corev1.Affinity                     `json:"affinity,omitempty"`
 	NodeSelector              map[string]string                    `json:"nodeSelector,omitempty"`
+	Tolerations               []corev1.Toleration                  `json:"tolerations,omitempty"`
 	TopologySpreadConstraints []corev1.TopologySpreadConstraint    `json:"topologySpreadConstraints,omitempty"`
 	PriorityClassName         string                               `json:"priorityClassName,omitempty"`
 	License                   *License                             `json:"license,omitempty"`
@@ -114,6 +115,7 @@ type MarklogicGroups struct {
 	Service                   Service                           `json:"service,omitempty"`
 	Resources                 *corev1.ResourceRequirements      `json:"resources,omitempty"`
 	Affinity                  *corev1.Affinity                  `json:"affinity,omitempty"`
+	Tolerations               []corev1.Toleration               `json:"tolerations,omitempty"`
 	TopologySpreadConstraints []corev1.TopologySpreadConstraint `json:"topologySpreadConstraints,omitempty"`
 	NodeSelector              map[string]string                 `json:"nodeSelector,omitempty"`
 	PriorityClassName         string                            `json:"priorityClassName,omitempty"`

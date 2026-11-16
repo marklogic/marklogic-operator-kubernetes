@@ -2249,6 +2249,7 @@ func defaultDynamicPVCRestartCleanup(oc *OperatorContext, pod *corev1.Pod) (bool
 				},
 				Spec: corev1.PodSpec{
 					RestartPolicy: corev1.RestartPolicyNever,
+					Tolerations:   oc.MarklogicGroup.Spec.Tolerations,
 					Containers: []corev1.Container{{
 						Name:    "cleanup",
 						Image:   oc.MarklogicGroup.Spec.Image,
