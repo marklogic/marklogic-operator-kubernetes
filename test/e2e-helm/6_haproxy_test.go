@@ -15,6 +15,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/e2e-framework/klient/k8s"
 	"sigs.k8s.io/e2e-framework/klient/k8s/resources"
 	"sigs.k8s.io/e2e-framework/klient/wait"
@@ -265,8 +266,10 @@ func TestHAProxyPathBasedEnabled(t *testing.T) {
 		if err := kube.Get(ctx, cr.Name, haProxyPathNS, current); err != nil {
 			t.Fatal(err)
 		}
-		current.Spec.HAProxy.Timeout.Client++
-		if err := kube.Update(ctx, current); err != nil {
+		if err := kube.Patch(ctx, current, k8s.Patch{
+			PatchType: types.MergePatchType,
+			Data:      []byte(fmt.Sprintf(`{"spec":{"haproxy":{"timeout":{"client":%d}}}}`, current.Spec.HAProxy.Timeout.Client+1)),
+		}); err != nil {
 			t.Fatal(err)
 		}
 		waitPhase("Success")
@@ -275,9 +278,10 @@ func TestHAProxyPathBasedEnabled(t *testing.T) {
 			t.Fatal(err)
 		}
 		committed := cm.Data["haproxy.cfg"]
-		current.Spec.HAProxy.Stats.Enabled = true
-		current.Spec.HAProxy.Stats.Port = -1
-		if err := kube.Update(ctx, current); err != nil {
+		if err := kube.Patch(ctx, current, k8s.Patch{
+			PatchType: types.MergePatchType,
+			Data:      []byte(`{"spec":{"haproxy":{"stats":{"enabled":true,"port":-1}}}}`),
+		}); err != nil {
 			t.Fatal(err)
 		}
 		waitPhase("Failed")
@@ -315,9 +319,10 @@ func TestHAProxyPathBasedEnabled(t *testing.T) {
 			}
 		}
 		verifyPathBasedHAProxyRoutes(t, haProxyPathNS, "ml-0", mlContainerName, adminUsername, adminPassword, cr.Spec.HAProxy.FrontendPort, cr.Spec.HAProxy.AppServers)
-		current.Spec.HAProxy.Stats.Enabled = false
-		current.Spec.HAProxy.Stats.Port = 1024
-		if err := kube.Update(ctx, current); err != nil {
+		if err := kube.Patch(ctx, current, k8s.Patch{
+			PatchType: types.MergePatchType,
+			Data:      []byte(`{"spec":{"haproxy":{"stats":{"enabled":false,"port":1024}}}}`),
+		}); err != nil {
 			t.Fatal(err)
 		}
 		waitPhase("Success")
