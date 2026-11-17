@@ -108,6 +108,7 @@ func (cc *ClusterContext) configureHAProxyHotReload(deployment *appsv1.Deploymen
 		Name: "install-haproxy-reloader", Image: image,
 		Command:      []string{"/haproxy-reloader", "install"},
 		VolumeMounts: []corev1.VolumeMount{runtimeMount},
+		Resources:    corev1.ResourceRequirements{Requests: container.Resources.Requests.DeepCopy()},
 		SecurityContext: &corev1.SecurityContext{
 			AllowPrivilegeEscalation: boolPtr(false), ReadOnlyRootFilesystem: boolPtr(true),
 			Capabilities: &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}},
@@ -177,6 +178,73 @@ func (cc *ClusterContext) ReconcileHAProxy() result.ReconcileResult {
 	} else if err != nil {
 		return fail(err)
 	} else {
+		// Replacement pods must retain committed certificate paths until every
+		// replica has activated the configuration referencing the new Secret.
+		if !equality.Semantic.DeepEqual(configmap.Data, data) {
+			for i, volume := range desiredDeployment.Spec.Template.Spec.Volumes {
+				if volume.Name != "ssl-certificate" {
+					continue
+				}
+				for _, previous := range deployment.Spec.Template.Spec.Volumes {
+					if previous.Name != volume.Name {
+						continue
+					}
+					if previous.Secret != nil && previous.Secret.SecretName == volume.Secret.SecretName &&
+						equality.Semantic.DeepEqual(previous.Secret.Items, volume.Secret.Items) {
+						continue
+					}
+					sources := []corev1.VolumeProjection{}
+					if previous.Secret != nil {
+						sources = append(sources, corev1.VolumeProjection{Secret: &corev1.SecretProjection{
+							LocalObjectReference: corev1.LocalObjectReference{Name: previous.Secret.SecretName},
+							Items:                previous.Secret.Items,
+						}})
+					} else if previous.Projected != nil {
+						sources = append(sources, previous.Projected.Sources...)
+					}
+					next := corev1.VolumeProjection{Secret: &corev1.SecretProjection{
+						LocalObjectReference: corev1.LocalObjectReference{Name: volume.Secret.SecretName},
+						Items:                volume.Secret.Items,
+					}}
+					found := false
+					for _, source := range sources {
+						found = found || equality.Semantic.DeepEqual(source, next)
+					}
+					if !found {
+						sources = append(sources, next)
+					}
+					mode := int32(corev1.ProjectedVolumeSourceDefaultMode)
+					staged := corev1.Volume{Name: volume.Name, VolumeSource: corev1.VolumeSource{
+						Projected: &corev1.ProjectedVolumeSource{Sources: sources, DefaultMode: &mode},
+					}}
+					if !equality.Semantic.DeepEqual(previous, staged) {
+						desiredDeployment.Spec.Template.Spec.Volumes[i] = staged
+						break
+					}
+					pods := &corev1.PodList{}
+					if err := cc.haproxyReader().List(cc.Ctx, pods, client.InNamespace(cr.Namespace),
+						client.MatchingLabels(getHAProxySelectorLabels(cr.Name))); err != nil {
+						return fail(err)
+					}
+					for _, pod := range pods.Items {
+						mounted := false
+						for _, mountedVolume := range pod.Spec.Volumes {
+							mounted = mounted || equality.Semantic.DeepEqual(mountedVolume, staged)
+						}
+						if !mounted {
+							if err := cc.setHAProxyReloadStatus("Pending", hash, "Waiting for HAProxy certificate staging rollout"); err != nil {
+								return result.Error(err)
+							}
+							return result.RequeueSoon(5)
+						}
+					}
+					if step := cc.reconcileHAProxyReload(configmap, data); step.Completed() {
+						return step
+					}
+					break
+				}
+			}
+		}
 		if getSSLConfig(cr.Spec.HAProxy.Tls) == "" && !equality.Semantic.DeepEqual(configmap.Data, data) {
 			for _, volume := range deployment.Spec.Template.Spec.Volumes {
 				if volume.Name == "ssl-certificate" {
@@ -277,6 +345,12 @@ func (cc *ClusterContext) reconcileHAProxyReload(configmap *corev1.ConfigMap, de
 		if !conditionReady {
 			for _, status := range pod.Status.ContainerStatuses {
 				if status.Name != "haproxy" {
+					continue
+				}
+				if status.State.Running != nil && pod.DeletionTimestamp == nil {
+					if _, err := cc.HAProxyExec(cc.Ctx, pod, "status", nil); err != nil {
+						return fail(fmt.Errorf("recovering unready HAProxy pod %s: %w", pod.Name, err))
+					}
 					continue
 				}
 				terminated := status.State.Terminated

@@ -75,6 +75,9 @@ spec:
         image: controller:latest
         name: manager
         env:
+        # Optional registry mirror for the HAProxy reloader installer image.
+        - name: HAPROXY_RELOADER_IMAGE
+          value: ""
         - name: POD_NAME
           valueFrom:
             fieldRef:

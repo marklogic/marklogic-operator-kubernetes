@@ -73,6 +73,21 @@ kubectl get crd -n marklogic-operator-system | grep 'marklogic'
 ### HAProxy configuration hot reload
 
 HAProxy uses validated master-worker reloads by default; no additional field is needed.
+
+**Before upgrading existing deployments**, ensure every namespace containing HAProxy
+pods can pull the reloader installer image. The installer reuses the running operator
+image by default. For a private registry, create the required pull secrets in each
+HAProxy namespace and reference them in the MarkLogicCluster's
+`spec.haproxy.imagePullSecrets`. The Helm chart's top-level `imagePullSecrets` only
+applies to the operator pod; these secrets are not propagated to HAProxy pods.
+
+To use a registry mirror, set Helm value
+`controllerManager.manager.haproxyReloaderImage` to the mirrored operator image
+(including its tag or digest), or set `HAPROXY_RELOADER_IMAGE` on the manager
+Deployment when using Kustomize. Leave it empty to reuse the running operator image.
+The mirror must contain the operator's reloader installer binary and be pullable
+using the HAProxy namespace's credentials.
+
 Existing deployments receive a one-time rolling update to adopt the new runtime layout. Subsequent
 configuration-only changes preserve HAProxy pods, containers, and active connections.
 Image, security context, certificate volume, and other pod-template changes still

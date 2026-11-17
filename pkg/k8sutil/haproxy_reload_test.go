@@ -227,6 +227,9 @@ func TestHAProxyHotReloadDeploymentDoesNotRollForConfigChanges(t *testing.T) {
 	if after.Spec.Template.Spec.InitContainers[0].Image != "operator:test" {
 		t.Fatal("reloader init container uses the wrong image")
 	}
+	if !reflect.DeepEqual(after.Spec.Template.Spec.InitContainers[0].Resources.Requests, container.Resources.Requests) {
+		t.Fatal("reloader init container must preserve the application's effective resource requests")
+	}
 }
 
 func TestHAProxyConfigurationRenderingIsDeterministic(t *testing.T) {
@@ -439,6 +442,210 @@ func TestHAProxyReadyPodIgnoresTerminationHistory(t *testing.T) {
 	_, cr := h.saved(t)
 	if cr.Status.HAProxyReload.Phase != "Success" {
 		t.Fatal("recovered pod was not reported as successful")
+	}
+}
+
+func TestHAProxyUnreadyRunningPodRecoversBeforeReadinessGate(t *testing.T) {
+	for _, recoveryFails := range []bool{false, true} {
+		t.Run(fmt.Sprintf("recoveryFails=%v", recoveryFails), func(t *testing.T) {
+			h := newReloadHarness(t)
+			pod := &corev1.Pod{}
+			if err := h.cc.Client.Get(h.cc.Ctx, types.NamespacedName{Name: "haproxy-1", Namespace: "test"}, pod); err != nil {
+				t.Fatal(err)
+			}
+			pod.Status.Conditions[0].Status = corev1.ConditionFalse
+			pod.Status.ContainerStatuses = []corev1.ContainerStatus{{
+				Name: "haproxy", State: corev1.ContainerState{Running: &corev1.ContainerStateRunning{}},
+				LastTerminationState: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{
+					ExitCode: 1, Message: "stale startup failure",
+				}},
+			}}
+			if err := h.cc.Client.Status().Update(h.cc.Ctx, pod); err != nil {
+				t.Fatal(err)
+			}
+			execute := h.cc.HAProxyExec
+			h.cc.HAProxyExec = func(ctx context.Context, pod *corev1.Pod, op string, data []byte) ([]byte, error) {
+				if recoveryFails {
+					h.calls = append(h.calls, op+":"+pod.Name)
+					return nil, errors.New("restoring reload failed")
+				}
+				return execute(ctx, pod, op, data)
+			}
+			step := h.cc.reconcileHAProxyReload(h.cm, h.desired)
+			outcome, err := step.Output()
+			if !step.Completed() || (err != nil) != recoveryFails ||
+				!reflect.DeepEqual(h.calls, []string{"status:haproxy-1"}) {
+				t.Fatalf("recovery did not run before readiness gate: %v %v", err, h.calls)
+			}
+			cm, cr := h.saved(t)
+			if !reflect.DeepEqual(cm.Data, h.cm.Data) {
+				t.Fatal("unready pod allowed a candidate commit")
+			}
+			if recoveryFails {
+				if cr.Status.HAProxyReload.Phase != "Failed" || !strings.Contains(cr.Status.HAProxyReload.Message, "restoring reload failed") {
+					t.Fatal("recovery failure was not reported")
+				}
+				return
+			}
+			if outcome.RequeueAfter == 0 || cr.Status.HAProxyReload.Phase != "Pending" {
+				t.Fatal("recovery must wait for the readiness probe")
+			}
+			pod.Status.Conditions[0].Status = corev1.ConditionTrue
+			if err := h.cc.Client.Status().Update(h.cc.Ctx, pod); err != nil {
+				t.Fatal(err)
+			}
+			if step := h.cc.reconcileHAProxyReload(cm, h.desired); step.Completed() {
+				_, err := step.Output()
+				t.Fatalf("recovered pod blocked subsequent reload: %v", err)
+			}
+		})
+	}
+}
+
+func TestHAProxyTLSRotationStagesBothSecretsUntilCommit(t *testing.T) {
+	for _, newFile := range []string{"old.pem", "new.pem"} {
+		for _, failValidation := range []bool{false, true} {
+			t.Run(fmt.Sprintf("newFile=%s/failValidation=%v", newFile, failValidation), func(t *testing.T) {
+				h := newReloadHarness(t)
+				cr := h.cc.MarklogicCluster
+				cr.Spec.HAProxy.Tls = &marklogicv1.TlsForHAProxy{
+					Enabled: true, SecretName: "old-tls", CertFileName: "old.pem",
+				}
+				if err := h.cc.Client.Update(h.cc.Ctx, cr); err != nil {
+					t.Fatal(err)
+				}
+				h.cm.Data = generateHAProxyConfigMapData(h.cc.Ctx, cr)
+				if err := h.cc.Client.Update(h.cc.Ctx, h.cm); err != nil {
+					t.Fatal(err)
+				}
+				for pod := range h.states {
+					h.states[pod] = haproxyreload.Hash([]byte(h.cm.Data["haproxy.cfg"]))
+				}
+				if _, err := h.cc.ReconcileHAProxy().Output(); err != nil {
+					t.Fatal(err)
+				}
+				_, cr = h.saved(t)
+				cr.Spec.HAProxy.Tls.SecretName = "new-tls"
+				cr.Spec.HAProxy.Tls.CertFileName = newFile
+				if err := h.cc.Client.Update(h.cc.Ctx, cr); err != nil {
+					t.Fatal(err)
+				}
+				h.cc.MarklogicCluster = cr
+				h.desired = generateHAProxyConfigMapData(h.cc.Ctx, cr)
+				if _, err := h.cc.ReconcileHAProxy().Output(); err != nil {
+					t.Fatal(err)
+				}
+				deployment := &appsv1.Deployment{}
+				if err := h.cc.Client.Get(h.cc.Ctx, client.ObjectKeyFromObject(h.cm), deployment); err != nil {
+					t.Fatal(err)
+				}
+				var staged corev1.Volume
+				for _, volume := range deployment.Spec.Template.Spec.Volumes {
+					if volume.Name == "ssl-certificate" {
+						staged = volume
+					}
+				}
+				if staged.Projected == nil || len(staged.Projected.Sources) != 2 ||
+					staged.Projected.Sources[0].Secret.Name != "old-tls" || staged.Projected.Sources[1].Secret.Name != "new-tls" {
+					t.Fatalf("rotation did not retain both certificate Secrets: %+v", staged)
+				}
+				oldPath := staged.Projected.Sources[0].Secret.Items[0].Path
+				newPath := staged.Projected.Sources[1].Secret.Items[0].Path
+				if oldPath == newPath || !strings.Contains(h.cm.Data["haproxy.cfg"], "/"+oldPath) ||
+					!strings.Contains(h.desired["haproxy.cfg"], "/"+newPath) {
+					t.Fatal("staged certificate paths collide or do not match their configurations")
+				}
+				if _, err := h.cc.ReconcileHAProxy().Output(); err != nil || len(h.calls) != 0 {
+					t.Fatalf("reload did not wait for staged pods: %v %v", err, h.calls)
+				}
+				for _, name := range []string{"haproxy-1", "haproxy-2"} {
+					pod := &corev1.Pod{}
+					if err := h.cc.Client.Get(h.cc.Ctx, types.NamespacedName{Name: name, Namespace: "test"}, pod); err != nil {
+						t.Fatal(err)
+					}
+					pod.Spec.Volumes = []corev1.Volume{staged}
+					if err := h.cc.Client.Update(h.cc.Ctx, pod); err != nil {
+						t.Fatal(err)
+					}
+				}
+				if failValidation {
+					h.failure = "validate:haproxy-2"
+				}
+				execute := h.cc.HAProxyExec
+				h.cc.HAProxyExec = func(ctx context.Context, pod *corev1.Pod, op string, data []byte) ([]byte, error) {
+					current := &appsv1.Deployment{}
+					if err := h.cc.Client.Get(ctx, client.ObjectKeyFromObject(h.cm), current); err != nil {
+						t.Fatal(err)
+					}
+					for _, volume := range current.Spec.Template.Spec.Volumes {
+						if volume.Name == staged.Name && !reflect.DeepEqual(volume, staged) {
+							t.Fatal("old certificate removed before commit")
+						}
+					}
+					return execute(ctx, pod, op, data)
+				}
+				_, err := h.cc.ReconcileHAProxy().Output()
+				if (err != nil) != failValidation {
+					t.Fatalf("unexpected rotation result: %v", err)
+				}
+				cm, _ := h.saved(t)
+				if reflect.DeepEqual(cm.Data, h.desired) == failValidation {
+					t.Fatal("rotation commit did not match validation outcome")
+				}
+				if err := h.cc.Client.Get(h.cc.Ctx, client.ObjectKeyFromObject(h.cm), deployment); err != nil {
+					t.Fatal(err)
+				}
+				for _, volume := range deployment.Spec.Template.Spec.Volumes {
+					if volume.Name != staged.Name {
+						continue
+					}
+					if failValidation && !reflect.DeepEqual(volume, staged) {
+						t.Fatal("failed rotation discarded the old certificate")
+					}
+					if !failValidation && (volume.Secret == nil || volume.Secret.SecretName != "new-tls") {
+						t.Fatal("successful rotation did not remove the old Secret")
+					}
+				}
+			})
+		}
+	}
+}
+
+func TestHAProxyTLSConfigChangeIgnoresDefaultedVolumeMode(t *testing.T) {
+	h := newReloadHarness(t)
+	h.cc.MarklogicCluster.Spec.HAProxy.Tls = &marklogicv1.TlsForHAProxy{
+		Enabled: true, SecretName: "tls", CertFileName: "certificate.pem",
+	}
+	if err := h.cc.Client.Update(h.cc.Ctx, h.cc.MarklogicCluster); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.cc.ReconcileHAProxy().Output(); err != nil {
+		t.Fatal(err)
+	}
+	deployment := &appsv1.Deployment{}
+	if err := h.cc.Client.Get(h.cc.Ctx, client.ObjectKeyFromObject(h.cm), deployment); err != nil {
+		t.Fatal(err)
+	}
+	for i := range deployment.Spec.Template.Spec.Volumes {
+		if secret := deployment.Spec.Template.Spec.Volumes[i].Secret; secret != nil {
+			mode := int32(corev1.SecretVolumeSourceDefaultMode)
+			secret.DefaultMode = &mode
+		}
+	}
+	if err := h.cc.Client.Update(h.cc.Ctx, deployment); err != nil {
+		t.Fatal(err)
+	}
+	h.desired = generateHAProxyConfigMapData(h.cc.Ctx, h.cc.MarklogicCluster)
+	if step := h.cc.ReconcileHAProxy(); step.Completed() {
+		_, err := step.Output()
+		t.Fatalf("defaulted volume mode triggered a rollout: %v", err)
+	}
+	current := &appsv1.Deployment{}
+	if err := h.cc.Client.Get(h.cc.Ctx, client.ObjectKeyFromObject(h.cm), current); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(current.Spec.Template, deployment.Spec.Template) {
+		t.Fatal("configuration-only change altered the TLS pod template")
 	}
 }
 

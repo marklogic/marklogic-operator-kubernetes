@@ -38,6 +38,8 @@ spec:
         command:
         - /manager
         env:
+        - name: HAPROXY_RELOADER_IMAGE
+          value: {{ .Values.controllerManager.manager.haproxyReloaderImage | default "" | quote }}
         - name: KUBERNETES_CLUSTER_DOMAIN
           value: {{ quote .Values.kubernetesClusterDomain }}
         - name: POD_NAMESPACE
