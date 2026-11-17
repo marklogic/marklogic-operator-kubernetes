@@ -34,6 +34,8 @@ import (
 
 type HAProxyExecutor func(context.Context, *corev1.Pod, string, []byte) ([]byte, error)
 
+const haproxyBootstrapAnnotation = "marklogic.progress.com/haproxy-bootstrap"
+
 func NewHAProxyExecutor(config *rest.Config) (HAProxyExecutor, error) {
 	kube, err := kubernetes.NewForConfig(config)
 	if err != nil {
@@ -151,7 +153,11 @@ func (cc *ClusterContext) ReconcileHAProxy() result.ReconcileResult {
 	}
 	configmap := &corev1.ConfigMap{}
 	if err := cc.Client.Get(cc.Ctx, key, configmap); apierrors.IsNotFound(err) {
-		configmap = generateHAProxyConfigMap(objectMeta, marklogicClusterAsOwner(cr), data)
+		configmap = generateHAProxyConfigMap(objectMeta, marklogicClusterAsOwner(cr), data).DeepCopy()
+		if configmap.Annotations == nil {
+			configmap.Annotations = map[string]string{}
+		}
+		configmap.Annotations[haproxyBootstrapAnnotation] = "pending"
 		if err := cc.Client.Create(cc.Ctx, configmap); err != nil {
 			return fail(err)
 		}
@@ -171,6 +177,16 @@ func (cc *ClusterContext) ReconcileHAProxy() result.ReconcileResult {
 	} else if err != nil {
 		return fail(err)
 	} else {
+		if getSSLConfig(cr.Spec.HAProxy.Tls) == "" && !equality.Semantic.DeepEqual(configmap.Data, data) {
+			for _, volume := range deployment.Spec.Template.Spec.Volumes {
+				if volume.Name == "ssl-certificate" {
+					if step := cc.reconcileHAProxyReload(configmap, data); step.Completed() {
+						return step
+					}
+					break
+				}
+			}
+		}
 		diff, err := patch.DefaultPatchMaker.Calculate(deployment, desiredDeployment, patch.IgnoreStatusFields())
 		if err != nil {
 			return fail(err)
@@ -247,6 +263,8 @@ func (cc *ClusterContext) reconcileHAProxyReload(configmap *corev1.ConfigMap, de
 		return fail(err)
 	}
 	ready := len(pods.Items) == int(cc.MarklogicCluster.Spec.HAProxy.ReplicaCount) && len(pods.Items) > 0
+	bootstrapFailed := configmap.Annotations[haproxyBootstrapAnnotation] == "pending" && ready
+	var startupErr error
 	for i := range pods.Items {
 		pod := &pods.Items[i]
 		conditionReady := false
@@ -254,22 +272,42 @@ func (cc *ClusterContext) reconcileHAProxyReload(configmap *corev1.ConfigMap, de
 			if condition.Type == corev1.PodReady && condition.Status == corev1.ConditionTrue {
 				conditionReady = true
 			}
-			if !conditionReady {
-				for _, status := range pod.Status.ContainerStatuses {
-					if status.Name != "haproxy" {
-						continue
-					}
-					terminated := status.State.Terminated
-					if terminated == nil {
-						terminated = status.LastTerminationState.Terminated
-					}
-					if terminated != nil && terminated.ExitCode != 0 {
-						return fail(fmt.Errorf("HAProxy pod %s failed to start (exit %d): %s", pod.Name, terminated.ExitCode, terminated.Message))
-					}
+		}
+		validationFailed := false
+		if !conditionReady {
+			for _, status := range pod.Status.ContainerStatuses {
+				if status.Name != "haproxy" {
+					continue
+				}
+				terminated := status.State.Terminated
+				if terminated == nil {
+					terminated = status.LastTerminationState.Terminated
+				}
+				if terminated != nil && terminated.ExitCode != 0 {
+					startupErr = fmt.Errorf("HAProxy pod %s failed to start (exit %d): %s", pod.Name, terminated.ExitCode, terminated.Message)
+					validationFailed = strings.Contains(terminated.Message, "HAProxy validation failed")
 				}
 			}
 		}
+		bootstrapFailed = bootstrapFailed && pod.DeletionTimestamp == nil && validationFailed
 		ready = ready && pod.DeletionTimestamp == nil && conditionReady
+	}
+	if bootstrapFailed && !equality.Semantic.DeepEqual(configmap.Data, desired) {
+		if err := cc.checkHAProxyGeneration(cc.Ctx); err != nil {
+			return fail(err)
+		}
+		next := configmap.DeepCopy()
+		next.Data = desired
+		if err := cc.Client.Update(cc.Ctx, next); err != nil {
+			return fail(fmt.Errorf("correcting HAProxy bootstrap ConfigMap: %w", err))
+		}
+		if err := cc.setHAProxyReloadStatus("Pending", hash, "Waiting for HAProxy to start with the corrected bootstrap configuration"); err != nil {
+			return result.Error(err)
+		}
+		return result.RequeueSoon(5)
+	}
+	if startupErr != nil {
+		return fail(startupErr)
 	}
 	if !ready {
 		if err := cc.setHAProxyReloadStatus("Pending", hash, "Waiting for all HAProxy replicas to be ready"); err != nil {
@@ -338,9 +376,10 @@ func (cc *ClusterContext) reconcileHAProxyReload(configmap *corev1.ConfigMap, de
 	if err := cc.checkHAProxyGeneration(cc.Ctx); err != nil {
 		return rollback(err)
 	}
-	if !bytes.Equal(previous, target) {
+	if !bytes.Equal(previous, target) || configmap.Annotations[haproxyBootstrapAnnotation] != "" {
 		next := configmap.DeepCopy()
 		next.Data = desired
+		delete(next.Annotations, haproxyBootstrapAnnotation)
 		if err := cc.Client.Update(cc.Ctx, next); err != nil {
 			return rollback(fmt.Errorf("committing HAProxy ConfigMap: %w", err))
 		}

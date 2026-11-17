@@ -20,6 +20,17 @@ import (
 	"time"
 )
 
+func testDir(t *testing.T) string {
+	t.Helper()
+	// Keep Unix socket paths below the platform limit, including on macOS.
+	dir, err := os.MkdirTemp("/tmp", "hpr-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	return dir
+}
+
 func testProxy(t *testing.T) (Reloader, []byte, string, string) {
 	t.Helper()
 	binary, err := exec.LookPath("haproxy")
@@ -271,6 +282,59 @@ func TestHAProxyInterruptedApplyRecovery(t *testing.T) {
 	}
 }
 
+func TestHAProxyInterruptedRestorationRecovery(t *testing.T) {
+	r, original, httpAddr, _ := testProxy(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	candidate := bytes.ReplaceAll(original, []byte("version-one"), []byte("uncommitted"))
+	for _, statusRequest := range []bool{false, true} {
+		if err := r.write("active.cfg", candidate); err != nil {
+			t.Fatal(err)
+		}
+		if err := r.reload(ctx); err != nil {
+			t.Fatal(err)
+		}
+		candidatePID, err := r.Worker(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		// Recovery and rollback share this interruption point: the files match,
+		// but the candidate worker is still serving requests.
+		if err := r.write("recovery.pending", nil); err != nil {
+			t.Fatal(err)
+		}
+		if err := r.write("active.cfg", original); err != nil {
+			t.Fatal(err)
+		}
+		if statusRequest {
+			status, err := r.Status(ctx)
+			if err != nil || status.Hash != Hash(original) {
+				t.Fatalf("status did not recover pending restoration: %+v, %v", status, err)
+			}
+		} else if err := r.Recover(ctx); err != nil {
+			t.Fatal(err)
+		}
+		pid, err := r.Worker(ctx)
+		if err != nil || pid == candidatePID {
+			t.Fatalf("pending restoration did not replace candidate worker: %d, %v", pid, err)
+		}
+		client := &http.Client{Timeout: 2 * time.Second}
+		response, err := client.Get("http://" + httpAddr)
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, err := io.ReadAll(response.Body)
+		response.Body.Close()
+		client.CloseIdleConnections()
+		if err != nil || string(body) != "version-one" {
+			t.Fatalf("candidate configuration still serving: %q, %v", body, err)
+		}
+		if _, err := os.Stat(r.path("recovery.pending")); !os.IsNotExist(err) {
+			t.Fatalf("confirmed restoration retained pending marker: %v", err)
+		}
+	}
+}
+
 func TestWithLockHonorsContext(t *testing.T) {
 	r := Reloader{Dir: t.TempDir()}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -281,5 +345,140 @@ func TestWithLockHonorsContext(t *testing.T) {
 	})
 	if err == nil || !strings.Contains(err.Error(), "context canceled") {
 		t.Fatalf("lock did not honor cancellation: %v", err)
+	}
+}
+
+func TestInterruptedRestorationRetainsPendingReload(t *testing.T) {
+	for _, rollback := range []bool{false, true} {
+		t.Run(fmt.Sprintf("rollback=%v", rollback), func(t *testing.T) {
+			r := Reloader{Dir: testDir(t), Binary: "true"}
+			original, candidate := []byte("committed"), []byte("candidate")
+			if err := r.Initialize(context.Background(), original); err != nil {
+				t.Fatal(err)
+			}
+			if !rollback {
+				if err := r.write("active.cfg", candidate); err != nil {
+					t.Fatal(err)
+				}
+			}
+			listener, err := net.Listen("unix", r.path("master.sock"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer listener.Close()
+			type exchange struct {
+				command, response string
+				restoring         bool
+			}
+			exchanges := []exchange{
+				{"reload", "interrupted", true},
+				{"reload", "retry failed", true},
+				{"reload", "Success=1\n", true},
+				{"show proc", "123 worker\n", true},
+				{"show proc", "123 worker\n", false},
+			}
+			if rollback {
+				exchanges = append([]exchange{{"reload", "activation failed", false}}, exchanges...)
+			}
+			done := make(chan error, 1)
+			go func() {
+				for _, step := range exchanges {
+					conn, err := listener.Accept()
+					if err != nil {
+						done <- err
+						return
+					}
+					command, err := io.ReadAll(conn)
+					if err != nil {
+						conn.Close()
+						done <- err
+						return
+					}
+					if strings.TrimSpace(string(command)) != step.command {
+						t.Errorf("command = %q, want %q", command, step.command)
+					}
+					if step.restoring {
+						// Observe the interruption window, before reload is confirmed.
+						if _, err := os.Stat(r.path("recovery.pending")); err != nil {
+							t.Errorf("restoration was not journaled: %v", err)
+						}
+						active, err := os.ReadFile(r.path("active.cfg"))
+						if err != nil || !bytes.Equal(active, original) {
+							t.Errorf("restored active file = %q, err=%v", active, err)
+						}
+					}
+					_, err = io.WriteString(conn, step.response)
+					conn.Close()
+					if err != nil {
+						done <- err
+						return
+					}
+				}
+				done <- nil
+			}()
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			if rollback {
+				err = r.Apply(ctx, candidate)
+			} else {
+				err = r.Recover(ctx)
+			}
+			if err == nil {
+				t.Fatal("interrupted restoration succeeded")
+			}
+			// A fresh request must retry even though the files are already equal.
+			retry := Reloader{Dir: r.Dir, Binary: r.Binary}
+			if err := retry.Recover(ctx); err == nil {
+				t.Fatal("failed retry succeeded")
+			}
+			if _, err := os.Stat(r.path("recovery.pending")); err != nil {
+				t.Fatalf("failed retry lost pending marker: %v", err)
+			}
+			status, err := retry.Status(ctx)
+			if err != nil || status.Hash != Hash(original) || status.WorkerPID != 123 {
+				t.Fatalf("status did not finish restoration: %+v, %v", status, err)
+			}
+			if _, err := os.Stat(r.path("recovery.pending")); !os.IsNotExist(err) {
+				t.Fatalf("confirmed restoration retained pending marker: %v", err)
+			}
+			select {
+			case err := <-done:
+				if err != nil {
+					t.Fatal(err)
+				}
+			case <-ctx.Done():
+				t.Fatal(ctx.Err())
+			}
+		})
+	}
+}
+
+func TestInitializeClearsPendingOnlyAfterSuccess(t *testing.T) {
+	for _, failure := range []string{"", "validation", "committed-write"} {
+		t.Run("failure="+failure, func(t *testing.T) {
+			r := Reloader{Dir: testDir(t), Binary: "true"}
+			if err := r.write("recovery.pending", nil); err != nil {
+				t.Fatal(err)
+			}
+			if failure == "validation" {
+				r.Binary = "false"
+			}
+			if failure == "committed-write" {
+				if err := os.Mkdir(r.path("committed.cfg"), 0700); err != nil {
+					t.Fatal(err)
+				}
+			}
+			err := r.Initialize(context.Background(), []byte("startup configuration"))
+			if (err != nil) != (failure != "") {
+				t.Fatalf("Initialize error = %v, failure = %q", err, failure)
+			}
+			_, err = os.Stat(r.path("recovery.pending"))
+			if failure == "" && !os.IsNotExist(err) {
+				t.Fatalf("successful startup retained stale marker: %v", err)
+			}
+			if failure != "" && err != nil {
+				t.Fatalf("failed startup lost pending marker: %v", err)
+			}
+		})
 	}
 }

@@ -60,7 +60,7 @@ func (r Reloader) Initialize(ctx context.Context, data []byte) error {
 			return err
 		}
 	}
-	return nil
+	return r.clearRecovery()
 }
 
 func (r Reloader) Validate(ctx context.Context, data []byte) error {
@@ -194,7 +194,7 @@ func (r Reloader) WithLock(ctx context.Context, fn func() error) error {
 }
 
 // Recover conservatively restores the last confirmed configuration if an exec
-// request was interrupted between replacing active.cfg and recording success.
+// request was interrupted during activation or restoration of active.cfg.
 func (r Reloader) Recover(ctx context.Context) error {
 	committed, err := os.ReadFile(r.path("committed.cfg"))
 	if err != nil {
@@ -204,17 +204,37 @@ func (r Reloader) Recover(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if bytes.Equal(active, committed) {
+	_, pendingErr := os.Stat(r.path("recovery.pending"))
+	if pendingErr != nil && !errors.Is(pendingErr, os.ErrNotExist) {
+		return pendingErr
+	}
+	if bytes.Equal(active, committed) && errors.Is(pendingErr, os.ErrNotExist) {
 		return nil
+	}
+	return r.restore(ctx, committed)
+}
+
+func (r Reloader) clearRecovery() error {
+	err := os.Remove(r.path("recovery.pending"))
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	return err
+}
+
+func (r Reloader) restore(ctx context.Context, committed []byte) error {
+	// File equality cannot prove that the running worker has been restored.
+	// Journal the pending reload before replacing active.cfg, including on retries.
+	if err := r.write("recovery.pending", nil); err != nil {
+		return err
 	}
 	if err := r.write("active.cfg", committed); err != nil {
 		return err
 	}
 	if err := r.reload(ctx); err != nil {
-		// Leave the mismatch visible so a later request retries recovery.
-		return errors.Join(err, r.write("active.cfg", active))
+		return err
 	}
-	return nil
+	return r.clearRecovery()
 }
 
 // Apply validates again immediately before swapping the active file. A successful
@@ -246,13 +266,8 @@ func (r Reloader) Apply(ctx context.Context, data []byte) error {
 	}
 	rollbackCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), Timeout)
 	defer cancel()
-	if restoreErr := r.write("active.cfg", previous); restoreErr != nil {
-		return errors.Join(err, fmt.Errorf("restoring active file: %w", restoreErr))
-	}
-	if restoreErr := r.reload(rollbackCtx); restoreErr != nil {
-		// Preserve the journal mismatch until recovery confirms a running worker.
-		journalErr := r.write("active.cfg", data)
-		return errors.Join(err, fmt.Errorf("rollback reload failed: %w", restoreErr), journalErr)
+	if restoreErr := r.restore(rollbackCtx, previous); restoreErr != nil {
+		return errors.Join(err, fmt.Errorf("rollback failed: %w", restoreErr))
 	}
 	return err
 }
