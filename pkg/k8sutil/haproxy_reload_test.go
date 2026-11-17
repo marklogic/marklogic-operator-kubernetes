@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -413,5 +414,220 @@ func TestHAProxyStartupValidationFailureIsReported(t *testing.T) {
 	_, cr := h.saved(t)
 	if cr.Status.HAProxyReload.Phase != "Failed" {
 		t.Fatal("startup failure remained Pending")
+	}
+}
+
+func TestHAProxyReadyPodIgnoresTerminationHistory(t *testing.T) {
+	h := newReloadHarness(t)
+	pod := &corev1.Pod{}
+	if err := h.cc.Client.Get(h.cc.Ctx, types.NamespacedName{Name: "haproxy-1", Namespace: "test"}, pod); err != nil {
+		t.Fatal(err)
+	}
+	pod.Status.Conditions = append([]corev1.PodCondition{{Type: corev1.PodInitialized, Status: corev1.ConditionTrue}}, pod.Status.Conditions...)
+	pod.Status.ContainerStatuses = []corev1.ContainerStatus{{
+		Name: "haproxy", LastTerminationState: corev1.ContainerState{
+			Terminated: &corev1.ContainerStateTerminated{ExitCode: 1, Message: "HAProxy validation failed"},
+		},
+	}}
+	if err := h.cc.Client.Status().Update(h.cc.Ctx, pod); err != nil {
+		t.Fatal(err)
+	}
+	if step := h.cc.reconcileHAProxyReload(h.cm, h.desired); step.Completed() {
+		_, err := step.Output()
+		t.Fatalf("recovered Ready pod blocked reload: %v", err)
+	}
+	_, cr := h.saved(t)
+	if cr.Status.HAProxyReload.Phase != "Success" {
+		t.Fatal("recovered pod was not reported as successful")
+	}
+}
+
+func TestHAProxyInvalidBootstrapCanBeCorrected(t *testing.T) {
+	h := newReloadHarness(t)
+	h.cc.Annotations = map[string]string{"example.com/annotation": "preserved"}
+	if err := h.cc.Client.Delete(h.cc.Ctx, h.cm); err != nil {
+		t.Fatal(err)
+	}
+	h.cc.MarklogicCluster.Spec.HAProxy.Stats.Enabled = true
+	h.cc.MarklogicCluster.Spec.HAProxy.Stats.Port = -1
+	if err := h.cc.Client.Update(h.cc.Ctx, h.cc.MarklogicCluster); err != nil {
+		t.Fatal(err)
+	}
+	if step := h.cc.ReconcileHAProxy(); !step.Completed() {
+		t.Fatal("initial deployment did not wait for rollout")
+	} else if _, err := step.Output(); err != nil {
+		t.Fatal(err)
+	}
+	if h.cc.Annotations[haproxyBootstrapAnnotation] != "" {
+		t.Fatal("bootstrap annotation leaked into shared resource annotations")
+	}
+	for _, name := range []string{"haproxy-1", "haproxy-2"} {
+		pod := &corev1.Pod{}
+		if err := h.cc.Client.Get(h.cc.Ctx, types.NamespacedName{Name: name, Namespace: "test"}, pod); err != nil {
+			t.Fatal(err)
+		}
+		pod.Status.Conditions = nil
+		pod.Status.ContainerStatuses = []corev1.ContainerStatus{{
+			Name: "haproxy", LastTerminationState: corev1.ContainerState{
+				Terminated: &corev1.ContainerStateTerminated{ExitCode: 1, Message: "HAProxy validation failed: invalid port -1"},
+			},
+		}}
+		if err := h.cc.Client.Status().Update(h.cc.Ctx, pod); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := h.cc.ReconcileHAProxy().Output(); err == nil {
+		t.Fatal("invalid bootstrap was not reported")
+	}
+	cm, cr := h.saved(t)
+	if !strings.Contains(cm.Data["haproxy.cfg"], "bind *:-1") || cm.Annotations[haproxyBootstrapAnnotation] != "pending" {
+		t.Fatal("initial configuration was not marked as bootstrap")
+	}
+	cr.Spec.HAProxy.Stats.Port = 8404
+	if err := h.cc.Client.Update(h.cc.Ctx, cr); err != nil {
+		t.Fatal(err)
+	}
+	h.cc.MarklogicCluster = cr
+	corrected := generateHAProxyConfigMapData(h.cc.Ctx, cr)
+	step := h.cc.ReconcileHAProxy()
+	outcome, err := step.Output()
+	if !step.Completed() || err != nil || outcome.RequeueAfter == 0 {
+		t.Fatalf("bootstrap correction did not wait for startup: %+v %v", outcome, err)
+	}
+	cm, cr = h.saved(t)
+	if !reflect.DeepEqual(cm.Data, corrected) || cr.Status.HAProxyReload.Phase != "Pending" || len(h.calls) != 0 {
+		t.Fatal("failed bootstrap configuration was not corrected without exec")
+	}
+	for _, name := range []string{"haproxy-1", "haproxy-2"} {
+		pod := &corev1.Pod{}
+		if err := h.cc.Client.Get(h.cc.Ctx, types.NamespacedName{Name: name, Namespace: "test"}, pod); err != nil {
+			t.Fatal(err)
+		}
+		pod.Status.Conditions = []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionTrue}}
+		if err := h.cc.Client.Status().Update(h.cc.Ctx, pod); err != nil {
+			t.Fatal(err)
+		}
+		h.states[name] = haproxyreload.Hash([]byte(corrected["haproxy.cfg"]))
+	}
+	if step := h.cc.ReconcileHAProxy(); step.Completed() {
+		_, err := step.Output()
+		t.Fatalf("corrected bootstrap did not recover: %v", err)
+	}
+	cm, cr = h.saved(t)
+	if cm.Annotations[haproxyBootstrapAnnotation] != "" || cr.Status.HAProxyReload.Phase != "Success" {
+		t.Fatal("successful bootstrap was not committed")
+	}
+}
+
+func TestHAProxyBootstrapCorrectionRequiresAllReplicasToHaveFailedValidation(t *testing.T) {
+	for _, bootstrap := range []bool{false, true} {
+		for _, failure := range []string{"HAProxy validation failed", "image startup failed"} {
+			t.Run(fmt.Sprintf("bootstrap=%v/failure=%s", bootstrap, failure), func(t *testing.T) {
+				h := newReloadHarness(t)
+				if bootstrap {
+					h.cm.Annotations = map[string]string{haproxyBootstrapAnnotation: "pending"}
+					if err := h.cc.Client.Update(h.cc.Ctx, h.cm); err != nil {
+						t.Fatal(err)
+					}
+				}
+				for _, name := range []string{"haproxy-1", "haproxy-2"} {
+					pod := &corev1.Pod{}
+					if err := h.cc.Client.Get(h.cc.Ctx, types.NamespacedName{Name: name, Namespace: "test"}, pod); err != nil {
+						t.Fatal(err)
+					}
+					if !bootstrap || failure != "HAProxy validation failed" || name == "haproxy-1" {
+						pod.Status.Conditions = nil
+					}
+					pod.Status.ContainerStatuses = []corev1.ContainerStatus{{
+						Name: "haproxy", State: corev1.ContainerState{
+							Terminated: &corev1.ContainerStateTerminated{ExitCode: 1, Message: failure},
+						},
+					}}
+					if err := h.cc.Client.Status().Update(h.cc.Ctx, pod); err != nil {
+						t.Fatal(err)
+					}
+				}
+				if _, err := h.cc.reconcileHAProxyReload(h.cm, h.desired).Output(); err == nil {
+					t.Fatal("startup failure was not reported")
+				}
+				cm, _ := h.saved(t)
+				if !reflect.DeepEqual(cm.Data, h.cm.Data) || len(h.calls) != 0 {
+					t.Fatal("committed or partially started configuration was overwritten")
+				}
+			})
+		}
+	}
+}
+
+func TestHAProxyTLSRemovalCommitsBeforeRemovingCertificate(t *testing.T) {
+	for _, failValidation := range []bool{false, true} {
+		t.Run(fmt.Sprintf("failValidation=%v", failValidation), func(t *testing.T) {
+			h := newReloadHarness(t)
+			h.cc.MarklogicCluster.Spec.HAProxy.Tls = &marklogicv1.TlsForHAProxy{
+				Enabled: true, SecretName: "haproxy-tls", CertFileName: "certificate.pem",
+			}
+			if err := h.cc.Client.Update(h.cc.Ctx, h.cc.MarklogicCluster); err != nil {
+				t.Fatal(err)
+			}
+			h.cm.Data = generateHAProxyConfigMapData(h.cc.Ctx, h.cc.MarklogicCluster)
+			if err := h.cc.Client.Update(h.cc.Ctx, h.cm); err != nil {
+				t.Fatal(err)
+			}
+			for pod := range h.states {
+				h.states[pod] = haproxyreload.Hash([]byte(h.cm.Data["haproxy.cfg"]))
+			}
+			if _, err := h.cc.ReconcileHAProxy().Output(); err != nil {
+				t.Fatal(err)
+			}
+			_, cr := h.saved(t)
+			cr.Spec.HAProxy.Tls = nil
+			if err := h.cc.Client.Update(h.cc.Ctx, cr); err != nil {
+				t.Fatal(err)
+			}
+			h.cc.MarklogicCluster = cr
+			h.desired = generateHAProxyConfigMapData(h.cc.Ctx, cr)
+			if failValidation {
+				h.failure = "validate:haproxy-2"
+			}
+			execute := h.cc.HAProxyExec
+			h.cc.HAProxyExec = func(ctx context.Context, pod *corev1.Pod, op string, data []byte) ([]byte, error) {
+				deployment := &appsv1.Deployment{}
+				if err := h.cc.Client.Get(ctx, client.ObjectKeyFromObject(h.cm), deployment); err != nil {
+					t.Fatal(err)
+				}
+				found := false
+				for _, volume := range deployment.Spec.Template.Spec.Volumes {
+					found = found || volume.Name == "ssl-certificate"
+				}
+				if !found {
+					t.Fatal("certificate removed before non-TLS reload completed")
+				}
+				return execute(ctx, pod, op, data)
+			}
+			step := h.cc.ReconcileHAProxy()
+			_, err := step.Output()
+			if failValidation != (err != nil) {
+				t.Fatalf("unexpected TLS transition result: %v", err)
+			}
+			cm, _ := h.saved(t)
+			deployment := &appsv1.Deployment{}
+			if err := h.cc.Client.Get(h.cc.Ctx, client.ObjectKeyFromObject(h.cm), deployment); err != nil {
+				t.Fatal(err)
+			}
+			found := false
+			for _, volume := range deployment.Spec.Template.Spec.Volumes {
+				found = found || volume.Name == "ssl-certificate"
+			}
+			if found != failValidation {
+				t.Fatal("certificate removal did not respect reload success")
+			}
+			expected := h.desired
+			if failValidation {
+				expected = h.cm.Data
+			}
+			if !reflect.DeepEqual(cm.Data, expected) {
+				t.Fatal("TLS transition committed the wrong startup configuration")
+			}
+		})
 	}
 }

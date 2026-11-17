@@ -60,6 +60,14 @@ deployment reports Pending. Changes to image, replicas, scheduling, security
 context, or certificate volume layout follow the normal Kubernetes deployment
 workflow rather than being configuration-only reloads.
 
+The initial ConfigMap remains marked as bootstrap until all replicas confirm a
+running configuration. If every replica fails startup validation during bootstrap,
+correcting the cluster specification updates that ConfigMap directly so restarting
+containers can recover. Once bootstrap succeeds, corrections always use the
+validated reload transaction. Disabling HAProxy TLS first reloads and commits the
+non-TLS configuration while certificates remain mounted, then rolls the deployment
+to remove the certificate volume.
+
 Edit the cluster specification, not the generated ConfigMap. ConfigMap watches
 reconcile drift back to the operator-generated configuration. Updating TLS Secret
 contents alone is not a configuration-hash change and is outside this workflow.

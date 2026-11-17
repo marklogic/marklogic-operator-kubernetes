@@ -40,6 +40,7 @@ type MarkLogicGroupParameters struct {
 	UpdateStrategy                 appsv1.StatefulSetUpdateStrategyType
 	Affinity                       *corev1.Affinity
 	NodeSelector                   map[string]string
+	Tolerations                    []corev1.Toleration
 	TopologySpreadConstraints      []corev1.TopologySpreadConstraint
 	HugePages                      *marklogicv1.HugePages
 	LivenessProbe                  marklogicv1.ContainerProbe
@@ -72,6 +73,7 @@ type MarkLogicClusterParameters struct {
 	License                        *marklogicv1.License
 	Affinity                       *corev1.Affinity
 	NodeSelector                   map[string]string
+	Tolerations                    []corev1.Toleration
 	TopologySpreadConstraints      []corev1.TopologySpreadConstraint
 	PriorityClassName              string
 	EnableConverters               bool
@@ -152,6 +154,7 @@ func (cc *ClusterContext) GenerateMarkLogicGroupDef(cr *marklogicv1.MarklogicClu
 			UpdateStrategy:                 params.UpdateStrategy,
 			Affinity:                       params.Affinity,
 			NodeSelector:                   params.NodeSelector,
+			Tolerations:                    params.Tolerations,
 			Persistence:                    params.Persistence.DeepCopy(),
 			Service:                        params.Service,
 			LivenessProbe:                  params.LivenessProbe,
@@ -277,6 +280,7 @@ func generateMarkLogicClusterParams(cr *marklogicv1.MarklogicCluster) *MarkLogic
 		Persistence:                    cr.Spec.Persistence,
 		Affinity:                       cr.Spec.Affinity,
 		NodeSelector:                   cr.Spec.NodeSelector,
+		Tolerations:                    cr.Spec.Tolerations,
 		TopologySpreadConstraints:      cr.Spec.TopologySpreadConstraints,
 		PriorityClassName:              cr.Spec.PriorityClassName,
 		License:                        cr.Spec.License,
@@ -332,6 +336,7 @@ func generateMarkLogicGroupParams(cr *marklogicv1.MarklogicCluster, index int, c
 		ClusterDomain:                  clusterParams.ClusterDomain,
 		Affinity:                       clusterParams.Affinity,
 		NodeSelector:                   clusterParams.NodeSelector,
+		Tolerations:                    clusterParams.Tolerations,
 		TopologySpreadConstraints:      clusterParams.TopologySpreadConstraints,
 		HugePages:                      clusterParams.HugePages,
 		LivenessProbe:                  clusterParams.LivenessProbe,
@@ -389,6 +394,9 @@ func generateMarkLogicGroupParams(cr *marklogicv1.MarklogicCluster, index int, c
 	}
 	if cr.Spec.MarkLogicGroups[index].NodeSelector != nil {
 		markLogicGroupParameters.NodeSelector = cr.Spec.MarkLogicGroups[index].NodeSelector
+	}
+	if cr.Spec.MarkLogicGroups[index].Tolerations != nil {
+		markLogicGroupParameters.Tolerations = cr.Spec.MarkLogicGroups[index].Tolerations
 	}
 	if cr.Spec.MarkLogicGroups[index].TopologySpreadConstraints != nil {
 		markLogicGroupParameters.TopologySpreadConstraints = cr.Spec.MarkLogicGroups[index].TopologySpreadConstraints
