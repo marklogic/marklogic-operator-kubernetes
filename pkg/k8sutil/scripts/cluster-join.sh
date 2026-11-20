@@ -39,7 +39,8 @@ cluster_join_hosts_valid() {
     local file=$1 xml hosts_open hosts_close host_open host_close host_ids host_names record
     local record_count record_hosts record_ids record_names
     [[ -r "$file" ]] || return 1
-    xml=$(tr -d '\r\n' < "$file") || return 1
+    # MarkLogic writes an XML declaration before the root element; ignore it and comments.
+    xml=$(tr -d '\r\n' < "$file" | sed -E 's/<\?[^>]*\?>//g; s/<!--[^>]*-->//g') || return 1
     [[ "$xml" =~ ^[[:space:]]*\<([A-Za-z0-9_-]+:)?hosts([[:space:]][^>]*)?\>.*\</([A-Za-z0-9_-]+:)?hosts\>[[:space:]]*$ ]] || return 1
     hosts_open=$(grep -oE '<([A-Za-z0-9_-]+:)?hosts([[:space:]][^>]*)?>' <<< "$xml" | wc -l | tr -d ' ')
     hosts_close=$(grep -oE '</([A-Za-z0-9_-]+:)?hosts>' <<< "$xml" | wc -l | tr -d ' ')
@@ -66,7 +67,10 @@ cluster_join_hosts_valid() {
 # does not imply an unjoined host and must never authorize a rejoin.
 cluster_join_local_state() {
     local bootstrap_id=$1 hostname=$2 hosts_file=$3 count own target
-    cluster_join_hosts_valid "$hosts_file" || return 1
+    if ! cluster_join_hosts_valid "$hosts_file"; then
+        info "Local membership check: $hosts_file is missing or not a complete hosts document" >&2
+        return 1
+    fi
     count=$(cluster_join_xml_values host-id "$hosts_file" | wc -l | tr -d ' ')
     own=$(cluster_join_xml_values host-name "$hosts_file" | grep -Fxc -- "$hostname") || true
     target=$(cluster_join_xml_values host-id "$hosts_file" | grep -Fxc -- "$bootstrap_id") || true
@@ -75,8 +79,28 @@ cluster_join_local_state() {
     elif [[ "$count" == 1 && "$own" == 1 && "$target" == 0 ]]; then
         echo standalone
     else
+        info "Local membership check: hosts=$count own-name-matches=$own bootstrap-id-matches=$target expected-name=$hostname local-names=$(cluster_join_xml_values host-name "$hosts_file" | paste -sd, -)" >&2
         return 1
     fi
+}
+
+# Verify a ZIP archive's structure and CRCs. The MarkLogic server image ships
+# python3 but not unzip, so fall back to python's zipfile.
+# Returns 0 valid, 1 invalid, 2 no validator available.
+cluster_join_zip_valid() {
+    local file=$1
+    if command -v unzip >/dev/null 2>&1; then
+        unzip -tqq "$file" >/dev/null 2>&1
+    elif command -v python3 >/dev/null 2>&1; then
+        python3 -c 'import sys, zipfile
+try:
+    with zipfile.ZipFile(sys.argv[1]) as z:
+        sys.exit(1 if not z.namelist() or z.testzip() is not None else 0)
+except Exception:
+    sys.exit(1)' "$file" >/dev/null 2>&1
+    else
+        return 2
+    fi || return 1
 }
 
 # Join has two separate commits: registration on bootstrap and installation
@@ -119,11 +143,13 @@ join_cluster_checked() (
         error "Bootstrap registration/configuration download failed; local installation was not attempted"
         return 1
     }
-    if ! command -v unzip >/dev/null 2>&1; then
-        error "ZIP validator (unzip) is unavailable; refusing to install the response"
+    local zip_rc
+    cluster_join_zip_valid "$work/cluster.zip"
+    zip_rc=$?
+    if [[ $zip_rc -eq 2 ]]; then
+        error "No ZIP validator (unzip or python3) is available; refusing to install the response"
         return 1
-    fi
-    if ! unzip -tqq "$work/cluster.zip" >/dev/null 2>&1; then
+    elif [[ $zip_rc -ne 0 ]]; then
         error "Bootstrap did not return a valid ZIP configuration; refusing to install the response"
         return 1
     fi

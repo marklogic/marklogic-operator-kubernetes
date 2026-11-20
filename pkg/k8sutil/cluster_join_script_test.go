@@ -44,9 +44,23 @@ func TestClusterJoinScript(t *testing.T) {
 		{"truncated-zip", "standalone", true, false, 0, 0, -1},
 		{"corrupt-zip", "standalone", true, false, 0, 0, -1},
 		{"incomplete-host-record", "incomplete", true, false, 0, 0, -1},
+		// The MarkLogic server image has python3 but no unzip.
+		{"partial-join-python3", "standalone", false, false, 1, 1, -1},
+		{"truncated-zip-python3", "standalone", true, false, 0, 0, -1},
+		{"corrupt-zip-python3", "standalone", true, false, 0, 0, -1},
+		{"no-zip-validator", "standalone", true, false, 0, 0, -1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
+			scenario := strings.TrimSuffix(tc.name, "-python3")
+			var zipTools []string // nil keeps the host PATH
+			switch {
+			case strings.HasSuffix(tc.name, "-python3"):
+				zipTools = []string{"python3"}
+			case tc.name == "no-zip-validator":
+				scenario = "partial-join"
+				zipTools = []string{}
+			}
 			zipFile, err := os.Create(filepath.Join(dir, "cluster.zip"))
 			if err != nil {
 				t.Fatal(err)
@@ -65,7 +79,7 @@ func TestClusterJoinScript(t *testing.T) {
 			if err := zipFile.Close(); err != nil {
 				t.Fatal(err)
 			}
-			if tc.name == "corrupt-zip" {
+			if scenario == "corrupt-zip" {
 				archive, err := os.ReadFile(filepath.Join(dir, "cluster.zip"))
 				if err != nil {
 					t.Fatal(err)
@@ -75,16 +89,20 @@ func TestClusterJoinScript(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			self := `<host><host-id>200</host-id><host-name>joiner.example</host-name></host>`
-			bootstrap := `<host><host-id>100</host-id><host-name>bootstrap.example</host-name></host>`
+			self := realHostRecord("200", "joiner.example")
+			bootstrap := realHostRecord("100", "bootstrap.example")
 			body := self
 			if tc.state == "joined" {
 				body += bootstrap
 			}
 			if tc.state == "foreign" {
-				body += `<host><host-id>300</host-id><host-name>other.example</host-name></host>`
+				body += realHostRecord("300", "other.example")
 			}
-			xml := `<hosts xmlns="http://marklogic.com/xdmp/hosts">` + body + `</hosts>`
+			xml := realHostsDocument(body)
+			if err := os.WriteFile(filepath.Join(dir, "hosts-joined.xml"),
+				[]byte(realHostsDocument(self+bootstrap)), 0600); err != nil {
+				t.Fatal(err)
+			}
 			if tc.state == "invalid" {
 				xml = "not XML"
 			}
@@ -100,8 +118,11 @@ func TestClusterJoinScript(t *testing.T) {
 				t.Fatal(err)
 			}
 			cmd := exec.Command("bash", "-c", joinScriptHarness)
-			cmd.Env = append(os.Environ(), "HELPER="+helper, "CASE="+tc.name, "TEST_DIR="+dir,
+			cmd.Env = append(os.Environ(), "HELPER="+helper, "CASE="+scenario, "TEST_DIR="+dir,
 				"ZIP_FIXTURE="+filepath.Join(dir, "cluster.zip"))
+			if zipTools != nil {
+				cmd.Env = append(cmd.Env, "PATH="+restrictedPath(t, zipTools...))
+			}
 			if tc.tls {
 				cmd.Env = append(cmd.Env, "TEST_PROTOCOL=https", "TEST_HTTPS_OPTION=-k")
 			}
@@ -184,7 +205,7 @@ curl() {
             if [[ "$CASE" == install-fails ]]; then
                 code=500
             elif [[ "$CASE" != install-not-committed ]]; then
-                echo '<hosts xmlns="http://marklogic.com/xdmp/hosts"><host><host-id>200</host-id><host-name>joiner.example</host-name></host><host><host-id>100</host-id><host-name>bootstrap.example</host-name></host></hosts>' > "$TEST_DIR/hosts.xml"
+                cat "$TEST_DIR/hosts-joined.xml" > "$TEST_DIR/hosts.xml"
             fi ;;
         *) echo "Unexpected URL: $url" >&2; return 99 ;;
     esac
@@ -193,3 +214,51 @@ curl() {
 }
 join_cluster_checked joiner.example
 `
+
+// realHostsDocument and realHostRecord mirror the layout of hosts.xml written
+// by MarkLogic 12: an XML declaration, root attributes, indentation, extra
+// host children, self-closing elements and a multi-line certificate.
+func realHostsDocument(hosts string) string {
+	return `<?xml version="1.0" encoding="UTF-8"?>` + "\n" +
+		`<hosts xsi:schemaLocation="http://marklogic.com/xdmp/hosts hosts.xsd" xml:lang="zxx" ` +
+		`timestamp="17951564878147570" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" ` +
+		`xmlns="http://marklogic.com/xdmp/hosts">` + "\n" + hosts + "</hosts>\n"
+}
+
+func realHostRecord(id, name string) string {
+	return "  <host>\n" +
+		"    <host-id>" + id + "</host-id>\n" +
+		"    <host-name>" + name + "</host-name>\n" +
+		"    <host-mode>normal</host-mode>\n" +
+		"    <host-mode-description/>\n" +
+		"    <group>4248465848067994579</group>\n" +
+		"    <bind-port>7999</bind-port>\n" +
+		"    <connect-port>7999</connect-port>\n" +
+		"    <ssl-certificate>-----BEGIN CERTIFICATE-----\n" +
+		"MIICzjCCAbagAwIBAgIJANeviKtsLGemMA0GCSqGSIb3DQEBCwUAMB8xHTAbBgNV\n" +
+		"-----END CERTIFICATE-----\n" +
+		"</ssl-certificate>\n" +
+		"    <ssl-certificate-old/>\n" +
+		"    <ssl-certificate-new/>\n" +
+		"    <zone/>\n" +
+		"  </host>\n"
+}
+
+// restrictedPath returns a PATH holding only the tools the join script and
+// harness need, plus extra, so tests can simulate an image without unzip.
+func restrictedPath(t *testing.T, extra ...string) string {
+	t.Helper()
+	dir := t.TempDir()
+	tools := append([]string{"bash", "cat", "grep", "head", "mktemp", "paste", "rm", "sed",
+		"sleep", "touch", "tr", "wc"}, extra...)
+	for _, tool := range tools {
+		path, err := exec.LookPath(tool)
+		if err != nil {
+			t.Skipf("test requires %s", tool)
+		}
+		if err := os.Symlink(path, filepath.Join(dir, tool)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return dir
+}
