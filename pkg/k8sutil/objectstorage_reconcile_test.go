@@ -426,6 +426,58 @@ func TestObjectStorageEmptyTokenEqualsAbsentToken(t *testing.T) {
 	}
 }
 
+func TestObjectStorageTokenOnlyRemovalRequiresPut(t *testing.T) {
+	t.Parallel()
+	for _, explicitlyEmpty := range []bool{false, true} {
+		name := "absent"
+		if explicitlyEmpty {
+			name = "empty"
+		}
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			h := newOSHarness(t, nil)
+			withToken := awsMaterial("1")
+			withToken["sessionToken"] = secretMarker + "-token"
+			h.setSecret("aws-creds", "aws-uid-1", withToken)
+			h.setSecret("azure-creds", "azure-uid-1", azureMaterial("1"))
+			h.mustReconcile()
+			before := h.entry(providerAWS)
+			azure := h.entry(providerAzure)
+			if len(h.creds.aws) != 1 || h.creds.aws[0].SessionToken == "" {
+				t.Fatal("initial application must include a session token")
+			}
+
+			// Hold both keys constant so only token removal can invalidate the fingerprint.
+			withoutToken := awsMaterial("1")
+			if explicitlyEmpty {
+				withoutToken["sessionToken"] = ""
+			}
+			h.setSecret("aws-creds", "aws-uid-1", withoutToken)
+			h.resetObservations()
+			h.mustReconcile()
+			if len(h.creds.aws) != 1 || h.creds.aws[0].SessionToken != "" ||
+				h.creds.aws[0].AccessKey != withToken["accessKey"] || h.creds.aws[0].SecretKey != withToken["secretKey"] {
+				t.Fatal("removing only the token must PUT the unchanged keys without a token")
+			}
+			after := h.entry(providerAWS)
+			if after.AppliedFingerprint == before.AppliedFingerprint || after.AppliedSecret.ResourceVersion == before.AppliedSecret.ResourceVersion {
+				t.Fatal("token removal must persist changed material and the new source revision")
+			}
+			assertPhase(t, after, marklogicv1.ObjectStoragePhaseApplied, "")
+			assertEligible(t, after, true)
+			if len(h.creds.azure) != 0 || !equality.Semantic.DeepEqual(azure, h.entry(providerAzure)) {
+				t.Fatal("AWS token removal must preserve Azure credentials and status")
+			}
+
+			h.resetObservations()
+			h.mustReconcile()
+			if h.countOps("put:aws") != 0 {
+				t.Fatal("unchanged cleared-token credentials must not be applied again")
+			}
+		})
+	}
+}
+
 func TestObjectStorageSecretReadFailurePreservesHistoryAndEligibility(t *testing.T) {
 	t.Parallel()
 	h := appliedBothProviders(t)
@@ -574,7 +626,7 @@ func TestObjectStorageBootstrapFailureMessagesAreSafe(t *testing.T) {
 		{"transport", &mlmanage.CredentialError{Operation: "GET /manage/v2/hosts"}, "unreachable"},
 		{"not ready", &mlmanage.CredentialError{Operation: "GET /manage/v2/hosts", StatusCode: 503}, "HTTP 503"},
 		{"offline host", &mlmanage.BootstrapNotReadyError{Reason: "the bootstrap host is not online"}, "not online"},
-		{"unreadable response", &mlmanage.CredentialError{Operation: "GET /manage/v2/hosts", StatusCode: 200, ResponseIncomplete: true}, "could not be read completely"},
+		{"unreadable response", &mlmanage.CredentialError{Operation: "GET /manage/v2/hosts", StatusCode: 200, ResponseIncomplete: true}, "could not be read completely (HTTP 200)"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

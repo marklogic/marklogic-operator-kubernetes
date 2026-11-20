@@ -333,7 +333,7 @@ func bootstrapProbeMessage(err error) string {
 	if errors.As(err, &credErr) {
 		switch {
 		case credErr.ResponseIncomplete:
-			return "Waiting for bootstrap host: the Management API response could not be read completely."
+			return "Waiting for bootstrap host: the Management API response could not be read completely (HTTP " + strconv.Itoa(credErr.StatusCode) + ")."
 		case credErr.IsTransport():
 			return "Waiting for bootstrap host: the Management API is unreachable."
 		case credErr.StatusCode == 401:

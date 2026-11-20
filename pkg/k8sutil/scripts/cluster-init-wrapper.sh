@@ -343,7 +343,8 @@ touch /tmp/marklogic_ready
 echo "[Wrapper] Initialization complete. Monitoring MarkLogic via port 8001..."
 
 PORT_DOWN_COUNT=0
-PORT_DOWN_THRESHOLD=6  # 6 × 5s = 30 seconds sustained outage before declaring crash
+PORT_DOWN_THRESHOLD=6  # 6 consecutive failed checks (5s sleep + up to 6s probe each) before declaring crash
+PORT_DOWN_STARTED=0    # $SECONDS when the first check of the current outage began
 
 while true; do
     sleep 5
@@ -355,6 +356,7 @@ while true; do
     fi
 
     # 2. Check MarkLogic liveness via port (reliable in rootless containers)
+    CHECK_STARTED=$SECONDS
     if ml_port_open; then
         # Port is up - MarkLogic is alive
         if [ $PORT_DOWN_COUNT -gt 0 ]; then
@@ -369,13 +371,17 @@ while true; do
             fi
         fi
         PORT_DOWN_COUNT=0
+        PORT_DOWN_STARTED=0
     else
         # Port is down
+        if [ $PORT_DOWN_COUNT -eq 0 ]; then
+            PORT_DOWN_STARTED=$CHECK_STARTED
+        fi
         PORT_DOWN_COUNT=$((PORT_DOWN_COUNT + 1))
         echo "[Wrapper] Port 8001 down (count $PORT_DOWN_COUNT/$PORT_DOWN_THRESHOLD) - MarkLogic may be restarting..."
 
         if [ $PORT_DOWN_COUNT -ge $PORT_DOWN_THRESHOLD ]; then
-            echo "[Wrapper] CRITICAL: MarkLogic port 8001 has been down for $((PORT_DOWN_COUNT * 5))s. Declaring crash."
+            echo "[Wrapper] CRITICAL: MarkLogic port 8001 failed $PORT_DOWN_COUNT consecutive checks over $((SECONDS - PORT_DOWN_STARTED))s since the first failed check. Declaring crash."
 
             if [ -f "/var/opt/MarkLogic/Logs/ErrorLog.txt" ]; then
                 echo "[Wrapper] ========== Last 50 lines of ErrorLog.txt =========="

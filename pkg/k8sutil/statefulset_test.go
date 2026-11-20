@@ -7,10 +7,13 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/go-logr/logr"
 	marklogicv1 "github.com/marklogic/marklogic-operator-kubernetes/api/v1"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -293,5 +296,130 @@ func TestClaimTemplateChangesTopology(t *testing.T) {
 				t.Fatalf("unsupported topology error = %v, want error = %t", err, test.wantError)
 			}
 		})
+	}
+}
+
+func TestStatefulSetReadiness(t *testing.T) {
+	int32Ptr := func(v int32) *int32 { return &v }
+	for _, test := range []struct {
+		name                           string
+		specReplicas, groupReplicas    *int32
+		replicas, ready                int32
+		generation, observedGeneration int64
+		wantReady                      bool
+		wantReason                     string
+	}{
+		{name: "scaled to zero with no pods", specReplicas: int32Ptr(0), groupReplicas: int32Ptr(0), wantReady: true, wantReason: "MarkLogicGroupScaledToZero"},
+		{name: "scaling to zero with pods terminating", specReplicas: int32Ptr(0), groupReplicas: int32Ptr(0), replicas: 3, ready: 3},
+		{name: "scale up from zero", specReplicas: int32Ptr(3), groupReplicas: int32Ptr(3)},
+		{name: "scale up in progress", specReplicas: int32Ptr(3), groupReplicas: int32Ptr(3), replicas: 2, ready: 2},
+		{name: "scale up with a pod not yet ready", specReplicas: int32Ptr(3), groupReplicas: int32Ptr(3), replicas: 3, ready: 2},
+		{name: "scale down in progress", specReplicas: int32Ptr(2), groupReplicas: int32Ptr(2), replicas: 3, ready: 3},
+		{name: "scale up held below the group's request", specReplicas: int32Ptr(2), groupReplicas: int32Ptr(3), replicas: 2, ready: 2},
+		{name: "scale down held above the group's request", specReplicas: int32Ptr(3), groupReplicas: int32Ptr(2), replicas: 3, ready: 3, wantReady: true, wantReason: "MarkLogicGroupStatefulSetReady"},
+		{name: "status lags the spec", specReplicas: int32Ptr(3), groupReplicas: int32Ptr(3), replicas: 3, ready: 3, generation: 4, observedGeneration: 3},
+		{name: "all replicas ready", specReplicas: int32Ptr(3), groupReplicas: int32Ptr(3), replicas: 3, ready: 3, generation: 4, observedGeneration: 4, wantReady: true, wantReason: "MarkLogicGroupStatefulSetReady"},
+		{name: "unset replicas default to one", replicas: 1, ready: 1, wantReady: true, wantReason: "MarkLogicGroupStatefulSetReady"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			sts := &appsv1.StatefulSet{
+				ObjectMeta: metav1.ObjectMeta{Generation: test.generation},
+				Spec:       appsv1.StatefulSetSpec{Replicas: test.specReplicas},
+				Status:     appsv1.StatefulSetStatus{Replicas: test.replicas, ReadyReplicas: test.ready, ObservedGeneration: test.observedGeneration},
+			}
+			ready, reason, _ := statefulSetReadiness(sts, test.groupReplicas)
+			if ready != test.wantReady {
+				t.Fatalf("ready=%t, want %t", ready, test.wantReady)
+			}
+			wantReason := test.wantReason
+			if wantReason == "" {
+				wantReason = "MarkLogicGroupStatefulSetNotReady"
+			}
+			if reason != wantReason {
+				t.Fatalf("reason=%q, want %q", reason, wantReason)
+			}
+		})
+	}
+}
+
+func TestReconcileStatefulsetReadyCondition(t *testing.T) {
+	for _, test := range []struct {
+		name          string
+		replicas      int32
+		status, ready int32
+		wantStatus    metav1.ConditionStatus
+		wantReason    string
+	}{
+		{name: "zero replicas is not a failure", replicas: 0, wantStatus: metav1.ConditionTrue, wantReason: "MarkLogicGroupScaledToZero"},
+		{name: "scale down to zero still has pods", replicas: 0, status: 2, ready: 2, wantStatus: metav1.ConditionFalse, wantReason: "MarkLogicGroupStatefulSetNotReady"},
+		{name: "scale up with only part of the pods created", replicas: 3, status: 2, ready: 2, wantStatus: metav1.ConditionFalse, wantReason: "MarkLogicGroupStatefulSetNotReady"},
+		{name: "scale up from zero", replicas: 3, wantStatus: metav1.ConditionFalse, wantReason: "MarkLogicGroupStatefulSetNotReady"},
+		{name: "all pods ready", replicas: 3, status: 3, ready: 3, wantStatus: metav1.ConditionTrue, wantReason: "MarkLogicGroupStatefulSetReady"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			scheme := runtime.NewScheme()
+			for _, register := range []func(*runtime.Scheme) error{marklogicv1.AddToScheme, appsv1.AddToScheme, corev1.AddToScheme} {
+				if err := register(scheme); err != nil {
+					t.Fatal(err)
+				}
+			}
+			group := &marklogicv1.MarklogicGroup{
+				ObjectMeta: metav1.ObjectMeta{Name: "dnode", Namespace: "testns", UID: "group-uid"},
+				Spec: marklogicv1.MarklogicGroupSpec{
+					Name: "dnode", Replicas: &test.replicas, Image: testMarkLogicImage,
+					HugePages: &marklogicv1.HugePages{}, LogCollection: &marklogicv1.LogCollection{},
+				},
+			}
+			fakeClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(group).Build()
+			operator := &OperatorContext{
+				Ctx: context.Background(), ReqLogger: logr.Discard(), Client: fakeClient, Scheme: scheme, MarklogicGroup: group,
+				Recorder:     record.NewFakeRecorder(10),
+				VACValidator: NewVolumeAttributesClassValidator(nil, vacDiscoveryFor("v1")),
+			}
+			// The first pass creates the StatefulSet; the second evaluates it with the status set below.
+			if _, err := operator.ReconcileStatefulset(); err != nil {
+				t.Fatal(err)
+			}
+			statefulSet := &appsv1.StatefulSet{}
+			if err := fakeClient.Get(operator.Ctx, client.ObjectKeyFromObject(group), statefulSet); err != nil {
+				t.Fatal(err)
+			}
+			statefulSet.Status = appsv1.StatefulSetStatus{Replicas: test.status, ReadyReplicas: test.ready}
+			if err := fakeClient.Status().Update(operator.Ctx, statefulSet); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := operator.ReconcileStatefulset(); err != nil {
+				t.Fatal(err)
+			}
+			condition := meta.FindStatusCondition(group.Status.Conditions, "Ready")
+			if condition == nil || condition.Status != test.wantStatus || condition.Reason != test.wantReason {
+				t.Fatalf("Ready condition=%+v, want status=%s reason=%s", condition, test.wantStatus, test.wantReason)
+			}
+		})
+	}
+}
+
+func TestSetConditionUpdatesReasonWithoutStatusChange(t *testing.T) {
+	transition := metav1.NewTime(metav1.Now().Add(-time.Hour))
+	group := &marklogicv1.MarklogicGroup{Status: marklogicv1.MarklogicGroupStatus{Conditions: []metav1.Condition{{
+		Type: "Ready", Status: metav1.ConditionTrue, Reason: "MarkLogicGroupStatefulSetReady",
+		Message: "MarkLogicGroup statefulSet is ready", LastTransitionTime: transition,
+	}}}}
+	operator := &OperatorContext{MarklogicGroup: group}
+	scaledToZero := metav1.Condition{
+		Type: "Ready", Status: metav1.ConditionTrue, Reason: "MarkLogicGroupScaledToZero",
+		Message: "MarkLogicGroup statefulSet is scaled to zero",
+	}
+
+	if !operator.setCondition(&scaledToZero) {
+		t.Fatal("reason change was not recorded")
+	}
+	condition := meta.FindStatusCondition(group.Status.Conditions, "Ready")
+	if condition.Reason != "MarkLogicGroupScaledToZero" || !condition.LastTransitionTime.Equal(&transition) {
+		t.Fatalf("condition=%+v, want new reason and unchanged transition time %v", condition, transition)
+	}
+	again := scaledToZero
+	if operator.setCondition(&again) {
+		t.Fatal("identical condition reported as updated")
 	}
 }
