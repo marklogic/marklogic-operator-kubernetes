@@ -41,9 +41,13 @@ export E2E_TOP_LEVEL_PARALLELISM ?= 1
 # e.g. `make e2e-setup-minikube MINIKUBE_PROFILE=e2e-cluster` and
 # `make e2e-setup-minikube MINIKUBE_PROFILE=e2e-namespace` can be started concurrently, and the
 # matching `make e2e-test-cluster MINIKUBE_PROFILE=e2e-cluster` /
-# `make e2e-test-helm-namespace MINIKUBE_PROFILE=e2e-namespace` runs target their own cluster via
-# an explicit `-context` so parallel runs never race over kubectl's shared current-context.
+# `make e2e-test-helm-namespace MINIKUBE_PROFILE=e2e-namespace` pass an explicit Go
+# client context. Their shell subprocesses also need a dedicated KUBECONFIG with
+# that current context (the focused object-storage target prepares one below).
 MINIKUBE_PROFILE ?= minikube
+# The focused object-storage target pins both the Go client and all shell tools
+# to this context using a temporary kubeconfig; the shared kubeconfig is unchanged.
+E2E_CONTEXT ?= $(MINIKUBE_PROFILE)
 
 # MINIKUBE_REUSE keeps an existing minikube profile ("shard") running instead of deleting and
 # recreating it on every setup/cleanup call. Two profiles doing `minikube start`/`delete`
@@ -380,6 +384,50 @@ e2e-test-upgrade-cleanup:
 e2e-test-volume-resize:
 	@echo "=====Running cluster-scoped volume-resize e2e test (parallel, 2 namespaces)====="
 	IMG=$(IMG) $(GO_TEST) -v -count=1 -parallel $(E2E_TOP_LEVEL_PARALLELISM) -timeout 30m ./test/e2e -run TestVolumeResizeClusterScoped -context=$(MINIKUBE_PROFILE)
+
+.PHONY: e2e-test-object-storage
+e2e-test-object-storage: ## Run object-storage tests in E2E_SCOPE (namespace by default), pinned to E2E_CONTEXT.
+	@set -eu; \
+	case "$(E2E_SCOPE)" in \
+		namespace) object_storage_package=./test/e2e-helm; object_storage_timeout='$(E2E_HELM_TEST_TIMEOUT)' ;; \
+		cluster) object_storage_package=./test/e2e; object_storage_timeout='$(E2E_TEST_TIMEOUT)' ;; \
+		*) echo 'E2E_SCOPE must be namespace or cluster'; exit 1 ;; \
+	esac; \
+	umask 077; \
+	object_storage_kubeconfig=$$(mktemp "$${TMPDIR:-/tmp}/object-storage-kubeconfig.XXXXXX"); \
+	trap 'rm -f "$$object_storage_kubeconfig"' EXIT HUP INT TERM; \
+	$(KUBECTL) --context='$(E2E_CONTEXT)' config view --minify --flatten --raw > "$$object_storage_kubeconfig"; \
+	export KUBECONFIG="$$object_storage_kubeconfig"; \
+	$(KUBECTL) config use-context '$(E2E_CONTEXT)' >/dev/null; \
+	IMG='$(IMG)' E2E_DOCKER_IMAGE='$(IMG)' \
+	$(GO_TEST) -v -count=1 -parallel $(E2E_TOP_LEVEL_PARALLELISM) -timeout "$$object_storage_timeout" \
+		"$$object_storage_package" -run '^TestObjectStorage' -args --labels='type=object-storage' --context='$(E2E_CONTEXT)'
+
+.PHONY: e2e-test-object-storage-local
+e2e-test-object-storage-local: ## Always build/load the candidate operator image into MINIKUBE_PROFILE, then run focused object-storage tests.
+	minikube -p '$(MINIKUBE_PROFILE)' status
+	$(MAKE) docker-build IMG='$(LOCAL_E2E_IMG)'
+	minikube -p '$(MINIKUBE_PROFILE)' image load '$(LOCAL_E2E_IMG)'
+	$(MAKE) e2e-test-object-storage IMG='$(LOCAL_E2E_IMG)' E2E_CONTEXT='$(MINIKUBE_PROFILE)'
+
+# Artifact upgrades use a separate runner without the normal E2E TestMain resets.
+# Source artifact directory/image and credential fixture must be supplied by the caller.
+E2E_OBJECT_STORAGE_UPGRADE_TARGET_DIR ?= $(CURDIR)
+E2E_OBJECT_STORAGE_UPGRADE_TARGET_IMAGE ?= $(IMG)
+.PHONY: e2e-test-object-storage-upgrade
+e2e-test-object-storage-upgrade: ## Upgrade object-storage workloads between supplied source and candidate artifacts on a clean disposable cluster.
+	@set -eu; \
+	case '$(E2E_SCOPE)' in \
+		namespace) object_storage_test=TestUpgradeNamespaceScope ;; \
+		cluster) object_storage_test=TestUpgradeClusterScope ;; \
+		*) echo 'E2E_SCOPE must be namespace or cluster'; exit 1 ;; \
+	esac; \
+	E2E_OBJECT_STORAGE_UPGRADE_RUN=true \
+	E2E_OBJECT_STORAGE_UPGRADE_SCOPE='$(E2E_SCOPE)' \
+	E2E_OBJECT_STORAGE_UPGRADE_CONTEXT='$(E2E_CONTEXT)' \
+	E2E_OBJECT_STORAGE_UPGRADE_TARGET_DIR='$(E2E_OBJECT_STORAGE_UPGRADE_TARGET_DIR)' \
+	E2E_OBJECT_STORAGE_UPGRADE_TARGET_IMAGE='$(E2E_OBJECT_STORAGE_UPGRADE_TARGET_IMAGE)' \
+	$(GO_TEST) -v -count=1 -timeout $(E2E_TEST_TIMEOUT) ./test/objectstorage-upgrade -run "$$object_storage_test"
 
 .PHONY: e2e-test-dynamic-host  ## Run ONLY the cluster-scoped dynamic-host lifecycle test
 e2e-test-dynamic-host:
