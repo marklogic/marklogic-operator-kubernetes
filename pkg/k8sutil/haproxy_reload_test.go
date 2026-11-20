@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/docker/docker/api/types/container"
 	"github.com/go-logr/logr"
 	marklogicv1 "github.com/marklogic/marklogic-operator-kubernetes/api/v1"
 	"github.com/marklogic/marklogic-operator-kubernetes/pkg/haproxyreload"
@@ -304,6 +305,9 @@ func TestHAProxyHotReloadDeploymentUsesSidecarAndPrivateStatusRBAC(t *testing.T)
 	if len(role.Rules) != 1 || !reflect.DeepEqual(role.Rules[0].ResourceNames, []string{haproxyReloadStatusMap}) ||
 		!reflect.DeepEqual(role.Rules[0].Verbs, []string{"patch"}) {
 		t.Fatalf("reloader RBAC exceeds the named status ConfigMap patch: %+v", role.Rules)
+	}
+	if !reflect.DeepEqual(after.Spec.Template.Spec.InitContainers[0].Resources.Requests, container.Resources.Requests) {
+		t.Fatal("reloader init container must preserve the application's effective resource requests")
 	}
 }
 

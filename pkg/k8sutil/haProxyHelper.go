@@ -433,7 +433,7 @@ func getSSLConfig(tls *marklogicv1.TlsForHAProxy) string {
 	if tls == nil || !tls.Enabled {
 		return ""
 	} else {
-		return "ssl crt /usr/local/etc/ssl/" + tls.CertFileName
+		return "ssl crt /usr/local/etc/ssl/" + tls.SecretName + "/" + tls.CertFileName
 	}
 }
 

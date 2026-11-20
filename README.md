@@ -77,8 +77,7 @@ the operator does not require `pods/exec`, and no additional field is needed.
 Existing deployments receive a one-time rolling update to adopt the new runtime layout. Subsequent
 configuration-only changes preserve HAProxy pods, containers, and active connections.
 Image, security context, certificate volume, and other pod-template changes still
-require a rollout. See [HAProxy hot reload](./docs/haproxy-hot-reload.md) for
-requirements, failure handling, and status reporting.
+require a rollout.
 
 ### Install MarkLogic Cluster
 Once MarkLogic Operator Pod is running, use your custom manifests or choose from sample manifests from this repository located in the `./config/samples` directory.

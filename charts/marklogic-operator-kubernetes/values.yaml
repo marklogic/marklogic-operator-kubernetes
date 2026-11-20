@@ -1,5 +1,8 @@
 controllerManager:
   manager:
+    # Optional operator image mirror for HAProxy reloader installation.
+    # Empty uses the running operator image; HAProxy pods need their own pull secrets.
+    haproxyReloaderImage: ""
     containerSecurityContext:
       allowPrivilegeEscalation: false
       capabilities:

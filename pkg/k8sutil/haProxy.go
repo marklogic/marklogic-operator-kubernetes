@@ -156,6 +156,10 @@ func (cc *ClusterContext) createHAProxyDeploymentDef(meta metav1.ObjectMeta) *ap
 			VolumeSource: corev1.VolumeSource{
 				Secret: &corev1.SecretVolumeSource{
 					SecretName: cr.Spec.HAProxy.Tls.SecretName,
+					Items: []corev1.KeyToPath{{
+						Key:  cr.Spec.HAProxy.Tls.CertFileName,
+						Path: cr.Spec.HAProxy.Tls.SecretName + "/" + cr.Spec.HAProxy.Tls.CertFileName,
+					}},
 				},
 			},
 		})
