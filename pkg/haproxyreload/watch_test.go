@@ -6,12 +6,14 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestReadCandidateFromAtomicProjectedVolume(t *testing.T) {
@@ -114,5 +116,66 @@ func TestAbortCandidateDoesNotApplyConfiguration(t *testing.T) {
 	}, candidate{phase: "abort", transaction: "1-abcd", hash: strings.Repeat("0", 64)})
 	if !done || status == nil || status.Phase != "aborted" {
 		t.Fatalf("abort did not finish without applying: status=%+v done=%v", status, done)
+	}
+}
+
+func TestIdleCandidateReappliesCommittedConfigurationAfterRestart(t *testing.T) {
+	r := Reloader{Dir: testDir(t), Binary: "true"}
+	stale, committed := []byte("stale projected configuration"), []byte("committed configuration")
+	// HAProxy restarted before the active ConfigMap projection was refreshed.
+	if err := r.Initialize(context.Background(), stale); err != nil {
+		t.Fatal(err)
+	}
+	listener, err := net.Listen("unix", r.path("master.sock"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	commands := make(chan string, 4)
+	go func() {
+		for _, response := range []string{"Success=1\n", "456 worker\n"} {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			command, _ := io.ReadAll(conn)
+			commands <- strings.TrimSpace(string(command))
+			io.WriteString(conn, response)
+			conn.Close()
+		}
+	}()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	idle := candidate{phase: "idle", transaction: "2-abcd-1", hash: Hash(committed), config: committed, previous: committed}
+	if err := reconcileIdle(ctx, r, idle); err != nil {
+		t.Fatal(err)
+	}
+	if got := <-commands; got != "reload" {
+		t.Fatalf("first master command = %q, want reload", got)
+	}
+	for _, name := range []string{"active.cfg", "committed.cfg"} {
+		data, err := os.ReadFile(r.path(name))
+		if err != nil || string(data) != string(committed) {
+			t.Fatalf("%s = %q, err=%v; want committed configuration", name, data, err)
+		}
+	}
+	// Once converged, idle reconciliation must not reload again.
+	if err := reconcileIdle(ctx, r, idle); err != nil {
+		t.Fatal(err)
+	}
+	<-commands
+	select {
+	case command := <-commands:
+		t.Fatalf("converged idle candidate issued %q", command)
+	default:
+	}
+}
+
+func TestIdleCandidateWaitsForHAProxyStartup(t *testing.T) {
+	r := Reloader{Dir: testDir(t), Binary: "false"}
+	config := []byte("committed configuration")
+	idle := candidate{phase: "idle", transaction: "bootstrap", hash: Hash(config), config: config, previous: config}
+	if err := reconcileIdle(context.Background(), r, idle); err != nil {
+		t.Fatalf("idle reconciliation before startup = %v", err)
 	}
 }

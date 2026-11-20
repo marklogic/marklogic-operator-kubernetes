@@ -174,9 +174,12 @@ func (r Reloader) reload(ctx context.Context) error {
 	return err
 }
 
-// WithLock serializes exec requests, including recovery after an interrupted request.
+// WithLock serializes startup, sidecar and CLI operations, including recovery
+// after an interrupted request.
 func (r Reloader) WithLock(ctx context.Context, fn func() error) error {
-	file, err := os.OpenFile(r.path("reload.lock"), os.O_CREATE|os.O_RDWR, 0660)
+	// flock needs only a readable descriptor, so containers sharing the
+	// runtime group can lock a file created by the other container.
+	file, err := os.OpenFile(r.path("reload.lock"), os.O_CREATE|os.O_RDONLY, 0660)
 	if err != nil {
 		return err
 	}

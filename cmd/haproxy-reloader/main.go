@@ -70,7 +70,7 @@ func run() error {
 		if err != nil {
 			return err
 		}
-		if err := r.Initialize(ctx, data); err != nil {
+		if err := r.WithLock(ctx, func() error { return r.Initialize(ctx, data) }); err != nil {
 			return err
 		}
 		binary, err := exec.LookPath(r.Binary)

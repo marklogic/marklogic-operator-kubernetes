@@ -534,8 +534,10 @@ rules:
   verbs:
   - create
   - get
+  - list
   - patch
   - update
+  - watch
 - apiGroups:
   - ""
   resources:

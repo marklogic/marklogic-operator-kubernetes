@@ -85,9 +85,17 @@ func (cc *ClusterContext) configureHAProxyHotReload(deployment *appsv1.Deploymen
 		groupID = *template.Spec.SecurityContext.FSGroup
 	}
 	container.Env = append(container.Env, corev1.EnvVar{Name: "HAPROXY_MASTER_GROUP", Value: fmt.Sprint(groupID)})
+	// The sidecar runs the installed reloader from the HAProxy image so that
+	// candidates are validated by the same HAProxy binary and libraries, using
+	// the identity with which that image already runs in this pod.
+	var runAsUser *int64
+	var runAsNonRoot *bool
+	if container.SecurityContext != nil {
+		runAsUser, runAsNonRoot = container.SecurityContext.RunAsUser, container.SecurityContext.RunAsNonRoot
+	}
 	template.Spec.Containers = append(template.Spec.Containers, corev1.Container{
 		Name:    "haproxy-reloader",
-		Image:   image,
+		Image:   container.Image,
 		Command: []string{haproxyreload.Executable, "watch"},
 		Env: []corev1.EnvVar{
 			{Name: "POD_NAME", ValueFrom: &corev1.EnvVarSource{FieldRef: &corev1.ObjectFieldSelector{FieldPath: "metadata.name"}}},
@@ -100,7 +108,8 @@ func (cc *ClusterContext) configureHAProxyHotReload(deployment *appsv1.Deploymen
 		SecurityContext: &corev1.SecurityContext{
 			AllowPrivilegeEscalation: boolPtr(false),
 			ReadOnlyRootFilesystem:   boolPtr(true),
-			RunAsNonRoot:             boolPtr(true),
+			RunAsNonRoot:             runAsNonRoot,
+			RunAsUser:                runAsUser,
 			RunAsGroup:               int64Ptr(groupID),
 			Capabilities:             &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}},
 			SeccompProfile:           &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault},
@@ -185,7 +194,7 @@ func (cc *ClusterContext) ensureHAProxyReloaderResources(config map[string]strin
 			return fmt.Errorf("creating HAProxy reloader Role: %w", err)
 		}
 		current := &rbacv1.Role{}
-		if err := cc.Client.Get(cc.Ctx, client.ObjectKeyFromObject(role), current); err != nil {
+		if err := cc.haproxyReader().Get(cc.Ctx, client.ObjectKeyFromObject(role), current); err != nil {
 			return err
 		}
 		if !equality.Semantic.DeepEqual(current.Rules, role.Rules) {
@@ -207,7 +216,7 @@ func (cc *ClusterContext) ensureHAProxyReloaderResources(config map[string]strin
 			return fmt.Errorf("creating HAProxy reloader RoleBinding: %w", err)
 		}
 		current := &rbacv1.RoleBinding{}
-		if err := cc.Client.Get(cc.Ctx, client.ObjectKeyFromObject(binding), current); err != nil {
+		if err := cc.haproxyReader().Get(cc.Ctx, client.ObjectKeyFromObject(binding), current); err != nil {
 			return err
 		}
 		if !equality.Semantic.DeepEqual(current.RoleRef, binding.RoleRef) ||
@@ -265,7 +274,7 @@ func (cc *ClusterContext) ReconcileHAProxy() result.ReconcileResult {
 		return fail(err)
 	}
 	owner := marklogicClusterAsOwner(cr)
-	if err := cc.ensureHAProxyReloaderResources(data, owner); err != nil {
+	if err := cc.ensureHAProxyReloaderResources(configmap.Data, owner); err != nil {
 		return fail(err)
 	}
 	deployment := &appsv1.Deployment{}
@@ -459,10 +468,9 @@ func (cc *ClusterContext) reconcileHAProxyReload(configmap *corev1.ConfigMap, de
 				if status.Name != "haproxy" {
 					continue
 				}
+				// The pod-local reloader recovers interrupted activations in
+				// running containers; wait for it to restore readiness.
 				if status.State.Running != nil && pod.DeletionTimestamp == nil {
-					if _, err := cc.HAProxyExec(cc.Ctx, pod, "status", nil); err != nil {
-						return fail(fmt.Errorf("recovering unready HAProxy pod %s: %w", pod.Name, err))
-					}
 					continue
 				}
 				terminated := status.State.Terminated
@@ -478,6 +486,15 @@ func (cc *ClusterContext) reconcileHAProxyReload(configmap *corev1.ConfigMap, de
 	}
 	if !ready {
 		if startupValidationErr != nil && !equality.Semantic.DeepEqual(configmap.Data, desired) {
+			// Idle sidecars converge on the candidate, so it must describe the
+			// correction before the startup ConfigMap does.
+			if candidate.Data["phase"] == "idle" {
+				idle := candidate.DeepCopy()
+				idle.Data["hash"], idle.Data["haproxy.cfg"], idle.Data["previous.cfg"] = hash, target, target
+				if err := cc.Client.Update(cc.Ctx, idle); err != nil {
+					return fail(fmt.Errorf("correcting bootstrap HAProxy candidate: %w", err))
+				}
+			}
 			next := configmap.DeepCopy()
 			next.Data = desired
 			if err := cc.Client.Update(cc.Ctx, next); err != nil {
@@ -501,20 +518,17 @@ func (cc *ClusterContext) reconcileHAProxyReload(configmap *corev1.ConfigMap, de
 	transaction := candidate.Data["transaction"]
 	candidateHash := candidate.Data["hash"]
 	currentGeneration := fmt.Sprint(cc.MarklogicCluster.Generation)
-	if transaction != "" && candidate.Data["generation"] != "" && candidate.Data["generation"] != currentGeneration {
-		if phase == "commit" || phase == "rollback" {
-			if phase == "commit" {
-				next := candidate.DeepCopy()
-				next.Data["phase"] = "rollback"
-				if err := cc.Client.Update(cc.Ctx, next); err != nil {
-					return fail(fmt.Errorf("rolling back superseded HAProxy transaction: %w", err))
-				}
-			}
-			if err := cc.setHAProxyReloadStatus("Pending", hash, "Rolling back a superseded HAProxy configuration before applying the latest generation"); err != nil {
-				return result.Error(err)
-			}
-			return result.RequeueSoon(2)
+	if transaction != "" && candidate.Data["generation"] != "" && candidate.Data["generation"] != currentGeneration &&
+		phase == "commit" {
+		next := candidate.DeepCopy()
+		next.Data["phase"] = "rollback"
+		if err := cc.Client.Update(cc.Ctx, next); err != nil {
+			return fail(fmt.Errorf("rolling back superseded HAProxy transaction: %w", err))
 		}
+		if err := cc.setHAProxyReloadStatus("Pending", hash, "Rolling back a superseded HAProxy configuration before applying the latest generation"); err != nil {
+			return result.Error(err)
+		}
+		return result.RequeueSoon(2)
 	}
 	if phase == "" || phase == "idle" || transaction == "" ||
 		(candidateHash != hash && phase != "rollback") {

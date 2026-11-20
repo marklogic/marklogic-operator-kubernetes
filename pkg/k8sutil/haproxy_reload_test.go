@@ -10,7 +10,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/docker/docker/api/types/container"
 	"github.com/go-logr/logr"
 	marklogicv1 "github.com/marklogic/marklogic-operator-kubernetes/api/v1"
 	"github.com/marklogic/marklogic-operator-kubernetes/pkg/haproxyreload"
@@ -253,6 +252,126 @@ func TestHAProxyReloadActivationFailureRollsBackEveryReplica(t *testing.T) {
 	}
 }
 
+func TestHAProxyReloadFinalizesRollbackOfSupersededGeneration(t *testing.T) {
+	h := newReloadHarness(t)
+	if outcome, err := h.run(t); outcome.RequeueAfter == 0 || err != nil {
+		t.Fatalf("start prepare: result=%+v err=%v", outcome, err)
+	}
+	targetHash := haproxyreload.Hash([]byte(h.desired["haproxy.cfg"]))
+	h.report(t, "prepared", targetHash)
+	if outcome, err := h.run(t); outcome.RequeueAfter == 0 || err != nil {
+		t.Fatalf("advance to commit: result=%+v err=%v", outcome, err)
+	}
+	cluster := &marklogicv1.MarklogicCluster{}
+	if err := h.cc.Client.Get(h.cc.Ctx, client.ObjectKeyFromObject(h.cc.MarklogicCluster), cluster); err != nil {
+		t.Fatal(err)
+	}
+	cluster.Generation = 2
+	if err := h.cc.Client.Update(h.cc.Ctx, cluster); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.cc.Client.Get(h.cc.Ctx, client.ObjectKeyFromObject(cluster), cluster); err != nil {
+		t.Fatal(err)
+	}
+	if cluster.Generation != 2 {
+		t.Skip("fake client does not preserve explicit generations")
+	}
+	h.cc.MarklogicCluster = cluster
+	if outcome, err := h.run(t); outcome.RequeueAfter == 0 || err != nil {
+		t.Fatalf("superseded commit was not rolled back: result=%+v err=%v", outcome, err)
+	}
+	if phase := h.getConfigMap(t, haproxyCandidateConfigMap).Data["phase"]; phase != "rollback" {
+		t.Fatalf("superseded commit phase = %s, want rollback", phase)
+	}
+	oldHash := haproxyreload.Hash([]byte(h.active.Data["haproxy.cfg"]))
+	h.report(t, "rolledback", oldHash)
+	if outcome, err := h.run(t); outcome.RequeueAfter == 0 || err != nil {
+		t.Fatalf("finalizing superseded rollback: result=%+v err=%v", outcome, err)
+	}
+	candidate := h.getConfigMap(t, haproxyCandidateConfigMap)
+	if candidate.Data["phase"] != "idle" || candidate.Data["hash"] != oldHash {
+		t.Fatalf("superseded rollback was not finalized: %#v", candidate.Data)
+	}
+	if outcome, err := h.run(t); outcome.RequeueAfter == 0 || err != nil {
+		t.Fatalf("latest generation was not prepared: result=%+v err=%v", outcome, err)
+	}
+	candidate = h.getConfigMap(t, haproxyCandidateConfigMap)
+	if candidate.Data["phase"] != "prepare" || candidate.Data["generation"] != "2" {
+		t.Fatalf("latest generation transaction = %#v", candidate.Data)
+	}
+}
+
+func TestHAProxyReloadWaitsForPodLocalRecoveryOfRunningUnreadyPod(t *testing.T) {
+	h := newReloadHarness(t)
+	active := h.getConfigMap(t, "marklogic-haproxy")
+	active.Annotations = map[string]string{haproxyBootstrapAnnotation: "pending"}
+	if err := h.cc.Client.Update(h.cc.Ctx, active); err != nil {
+		t.Fatal(err)
+	}
+	pod := &corev1.Pod{}
+	if err := h.cc.Client.Get(h.cc.Ctx, types.NamespacedName{Name: "haproxy-2", Namespace: "test"}, pod); err != nil {
+		t.Fatal(err)
+	}
+	pod.Status = corev1.PodStatus{
+		Conditions: []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionFalse}},
+		ContainerStatuses: []corev1.ContainerStatus{{
+			Name: "haproxy", State: corev1.ContainerState{Running: &corev1.ContainerStateRunning{}},
+		}},
+	}
+	if err := h.cc.Client.Delete(h.cc.Ctx, pod); err != nil {
+		t.Fatal(err)
+	}
+	pod.ResourceVersion = ""
+	if err := h.cc.Client.Create(h.cc.Ctx, pod); err != nil {
+		t.Fatal(err)
+	}
+	if outcome, err := h.run(t); outcome.RequeueAfter == 0 || err != nil {
+		t.Fatalf("running unready pod should wait for local recovery: result=%+v err=%v", outcome, err)
+	}
+	if phase := h.getConfigMap(t, haproxyCandidateConfigMap).Data["phase"]; phase != "idle" {
+		t.Fatalf("reload began while a replica was unready: %s", phase)
+	}
+}
+
+func TestHAProxyBootstrapCorrectionUpdatesIdleCandidate(t *testing.T) {
+	h := newReloadHarness(t)
+	active := h.getConfigMap(t, "marklogic-haproxy")
+	active.Annotations = map[string]string{haproxyBootstrapAnnotation: "pending"}
+	if err := h.cc.Client.Update(h.cc.Ctx, active); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"haproxy-1", "haproxy-2"} {
+		pod := &corev1.Pod{}
+		if err := h.cc.Client.Get(h.cc.Ctx, types.NamespacedName{Name: name, Namespace: "test"}, pod); err != nil {
+			t.Fatal(err)
+		}
+		if err := h.cc.Client.Delete(h.cc.Ctx, pod); err != nil {
+			t.Fatal(err)
+		}
+		pod.ResourceVersion = ""
+		pod.Status = corev1.PodStatus{ContainerStatuses: []corev1.ContainerStatus{{
+			Name: "haproxy", State: corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: "CrashLoopBackOff"}},
+			LastTerminationState: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{ExitCode: 1, Message: "invalid port"}},
+		}}}
+		if err := h.cc.Client.Create(h.cc.Ctx, pod); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if outcome, err := h.run(t); outcome.RequeueAfter == 0 || err != nil {
+		t.Fatalf("bootstrap correction: result=%+v err=%v", outcome, err)
+	}
+	if active := h.getConfigMap(t, "marklogic-haproxy"); !reflect.DeepEqual(active.Data, h.desired) {
+		t.Fatal("bootstrap correction did not update the startup ConfigMap")
+	}
+	// Idle sidecars converge on the candidate and must not reapply the invalid bootstrap.
+	candidate := h.getConfigMap(t, haproxyCandidateConfigMap)
+	targetHash := haproxyreload.Hash([]byte(h.desired["haproxy.cfg"]))
+	if candidate.Data["phase"] != "idle" || candidate.Data["hash"] != targetHash ||
+		candidate.Data["haproxy.cfg"] != h.desired["haproxy.cfg"] {
+		t.Fatalf("idle candidate does not describe the bootstrap correction: %#v", candidate.Data)
+	}
+}
+
 func TestHAProxyReloadWaitsUntilEveryPodIsReady(t *testing.T) {
 	h := newReloadHarness(t)
 	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "haproxy-2", Namespace: "test"}}
@@ -295,6 +414,15 @@ func TestHAProxyHotReloadDeploymentUsesSidecarAndPrivateStatusRBAC(t *testing.T)
 	if !foundToken {
 		t.Fatal("projected API token is not mounted into the reloader sidecar")
 	}
+	// Candidates must be validated by the HAProxy binary, which the operator image lacks.
+	if sidecar := spec.Containers[1]; sidecar.Image != spec.Containers[0].Image ||
+		len(sidecar.Command) == 0 || sidecar.Command[0] != haproxyreload.Executable {
+		t.Fatalf("reloader sidecar does not run the installed reloader in the HAProxy image: image=%s command=%v",
+			sidecar.Image, sidecar.Command)
+	}
+	if spec.InitContainers[0].Image != "operator:test" {
+		t.Fatalf("reloader installer image = %s", spec.InitContainers[0].Image)
+	}
 	if err := h.cc.ensureHAProxyReloaderResources(h.desired, marklogicClusterAsOwner(h.cc.MarklogicCluster)); err != nil {
 		t.Fatal(err)
 	}
@@ -306,7 +434,7 @@ func TestHAProxyHotReloadDeploymentUsesSidecarAndPrivateStatusRBAC(t *testing.T)
 		!reflect.DeepEqual(role.Rules[0].Verbs, []string{"patch"}) {
 		t.Fatalf("reloader RBAC exceeds the named status ConfigMap patch: %+v", role.Rules)
 	}
-	if !reflect.DeepEqual(after.Spec.Template.Spec.InitContainers[0].Resources.Requests, container.Resources.Requests) {
+	if !reflect.DeepEqual(spec.InitContainers[0].Resources.Requests, spec.Containers[0].Resources.Requests) {
 		t.Fatal("reloader init container must preserve the application's effective resource requests")
 	}
 }

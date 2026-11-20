@@ -111,7 +111,28 @@ func Watch(ctx context.Context, r Reloader) error {
 	var pendingReport *PodStatus
 	pendingFingerprint := ""
 	lastWorkerPID := currentWorker(ctx, r)
+	lastRecoverError := ""
+	idleError := ""
+	idleFailed := ""
+	var idleRetryAt time.Time
 	for {
+		// The reloader owns recovery of interrupted activations, so running but
+		// unready HAProxy containers regain a current worker without operator exec.
+		if err := r.WithLock(ctx, func() error {
+			opCtx, cancel := context.WithTimeout(ctx, 2*Timeout)
+			defer cancel()
+			return r.Recover(opCtx)
+		}); err != nil && !errors.Is(err, os.ErrNotExist) {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			if err.Error() != lastRecoverError {
+				fmt.Fprintf(os.Stderr, "haproxy-reloader: recovering interrupted reload: %v\n", err)
+				lastRecoverError = err.Error()
+			}
+		} else {
+			lastRecoverError = ""
+		}
 		if workerPID := currentWorker(ctx, r); workerPID != 0 {
 			if lastWorkerPID != 0 && workerPID != lastWorkerPID {
 				retryPhase = ""
@@ -129,6 +150,21 @@ func Watch(ctx context.Context, r Reloader) error {
 			}
 		} else {
 			lastReadError = ""
+			if candidate.phase == "idle" {
+				key := candidate.transaction + ":" + candidate.hash
+				if key != idleFailed || !time.Now().Before(idleRetryAt) {
+					err := r.WithLock(ctx, func() error { return reconcileIdle(ctx, r, candidate) })
+					if err != nil && ctx.Err() == nil {
+						if err.Error() != idleError {
+							fmt.Fprintf(os.Stderr, "haproxy-reloader: applying committed configuration: %v\n", err)
+							idleError = err.Error()
+						}
+						idleFailed, idleRetryAt = key, time.Now().Add(10*time.Second)
+					} else {
+						idleError, idleFailed = "", ""
+					}
+				}
+			}
 			phaseKey := candidate.transaction + ":" + candidate.phase
 			if phaseKey == retryPhase {
 				if pendingReport != nil {
@@ -155,7 +191,14 @@ func Watch(ctx context.Context, r Reloader) error {
 				pendingReport = nil
 				pendingFingerprint = ""
 			}
-			report, done := processCandidate(ctx, r, candidate)
+			var report *PodStatus
+			done := false
+			if err := r.WithLock(ctx, func() error {
+				report, done = processCandidate(ctx, r, candidate)
+				return nil
+			}); err != nil && ctx.Err() == nil {
+				fmt.Fprintf(os.Stderr, "haproxy-reloader: acquiring reload lock: %v\n", err)
+			}
 			reportFailed := false
 			if report != nil {
 				fingerprint, _ := json.Marshal(report)
@@ -270,6 +313,25 @@ func processCandidate(ctx context.Context, r Reloader, c candidate) (*PodStatus,
 	default:
 		return nil, false
 	}
+}
+
+// reconcileIdle converges a restarted HAProxy on the committed configuration.
+// Its startup configuration can predate the commit while the active ConfigMap
+// projection is refreshed, and no further transaction would otherwise apply it.
+func reconcileIdle(ctx context.Context, r Reloader, c candidate) error {
+	committed, err := os.ReadFile(r.path("committed.cfg"))
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if Hash(committed) == c.hash {
+		return nil
+	}
+	opCtx, cancel := context.WithTimeout(ctx, 2*Timeout+5*time.Second)
+	defer cancel()
+	return r.Apply(opCtx, c.config)
 }
 
 func currentWorker(ctx context.Context, r Reloader) int {
