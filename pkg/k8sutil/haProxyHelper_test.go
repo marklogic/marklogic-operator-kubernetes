@@ -15,6 +15,7 @@ func TestGenerateFrontendConfigExcludesQueryConsoleFromHeaderRewrite(t *testing.
 			HAProxy: &marklogicv1.HAProxy{FrontendPort: 8443},
 		},
 	}
+
 	config := &HAProxyConfig{
 		IsPathBased: true,
 		BackendConfigMap: map[string][]BackendConfig{
@@ -36,6 +37,23 @@ func TestGenerateFrontendConfigExcludesQueryConsoleFromHeaderRewrite(t *testing.
 	for _, expected := range expectedLines {
 		if !strings.Contains(generated, expected) {
 			t.Errorf("expected generated frontend to contain %q, got:\n%s", expected, generated)
+		}
+	}
+}
+
+func TestGenerateBackendConfigDoesNotAccumulatePathRules(t *testing.T) {
+	config := &HAProxyConfig{BackendConfigMap: map[string][]BackendConfig{
+		"a": {{BackendName: "admin", Path: "/admin", IsPathBased: true}},
+		"b": {{BackendName: "manage", Path: "/manage", IsPathBased: true}},
+		"c": {{BackendName: "direct"}},
+	}}
+	generated := generateBackendConfig(&marklogicv1.MarklogicCluster{}, config)
+	if strings.Count(generated, "http-request replace-path") != 2 {
+		t.Fatalf("path rewrite rules leaked across backends:\n%s", generated)
+	}
+	for _, path := range []string{"/admin", "/manage"} {
+		if strings.Count(generated, "http-request replace-path "+path) != 1 {
+			t.Errorf("expected exactly one path rewrite for %s", path)
 		}
 	}
 }

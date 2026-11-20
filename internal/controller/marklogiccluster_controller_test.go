@@ -36,6 +36,25 @@ import (
 	"github.com/marklogic/marklogic-operator-kubernetes/pkg/k8sutil"
 )
 
+func TestHAProxyPodWatch(t *testing.T) {
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{
+		Name: "haproxy-1", Namespace: "test",
+		Labels: map[string]string{
+			"app.kubernetes.io/component":  "haproxy",
+			"app.kubernetes.io/managed-by": "marklogic-operator",
+			"app.kubernetes.io/instance":   "cluster",
+		},
+	}}
+	requests := haproxyPodToCluster(context.Background(), pod)
+	if len(requests) != 1 || requests[0].Name != "cluster" || requests[0].Namespace != "test" {
+		t.Fatalf("HAProxy pod event did not map to its cluster: %v", requests)
+	}
+	pod.Labels["app.kubernetes.io/component"] = "marklogic"
+	if requests := haproxyPodToCluster(context.Background(), pod); len(requests) != 0 {
+		t.Fatalf("non-HAProxy pod triggered reload reconciliation: %v", requests)
+	}
+}
+
 func TestVolumeAttributesClassClusterWatch(t *testing.T) {
 	group := &marklogicv1.MarklogicGroup{ObjectMeta: metav1.ObjectMeta{Name: "data", Generation: 1}}
 	filter := markLogicClusterCreateUpdateDeletePredicate()

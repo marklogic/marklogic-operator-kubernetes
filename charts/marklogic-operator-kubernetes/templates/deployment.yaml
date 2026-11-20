@@ -38,12 +38,18 @@ spec:
         command:
         - /manager
         env:
+        - name: HAPROXY_RELOADER_IMAGE
+          value: {{ .Values.controllerManager.manager.haproxyReloaderImage | default "" | quote }}
         - name: KUBERNETES_CLUSTER_DOMAIN
           value: {{ quote .Values.kubernetesClusterDomain }}
         - name: POD_NAMESPACE
           valueFrom:
             fieldRef:
               fieldPath: metadata.namespace
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
         {{- if eq .Values.scope.type "namespace" }}
         {{- $ns := .Values.scope.watchNamespaces }}
         {{- if not $ns }}
