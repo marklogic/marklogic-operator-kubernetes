@@ -1,11 +1,34 @@
 package v1
 
 import (
+	"encoding/json"
 	"testing"
 	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
+
+func TestMarklogicGroupPreservesDisabledXdqpSSLOnWire(t *testing.T) {
+	group := &MarklogicGroup{Spec: MarklogicGroupSpec{
+		GroupConfig: &GroupConfig{Name: "dnode", EnableXdqpSsl: false},
+	}}
+	payload, err := json.Marshal(group)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wire struct {
+		Spec struct {
+			GroupConfig map[string]json.RawMessage `json:"groupConfig"`
+		} `json:"spec"`
+	}
+	if err := json.Unmarshal(payload, &wire); err != nil {
+		t.Fatal(err)
+	}
+	value, present := wire.Spec.GroupConfig["enableXdqpSsl"]
+	if !present || string(value) != "false" {
+		t.Fatalf("explicit XDQP SSL disable must reach the API server as false, got %s (present=%t); omission re-enables the CRD default", value, present)
+	}
+}
 
 func TestMarklogicGroupDeepCopyVolumeResizeStatus(t *testing.T) {
 	now := metav1.NewTime(time.Now())

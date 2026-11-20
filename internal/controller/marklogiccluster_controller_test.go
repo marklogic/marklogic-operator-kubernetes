@@ -322,5 +322,41 @@ var _ = Describe("MarklogicCluster Controller", func() {
 			}, timeout, interval).Should(BeTrue())
 			Expect(bootstrapStatic.Spec.IsDynamic).Should(BeFalse())
 		})
+
+		DescribeTable("Should preserve enableXdqpSsl on child MarklogicGroup resources",
+			func(nsName string, groupConfig *marklogicv1.GroupConfig, expected bool) {
+				Expect(k8sClient.Create(ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: nsName}})).Should(Succeed())
+				replicas := int32(1)
+				mlCluster := &marklogicv1.MarklogicCluster{
+					TypeMeta:   metav1.TypeMeta{Kind: "MarklogicCluster", APIVersion: "marklogic.progress.com/v1"},
+					ObjectMeta: metav1.ObjectMeta{Name: "xdqp-ssl", Namespace: nsName},
+					Spec: marklogicv1.MarklogicClusterSpec{
+						Image: imageName,
+						MarkLogicGroups: []*marklogicv1.MarklogicGroups{{
+							Name:        "dnode",
+							Replicas:    &replicas,
+							IsBootstrap: true,
+							GroupConfig: groupConfig,
+							Service:     marklogicv1.Service{Type: corev1.ServiceTypeClusterIP},
+						}},
+					},
+				}
+				Expect(k8sClient.Create(ctx, mlCluster)).Should(Succeed())
+
+				parent := &marklogicv1.MarklogicCluster{}
+				Expect(k8sClient.Get(ctx, types.NamespacedName{Name: "xdqp-ssl", Namespace: nsName}, parent)).Should(Succeed())
+				Expect(parent.Spec.MarkLogicGroups[0].GroupConfig.EnableXdqpSsl).Should(Equal(expected))
+
+				child := &marklogicv1.MarklogicGroup{}
+				Eventually(func() error {
+					return k8sClient.Get(ctx, types.NamespacedName{Name: "dnode", Namespace: nsName}, child)
+				}, timeout, interval).Should(Succeed())
+				Expect(child.Spec.GroupConfig).ShouldNot(BeNil())
+				Expect(child.Spec.GroupConfig.EnableXdqpSsl).Should(Equal(expected))
+			},
+			Entry("explicit false", "cluster-xdqp-false-ns", &marklogicv1.GroupConfig{Name: "dnode", EnableXdqpSsl: false}, false),
+			Entry("explicit true", "cluster-xdqp-true-ns", &marklogicv1.GroupConfig{Name: "dnode", EnableXdqpSsl: true}, true),
+			Entry("unset groupConfig uses the default", "cluster-xdqp-default-ns", nil, true),
+		)
 	})
 })
