@@ -53,6 +53,7 @@ var (
 	}
 
 	e2eHelmWatchedNamespaces = []string{
+		"ml-ns-object-storage",
 		"ml-ns-test",
 		"ml-ns-ednode",
 		"ml-ns-tls",
@@ -66,6 +67,7 @@ var (
 	}
 
 	e2eClusterCleanupNamespaces = []string{
+		"ml-object-storage",
 		"ml-dynamic-host",
 		"ml-cluster-test",
 		"ednode",
@@ -82,6 +84,7 @@ var (
 	}
 
 	e2eHelmCleanupNamespaces = []string{
+		"ml-ns-object-storage",
 		"ml-ns-test",
 		"ml-ns-ednode",
 		"ml-ns-tls",

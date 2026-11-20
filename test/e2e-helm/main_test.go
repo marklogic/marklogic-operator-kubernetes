@@ -57,7 +57,7 @@ const helmChart = "charts/marklogic-operator-kubernetes"
 // watchedNamespaces is the comma-separated list of namespaces the operator watches.
 // Every test namespace in this suite must appear here — the namespace-scoped operator
 // only has a Role/RoleBinding in these namespaces (no ClusterRole backstop).
-var watchedNamespaces = envOrDefault("E2E_WATCHED_NAMESPACES", "ml-ns-test,ml-ns-ednode,ml-ns-tls,ml-ns-tls-named,ml-ns-tls-ednode,ml-ns-haproxy-path,ml-ns-haproxy,ml-ns-log,ml-ns-resize-a,ml-ns-resize-b,ml-ns-vac")
+var watchedNamespaces = envOrDefault("E2E_WATCHED_NAMESPACES", "ml-ns-test,ml-ns-ednode,ml-ns-tls,ml-ns-tls-named,ml-ns-tls-ednode,ml-ns-haproxy-path,ml-ns-haproxy,ml-ns-log,ml-ns-resize-a,ml-ns-resize-b,ml-ns-vac,ml-ns-object-storage")
 
 var (
 	testEnv             env.Environment
@@ -81,8 +81,9 @@ func namespaceLabels() map[string]string {
 // ── Test summary tracker ──────────────────────────────────────────────────────
 
 type testResult struct {
-	name   string
-	passed bool
+	name    string
+	passed  bool
+	skipped bool
 }
 
 var (
@@ -91,12 +92,16 @@ var (
 )
 
 // trackTest registers t in the global summary. Call it at the top of each Test* function.
-// t.Cleanup runs after the test (and all its sub-tests) complete, so t.Failed() is final.
+// t.Cleanup runs after the test (and all its sub-tests) complete, so t.Failed()/t.Skipped() are final.
 func trackTest(t *testing.T) {
 	t.Helper()
 	t.Cleanup(func() {
 		trackMu.Lock()
-		trackedTests = append(trackedTests, testResult{name: t.Name(), passed: !t.Failed()})
+		trackedTests = append(trackedTests, testResult{
+			name:    t.Name(),
+			passed:  !t.Failed() && !t.Skipped(),
+			skipped: t.Skipped(),
+		})
 		trackMu.Unlock()
 	})
 }
@@ -111,8 +116,11 @@ func printTestSummary() {
 	total := len(results)
 	passed := 0
 	var failed []string
+	skipped := 0
 	for _, r := range results {
-		if r.passed {
+		if r.skipped {
+			skipped++
+		} else if r.passed {
 			passed++
 		} else {
 			failed = append(failed, r.name)
@@ -123,9 +131,10 @@ func printTestSummary() {
 	fmt.Println("╔══════════════════════════════════════════════════════════════╗")
 	fmt.Println("║               E2E-HELM TEST SUITE SUMMARY                   ║")
 	fmt.Println("╠══════════════════════════════════════════════════════════════╣")
-	fmt.Printf("║  Total  : %-51d║\n", total)
-	fmt.Printf("║  Passed : %-51d║\n", passed)
-	fmt.Printf("║  Failed : %-51d║\n", len(failed))
+	fmt.Printf("║  Total   : %-50d║\n", total)
+	fmt.Printf("║  Passed  : %-50d║\n", passed)
+	fmt.Printf("║  Skipped : %-50d║\n", skipped)
+	fmt.Printf("║  Failed  : %-50d║\n", len(failed))
 	if len(failed) > 0 {
 		fmt.Println("╠══════════════════════════════════════════════════════════════╣")
 		fmt.Println("║  Failed tests:                                               ║")
