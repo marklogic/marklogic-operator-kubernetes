@@ -4,13 +4,11 @@ package k8sutil
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"testing"
 	"time"
 
 	marklogicv1 "github.com/marklogic/marklogic-operator-kubernetes/api/v1"
-	"github.com/marklogic/marklogic-operator-kubernetes/pkg/haproxyreload"
 	"github.com/marklogic/marklogic-operator-kubernetes/pkg/mlmanage"
 	"github.com/marklogic/marklogic-operator-kubernetes/pkg/result"
 	corev1 "k8s.io/api/core/v1"
@@ -333,10 +331,6 @@ func handlerHAProxyContext(t *testing.T, h *osHarness, ready bool) *ClusterConte
 	t.Helper()
 	cc := h.context()
 	cc.HAProxyReloaderImage = "operator:test"
-	cc.HAProxyExec = func(_ context.Context, _ *corev1.Pod, _ string, _ []byte) ([]byte, error) {
-		data := generateHAProxyConfigMapData(cc.Ctx, cc.MarklogicCluster)
-		return json.Marshal(haproxyreload.Status{Hash: haproxyreload.Hash([]byte(data["haproxy.cfg"])), WorkerPID: 123})
-	}
 	if ready {
 		step := cc.ReconcileHAProxy()
 		if !step.Completed() {

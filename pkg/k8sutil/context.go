@@ -48,7 +48,6 @@ type ClusterContext struct {
 	APIReader controllerClient.Reader
 	// CredentialClientFactory builds the object storage credential client; nil uses the default.
 	CredentialClientFactory func(mlmanage.ClientOptions) mlmanage.CredentialClient
-	HAProxyExec             HAProxyExecutor
 	HAProxyReloaderImage    string
 
 	Services     []*corev1.Service

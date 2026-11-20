@@ -65,14 +65,13 @@ type MarklogicClusterReconciler struct {
 	APIReader client.Reader
 	// CredentialClientFactory builds the object storage credential client; nil uses the default.
 	CredentialClientFactory func(mlmanage.ClientOptions) mlmanage.CredentialClient
-	HAProxyExec             k8sutil.HAProxyExecutor
 }
 
 //+kubebuilder:rbac:groups=marklogic.progress.com,resources=marklogicclusters,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups=marklogic.progress.com,resources=marklogicclusters/status,verbs=get;update;patch
 //+kubebuilder:rbac:groups=marklogic.progress.com,resources=marklogicclusters/finalizers,verbs=update
 //+kubebuilder:rbac:groups=core,resources=serviceaccounts,verbs=get;list;watch;create;update;patch;delete
-//+kubebuilder:rbac:groups=core,resources=pods/exec,verbs=create
+//+kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=roles;rolebindings,verbs=get;create;update;patch
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
@@ -101,7 +100,6 @@ func (r *MarklogicClusterReconciler) Reconcile(ctx context.Context, req ctrl.Req
 
 	cc.APIReader = r.APIReader
 	cc.CredentialClientFactory = r.CredentialClientFactory
-	cc.HAProxyExec = r.HAProxyExec
 
 	result, err := cc.ReconsileMarklogicClusterHandler()
 
@@ -224,13 +222,6 @@ func (r *MarklogicClusterReconciler) secretToClusters(ctx context.Context, obj c
 // SetupWithManager sets up the controller with the Manager.
 func (r *MarklogicClusterReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	r.APIReader = mgr.GetAPIReader()
-	if r.HAProxyExec == nil {
-		executor, err := k8sutil.NewHAProxyExecutor(mgr.GetConfig())
-		if err != nil {
-			return err
-		}
-		r.HAProxyExec = executor
-	}
 	if err := mgr.GetFieldIndexer().IndexField(context.Background(), &marklogicv1.MarklogicCluster{}, objectStorageSecretIndex, objectStorageSecretNames); err != nil {
 		return err
 	}

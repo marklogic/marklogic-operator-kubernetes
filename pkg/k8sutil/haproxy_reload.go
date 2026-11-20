@@ -3,15 +3,13 @@
 package k8sutil
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
-	"sort"
+	"strconv"
 	"strings"
-	"time"
 
 	"github.com/cisco-open/k8s-objectmatcher/patch"
 	marklogicv1 "github.com/marklogic/marklogic-operator-kubernetes/api/v1"
@@ -19,53 +17,23 @@ import (
 	"github.com/marklogic/marklogic-operator-kubernetes/pkg/result"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	rbacv1 "k8s.io/api/rbac/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/client-go/kubernetes"
-	"k8s.io/client-go/kubernetes/scheme"
-	"k8s.io/client-go/rest"
-	"k8s.io/client-go/tools/remotecommand"
 	"k8s.io/client-go/util/retry"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
-type HAProxyExecutor func(context.Context, *corev1.Pod, string, []byte) ([]byte, error)
-
-const haproxyBootstrapAnnotation = "marklogic.progress.com/haproxy-bootstrap"
-
-func NewHAProxyExecutor(config *rest.Config) (HAProxyExecutor, error) {
-	kube, err := kubernetes.NewForConfig(config)
-	if err != nil {
-		return nil, err
-	}
-	return func(ctx context.Context, pod *corev1.Pod, operation string, data []byte) ([]byte, error) {
-		// The helper may spend a second timeout recovering a failed activation.
-		ctx, cancel := context.WithTimeout(ctx, 2*haproxyreload.Timeout+5*time.Second)
-		defer cancel()
-		request := kube.CoreV1().RESTClient().Post().Resource("pods").Name(pod.Name).
-			Namespace(pod.Namespace).SubResource("exec").
-			VersionedParams(&corev1.PodExecOptions{
-				Container: "haproxy", Command: []string{haproxyreload.Executable, operation},
-				Stdin: data != nil, Stdout: true, Stderr: true,
-			}, scheme.ParameterCodec)
-		executor, err := remotecommand.NewSPDYExecutor(config, "POST", request.URL())
-		if err != nil {
-			return nil, err
-		}
-		var stdout, stderr bytes.Buffer
-		stream := remotecommand.StreamOptions{Stdout: &stdout, Stderr: &stderr}
-		if data != nil {
-			stream.Stdin = bytes.NewReader(data)
-		}
-		if err := executor.StreamWithContext(ctx, stream); err != nil {
-			return nil, fmt.Errorf("%s in HAProxy pod %s: %w: %s", operation, pod.Name, err, stderr.String())
-		}
-		return stdout.Bytes(), nil
-	}, nil
-}
+const (
+	haproxyBootstrapAnnotation = "marklogic.progress.com/haproxy-bootstrap"
+	haproxyCandidateConfigMap  = "marklogic-haproxy-candidate"
+	haproxyReloadStatusMap     = haproxyreload.StatusMap
+	haproxyReloaderAccount     = "marklogic-haproxy-reloader"
+)
 
 func (cc *ClusterContext) configureHAProxyHotReload(deployment *appsv1.Deployment) error {
 	image := cc.HAProxyReloaderImage
@@ -104,17 +72,72 @@ func (cc *ClusterContext) configureHAProxyHotReload(deployment *appsv1.Deploymen
 		ProbeHandler:  corev1.ProbeHandler{Exec: &corev1.ExecAction{Command: []string{haproxyreload.Executable, "ready"}}},
 		PeriodSeconds: 5, TimeoutSeconds: 5, FailureThreshold: 3,
 	}
+	template.Spec.ServiceAccountName = haproxyReloaderAccount
+	template.Spec.AutomountServiceAccountToken = boolPtr(false)
+	candidateMount := corev1.VolumeMount{Name: "haproxy-candidate", MountPath: haproxyreload.CandidateDir, ReadOnly: true}
+	apiMount := corev1.VolumeMount{Name: "haproxy-reloader-api", MountPath: haproxyreload.APITokenDir, ReadOnly: true}
+	groupID := int64(101)
+	if container.SecurityContext != nil && container.SecurityContext.RunAsGroup != nil {
+		groupID = *container.SecurityContext.RunAsGroup
+	} else if template.Spec.SecurityContext.RunAsGroup != nil {
+		groupID = *template.Spec.SecurityContext.RunAsGroup
+	} else if template.Spec.SecurityContext.FSGroup != nil {
+		groupID = *template.Spec.SecurityContext.FSGroup
+	}
+	container.Env = append(container.Env, corev1.EnvVar{Name: "HAPROXY_MASTER_GROUP", Value: fmt.Sprint(groupID)})
+	template.Spec.Containers = append(template.Spec.Containers, corev1.Container{
+		Name:    "haproxy-reloader",
+		Image:   image,
+		Command: []string{haproxyreload.Executable, "watch"},
+		Env: []corev1.EnvVar{
+			{Name: "POD_NAME", ValueFrom: &corev1.EnvVarSource{FieldRef: &corev1.ObjectFieldSelector{FieldPath: "metadata.name"}}},
+			{Name: "POD_NAMESPACE", ValueFrom: &corev1.EnvVarSource{FieldRef: &corev1.ObjectFieldSelector{FieldPath: "metadata.namespace"}}},
+		},
+		VolumeMounts: []corev1.VolumeMount{runtimeMount, candidateMount, apiMount},
+		Resources: corev1.ResourceRequirements{Requests: corev1.ResourceList{
+			"cpu": resource.MustParse("10m"), "memory": resource.MustParse("32Mi"),
+		}},
+		SecurityContext: &corev1.SecurityContext{
+			AllowPrivilegeEscalation: boolPtr(false),
+			ReadOnlyRootFilesystem:   boolPtr(true),
+			RunAsNonRoot:             boolPtr(true),
+			RunAsGroup:               int64Ptr(groupID),
+			Capabilities:             &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}},
+			SeccompProfile:           &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault},
+		},
+	})
+	for _, mount := range container.VolumeMounts {
+		if mount.Name == "ssl-certificate" {
+			template.Spec.Containers[1].VolumeMounts = append(template.Spec.Containers[1].VolumeMounts, mount)
+		}
+	}
 	template.Spec.InitContainers = []corev1.Container{{
 		Name: "install-haproxy-reloader", Image: image,
 		Command:      []string{"/haproxy-reloader", "install"},
 		VolumeMounts: []corev1.VolumeMount{runtimeMount},
 		SecurityContext: &corev1.SecurityContext{
 			AllowPrivilegeEscalation: boolPtr(false), ReadOnlyRootFilesystem: boolPtr(true),
-			Capabilities: &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}},
+			RunAsNonRoot:   boolPtr(true),
+			Capabilities:   &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}},
+			SeccompProfile: &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault},
 		},
 	}}
 	template.Spec.Volumes = append(template.Spec.Volumes, corev1.Volume{
 		Name: "haproxy-runtime", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}},
+	}, corev1.Volume{
+		Name: "haproxy-candidate",
+		VolumeSource: corev1.VolumeSource{ConfigMap: &corev1.ConfigMapVolumeSource{
+			LocalObjectReference: corev1.LocalObjectReference{Name: haproxyCandidateConfigMap},
+		}},
+	}, corev1.Volume{
+		Name: "haproxy-reloader-api",
+		VolumeSource: corev1.VolumeSource{Projected: &corev1.ProjectedVolumeSource{Sources: []corev1.VolumeProjection{
+			{ServiceAccountToken: &corev1.ServiceAccountTokenProjection{Path: "token", ExpirationSeconds: int64Ptr(3600)}},
+			{ConfigMap: &corev1.ConfigMapProjection{
+				LocalObjectReference: corev1.LocalObjectReference{Name: "kube-root-ca.crt"},
+				Items:                []corev1.KeyToPath{{Key: "ca.crt", Path: "ca.crt"}},
+			}},
+		}}},
 	})
 	return nil
 }
@@ -133,6 +156,82 @@ func (cc *ClusterContext) checkHAProxyGeneration(ctx context.Context) error {
 	}
 	if current.UID != cc.MarklogicCluster.UID || current.Generation != cc.MarklogicCluster.Generation || current.DeletionTimestamp != nil {
 		return errors.New("cluster changed during HAProxy reload")
+	}
+	return nil
+}
+
+func (cc *ClusterContext) ensureHAProxyReloaderResources(config map[string]string, owner metav1.OwnerReference) error {
+	namespace := cc.MarklogicCluster.Namespace
+	account := &corev1.ServiceAccount{
+		ObjectMeta:                   metav1.ObjectMeta{Name: haproxyReloaderAccount, Namespace: namespace},
+		AutomountServiceAccountToken: boolPtr(false),
+	}
+	AddOwnerRefToObject(account, owner)
+	if err := cc.Client.Create(cc.Ctx, account); err != nil && !apierrors.IsAlreadyExists(err) {
+		return fmt.Errorf("creating HAProxy reloader ServiceAccount: %w", err)
+	}
+
+	role := &rbacv1.Role{
+		ObjectMeta: metav1.ObjectMeta{Name: haproxyReloaderAccount, Namespace: namespace},
+		Rules: []rbacv1.PolicyRule{{
+			APIGroups: []string{""}, Resources: []string{"configmaps"}, ResourceNames: []string{haproxyReloadStatusMap},
+			Verbs: []string{"patch"},
+		}},
+	}
+	AddOwnerRefToObject(role, owner)
+	if err := cc.Client.Create(cc.Ctx, role); err != nil {
+		if !apierrors.IsAlreadyExists(err) {
+			return fmt.Errorf("creating HAProxy reloader Role: %w", err)
+		}
+		current := &rbacv1.Role{}
+		if err := cc.Client.Get(cc.Ctx, client.ObjectKeyFromObject(role), current); err != nil {
+			return err
+		}
+		if !equality.Semantic.DeepEqual(current.Rules, role.Rules) {
+			current.Rules = role.Rules
+			if err := cc.Client.Update(cc.Ctx, current); err != nil {
+				return fmt.Errorf("updating HAProxy reloader Role: %w", err)
+			}
+		}
+	}
+
+	binding := &rbacv1.RoleBinding{
+		ObjectMeta: metav1.ObjectMeta{Name: haproxyReloaderAccount, Namespace: namespace},
+		RoleRef:    rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "Role", Name: haproxyReloaderAccount},
+		Subjects:   []rbacv1.Subject{{Kind: "ServiceAccount", Name: haproxyReloaderAccount, Namespace: namespace}},
+	}
+	AddOwnerRefToObject(binding, owner)
+	if err := cc.Client.Create(cc.Ctx, binding); err != nil {
+		if !apierrors.IsAlreadyExists(err) {
+			return fmt.Errorf("creating HAProxy reloader RoleBinding: %w", err)
+		}
+		current := &rbacv1.RoleBinding{}
+		if err := cc.Client.Get(cc.Ctx, client.ObjectKeyFromObject(binding), current); err != nil {
+			return err
+		}
+		if !equality.Semantic.DeepEqual(current.RoleRef, binding.RoleRef) ||
+			!equality.Semantic.DeepEqual(current.Subjects, binding.Subjects) {
+			return errors.New("existing HAProxy reloader RoleBinding has unexpected role or subjects")
+		}
+	}
+
+	for _, desired := range []*corev1.ConfigMap{
+		generateHAProxyConfigMap(
+			generateObjectMeta(haproxyCandidateConfigMap, namespace, cc.GetHAProxyLabels(cc.MarklogicCluster.Name), nil),
+			owner,
+			map[string]string{
+				"phase": "idle", "transaction": "bootstrap", "attempt": "0", "hash": haproxyreload.Hash([]byte(config["haproxy.cfg"])),
+				"haproxy.cfg": config["haproxy.cfg"], "previous.cfg": config["haproxy.cfg"],
+			},
+		),
+		generateHAProxyConfigMap(
+			generateObjectMeta(haproxyReloadStatusMap, namespace, cc.GetHAProxyLabels(cc.MarklogicCluster.Name), nil),
+			owner, map[string]string{},
+		),
+	} {
+		if err := cc.Client.Create(cc.Ctx, desired); err != nil && !apierrors.IsAlreadyExists(err) {
+			return fmt.Errorf("creating HAProxy reload coordination ConfigMap %s: %w", desired.Name, err)
+		}
 	}
 	return nil
 }
@@ -162,6 +261,10 @@ func (cc *ClusterContext) ReconcileHAProxy() result.ReconcileResult {
 			return fail(err)
 		}
 	} else if err != nil {
+		return fail(err)
+	}
+	owner := marklogicClusterAsOwner(cr)
+	if err := cc.ensureHAProxyReloaderResources(data, owner); err != nil {
 		return fail(err)
 	}
 	deployment := &appsv1.Deployment{}
@@ -245,36 +348,45 @@ func (cc *ClusterContext) ReconcileHAProxy() result.ReconcileResult {
 	return result.Continue()
 }
 
-// reconcileHAProxyReload keeps the ConfigMap as the last all-replica commit.
-// Until activation is confirmed on every replica, replacement pods start from it.
+// reconcileHAProxyReload coordinates a pod-local prepare/commit/rollback transaction.
+// The active ConfigMap remains the last cluster-wide commit until all replicas apply.
 func (cc *ClusterContext) reconcileHAProxyReload(configmap *corev1.ConfigMap, desired map[string]string) result.ReconcileResult {
-	target := []byte(desired["haproxy.cfg"])
-	hash := haproxyreload.Hash(target)
+	target := desired["haproxy.cfg"]
+	hash := haproxyreload.Hash([]byte(target))
 	fail := func(err error) result.ReconcileResult {
 		cc.ReqLogger.Error(err, "HAProxy hot reload failed", "configurationHash", hash)
 		return result.Error(errors.Join(err, cc.setHAProxyReloadStatus("Failed", hash, err.Error())))
 	}
-	if cc.HAProxyExec == nil {
-		return fail(errors.New("HAProxy exec client is not configured"))
+	if err := cc.checkHAProxyGeneration(cc.Ctx); err != nil {
+		return fail(err)
 	}
+	key := types.NamespacedName{Name: haproxyCandidateConfigMap, Namespace: cc.MarklogicCluster.Namespace}
+	candidate := &corev1.ConfigMap{}
+	if err := cc.Client.Get(cc.Ctx, key, candidate); err != nil {
+		return fail(fmt.Errorf("reading HAProxy reload candidate: %w", err))
+	}
+	statusMap := &corev1.ConfigMap{}
+	if err := cc.Client.Get(cc.Ctx, types.NamespacedName{Name: haproxyReloadStatusMap, Namespace: cc.MarklogicCluster.Namespace}, statusMap); err != nil {
+		return fail(fmt.Errorf("reading HAProxy reload acknowledgements: %w", err))
+	}
+
 	pods := &corev1.PodList{}
 	if err := cc.haproxyReader().List(cc.Ctx, pods, client.InNamespace(cc.MarklogicCluster.Namespace),
 		client.MatchingLabels(getHAProxySelectorLabels(cc.MarklogicCluster.Name))); err != nil {
 		return fail(err)
 	}
 	ready := len(pods.Items) == int(cc.MarklogicCluster.Spec.HAProxy.ReplicaCount) && len(pods.Items) > 0
-	bootstrapFailed := configmap.Annotations[haproxyBootstrapAnnotation] == "pending" && ready
-	var startupErr error
+	var startupValidationErr error
 	for i := range pods.Items {
 		pod := &pods.Items[i]
-		conditionReady := false
+		isReady := false
 		for _, condition := range pod.Status.Conditions {
-			if condition.Type == corev1.PodReady && condition.Status == corev1.ConditionTrue {
-				conditionReady = true
+			if condition.Type == corev1.PodReady {
+				isReady = condition.Status == corev1.ConditionTrue
 			}
 		}
-		validationFailed := false
-		if !conditionReady {
+		isReady = isReady && pod.DeletionTimestamp == nil
+		if !isReady && configmap.Annotations[haproxyBootstrapAnnotation] == "pending" {
 			for _, status := range pod.Status.ContainerStatuses {
 				if status.Name != "haproxy" {
 					continue
@@ -284,110 +396,242 @@ func (cc *ClusterContext) reconcileHAProxyReload(configmap *corev1.ConfigMap, de
 					terminated = status.LastTerminationState.Terminated
 				}
 				if terminated != nil && terminated.ExitCode != 0 {
-					startupErr = fmt.Errorf("HAProxy pod %s failed to start (exit %d): %s", pod.Name, terminated.ExitCode, terminated.Message)
-					validationFailed = strings.Contains(terminated.Message, "HAProxy validation failed")
+					startupValidationErr = fmt.Errorf("HAProxy pod %s failed to start (exit %d): %s", pod.Name, terminated.ExitCode, terminated.Message)
 				}
 			}
 		}
-		bootstrapFailed = bootstrapFailed && pod.DeletionTimestamp == nil && validationFailed
-		ready = ready && pod.DeletionTimestamp == nil && conditionReady
-	}
-	if bootstrapFailed && !equality.Semantic.DeepEqual(configmap.Data, desired) {
-		if err := cc.checkHAProxyGeneration(cc.Ctx); err != nil {
-			return fail(err)
-		}
-		next := configmap.DeepCopy()
-		next.Data = desired
-		if err := cc.Client.Update(cc.Ctx, next); err != nil {
-			return fail(fmt.Errorf("correcting HAProxy bootstrap ConfigMap: %w", err))
-		}
-		if err := cc.setHAProxyReloadStatus("Pending", hash, "Waiting for HAProxy to start with the corrected bootstrap configuration"); err != nil {
-			return result.Error(err)
-		}
-		return result.RequeueSoon(5)
-	}
-	if startupErr != nil {
-		return fail(startupErr)
+		ready = ready && isReady
 	}
 	if !ready {
+		if startupValidationErr != nil && !equality.Semantic.DeepEqual(configmap.Data, desired) {
+			next := configmap.DeepCopy()
+			next.Data = desired
+			if err := cc.Client.Update(cc.Ctx, next); err != nil {
+				return fail(fmt.Errorf("correcting invalid bootstrap HAProxy configuration: %w", err))
+			}
+			if err := cc.setHAProxyReloadStatus("Pending", hash, "Waiting for HAProxy to start with the corrected bootstrap configuration"); err != nil {
+				return result.Error(err)
+			}
+			return result.RequeueSoon(5)
+		}
+		if startupValidationErr != nil {
+			return fail(startupValidationErr)
+		}
 		if err := cc.setHAProxyReloadStatus("Pending", hash, "Waiting for all HAProxy replicas to be ready"); err != nil {
 			return result.Error(err)
 		}
 		return result.RequeueSoon(5)
 	}
-	sort.Slice(pods.Items, func(i, j int) bool { return pods.Items[i].Name < pods.Items[j].Name })
-	previous := []byte(configmap.Data["haproxy.cfg"])
-	previousHash := haproxyreload.Hash(previous)
-	states := make(map[string]string, len(pods.Items))
-	rollback := func(cause error) result.ReconcileResult {
-		ctx, cancel := context.WithTimeout(context.WithoutCancel(cc.Ctx), time.Duration(len(pods.Items))*(2*haproxyreload.Timeout+5*time.Second))
-		defer cancel()
-		errs := []error{cause}
-		for i := range pods.Items {
-			pod := &pods.Items[i]
-			if states[pod.Name] == previousHash {
-				continue
+
+	phase := candidate.Data["phase"]
+	transaction := candidate.Data["transaction"]
+	candidateHash := candidate.Data["hash"]
+	currentGeneration := fmt.Sprint(cc.MarklogicCluster.Generation)
+	if transaction != "" && candidate.Data["generation"] != "" && candidate.Data["generation"] != currentGeneration {
+		if phase == "commit" || phase == "rollback" {
+			if phase == "commit" {
+				next := candidate.DeepCopy()
+				next.Data["phase"] = "rollback"
+				if err := cc.Client.Update(cc.Ctx, next); err != nil {
+					return fail(fmt.Errorf("rolling back superseded HAProxy transaction: %w", err))
+				}
 			}
-			if _, err := cc.HAProxyExec(ctx, pod, "apply", previous); err != nil {
-				errs = append(errs, fmt.Errorf("rollback of pod %s failed: %w", pod.Name, err))
+			if err := cc.setHAProxyReloadStatus("Pending", hash, "Rolling back a superseded HAProxy configuration before applying the latest generation"); err != nil {
+				return result.Error(err)
 			}
+			return result.RequeueSoon(2)
 		}
-		return fail(errors.Join(errs...))
 	}
-	needsReload := false
-	for i := range pods.Items {
-		pod := &pods.Items[i]
-		output, err := cc.HAProxyExec(cc.Ctx, pod, "status", nil)
+	if phase == "" || phase == "idle" || transaction == "" ||
+		(candidateHash != hash && phase != "rollback") {
+		next := candidate.DeepCopy()
+		if equality.Semantic.DeepEqual(configmap.Data, desired) {
+			if configmap.Annotations[haproxyBootstrapAnnotation] != "" {
+				committed := configmap.DeepCopy()
+				delete(committed.Annotations, haproxyBootstrapAnnotation)
+				if err := cc.Client.Update(cc.Ctx, committed); err != nil {
+					return fail(fmt.Errorf("clearing HAProxy bootstrap marker: %w", err))
+				}
+			}
+			if err := cc.setHAProxyReloadStatus("Success", hash, "Configuration active on all HAProxy replicas"); err != nil {
+				return result.Error(err)
+			}
+			return result.Continue()
+		}
+		attempt, err := strconv.Atoi(candidate.Data["attempt"])
 		if err != nil {
-			return rollback(err)
+			return fail(fmt.Errorf("invalid HAProxy transaction attempt: %w", err))
 		}
-		var status haproxyreload.Status
-		if err := json.Unmarshal(output, &status); err != nil {
-			return rollback(fmt.Errorf("decoding HAProxy pod %s status: %w", pod.Name, err))
+		attempt++
+		next.Data = map[string]string{
+			"phase": "prepare", "transaction": fmt.Sprintf("%s-%s-%d", currentGeneration, hash[:12], attempt),
+			"generation": currentGeneration, "attempt": strconv.Itoa(attempt), "hash": hash, "haproxy.cfg": target,
+			"previous.cfg": configmap.Data["haproxy.cfg"],
 		}
-		if status.Hash == "" || status.WorkerPID <= 0 {
-			return rollback(fmt.Errorf("HAProxy pod %s returned incomplete status", pod.Name))
+		if err := cc.Client.Update(cc.Ctx, next); err != nil {
+			return fail(fmt.Errorf("publishing HAProxy candidate: %w", err))
 		}
-		states[pod.Name] = status.Hash
-		needsReload = needsReload || status.Hash != hash
+		if err := cc.setHAProxyReloadStatus("Pending", hash, "Validating candidate on all HAProxy replicas"); err != nil {
+			return result.Error(err)
+		}
+		return result.RequeueSoon(2)
 	}
-	if needsReload {
-		for i := range pods.Items {
-			if _, err := cc.HAProxyExec(cc.Ctx, &pods.Items[i], "validate", target); err != nil {
-				return rollback(err)
+
+	reports := make(map[string]haproxyreload.PodStatus, len(pods.Items))
+	for _, pod := range pods.Items {
+		var report haproxyreload.PodStatus
+		if raw := statusMap.Data[pod.Name]; raw != "" {
+			if err := json.Unmarshal([]byte(raw), &report); err != nil {
+				return fail(fmt.Errorf("invalid HAProxy reload acknowledgement from pod %s: %w", pod.Name, err))
 			}
+		}
+		expectedHash := candidateHash
+		if phase == "rollback" {
+			expectedHash = haproxyreload.Hash([]byte(candidate.Data["previous.cfg"]))
+		}
+		if report.Transaction == transaction && (report.Hash == candidateHash || report.Hash == expectedHash) {
+			reports[pod.Name] = report
+		}
+	}
+	allAre := func(want string) bool {
+		for _, pod := range pods.Items {
+			if reports[pod.Name].Phase != want {
+				return false
+			}
+		}
+		return true
+	}
+	anyAre := func(phases ...string) bool {
+		for _, report := range reports {
+			for _, want := range phases {
+				if report.Phase == want {
+					return true
+				}
+			}
+		}
+		return false
+	}
+	setCandidateIdle := func(committedConfig string) error {
+		next := candidate.DeepCopy()
+		next.Data = map[string]string{
+			"phase": "idle", "transaction": transaction, "generation": currentGeneration,
+			"attempt": candidate.Data["attempt"], "hash": haproxyreload.Hash([]byte(committedConfig)),
+			"haproxy.cfg": committedConfig, "previous.cfg": committedConfig,
+		}
+		return cc.Client.Update(cc.Ctx, next)
+	}
+
+	switch phase {
+	case "prepare":
+		if anyAre("failed") {
+			message := "HAProxy candidate validation failed"
+			for pod, report := range reports {
+				if report.Phase == "failed" {
+					message = fmt.Sprintf("HAProxy candidate validation failed on pod %s: %s", pod, report.Message)
+					break
+				}
+			}
+			if err := setCandidateIdle(configmap.Data["haproxy.cfg"]); err != nil {
+				return fail(fmt.Errorf("aborting invalid HAProxy candidate: %w", err))
+			}
+			return fail(errors.New(message))
+		}
+		if !allAre("prepared") {
+			if err := cc.setHAProxyReloadStatus("Pending", hash, "Waiting for HAProxy candidate validation on all replicas"); err != nil {
+				return result.Error(err)
+			}
+			return result.RequeueSoon(2)
 		}
 		if err := cc.checkHAProxyGeneration(cc.Ctx); err != nil {
-			return rollback(err)
+			return fail(err)
 		}
-		for i := range pods.Items {
-			pod := &pods.Items[i]
-			if states[pod.Name] == hash {
-				continue
-			}
-			// A transport failure may happen after activation; roll this pod back too.
-			states[pod.Name] = ""
-			if _, err := cc.HAProxyExec(cc.Ctx, pod, "apply", target); err != nil {
-				return rollback(err)
-			}
-			states[pod.Name] = hash
-		}
-	}
-	if err := cc.checkHAProxyGeneration(cc.Ctx); err != nil {
-		return rollback(err)
-	}
-	if !bytes.Equal(previous, target) || configmap.Annotations[haproxyBootstrapAnnotation] != "" {
-		next := configmap.DeepCopy()
-		next.Data = desired
-		delete(next.Annotations, haproxyBootstrapAnnotation)
+		next := candidate.DeepCopy()
+		next.Data["phase"] = "commit"
 		if err := cc.Client.Update(cc.Ctx, next); err != nil {
-			return rollback(fmt.Errorf("committing HAProxy ConfigMap: %w", err))
+			return fail(fmt.Errorf("committing HAProxy candidate: %w", err))
 		}
+		if err := cc.setHAProxyReloadStatus("Pending", hash, "Applying validated configuration on all HAProxy replicas"); err != nil {
+			return result.Error(err)
+		}
+		return result.RequeueSoon(2)
+	case "commit":
+		if anyAre("failed") {
+			next := candidate.DeepCopy()
+			next.Data["phase"] = "rollback"
+			if err := cc.Client.Update(cc.Ctx, next); err != nil {
+				return fail(fmt.Errorf("starting HAProxy rollback: %w", err))
+			}
+			message := "HAProxy activation failed"
+			for pod, report := range reports {
+				if report.Phase == "failed" {
+					message = fmt.Sprintf("HAProxy activation failed on pod %s: %s", pod, report.Message)
+					break
+				}
+			}
+			if err := cc.setHAProxyReloadStatus("Pending", hash, message+"; rolling back replicas"); err != nil {
+				return result.Error(err)
+			}
+			return result.RequeueSoon(2)
+		}
+		if !allAre("applied") {
+			return result.RequeueSoon(2)
+		}
+		if err := cc.checkHAProxyGeneration(cc.Ctx); err != nil {
+			next := candidate.DeepCopy()
+			next.Data["phase"] = "rollback"
+			if updateErr := cc.Client.Update(cc.Ctx, next); updateErr != nil {
+				return fail(errors.Join(err, updateErr))
+			}
+			return result.RequeueSoon(2)
+		}
+		nextConfig := configmap.DeepCopy()
+		nextConfig.Data = desired
+		delete(nextConfig.Annotations, haproxyBootstrapAnnotation)
+		if err := cc.Client.Update(cc.Ctx, nextConfig); err != nil {
+			next := candidate.DeepCopy()
+			next.Data["phase"] = "rollback"
+			if updateErr := cc.Client.Update(cc.Ctx, next); updateErr != nil {
+				return fail(errors.Join(fmt.Errorf("committing HAProxy ConfigMap: %w", err), updateErr))
+			}
+			message := fmt.Sprintf("committing HAProxy ConfigMap failed; rolling back replicas: %v", err)
+			if statusErr := cc.setHAProxyReloadStatus("Pending", hash, message); statusErr != nil {
+				return result.Error(errors.Join(err, statusErr))
+			}
+			return result.RequeueSoon(2)
+		}
+		if err := setCandidateIdle(target); err != nil {
+			message := fmt.Sprintf("configuration is active; finalizing HAProxy transaction: %v", err)
+			if statusErr := cc.setHAProxyReloadStatus("Pending", hash, message); statusErr != nil {
+				return result.Error(errors.Join(err, statusErr))
+			}
+			return result.RequeueSoon(2)
+		}
+		if err := cc.setHAProxyReloadStatus("Success", hash, "Configuration active on all HAProxy replicas"); err != nil {
+			return result.Error(err)
+		}
+		return result.Continue()
+	case "rollback":
+		if anyAre("rollback-failed") {
+			return result.RequeueSoon(2)
+		}
+		if !allAre("rolledback") {
+			return result.RequeueSoon(2)
+		}
+		if err := setCandidateIdle(configmap.Data["haproxy.cfg"]); err != nil {
+			return fail(fmt.Errorf("resetting rolled-back HAProxy candidate: %w", err))
+		}
+		if candidate.Data["generation"] == currentGeneration {
+			return fail(errors.New("HAProxy activation failed; all replicas were restored to the previous configuration"))
+		}
+		return result.RequeueSoon(1)
+	case "abort":
+		if err := setCandidateIdle(configmap.Data["haproxy.cfg"]); err != nil {
+			return fail(fmt.Errorf("resetting aborted HAProxy candidate: %w", err))
+		}
+		return result.Continue()
+	default:
+		return fail(fmt.Errorf("unknown HAProxy reload phase %q", phase))
 	}
-	if err := cc.setHAProxyReloadStatus("Success", hash, "Configuration active on all HAProxy replicas"); err != nil {
-		return result.Error(err)
-	}
-	return result.Continue()
 }
 
 func (cc *ClusterContext) setHAProxyReloadStatus(phase, hash, message string) error {

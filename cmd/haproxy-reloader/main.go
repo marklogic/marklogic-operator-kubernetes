@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"os/signal"
 	"syscall"
 
 	"github.com/marklogic/marklogic-operator-kubernetes/pkg/haproxyreload"
@@ -24,11 +25,18 @@ func main() {
 
 func run() error {
 	if len(os.Args) != 2 {
-		return errors.New("expected install, start, validate, apply, status, or ready")
+		return errors.New("expected install, start, watch, validate, apply, status, or ready")
+	}
+	r := haproxyreload.Reloader{
+		Dir: haproxyreload.RuntimeDir, Binary: "haproxy", Group: os.Getenv("HAPROXY_MASTER_GROUP"),
+	}
+	if os.Args[1] == "watch" {
+		ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
+		defer cancel()
+		return haproxyreload.Watch(ctx, r)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), haproxyreload.Timeout)
 	defer cancel()
-	r := haproxyreload.Reloader{Dir: haproxyreload.RuntimeDir, Binary: "haproxy"}
 	switch os.Args[1] {
 	case "install":
 		path, err := os.Executable()

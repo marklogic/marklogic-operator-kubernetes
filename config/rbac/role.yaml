@@ -40,12 +40,6 @@ rules:
   - get
 - apiGroups:
   - ""
-  resources:
-  - pods/exec
-  verbs:
-  - create
-- apiGroups:
-  - ""
   - events.k8s.io
   resources:
   - events
@@ -109,6 +103,16 @@ rules:
   - patch
   - update
   - watch
+- apiGroups:
+  - rbac.authorization.k8s.io
+  resources:
+  - rolebindings
+  - roles
+  verbs:
+  - create
+  - get
+  - patch
+  - update
 - apiGroups:
   - storage.k8s.io
   resources:

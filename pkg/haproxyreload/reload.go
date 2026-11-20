@@ -37,6 +37,7 @@ type Status struct {
 type Reloader struct {
 	Dir    string
 	Binary string
+	Group  string
 }
 
 func Hash(data []byte) string {
@@ -47,7 +48,11 @@ func Hash(data []byte) string {
 func (r Reloader) path(name string) string { return filepath.Join(r.Dir, name) }
 
 func (r Reloader) Args() []string {
-	return []string{"-W", "-db", "-S", r.path("master.sock") + ",mode,600,level,admin", "-f", r.path("active.cfg")}
+	group := r.Group
+	if group == "" {
+		group = strconv.Itoa(os.Getgid())
+	}
+	return []string{"-W", "-db", "-S", r.path("master.sock") + ",gid," + group + ",mode,660,level,admin", "-f", r.path("active.cfg")}
 }
 
 // Initialize is used only on container startup, before HAProxy starts.
@@ -90,6 +95,10 @@ func (r Reloader) write(name string, data []byte) error {
 	}
 	defer os.Remove(file.Name())
 	if _, err = file.Write(data); err != nil {
+		file.Close()
+		return err
+	}
+	if err = file.Chmod(0660); err != nil {
 		file.Close()
 		return err
 	}
@@ -167,7 +176,7 @@ func (r Reloader) reload(ctx context.Context) error {
 
 // WithLock serializes exec requests, including recovery after an interrupted request.
 func (r Reloader) WithLock(ctx context.Context, fn func() error) error {
-	file, err := os.OpenFile(r.path("reload.lock"), os.O_CREATE|os.O_RDWR, 0600)
+	file, err := os.OpenFile(r.path("reload.lock"), os.O_CREATE|os.O_RDWR, 0660)
 	if err != nil {
 		return err
 	}
