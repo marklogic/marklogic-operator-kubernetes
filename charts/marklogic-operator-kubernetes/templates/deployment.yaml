@@ -39,7 +39,7 @@ spec:
         - /manager
         env:
         - name: HAPROXY_RELOADER_IMAGE
-          value: {{ .Values.controllerManager.manager.haproxyReloaderImage | default "" | quote }}
+          value: {{ .Values.controllerManager.manager.haproxyReloaderImage | default (printf "%s:%s" .Values.controllerManager.manager.image.repository (.Values.controllerManager.manager.image.tag | default .Chart.AppVersion)) | quote }}
         - name: KUBERNETES_CLUSTER_DOMAIN
           value: {{ quote .Values.kubernetesClusterDomain }}
         - name: POD_NAMESPACE

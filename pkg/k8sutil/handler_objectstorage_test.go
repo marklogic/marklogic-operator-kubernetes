@@ -4,11 +4,13 @@ package k8sutil
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 	"time"
 
 	marklogicv1 "github.com/marklogic/marklogic-operator-kubernetes/api/v1"
+	"github.com/marklogic/marklogic-operator-kubernetes/pkg/haproxyreload"
 	"github.com/marklogic/marklogic-operator-kubernetes/pkg/mlmanage"
 	"github.com/marklogic/marklogic-operator-kubernetes/pkg/result"
 	corev1 "k8s.io/api/core/v1"
@@ -344,6 +346,21 @@ func handlerHAProxyContext(t *testing.T, h *osHarness, ready bool) *ClusterConte
 			Status:     corev1.PodStatus{Conditions: []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionTrue}}},
 		}
 		if err := h.c.Create(cc.Ctx, pod); err != nil {
+			t.Fatal(err)
+		}
+		// Success requires the replica to report that it runs the committed configuration.
+		active, status := &corev1.ConfigMap{}, &corev1.ConfigMap{}
+		if err := h.c.Get(cc.Ctx, types.NamespacedName{Name: "marklogic-haproxy", Namespace: osNamespace}, active); err != nil {
+			t.Fatal(err)
+		}
+		if err := h.c.Get(cc.Ctx, types.NamespacedName{Name: haproxyReloadStatusMap, Namespace: osNamespace}, status); err != nil {
+			t.Fatal(err)
+		}
+		report, _ := json.Marshal(haproxyreload.PodStatus{
+			Transaction: "bootstrap", Phase: "active", Hash: haproxyreload.Hash([]byte(active.Data["haproxy.cfg"])),
+		})
+		status.Data = map[string]string{pod.Name: string(report)}
+		if err := h.c.Update(cc.Ctx, status); err != nil {
 			t.Fatal(err)
 		}
 	}

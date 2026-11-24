@@ -4,6 +4,7 @@ package k8sutil
 
 import (
 	"context"
+	"fmt"
 
 	marklogicv1 "github.com/marklogic/marklogic-operator-kubernetes/api/v1"
 	"github.com/marklogic/marklogic-operator-kubernetes/pkg/haproxyreload"
@@ -13,6 +14,20 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
 )
+
+// haproxyHardStopAfter bounds how long a worker that a reload replaced may keep
+// draining connections. Without a bound one long-lived connection keeps an old
+// worker, and its memory, alive indefinitely and repeated reloads accumulate them.
+// Idle connections already end at the client/server timeouts, so the bound is a
+// generous multiple of those, and never less than an hour so that a long query or
+// transfer that was in flight during a reload is not cut short.
+func haproxyHardStopAfter(cr *marklogicv1.MarklogicCluster) int {
+	longest := 0
+	if cr.Spec.HAProxy != nil {
+		longest = max(int(cr.Spec.HAProxy.Timeout.Client), int(cr.Spec.HAProxy.Timeout.Server))
+	}
+	return max(3600, 2*longest)
+}
 
 // generateHAProxyData generates the HAProxy Config Data
 func generateHAProxyConfigMapData(ctx context.Context, cr *marklogicv1.MarklogicCluster) map[string]string {
@@ -24,6 +39,7 @@ global
   log stdout format raw local0
   maxconn 1024
 `
+	haProxyData["haproxy.cfg"] += fmt.Sprintf("  hard-stop-after %ds\n", haproxyHardStopAfter(cr))
 	haProxyData["haproxy.cfg"] += "  stats socket " + haproxyreload.RuntimeDir + "/worker.sock mode 600 level admin expose-fd listeners\n"
 	baseConfig := `
 defaults

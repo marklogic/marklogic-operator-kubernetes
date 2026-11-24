@@ -329,7 +329,8 @@ if not re.search(r'^    haproxyReloaderImage:', values, re.MULTILINE):
         r'(?m)^  manager:\n',
         '  manager:\n'
         '    # Optional operator image mirror for HAProxy reloader installation.\n'
-        '    # Empty uses the running operator image; HAProxy pods need their own pull secrets.\n'
+        '    # Empty uses this chart\'s operator image (repository:tag), so the operator\n'
+        '    # needs no API lookup; HAProxy pods need their own pull secrets for it.\n'
         '    haproxyReloaderImage: ""\n',
         values, count=1,
     )
@@ -342,7 +343,7 @@ with open(deployment_file) as f:
     deployment = f.read()
 env = (
     '        - name: HAPROXY_RELOADER_IMAGE\n'
-    '          value: {{ .Values.controllerManager.manager.haproxyReloaderImage | default "" | quote }}\n'
+    '          value: {{ .Values.controllerManager.manager.haproxyReloaderImage | default (printf "%s:%s" .Values.controllerManager.manager.image.repository (.Values.controllerManager.manager.image.tag | default .Chart.AppVersion)) | quote }}\n'
 )
 if '- name: HAPROXY_RELOADER_IMAGE\n' in deployment:
     deployment, count = re.subn(
@@ -524,6 +525,14 @@ rules:
   - rolebindings
   verbs:
   - create
+- apiGroups:
+  - rbac.authorization.k8s.io
+  resourceNames:
+  - marklogic-haproxy-reloader
+  resources:
+  - roles
+  - rolebindings
+  verbs:
   - get
   - patch
   - update
@@ -698,11 +707,17 @@ rules:
   - rolebindings
   verbs:
   - create
+- apiGroups:
+  - rbac.authorization.k8s.io
+  resourceNames:
+  - marklogic-haproxy-reloader
+  resources:
+  - roles
+  - rolebindings
+  verbs:
   - get
-  - list
   - patch
   - update
-  - watch
 - apiGroups:
   - ""
   resources:

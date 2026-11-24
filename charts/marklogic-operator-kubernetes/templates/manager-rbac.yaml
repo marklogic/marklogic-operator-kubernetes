@@ -35,6 +35,14 @@ rules:
   - rolebindings
   verbs:
   - create
+- apiGroups:
+  - rbac.authorization.k8s.io
+  resourceNames:
+  - marklogic-haproxy-reloader
+  resources:
+  - roles
+  - rolebindings
+  verbs:
   - get
   - patch
   - update
@@ -209,11 +217,17 @@ rules:
   - rolebindings
   verbs:
   - create
+- apiGroups:
+  - rbac.authorization.k8s.io
+  resourceNames:
+  - marklogic-haproxy-reloader
+  resources:
+  - roles
+  - rolebindings
+  verbs:
   - get
-  - list
   - patch
   - update
-  - watch
 - apiGroups:
   - ""
   resources:

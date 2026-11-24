@@ -74,13 +74,42 @@ kubectl get crd -n marklogic-operator-system | grep 'marklogic'
 
 HAProxy uses a pod-local sidecar for validated master-worker reloads by default;
 the operator does not require `pods/exec`, and no additional field is needed.
-An init container copies the reloader from the operator image into the pod; the
-sidecar then runs it from the HAProxy image so candidates are validated with the
-same HAProxy binary and libraries that serve traffic.
+An init container copies the reloader from the operator image into a volume that
+HAProxy and the sidecar mount read-only; the sidecar then runs it from the HAProxy
+image, always as a non-root user, so candidates are validated with the same HAProxy
+binary and libraries that serve traffic. The sidecar reads the candidate configuration
+through the Kubernetes API (its ServiceAccount may `get` that one ConfigMap and `patch`
+one status ConfigMap, nothing else), so a configuration change normally completes in a few
+seconds; the ConfigMap mounted into the pod is used only as a fallback. If a replica never acknowledges a phase,
+the operator abandons or rolls back the change after 10 minutes and reports the pods
+involved in the `HAProxyReloadReady` condition and Events; a liveness probe restarts
+a sidecar that stops making progress. An activation that passes validation but fails
+when HAProxy starts (for example, a port that is already in use) is rolled back on every
+replica and is not retried until the spec changes; HAProxy itself pauses the listeners of
+the affected pod for a couple of seconds while it tries and restores the previous
+configuration.
 Existing deployments receive a one-time rolling update to adopt the new runtime layout. Subsequent
 configuration-only changes preserve HAProxy pods, containers, and active connections.
 Image, security context, certificate volume, and other pod-template changes still
 require a rollout.
+
+**Stats page credentials.** When `haproxy.stats.auth.enabled` is true, the generated HAProxy
+configuration contains only a salted SHA-512 hash of the password (a `userlist`), so the
+ConfigMaps, the pods and the logs never contain it. The user name must be 1-64 characters from
+`A-Z a-z 0-9 . _ @ -` and the password must not be empty; otherwise the HAProxy status is `Failed`
+and names the field. The password itself is still part of the `MarklogicCluster` spec, so restrict
+read access to that resource. The Prometheus `/metrics` endpoint on the stats port is not covered
+by this authentication. Changing the password is applied as a normal hot reload; applying the
+same password again changes nothing.
+
+**Draining workers.** After a reload, a worker of the previous configuration keeps serving its open
+connections. `hard-stop-after` ends it eventually: one hour, or twice the longest of
+`timeout.client` and `timeout.server` if that is larger, so a long request that was in flight
+during a reload is not cut short. Each pod's entry in the `marklogic-haproxy-reload-status`
+ConfigMap shows how many old workers are still draining (`oldWorkers`).
+
+On upgrade, the first reconcile changes the generated configuration (the hashed credential and
+`hard-stop-after`); it is applied as a normal hot reload.
 
 ### Install MarkLogic Cluster
 Once MarkLogic Operator Pod is running, use your custom manifests or choose from sample manifests from this repository located in the `./config/samples` directory.

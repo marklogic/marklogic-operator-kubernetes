@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/marklogic/marklogic-operator-kubernetes/pkg/haproxyreload"
 )
@@ -25,7 +26,7 @@ func main() {
 
 func run() error {
 	if len(os.Args) != 2 {
-		return errors.New("expected install, start, watch, validate, apply, status, or ready")
+		return errors.New("expected install, start, watch, ready, live, validate, apply, or status")
 	}
 	r := haproxyreload.Reloader{
 		Dir: haproxyreload.RuntimeDir, Binary: "haproxy", Group: os.Getenv("HAPROXY_MASTER_GROUP"),
@@ -48,7 +49,7 @@ func run() error {
 			return err
 		}
 		defer source.Close()
-		file, err := os.CreateTemp(r.Dir, ".reloader-*")
+		file, err := os.CreateTemp(haproxyreload.BinDir, ".reloader-*")
 		if err != nil {
 			return err
 		}
@@ -81,6 +82,8 @@ func run() error {
 	case "ready":
 		_, err := r.Worker(ctx)
 		return err
+	case "live":
+		return haproxyreload.CheckHeartbeat(haproxyreload.HealthDir, haproxyreload.HeartbeatMaxAge, time.Now())
 	case "validate", "apply":
 		data, err := io.ReadAll(io.LimitReader(os.Stdin, 1024*1024+1))
 		if err != nil {

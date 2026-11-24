@@ -482,3 +482,110 @@ func TestInitializeClearsPendingOnlyAfterSuccess(t *testing.T) {
 		})
 	}
 }
+
+func TestValidationFailureMessageIsStableAcrossRetries(t *testing.T) {
+	script := filepath.Join(t.TempDir(), "fake-haproxy")
+	body := "#!/bin/sh\n" +
+		"echo \"[NOTICE]   ($$) : haproxy version is 3.4.7\"\n" +
+		"echo \"[ALERT]    ($$) : config : parsing [$3:3] : unknown keyword 'bogus' in 'frontend' section\"\n" +
+		"echo \"[ALERT]    ($$) : config : Fatal errors found in configuration.\"\n" +
+		"exit 1\n"
+	if err := os.WriteFile(script, []byte(body), 0700); err != nil {
+		t.Fatal(err)
+	}
+	r := Reloader{Dir: t.TempDir(), Binary: script}
+	var messages []string
+	for i := 0; i < 2; i++ {
+		err := r.Validate(context.Background(), []byte("frontend f\n"))
+		if err == nil {
+			t.Fatal("invalid configuration was accepted")
+		}
+		messages = append(messages, err.Error())
+	}
+	if messages[0] != messages[1] {
+		t.Fatalf("message must not vary between attempts:\n%q\n%q", messages[0], messages[1])
+	}
+	for _, volatile := range []string{"NOTICE", "candidate-", r.Dir} {
+		if strings.Contains(messages[0], volatile) {
+			t.Fatalf("message contains run-specific text %q: %s", volatile, messages[0])
+		}
+	}
+	if !strings.Contains(messages[0], "unknown keyword 'bogus'") || !strings.Contains(messages[0], "candidate configuration:3") {
+		t.Fatalf("diagnostics were lost: %s", messages[0])
+	}
+}
+
+func waitForOldWorkers(t *testing.T, r Reloader, want int, within time.Duration) time.Duration {
+	t.Helper()
+	start := time.Now()
+	for {
+		_, old, err := r.Processes(context.Background())
+		if err == nil && old == want {
+			return time.Since(start)
+		}
+		if time.Since(start) > within {
+			t.Fatalf("expected %d old workers within %s, have %d (err %v)", want, within, old, err)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
+func TestHardStopAfterBoundsHowLongAnOldWorkerDrains(t *testing.T) {
+	r, original, _, tcpAddr := testProxy(t)
+	ctx := context.Background()
+	echoes := func(conn net.Conn) bool {
+		_ = conn.SetDeadline(time.Now().Add(time.Second))
+		if _, err := io.WriteString(conn, "ping\n"); err != nil {
+			return false
+		}
+		line, err := bufio.NewReader(conn).ReadString('\n')
+		return err == nil && line == "ping\n"
+	}
+
+	// Without a bound, the old worker stays for as long as a connection is open ...
+	held, err := net.Dial("tcp", tcpAddr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer held.Close()
+	if !echoes(held) {
+		t.Fatal("test setup: connection does not work")
+	}
+	if err := r.Apply(ctx, bytes.ReplaceAll(original, []byte("version-one"), []byte("version-two"))); err != nil {
+		t.Fatal(err)
+	}
+	waitForOldWorkers(t, r, 1, 3*time.Second)
+	time.Sleep(4 * time.Second)
+	if _, old, _ := r.Processes(ctx); old != 1 || !echoes(held) {
+		t.Fatalf("without hard-stop-after the old worker must keep serving its open connection (old=%d)", old)
+	}
+	// ... and drains once the connection ends, which is what the counter must show.
+	held.Close()
+	waitForOldWorkers(t, r, 0, 5*time.Second)
+
+	// With a bound, it is removed on schedule even though a connection is still open.
+	bounded := bytes.Replace(original, []byte("global\n"), []byte("global\n  hard-stop-after 3s\n"), 1)
+	if err := r.Apply(ctx, bounded); err != nil {
+		t.Fatal(err)
+	}
+	waitForOldWorkers(t, r, 0, 5*time.Second) // the previous config had no bound: nothing draining
+	stuck, err := net.Dial("tcp", tcpAddr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stuck.Close()
+	if !echoes(stuck) {
+		t.Fatal("test setup: connection to the bounded configuration does not work")
+	}
+	if err := r.Apply(ctx, bytes.ReplaceAll(bounded, []byte("version-one"), []byte("version-three"))); err != nil {
+		t.Fatal(err)
+	}
+	waitForOldWorkers(t, r, 1, 3*time.Second)
+	took := waitForOldWorkers(t, r, 0, 8*time.Second)
+	if took > 6*time.Second {
+		t.Fatalf("the old worker outlived hard-stop-after 3s by too much: %s", took)
+	}
+	if echoes(stuck) {
+		t.Fatal("hard-stop-after must end connections still open when the bound expires")
+	}
+}

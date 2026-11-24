@@ -7,6 +7,7 @@ package haproxyreload
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -16,6 +17,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"syscall"
@@ -23,10 +25,17 @@ import (
 )
 
 const (
+	// RuntimeDir is shared and writable by both HAProxy and the reloader.
 	RuntimeDir = "/var/run/marklogic-haproxy"
-	Executable = RuntimeDir + "/reloader"
-	Source     = "/usr/local/etc/haproxy/haproxy.cfg"
-	Timeout    = 30 * time.Second
+	// BinDir holds the reloader executable. Only the init container can write it;
+	// the long-running containers mount it read-only so that a compromised HAProxy
+	// cannot replace the code that runs in the token-bearing sidecar.
+	BinDir     = "/opt/marklogic-haproxy-reloader"
+	Executable = BinDir + "/reloader"
+	// HealthDir is mounted only into the sidecar and holds its liveness heartbeat.
+	HealthDir = "/var/run/marklogic-haproxy-health"
+	Source    = "/usr/local/etc/haproxy/haproxy.cfg"
+	Timeout   = 30 * time.Second
 )
 
 type Status struct {
@@ -65,7 +74,34 @@ func (r Reloader) Initialize(ctx context.Context, data []byte) error {
 			return err
 		}
 	}
+	// A new boot ID tells the sidecar that HAProxy restarted, which a reload (even a
+	// failed one) must never look like.
+	id := make([]byte, 16)
+	if _, err := rand.Read(id); err != nil {
+		return err
+	}
+	if err := r.write(bootIDFile, []byte(hex.EncodeToString(id))); err != nil {
+		return err
+	}
 	return r.clearRecovery()
+}
+
+const bootIDFile = "boot.id"
+
+// BootWatcher reports when the HAProxy container has restarted since it was last asked.
+type BootWatcher struct{ last string }
+
+// Restarted is true once per restart. An unreadable or missing ID (for example before
+// HAProxy has initialized) is not a restart.
+func (b *BootWatcher) Restarted(r Reloader) bool {
+	data, err := os.ReadFile(r.path(bootIDFile))
+	if err != nil || len(data) == 0 {
+		return false
+	}
+	id := string(data)
+	restarted := b.last != "" && id != b.last
+	b.last = id
+	return restarted
 }
 
 func (r Reloader) Validate(ctx context.Context, data []byte) error {
@@ -83,9 +119,25 @@ func (r Reloader) Validate(ctx context.Context, data []byte) error {
 	}
 	output, err := exec.CommandContext(ctx, r.Binary, "-c", "-f", file.Name()).CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("HAProxy validation failed: %w: %s", err, output)
+		return fmt.Errorf("HAProxy validation failed: %w: %s", err, summarizeHAProxyOutput(output, file.Name()))
 	}
 	return nil
+}
+
+var haproxyLogPrefix = regexp.MustCompile(`^\[(\w+)\]\s+\(\d+\) : `)
+
+// summarizeHAProxyOutput keeps the diagnostic lines of `haproxy -c` and removes what
+// differs on every run (process ID, temporary file name), so repeated failures
+// produce identical messages instead of a status update per retry.
+func summarizeHAProxyOutput(output []byte, candidatePath string) string {
+	var kept []string
+	for _, line := range strings.Split(strings.ReplaceAll(string(output), candidatePath, "candidate configuration"), "\n") {
+		line = strings.TrimSpace(haproxyLogPrefix.ReplaceAllString(strings.TrimSpace(line), "[$1] "))
+		if line != "" && !strings.HasPrefix(line, "[NOTICE]") {
+			kept = append(kept, line)
+		}
+	}
+	return strings.Join(kept, "\n")
 }
 
 func (r Reloader) write(name string, data []byte) error {
@@ -140,24 +192,51 @@ func (r Reloader) cli(ctx context.Context, command string) (string, error) {
 	return string(output), nil
 }
 
-func (r Reloader) Worker(ctx context.Context) (int, error) {
-	output, err := r.cli(ctx, "show proc")
-	if err != nil {
-		return 0, err
-	}
+// parseProcesses reads `show proc`: the current worker's PID, and how many workers of
+// earlier configurations are still draining connections.
+func parseProcesses(output string) (current, old int) {
+	section := ""
 	for _, line := range strings.Split(output, "\n") {
-		if strings.HasPrefix(line, "# old workers") {
-			break
+		if strings.HasPrefix(line, "#") {
+			section = strings.TrimSpace(strings.TrimPrefix(line, "#"))
+			continue
 		}
 		fields := strings.Fields(line)
-		if len(fields) >= 2 && fields[1] == "worker" {
-			pid, err := strconv.Atoi(fields[0])
-			if err == nil && pid > 0 {
-				return pid, nil
+		if len(fields) < 2 || fields[1] != "worker" {
+			continue
+		}
+		pid, err := strconv.Atoi(fields[0])
+		if err != nil || pid <= 0 {
+			continue
+		}
+		switch section {
+		case "", "workers": // a worker listed before any header is the current one
+			if current == 0 {
+				current = pid
 			}
+		case "old workers":
+			old++
 		}
 	}
-	return 0, fmt.Errorf("HAProxy master reports no current worker: %s", output)
+	return current, old
+}
+
+// Processes returns the current worker and the number of old workers still draining.
+func (r Reloader) Processes(ctx context.Context) (current, old int, err error) {
+	output, err := r.cli(ctx, "show proc")
+	if err != nil {
+		return 0, 0, err
+	}
+	current, old = parseProcesses(output)
+	if current == 0 {
+		return 0, old, fmt.Errorf("HAProxy master reports no current worker: %s", output)
+	}
+	return current, old, nil
+}
+
+func (r Reloader) Worker(ctx context.Context) (int, error) {
+	pid, _, err := r.Processes(ctx)
+	return pid, err
 }
 
 func (r Reloader) reload(ctx context.Context) error {

@@ -381,14 +381,14 @@ frontend stats
 		"StatsPort": cr.Spec.HAProxy.Stats.Port,
 		"SslCert":   getSSLConfig(cr.Spec.HAProxy.Tls),
 	}
+	stats := parseTemplateToString(statsDef, data)
 	if cr.Spec.HAProxy.Stats.Auth.Enabled {
-		statsDef += `  stats auth {{ .StatsUsername }}:{{ .StatsPassword }}
+		// The credential is checked against a salted hash, never the password itself,
+		// and nothing the user typed passes through the template engine.
+		stats = statsUserlist(cr) + stats + `  stats http-request auth realm "HAProxy Statistics" unless { http_auth(stats-users) }
 `
-		data["StatsUsername"] = cr.Spec.HAProxy.Stats.Auth.Username
-		data["StatsPassword"] = cr.Spec.HAProxy.Stats.Auth.Password
 	}
-
-	return parseTemplateToString(statsDef, data)
+	return stats
 }
 
 // generates the tcp config for HAProxy

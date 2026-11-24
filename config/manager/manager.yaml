@@ -75,7 +75,9 @@ spec:
         image: controller:latest
         name: manager
         env:
-        # Optional registry mirror for the HAProxy reloader installer image.
+        # Image that provides the HAProxy reloader binary. When empty the operator
+        # reads its own Pod to find its image, which needs POD_NAME and POD_NAMESPACE
+        # and permission to get that Pod. Set it to the operator image to avoid the lookup.
         - name: HAPROXY_RELOADER_IMAGE
           value: ""
         - name: POD_NAME

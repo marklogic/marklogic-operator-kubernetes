@@ -3,6 +3,7 @@ module github.com/marklogic/marklogic-operator-kubernetes
 go 1.25.11
 
 require (
+	github.com/GehirnInc/crypt v0.0.0-20230320061759-8cc1b52080c5
 	github.com/cisco-open/k8s-objectmatcher v1.10.0
 	github.com/go-logr/logr v1.4.3
 	github.com/onsi/ginkgo/v2 v2.32.0

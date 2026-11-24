@@ -110,6 +110,14 @@ rules:
   - roles
   verbs:
   - create
+- apiGroups:
+  - rbac.authorization.k8s.io
+  resourceNames:
+  - marklogic-haproxy-reloader
+  resources:
+  - rolebindings
+  - roles
+  verbs:
   - get
   - patch
   - update
