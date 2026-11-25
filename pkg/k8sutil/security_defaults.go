@@ -10,7 +10,11 @@ import (
 // or a secure default if nil is provided.
 func getHAProxyPodSecurityContextOrDefault(ctx *corev1.PodSecurityContext) *corev1.PodSecurityContext {
 	if ctx != nil {
-		return ctx
+		defaulted := ctx.DeepCopy()
+		if defaulted.FSGroup == nil {
+			defaulted.FSGroup = int64Ptr(101)
+		}
+		return defaulted
 	}
 
 	return &corev1.PodSecurityContext{

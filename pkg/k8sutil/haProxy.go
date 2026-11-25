@@ -4,149 +4,29 @@ package k8sutil
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
-	"sort"
+	"fmt"
 
-	"github.com/cisco-open/k8s-objectmatcher/patch"
 	marklogicv1 "github.com/marklogic/marklogic-operator-kubernetes/api/v1"
-	"github.com/marklogic/marklogic-operator-kubernetes/pkg/result"
+	"github.com/marklogic/marklogic-operator-kubernetes/pkg/haproxyreload"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
 )
 
-func (cc *ClusterContext) ReconcileHAProxy() result.ReconcileResult {
-	logger := cc.ReqLogger
-	client := cc.Client
-	cr := cc.MarklogicCluster
-
-	logger.Info("Reconciling HAProxy Config")
-
-	labels := cc.GetHAProxyLabels(cr.GetObjectMeta().GetName())
-	annotations := cc.GetClusterAnnotations()
-	configMapName := "marklogic-haproxy"
-	objectMeta := generateObjectMeta(configMapName, cr.Namespace, labels, annotations)
-	nsName := types.NamespacedName{Name: objectMeta.Name, Namespace: objectMeta.Namespace}
-	svcName := types.NamespacedName{Name: "marklogic-haproxy", Namespace: cr.Namespace}
-	configmap := &corev1.ConfigMap{}
-	haproxyService := &corev1.Service{}
-	err := client.Get(cc.Ctx, nsName, configmap)
-	data := generateHAProxyConfigMapData(cc.Ctx, cc.MarklogicCluster)
-	configMapDef := generateHAProxyConfigMap(objectMeta, marklogicClusterAsOwner(cr), data)
-	haproxyDeploymentDef := cc.createHAProxyDeploymentDef(objectMeta)
-	haproxyServiceDef := cc.generateHaproxyServiceDef(objectMeta)
-	configmapHash := calculateHash(configMapDef.Data)
-	if err != nil {
-		if errors.IsNotFound(err) {
-			logger.Info("HAProxy ConfigMap is not found, creating a new one")
-			if err := patch.DefaultAnnotator.SetLastAppliedAnnotation(configMapDef); err != nil {
-				logger.Error(err, "Failed to set last applied annotation for HAProxy ConfigMap")
-			}
-			err = cc.createConfigMapForCC(configMapDef)
-			if err != nil {
-				logger.Info("HAProxy configmap creation is failed")
-				return result.Error(err)
-			}
-			logger.Info("HAProxy configmap creation is successful")
-			err = cc.createHAProxyDeployment(haproxyDeploymentDef)
-			if err != nil {
-				logger.Info("HAProxy Deployment creation is failed")
-				return result.Error(err)
-			}
-			if err := patch.DefaultAnnotator.SetLastAppliedAnnotation(haproxyServiceDef); err != nil {
-				logger.Error(err, "Failed to set last applied annotation for HAProxy Service")
-			}
-			err = cc.createHAProxyService(haproxyServiceDef)
-			if err != nil {
-				logger.Info("HAProxy Service creation is failed")
-				return result.Error(err)
-			}
-			logger.Info("HAProxy Deployed is successful")
-			return result.Continue()
-		} else {
-			logger.Error(err, "HAProxy configmap creation is failed")
-			return result.Error(err)
-		}
+// haproxyHardStopAfter bounds how long a worker that a reload replaced may keep
+// draining connections. Without a bound one long-lived connection keeps an old
+// worker, and its memory, alive indefinitely and repeated reloads accumulate them.
+// Idle connections already end at the client/server timeouts, so the bound is a
+// generous multiple of those, and never less than an hour so that a long query or
+// transfer that was in flight during a reload is not cut short.
+func haproxyHardStopAfter(cr *marklogicv1.MarklogicCluster) int {
+	longest := 0
+	if cr.Spec.HAProxy != nil {
+		longest = max(int(cr.Spec.HAProxy.Timeout.Client), int(cr.Spec.HAProxy.Timeout.Server))
 	}
-	logger.Info("HAProxy ConfigMap is found", "configmap:", configmap)
-	patchDiff, err := patch.DefaultPatchMaker.Calculate(configmap, configMapDef,
-		patch.IgnoreStatusFields(),
-		patch.IgnoreVolumeClaimTemplateTypeMetaAndStatus(),
-		patch.IgnoreField("kind"))
-	if err != nil {
-		logger.Error(err, "Error calculating patch for HAProxy configmap")
-		return result.Error(err)
-	}
-	if !patchDiff.IsEmpty() {
-		logger.Info("MarkLogic HAProxy Config spec is different from previous spec, updating the HAProxy ConfigMap")
-		configmap.Data = configMapDef.Data
-		if err := patch.DefaultAnnotator.SetLastAppliedAnnotation(configmap); err != nil {
-			logger.Error(err, "Failed to set last applied annotation for HAProxy ConfigMap")
-		}
-		err := cc.Client.Update(cc.Ctx, configmap)
-		if err != nil {
-			logger.Error(err, "Error updating MarkLogic HAProxy ConfigMap")
-			return result.Error(err)
-		}
-	}
-	err = client.Get(cc.Ctx, svcName, haproxyService)
-	if err != nil {
-		logger.Error(err, "Failed to get HAProxy service")
-		return result.Error(err)
-	}
-	patchDiff, err = patch.DefaultPatchMaker.Calculate(haproxyService, haproxyServiceDef,
-		patch.IgnoreStatusFields(),
-		patch.IgnoreVolumeClaimTemplateTypeMetaAndStatus(),
-		patch.IgnoreField("kind"))
-	if err != nil {
-		logger.Error(err, "Error calculating patch for HAProxy service")
-		return result.Error(err)
-	}
-	if !patchDiff.IsEmpty() {
-		logger.Info("HAProxy spec is different from the previous spec, updating the haproxy service")
-		haproxyService.Spec = haproxyServiceDef.Spec
-		haproxyService.ObjectMeta.Labels = haproxyServiceDef.ObjectMeta.Labels
-		haproxyService.ObjectMeta.Annotations = haproxyServiceDef.ObjectMeta.Annotations
-		err := cc.Client.Update(cc.Ctx, haproxyService)
-		if err != nil {
-			logger.Error(err, "Error updating HAProxy service")
-			return result.Error(err)
-		}
-	}
-
-	haproxyDeployment := &appsv1.Deployment{}
-	deployName := types.NamespacedName{Name: "marklogic-haproxy", Namespace: cr.Namespace}
-	err = client.Get(cc.Ctx, deployName, haproxyDeployment)
-	if err != nil {
-		logger.Error(err, "Failed to get HAProxy Deployment")
-		return result.Error(err)
-	}
-	patchDiff, err = patch.DefaultPatchMaker.Calculate(haproxyDeployment, haproxyDeploymentDef,
-		patch.IgnoreStatusFields(),
-		patch.IgnoreVolumeClaimTemplateTypeMetaAndStatus(),
-		patch.IgnoreField("kind"))
-	if err != nil {
-		logger.Error(err, "Failed to calculate HAProxy Deployment patch")
-		return result.Error(err)
-	}
-	if haproxyDeploymentDef.Spec.Template.Annotations == nil {
-		haproxyDeploymentDef.Spec.Template.Annotations = make(map[string]string)
-	}
-	if haproxyDeployment.Spec.Template.Annotations["configmap-hash"] != configmapHash || !patchDiff.IsEmpty() {
-		logger.Info("HAProxy Deployment is different from the HAProxy ConfigMap, updating the Deployment")
-		haproxyDeploymentDef.Spec.Template.Annotations["configmap-hash"] = configmapHash
-		err := client.Update(cc.Ctx, haproxyDeploymentDef)
-		if err != nil {
-			logger.Error(err, "Error updating HAProxy Deployment")
-			return result.Error(err)
-		}
-	}
-	return result.Continue()
+	return max(3600, 2*longest)
 }
 
 // generateHAProxyData generates the HAProxy Config Data
@@ -159,6 +39,8 @@ global
   log stdout format raw local0
   maxconn 1024
 `
+	haProxyData["haproxy.cfg"] += fmt.Sprintf("  hard-stop-after %ds\n", haproxyHardStopAfter(cr))
+	haProxyData["haproxy.cfg"] += "  stats socket " + haproxyreload.RuntimeDir + "/worker.sock mode 600 level admin expose-fd listeners\n"
 	baseConfig := `
 defaults
   log global
@@ -237,9 +119,6 @@ func (cc *ClusterContext) createHAProxyDeploymentDef(meta metav1.ObjectMeta) *ap
 			Template: corev1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{
 					Labels: meta.Labels,
-					Annotations: map[string]string{
-						"configmap-hash": calculateHash(generateHAProxyConfigMapData(cc.Ctx, cr)),
-					},
 				},
 				Spec: corev1.PodSpec{
 					SecurityContext: getHAProxyPodSecurityContextOrDefault(cr.Spec.HAProxy.PodSecurityContext),
@@ -293,6 +172,10 @@ func (cc *ClusterContext) createHAProxyDeploymentDef(meta metav1.ObjectMeta) *ap
 			VolumeSource: corev1.VolumeSource{
 				Secret: &corev1.SecretVolumeSource{
 					SecretName: cr.Spec.HAProxy.Tls.SecretName,
+					Items: []corev1.KeyToPath{{
+						Key:  cr.Spec.HAProxy.Tls.CertFileName,
+						Path: cr.Spec.HAProxy.Tls.SecretName + "/" + cr.Spec.HAProxy.Tls.CertFileName,
+					}},
 				},
 			},
 		})
@@ -310,20 +193,6 @@ func (cc *ClusterContext) createHAProxyDeploymentDef(meta metav1.ObjectMeta) *ap
 	}
 	AddOwnerRefToObject(deploymentDef, ownerDef)
 	return deploymentDef
-}
-
-// createHAproxy Deployment
-func (cc *ClusterContext) createHAProxyDeployment(deploymentDef *appsv1.Deployment) error {
-	logger := cc.ReqLogger
-	logger.Info("Creating HAProxy Deployment")
-	client := cc.Client
-	err := client.Create(cc.Ctx, deploymentDef)
-	if err != nil {
-		logger.Error(err, "HAProxy Deployment creation failed")
-		return err
-	}
-	logger.Info("HAProxy Deployment creation is successful")
-	return nil
 }
 
 func (cc *ClusterContext) generateHaproxyServiceDef(meta metav1.ObjectMeta) *corev1.Service {
@@ -400,22 +269,6 @@ func (cc *ClusterContext) generateHaproxyServiceDef(meta metav1.ObjectMeta) *cor
 	return serviceDef
 }
 
-func (cc *ClusterContext) createHAProxyService(serviceDef *corev1.Service) error {
-	logger := cc.ReqLogger
-	logger.Info("Creating HAProxy Service")
-	cr := cc.MarklogicCluster
-	ownerDef := marklogicClusterAsOwner(cr)
-	client := cc.Client
-	AddOwnerRefToObject(serviceDef, ownerDef)
-	err := client.Create(cc.Ctx, serviceDef)
-	if err != nil {
-		logger.Error(err, "HAProxy Service creation failed")
-		return err
-	}
-	logger.Info("HAProxy Service creation is successful")
-	return nil
-}
-
 func generateHAProxyConfigMap(objectMeta metav1.ObjectMeta, owner metav1.OwnerReference, data map[string]string) *corev1.ConfigMap {
 
 	return &corev1.ConfigMap{
@@ -430,27 +283,4 @@ func generateHAProxyConfigMap(objectMeta metav1.ObjectMeta, owner metav1.OwnerRe
 		},
 		Data: data,
 	}
-}
-
-func calculateHash(data map[string]string) string {
-	// Create a slice to hold the sorted keys
-	keys := make([]string, 0, len(data))
-	for k := range data {
-		keys = append(keys, k)
-	}
-
-	// Sort the keys to ensure consistent ordering
-	sort.Strings(keys)
-
-	// Create a SHA256 hash
-	hash := sha256.New()
-
-	// Iterate over the sorted keys and write key-value pairs to the hash
-	for _, k := range keys {
-		_, _ = hash.Write([]byte(k))
-		_, _ = hash.Write([]byte(data[k]))
-	}
-
-	// Get the final hash and convert to hexadecimal string
-	return hex.EncodeToString(hash.Sum(nil))
 }

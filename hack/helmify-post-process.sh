@@ -316,6 +316,52 @@ PYEOF
 # 2. deployment.yaml – scope/metrics-conditional args, port, and env vars
 # ──────────────────────────────────────────────────────────────────────────────
 
+# Keep the installer image override configurable after chart regeneration.
+python3 - "${VALUES_FILE}" "${DEPLOYMENT_FILE}" << 'PYEOF'
+import re
+import sys
+
+values_file, deployment_file = sys.argv[1:]
+with open(values_file) as f:
+    values = f.read()
+if not re.search(r'^    haproxyReloaderImage:', values, re.MULTILINE):
+    values, count = re.subn(
+        r'(?m)^  manager:\n',
+        '  manager:\n'
+        '    # Optional operator image mirror for HAProxy reloader installation.\n'
+        '    # Empty uses this chart\'s operator image (repository:tag), so the operator\n'
+        '    # needs no API lookup; HAProxy pods need their own pull secrets for it.\n'
+        '    haproxyReloaderImage: ""\n',
+        values, count=1,
+    )
+    if count != 1:
+        sys.exit("manager values anchor not found")
+    with open(values_file, 'w') as f:
+        f.write(values)
+
+with open(deployment_file) as f:
+    deployment = f.read()
+env = (
+    '        - name: HAPROXY_RELOADER_IMAGE\n'
+    '          value: {{ .Values.controllerManager.manager.haproxyReloaderImage | default (printf "%s:%s" .Values.controllerManager.manager.image.repository (.Values.controllerManager.manager.image.tag | default .Chart.AppVersion)) | quote }}\n'
+)
+if '- name: HAPROXY_RELOADER_IMAGE\n' in deployment:
+    deployment, count = re.subn(
+        r'        - name: HAPROXY_RELOADER_IMAGE\n'
+        r'          value: [^\n]*(?:\n            [^\n]+)*\n',
+        lambda _: env, deployment, count=1,
+    )
+else:
+    deployment, count = re.subn(
+        r'(?m)^        env:\n', lambda _: '        env:\n' + env,
+        deployment, count=1,
+    )
+if count != 1:
+    sys.exit("manager env anchor not found")
+with open(deployment_file, 'w') as f:
+    f.write(deployment)
+PYEOF
+
 # 2a. Replace static manager args with metrics.secure-conditional block
 if ! grep -q 'metrics.secure' "${DEPLOYMENT_FILE}"; then
     echo "  [deployment.yaml] Injecting metrics.secure-conditional manager args..."
@@ -400,6 +446,10 @@ if ANCHOR not in content:
     sys.exit(1)
 
 INJECTION = """          value: {{ quote .Values.kubernetesClusterDomain }}
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
         - name: POD_NAMESPACE
           valueFrom:
             fieldRef:
@@ -415,6 +465,15 @@ INJECTION = """          value: {{ quote .Values.kubernetesClusterDomain }}
           value: {{ $ns | quote }}
         {{- end }}
 """
+
+for name, field in (("POD_NAME", "name"), ("POD_NAMESPACE", "namespace")):
+    block = f"""        - name: {name}
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.{field}
+"""
+    if f"- name: {name}\n" in content:
+        INJECTION = INJECTION.replace(block, "")
 
 with open(filename, 'w') as f:
     f.write(content.replace(ANCHOR, INJECTION, 1))
@@ -459,6 +518,24 @@ rules:
   - patch
   - update
   - watch
+- apiGroups:
+  - rbac.authorization.k8s.io
+  resources:
+  - roles
+  - rolebindings
+  verbs:
+  - create
+- apiGroups:
+  - rbac.authorization.k8s.io
+  resourceNames:
+  - marklogic-haproxy-reloader
+  resources:
+  - roles
+  - rolebindings
+  verbs:
+  - get
+  - patch
+  - update
 - apiGroups:
   - ""
   resources:
@@ -623,6 +700,24 @@ rules:
   - patch
   - update
   - watch
+- apiGroups:
+  - rbac.authorization.k8s.io
+  resources:
+  - roles
+  - rolebindings
+  verbs:
+  - create
+- apiGroups:
+  - rbac.authorization.k8s.io
+  resourceNames:
+  - marklogic-haproxy-reloader
+  resources:
+  - roles
+  - rolebindings
+  verbs:
+  - get
+  - patch
+  - update
 - apiGroups:
   - ""
   resources:

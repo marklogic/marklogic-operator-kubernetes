@@ -74,6 +74,20 @@ spec:
         - --leader-elect
         image: controller:latest
         name: manager
+        env:
+        # Image that provides the HAProxy reloader binary. When empty the operator
+        # reads its own Pod to find its image, which needs POD_NAME and POD_NAMESPACE
+        # and permission to get that Pod. Set it to the operator image to avoid the lookup.
+        - name: HAPROXY_RELOADER_IMAGE
+          value: ""
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: POD_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
         securityContext:
           allowPrivilegeEscalation: false
           capabilities:

@@ -11463,6 +11463,32 @@ spec:
                   - type
                   type: object
                 type: array
+              haproxyReload:
+                description: HAProxyReloadStatus describes the last observed configuration
+                  transaction.
+                properties:
+                  configurationHash:
+                    type: string
+                  lastAttemptTime:
+                    format: date-time
+                    type: string
+                  message:
+                    type: string
+                  observedGeneration:
+                    format: int64
+                    type: integer
+                  phase:
+                    enum:
+                    - Pending
+                    - Success
+                    - Failed
+                    type: string
+                required:
+                - configurationHash
+                - lastAttemptTime
+                - observedGeneration
+                - phase
+                type: object
               objectStorage:
                 description: ObjectStorage reports the per-provider object storage
                   credential results.
