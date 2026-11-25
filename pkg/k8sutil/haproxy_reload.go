@@ -43,6 +43,8 @@ const (
 	// sidecar always runs as a numeric non-root user because it alone holds a
 	// Kubernetes token, even though those images default to root.
 	haproxyReloaderDefaultUser = int64(1000)
+	// haproxyReloaderInstallerUser matches the non-root UID in the operator image.
+	haproxyReloaderInstallerUser = int64(65532)
 	// haproxyPhaseTimeout bounds how long a transaction phase may wait for replicas.
 	// It must cover projected ConfigMap propagation plus validation and activation.
 	haproxyPhaseTimeout   = 10 * time.Minute
@@ -179,7 +181,7 @@ func (cc *ClusterContext) configureHAProxyHotReload(deployment *appsv1.Deploymen
 		Resources:    corev1.ResourceRequirements{Requests: container.Resources.Requests.DeepCopy()},
 		SecurityContext: &corev1.SecurityContext{
 			AllowPrivilegeEscalation: boolPtr(false), ReadOnlyRootFilesystem: boolPtr(true),
-			RunAsNonRoot:   boolPtr(true),
+			RunAsNonRoot: boolPtr(true), RunAsUser: int64Ptr(haproxyReloaderInstallerUser),
 			Capabilities:   &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}},
 			SeccompProfile: &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault},
 		},
@@ -428,16 +430,56 @@ func (cc *ClusterContext) rotateHAProxyCertificate(desired, live *appsv1.Deploym
 // reloadBeforeRemovingHAProxyCertificate handles turning TLS off: the running
 // configuration still references the certificate files, so it must stop doing so
 // before the volume that holds them goes away.
-func (cc *ClusterContext) reloadBeforeRemovingHAProxyCertificate(live *appsv1.Deployment, configmap *corev1.ConfigMap,
+func (cc *ClusterContext) reloadBeforeRemovingHAProxyCertificate(desired, live *appsv1.Deployment, configmap *corev1.ConfigMap,
 	data map[string]string) (result.ReconcileResult, bool) {
 	if getSSLConfig(cc.MarklogicCluster.Spec.HAProxy.Tls) != "" || equality.Semantic.DeepEqual(configmap.Data, data) ||
 		findVolume(live.Spec.Template.Spec.Volumes, certificateVolumeName) < 0 {
+		return result.Continue(), false
+	}
+	if !hasHAProxyReloader(live) {
+		liveSpec := &live.Spec.Template.Spec
+		desiredSpec := &desired.Spec.Template.Spec
+		if len(liveSpec.Containers) == 0 || len(desiredSpec.Containers) < 2 {
+			return result.Error(errors.New("cannot stage HAProxy TLS migration without the reloader sidecar")), true
+		}
+		var certificateMount *corev1.VolumeMount
+		for i := range liveSpec.Containers[0].VolumeMounts {
+			if liveSpec.Containers[0].VolumeMounts[i].Name == certificateVolumeName {
+				certificateMount = &liveSpec.Containers[0].VolumeMounts[i]
+				break
+			}
+		}
+		if certificateMount == nil {
+			return result.Error(errors.New("legacy HAProxy TLS deployment has no certificate mount")), true
+		}
+		if findVolume(desiredSpec.Volumes, certificateVolumeName) < 0 {
+			desiredSpec.Volumes = append(desiredSpec.Volumes, *liveSpec.Volumes[findVolume(liveSpec.Volumes, certificateVolumeName)].DeepCopy())
+		}
+		appendCertificateMount := func(container *corev1.Container) {
+			for _, mount := range container.VolumeMounts {
+				if mount.Name == certificateVolumeName {
+					return
+				}
+			}
+			container.VolumeMounts = append(container.VolumeMounts, *certificateMount.DeepCopy())
+		}
+		appendCertificateMount(&desiredSpec.Containers[0])
+		appendCertificateMount(&desiredSpec.Containers[1])
 		return result.Continue(), false
 	}
 	if step := cc.reconcileHAProxyReload(configmap, data); step.Completed() {
 		return step, true
 	}
 	return result.Continue(), false
+}
+
+func hasHAProxyReloader(deployment *appsv1.Deployment) bool {
+	for _, container := range deployment.Spec.Template.Spec.Containers {
+		if container.Name == "haproxy-reloader" {
+			return true
+		}
+	}
+	return false
 }
 
 func (cc *ClusterContext) ReconcileHAProxy() result.ReconcileResult {
@@ -490,7 +532,7 @@ func (cc *ClusterContext) ReconcileHAProxy() result.ReconcileResult {
 		if step, handled := cc.rotateHAProxyCertificate(desiredDeployment, deployment, configmap, data, hash); handled {
 			return step
 		}
-		if step, handled := cc.reloadBeforeRemovingHAProxyCertificate(deployment, configmap, data); handled {
+		if step, handled := cc.reloadBeforeRemovingHAProxyCertificate(desiredDeployment, deployment, configmap, data); handled {
 			return step
 		}
 		diff, err := patch.DefaultPatchMaker.Calculate(deployment, desiredDeployment, patch.IgnoreStatusFields())
@@ -1102,6 +1144,7 @@ func (cc *ClusterContext) commitHAProxyConfigMap(current *corev1.ConfigMap, desi
 		next := current.DeepCopy()
 		next.Data = desired
 		delete(next.Annotations, haproxyBootstrapAnnotation)
+		delete(next.Annotations, "kubectl.kubernetes.io/last-applied-configuration")
 		err := cc.Client.Update(cc.Ctx, next)
 		if apierrors.IsConflict(err) {
 			fresh := &corev1.ConfigMap{}

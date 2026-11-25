@@ -448,6 +448,23 @@ func TestCandidateSourcePrefersTheAPIOverAStaleMountedCopy(t *testing.T) {
 	}
 }
 
+func TestCandidateSourceKeepsAcceptedAPIStateWhenMountedCopyLags(t *testing.T) {
+	now := time.Now()
+	server := newCandidateServer(t, candidateData("commit", "9-new-1", "global\n"))
+	stale := writeMountedCandidate(t, candidateData("idle", "8-old-1", "global\n"))
+	source := newSource(t, server, stale, &now)
+	if c, err := source.get(context.Background()); err != nil || c.transaction != "9-new-1" {
+		t.Fatalf("the API candidate was not accepted: %+v %v", c, err)
+	}
+
+	server.status = http.StatusServiceUnavailable
+	now = now.Add(candidatePollActive)
+	c, err := source.get(context.Background())
+	if err != nil || c.phase != "commit" || c.transaction != "9-new-1" {
+		t.Fatalf("a stale mounted candidate replaced the accepted API state: %+v %v", c, err)
+	}
+}
+
 func TestCandidateSourcePollsFastDuringATransactionAndSlowlyWhenIdle(t *testing.T) {
 	now := time.Now()
 	server := newCandidateServer(t, candidateData("prepare", "1-a-1", "global\n"))

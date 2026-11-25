@@ -253,3 +253,57 @@ func TestHAProxyDisablingTLSReloadsBeforeTheCertificateVolumeIsRemoved(t *testin
 		}
 	}
 }
+
+func TestHAProxyDisablingTLSMigratesLegacyDeploymentBeforeReload(t *testing.T) {
+	h := newReloadHarness(t)
+	h.useTLS(t, "tls", "certificate.pem")
+	meta := generateObjectMeta("marklogic-haproxy", "test", h.cc.GetHAProxyLabels("cluster"), nil)
+	legacy := h.cc.createHAProxyDeploymentDef(meta)
+	if err := h.cc.Client.Create(h.cc.Ctx, legacy); err != nil {
+		t.Fatal(err)
+	}
+
+	h.updateCluster(t, func(cr *marklogicv1.MarklogicCluster) { cr.Spec.HAProxy.Tls = nil })
+	h.desired = generateHAProxyConfigMapData(h.cc.Ctx, h.cc.MarklogicCluster)
+	if waiting, err := h.reconcile(t); err != nil || !waiting {
+		t.Fatalf("legacy deployment migration must roll out before reload: waiting=%v err=%v", waiting, err)
+	}
+	deployment := h.deployment(t)
+	if len(deployment.Spec.Template.Spec.Containers) != 2 ||
+		deployment.Spec.Template.Spec.Containers[1].Name != "haproxy-reloader" {
+		t.Fatal("the legacy deployment did not gain the reloader before reload")
+	}
+	if certificateVolume(t, deployment).Secret == nil {
+		t.Fatal("the certificate volume was removed during sidecar migration")
+	}
+	for _, container := range deployment.Spec.Template.Spec.Containers {
+		found := false
+		for _, mount := range container.VolumeMounts {
+			found = found || mount.Name == certificateVolumeName
+		}
+		if !found {
+			t.Fatalf("%s lost its certificate mount during migration", container.Name)
+		}
+	}
+	if phase := h.getConfigMap(t, haproxyCandidateConfigMap).Data["phase"]; phase != "idle" {
+		t.Fatalf("a reload started before the reloader rollout: %s", phase)
+	}
+
+	if waiting, err := h.reconcile(t); err != nil || !waiting {
+		t.Fatalf("non-TLS reload did not start after migration: waiting=%v err=%v", waiting, err)
+	}
+	hash := haproxyreload.Hash([]byte(h.desired["haproxy.cfg"]))
+	h.reportPods(t, hash, map[string]string{"haproxy-1": "prepared", "haproxy-2": "prepared"})
+	if _, err := h.reconcile(t); err != nil {
+		t.Fatal(err)
+	}
+	h.reportPods(t, hash, map[string]string{"haproxy-1": "applied", "haproxy-2": "applied"})
+	if _, err := h.reconcile(t); err != nil {
+		t.Fatal(err)
+	}
+	for _, volume := range h.deployment(t).Spec.Template.Spec.Volumes {
+		if volume.Name == certificateVolumeName {
+			t.Fatal("the certificate volume must be removed after the non-TLS configuration commits")
+		}
+	}
+}

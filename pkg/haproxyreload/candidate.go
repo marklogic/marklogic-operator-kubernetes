@@ -139,10 +139,13 @@ func (s *candidateSource) get(ctx context.Context) (candidate, error) {
 		return c, nil
 	}
 	if err.Error() != s.lastAPIErr {
-		fmt.Fprintf(os.Stderr, "haproxy-reloader: reading candidate through the API (using the mounted copy): %v\n", err)
+		fmt.Fprintf(os.Stderr, "haproxy-reloader: reading candidate through the API (using the last known candidate): %v\n", err)
 		s.lastAPIErr = err.Error()
 	}
 	s.nextFetch = now.Add(candidateFallbackRetry)
+	if s.haveCached {
+		return s.cached, nil
+	}
 	c, mountErr := readCandidate(s.dir)
 	if mountErr != nil {
 		return candidate{}, fmt.Errorf("%w; mounted copy: %v", err, mountErr)

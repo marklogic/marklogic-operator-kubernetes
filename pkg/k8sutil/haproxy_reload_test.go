@@ -572,6 +572,27 @@ func TestHAProxyTransactionRejectsUnexpectedPhase(t *testing.T) {
 	}
 }
 
+func TestHAProxyCommitRemovesLegacyLastAppliedConfiguration(t *testing.T) {
+	h := newReloadHarness(t)
+	active := h.getConfigMap(t, "marklogic-haproxy")
+	active.Annotations = map[string]string{
+		"kubectl.kubernetes.io/last-applied-configuration": "legacy snapshot with sensitive configuration",
+	}
+	if err := h.cc.Client.Update(h.cc.Ctx, active); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.cc.commitHAProxyConfigMap(active, h.desired); err != nil {
+		t.Fatal(err)
+	}
+	active = h.getConfigMap(t, "marklogic-haproxy")
+	if _, exists := active.Annotations["kubectl.kubernetes.io/last-applied-configuration"]; exists {
+		t.Fatal("legacy last-applied snapshot was retained")
+	}
+	if !reflect.DeepEqual(active.Data, h.desired) {
+		t.Fatal("the committed configuration was not saved")
+	}
+}
+
 func TestHAProxyCandidateTransactionIDIncludesGenerationAndHash(t *testing.T) {
 	h := newReloadHarness(t)
 	if outcome, err := h.run(t); outcome.RequeueAfter == 0 || err != nil {
@@ -618,6 +639,26 @@ func TestHAProxySidecarAlwaysRunsAsNonRootUser(t *testing.T) {
 				t.Fatalf("sidecar must run as non-root uid %d: %+v", tc.want, sc)
 			}
 		})
+	}
+}
+
+func TestHAProxyInstallerUsesExplicitNonRootUIDAndDefaultsFSGroups(t *testing.T) {
+	h := newReloadHarness(t)
+	rootUID := int64(0)
+	podContext := &corev1.PodSecurityContext{RunAsUser: &rootUID}
+	h.cc.MarklogicCluster.Spec.HAProxy.PodSecurityContext = podContext
+	spec := renderHotReloadPod(t, h, nil)
+
+	if spec.SecurityContext.FSGroup == nil || *spec.SecurityContext.FSGroup != 101 {
+		t.Fatalf("shared volumes need a default fsGroup: %+v", spec.SecurityContext)
+	}
+	if podContext.FSGroup != nil {
+		t.Fatal("defaulting fsGroup must not mutate the cluster spec")
+	}
+	installer := spec.InitContainers[0].SecurityContext
+	if installer.RunAsNonRoot == nil || !*installer.RunAsNonRoot ||
+		installer.RunAsUser == nil || *installer.RunAsUser != haproxyReloaderInstallerUser {
+		t.Fatalf("installer must use its explicit non-root UID: %+v", installer)
 	}
 }
 
